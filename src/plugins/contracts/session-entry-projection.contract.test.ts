@@ -299,6 +299,11 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "bad fresh-main slot",
           sessionEntrySlotKey: "subagentRecovery",
         });
+        api.registerSessionExtension({
+          namespace: "future-recovery",
+          description: "bad future core recovery slot",
+          sessionEntrySlotKey: "restartRecoveryPluginOverride",
+        });
       },
     });
 
@@ -317,6 +322,11 @@ describe("plugin session extension SessionEntry projection", () => {
       {
         pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: subagentRecovery",
+      },
+      {
+        pluginId: "slot-collision",
+        message:
+          "sessionEntrySlotKey is reserved by core restart recovery: restartRecoveryPluginOverride",
       },
     ]);
   });

@@ -33,6 +33,13 @@ import type {
 type DispatchReplyWithBufferedBlockDispatcher =
   import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
+type RuntimeSessionEntry = import("./session-store-facade.js").PluginSessionEntry;
+type PluginRecordSessionMetaFromInbound = (
+  params: Parameters<RecordSessionMetaFromInbound>[0],
+) => Promise<RuntimeSessionEntry | null>;
+type PluginUpdateLastRoute = (
+  params: Parameters<UpdateLastRoute>[0],
+) => Promise<RuntimeSessionEntry | null>;
 
 type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
@@ -149,10 +156,10 @@ export type PluginRuntimeChannel = {
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
     readSessionUpdatedAt: ReadSessionUpdatedAt;
-    recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
+    recordSessionMetaFromInbound: PluginRecordSessionMetaFromInbound;
     /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
-    updateLastRoute: UpdateLastRoute;
+    updateLastRoute: PluginUpdateLastRoute;
   };
   mentions: {
     buildMentionRegexes: BuildMentionRegexes;

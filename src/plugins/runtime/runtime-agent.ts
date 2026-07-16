@@ -27,7 +27,6 @@ import {
   rollbackPluginOwnedSessionEntryLifecycle,
 } from "../../config/sessions/session-accessor.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -43,6 +42,7 @@ import {
   projectPluginSessionEntry,
   updatePluginSessionStoreEntry,
   upsertPluginSessionEntry,
+  type PluginSessionEntry as SessionEntry,
 } from "./session-store-facade.js";
 import type { PluginRuntime } from "./types.js";
 

@@ -5,9 +5,11 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import { loadCombinedSessionStoreForGateway as loadInternalCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectPluginSessionStore } from "../plugins/runtime/session-store-facade.js";
+import {
+  projectPluginSessionStore,
+  type PluginSessionEntry as SessionEntry,
+} from "../plugins/runtime/session-store-facade.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 export {
   formatSessionTranscriptMemoryHitKey,

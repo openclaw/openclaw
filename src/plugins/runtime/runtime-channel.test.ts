@@ -28,10 +28,16 @@ describe("session runtime", () => {
       cycleId: "channel-cycle",
       revision: 1,
     };
+    const restartRecoveryState = {
+      restartRecoveryBeforeAgentReplyState: "continue" as const,
+      restartRecoveryRequesterAccountId: "channel-account",
+      restartRecoverySourceIngress: "channel" as const,
+    };
 
     try {
       await replaceInternalSessionEntry({ sessionKey, storePath }, {
         mainRestartRecovery,
+        ...restartRecoveryState,
         sessionId: "channel-session",
         updatedAt: 10,
       } as InternalSessionEntry);
@@ -47,8 +53,10 @@ describe("session runtime", () => {
         storePath,
       });
       expect(recorded).not.toHaveProperty("mainRestartRecovery");
+      expect(recorded).not.toHaveProperty("restartRecoveryBeforeAgentReplyState");
       expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
         mainRestartRecovery,
+        ...restartRecoveryState,
         origin: expect.objectContaining({ provider: "telegram" }),
       });
 
@@ -59,10 +67,12 @@ describe("session runtime", () => {
         to: "user:1",
       });
       expect(routed).not.toHaveProperty("mainRestartRecovery");
+      expect(routed).not.toHaveProperty("restartRecoveryBeforeAgentReplyState");
       expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
         lastChannel: "telegram",
         lastTo: "user:1",
         mainRestartRecovery,
+        ...restartRecoveryState,
       });
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });

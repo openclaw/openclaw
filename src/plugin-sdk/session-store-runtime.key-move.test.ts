@@ -31,8 +31,15 @@ describe("session-store-runtime whole-store key moves", () => {
       cycleId: "key-move-cycle",
       revision: 4,
     };
+    const restartRecoveryState = {
+      restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+      restartRecoveryDeliveryToolCallId: "message-call-key-move",
+      restartRecoveryRequesterAccountId: "account-key-move",
+      restartRecoverySourceIngress: "channel" as const,
+    };
     await replaceInternalSessionEntry({ agentId: "main", sessionKey: oldKey, storePath }, {
       mainRestartRecovery,
+      ...restartRecoveryState,
       sessionId: "key-move-session",
       updatedAt: 10,
     } as InternalSessionEntry);
@@ -53,6 +60,7 @@ describe("session-store-runtime whole-store key moves", () => {
       loadInternalSessionEntry({ agentId: "main", sessionKey: newKey, storePath }),
     ).toMatchObject({
       mainRestartRecovery,
+      ...restartRecoveryState,
       sessionId: "key-move-session",
     });
   });
@@ -67,6 +75,7 @@ describe("session-store-runtime whole-store key moves", () => {
         cycleId: "ambiguous-key-move-cycle",
         revision: 4,
       },
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
       sessionId: "ambiguous-key-move-session",
       updatedAt: 10,
     } as InternalSessionEntry);
@@ -87,6 +96,12 @@ describe("session-store-runtime whole-store key moves", () => {
     expect(
       loadInternalSessionEntry({ agentId: "main", sessionKey: secondNewKey, storePath }),
     ).not.toHaveProperty("mainRestartRecovery");
+    expect(
+      loadInternalSessionEntry({ agentId: "main", sessionKey: firstNewKey, storePath }),
+    ).not.toHaveProperty("restartRecoveryDeliveryReceiptState");
+    expect(
+      loadInternalSessionEntry({ agentId: "main", sessionKey: secondNewKey, storePath }),
+    ).not.toHaveProperty("restartRecoveryDeliveryReceiptState");
   });
 
   it("does not guess recovery across ambiguous source identities", () => {
@@ -101,6 +116,7 @@ describe("session-store-runtime whole-store key moves", () => {
           cycleId: "ambiguous-source-cycle",
           revision: 4,
         },
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
         sessionId,
         updatedAt: 10,
       },
@@ -119,5 +135,6 @@ describe("session-store-runtime whole-store key moves", () => {
     reconcilePluginSessionStore({ internalStore, publicStore });
 
     expect(internalStore[newKey]).not.toHaveProperty("mainRestartRecovery");
+    expect(internalStore[newKey]).not.toHaveProperty("restartRecoveryDeliveryReceiptState");
   });
 });

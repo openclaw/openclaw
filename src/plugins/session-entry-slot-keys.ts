@@ -1,5 +1,6 @@
 /** Reserves session-entry keys so plugin extension slots cannot collide with core session state. */
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/main-session-recovery.types.js";
+import { isCoreRestartRecoverySessionEntryKey } from "../config/sessions/restart-recovery-private-keys.js";
 
 const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "__proto__",
@@ -204,6 +205,12 @@ export function normalizeSessionEntrySlotKey(
     return {
       ok: false,
       error: `sessionEntrySlotKey is reserved by SessionEntry: ${key}`,
+    };
+  }
+  if (isCoreRestartRecoverySessionEntryKey(key)) {
+    return {
+      ok: false,
+      error: `sessionEntrySlotKey is reserved by core restart recovery: ${key}`,
     };
   }
   if (OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS.has(key)) {

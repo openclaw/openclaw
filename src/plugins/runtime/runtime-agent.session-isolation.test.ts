@@ -25,10 +25,17 @@ describe("plugin runtime session isolation", () => {
       },
       revision: 1,
     };
+    const restartRecoveryState = {
+      restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+      restartRecoveryDeliveryToolCallId: "runtime-message-call",
+      restartRecoveryRequesterAccountId: "runtime-account",
+      restartRecoverySourceIngress: "channel" as const,
+    };
 
     try {
       await replaceInternalSessionEntry({ sessionKey, storePath }, {
         mainRestartRecovery,
+        ...restartRecoveryState,
         model: "gpt-5.5",
         sessionId: "runtime-session-before",
         updatedAt: 10,
@@ -40,6 +47,9 @@ describe("plugin runtime session isolation", () => {
       );
       expect(runtime.session.listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty(
         "mainRestartRecovery",
+      );
+      expect(runtime.session.getSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
+        "restartRecoveryDeliveryReceiptState",
       );
 
       let callbackSawPrivateState = false;
@@ -55,12 +65,14 @@ describe("plugin runtime session isolation", () => {
               revision: 99,
             },
             model: "gpt-5.6",
+            restartRecoveryDeliveryReceiptState: "delivered-terminal",
           } as unknown as Partial<SessionEntry>;
         },
       });
       expect(callbackSawPrivateState).toBe(false);
       expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
         mainRestartRecovery,
+        ...restartRecoveryState,
         model: "gpt-5.6",
       });
 
@@ -74,6 +86,7 @@ describe("plugin runtime session isolation", () => {
       });
       expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
         mainRestartRecovery,
+        ...restartRecoveryState,
         sessionId: "runtime-session-before",
       });
 
@@ -92,6 +105,9 @@ describe("plugin runtime session isolation", () => {
       expect(loadInternalSessionEntry({ sessionKey, storePath })).not.toHaveProperty(
         "mainRestartRecovery",
       );
+      for (const field of Object.keys(restartRecoveryState)) {
+        expect(loadInternalSessionEntry({ sessionKey, storePath })).not.toHaveProperty(field);
+      }
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

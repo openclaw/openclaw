@@ -28,6 +28,8 @@ describe("loadCombinedSessionStoreForGateway", () => {
           cycleId: "transcript-hit-cycle",
           revision: 1,
         },
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryRequesterAccountId: "transcript-account",
         sessionId: "transcript-isolation-session",
         updatedAt: 10,
       } as InternalSessionEntry);
@@ -39,6 +41,8 @@ describe("loadCombinedSessionStoreForGateway", () => {
         updatedAt: 10,
       });
       expect(store[sessionKey]).not.toHaveProperty("mainRestartRecovery");
+      expect(store[sessionKey]).not.toHaveProperty("restartRecoveryDeliveryReceiptState");
+      expect(store[sessionKey]).not.toHaveProperty("restartRecoveryRequesterAccountId");
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }

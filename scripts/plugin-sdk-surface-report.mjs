@@ -244,7 +244,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared channel replay-guard factory and claim handle.
       // Harvest: retired AudioConfig type -1.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
-      7991,
+      // +1: AcpSessionManagerFacade names the restricted public manager contract.
+      7992,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

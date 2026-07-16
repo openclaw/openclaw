@@ -28,7 +28,7 @@ import {
 } from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
-import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import type { AmbientTranscriptWatermark } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getPluginSessionEntry,
@@ -38,11 +38,14 @@ import {
   projectPluginSessionStore,
   reconcilePluginSessionStore,
   recordPluginSessionMetaFromInbound,
-  type SessionStoreReadParams,
   toPluginSessionAccessScope,
   updatePluginSessionLastRoute,
   updatePluginSessionStoreEntry,
   upsertPluginSessionEntry,
+} from "../plugins/runtime/session-store-facade.js";
+import type {
+  PluginSessionEntry as SessionEntry,
+  SessionStoreReadParams,
 } from "../plugins/runtime/session-store-facade.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
@@ -505,4 +508,5 @@ export {
   resolveThreadFlag,
 } from "../config/sessions/reset.js";
 export { resolveSendPolicy } from "../sessions/send-policy.js";
-export type { SessionEntry, SessionScope } from "../config/sessions/types.js";
+export type { PluginSessionEntry as SessionEntry } from "../plugins/runtime/session-store-facade.js";
+export type { SessionScope } from "../config/sessions/types.js";

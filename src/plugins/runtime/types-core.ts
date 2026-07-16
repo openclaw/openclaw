@@ -59,7 +59,7 @@ type RuntimeReplaceConfigFileParams = {
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
 };
-type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionEntry = import("./session-store-facade.js").PluginSessionEntry;
 type RuntimeSessionPluginExtensions =
   | Record<string, Record<string, SessionPluginJsonValue>>
   | undefined;

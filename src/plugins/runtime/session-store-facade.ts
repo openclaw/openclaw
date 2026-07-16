@@ -1,5 +1,9 @@
 import type { InternalSessionEntry } from "../../config/sessions/main-session-recovery.types.js";
 import {
+  isCoreRestartRecoverySessionEntryKey,
+  type CoreRestartRecoverySessionEntryKey,
+} from "../../config/sessions/restart-recovery-private-keys.js";
+import {
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
@@ -12,7 +16,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+
+export type PluginSessionEntry = Omit<InternalSessionEntry, CoreRestartRecoverySessionEntryKey>;
+
+type CoreRestartRecoveryState = Partial<
+  Pick<InternalSessionEntry, CoreRestartRecoverySessionEntryKey>
+>;
 
 export type SessionStoreReadParams = {
   agentId?: string;
@@ -27,20 +36,20 @@ type SessionStoreListParams = Partial<Omit<SessionStoreReadParams, "sessionKey">
 
 type SessionStoreEntrySummary = {
   sessionKey: string;
-  entry: SessionEntry;
+  entry: PluginSessionEntry;
 };
 
 type SessionStoreEntryUpdate = (
-  entry: SessionEntry,
-) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+  entry: PluginSessionEntry,
+) => Promise<Partial<PluginSessionEntry> | null> | Partial<PluginSessionEntry> | null;
 
 type SessionStoreEntryPatch = (
-  entry: SessionEntry,
-  context: { existingEntry?: SessionEntry },
-) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+  entry: PluginSessionEntry,
+  context: { existingEntry?: PluginSessionEntry },
+) => Promise<Partial<PluginSessionEntry> | null> | Partial<PluginSessionEntry> | null;
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
-  fallbackEntry?: SessionEntry;
+  fallbackEntry?: PluginSessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   requireWriteSuccess?: boolean;
@@ -58,7 +67,7 @@ type UpdateSessionStoreEntryParams = {
   requireWriteSuccess?: boolean;
 };
 
-type UpsertSessionEntryParams = SessionStoreReadParams & { entry: SessionEntry };
+type UpsertSessionEntryParams = SessionStoreReadParams & { entry: PluginSessionEntry };
 
 export function toPluginSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
   return {
@@ -73,21 +82,31 @@ export function toPluginSessionAccessScope(params: SessionStoreReadParams): Sess
   };
 }
 
-export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  const { mainRestartRecovery: _mainRestartRecovery, ...publicEntry } = entry;
-  return publicEntry;
+export function projectPluginSessionEntry(entry: InternalSessionEntry): PluginSessionEntry {
+  const publicEntry = { ...entry } as Record<string, unknown>;
+  for (const key of Object.keys(publicEntry)) {
+    if (isCoreRestartRecoverySessionEntryKey(key)) {
+      delete publicEntry[key];
+    }
+  }
+  return publicEntry as PluginSessionEntry;
 }
 
 function projectPluginSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
-): Partial<SessionEntry> {
-  const { mainRestartRecovery: _mainRestartRecovery, ...publicPatch } = patch;
-  return publicPatch;
+): Partial<PluginSessionEntry> {
+  const publicPatch = { ...patch } as Record<string, unknown>;
+  for (const key of Object.keys(publicPatch)) {
+    if (isCoreRestartRecoverySessionEntryKey(key)) {
+      delete publicPatch[key];
+    }
+  }
+  return publicPatch as Partial<PluginSessionEntry>;
 }
 
 export function projectPluginSessionStore(
   store: Record<string, InternalSessionEntry>,
-): Record<string, SessionEntry> {
+): Record<string, PluginSessionEntry> {
   return Object.fromEntries(
     Object.entries(store).map(([sessionKey, entry]) => [
       sessionKey,
@@ -96,17 +115,31 @@ export function projectPluginSessionStore(
   );
 }
 
+function readCoreRestartRecoveryState(
+  entry: InternalSessionEntry,
+): CoreRestartRecoveryState | undefined {
+  const recoveryState = {} as Record<string, unknown>;
+  for (const [key, value] of Object.entries(entry)) {
+    if (isCoreRestartRecoverySessionEntryKey(key)) {
+      recoveryState[key] = value;
+    }
+  }
+  return Object.keys(recoveryState).length > 0
+    ? (recoveryState as CoreRestartRecoveryState)
+    : undefined;
+}
+
 function recoveryStateForSameSession(
   existingEntry: InternalSessionEntry | undefined,
   nextSessionId: string | undefined,
-): InternalSessionEntry["mainRestartRecovery"] {
+): CoreRestartRecoveryState | undefined {
   return existingEntry && existingEntry.sessionId === nextSessionId
-    ? existingEntry.mainRestartRecovery
+    ? readCoreRestartRecoveryState(existingEntry)
     : undefined;
 }
 
 function indexSessionKeysBySessionId(
-  store: Record<string, Pick<SessionEntry, "sessionId">>,
+  store: Record<string, Pick<PluginSessionEntry, "sessionId">>,
 ): Map<string, string[]> {
   const keysBySessionId = new Map<string, string[]>();
   for (const [sessionKey, entry] of Object.entries(store)) {
@@ -125,17 +158,24 @@ function indexSessionKeysBySessionId(
 
 function clearRecoveryStateForRotatedMergePatch(
   existingEntry: InternalSessionEntry,
-  publicPatch: Partial<SessionEntry>,
+  publicPatch: Partial<PluginSessionEntry>,
 ): Partial<InternalSessionEntry> {
   const nextSessionId = publicPatch.sessionId ?? existingEntry.sessionId;
-  return nextSessionId !== existingEntry.sessionId
-    ? { ...publicPatch, mainRestartRecovery: undefined }
-    : publicPatch;
+  if (nextSessionId === existingEntry.sessionId) {
+    return publicPatch;
+  }
+  const rotatedPatch = { ...publicPatch } as Record<string, unknown>;
+  for (const key of Object.keys(existingEntry)) {
+    if (isCoreRestartRecoverySessionEntryKey(key)) {
+      rotatedPatch[key] = undefined;
+    }
+  }
+  return rotatedPatch as Partial<InternalSessionEntry>;
 }
 
 export function reconcilePluginSessionStore(params: {
   internalStore: Record<string, InternalSessionEntry>;
-  publicStore: Record<string, SessionEntry>;
+  publicStore: Record<string, PluginSessionEntry>;
 }): void {
   const originalStore = { ...params.internalStore };
   const originalKeysBySessionId = indexSessionKeysBySessionId(originalStore);
@@ -155,16 +195,19 @@ export function reconcilePluginSessionStore(params: {
       const originalKeys = originalKeysBySessionId.get(projectedEntry.sessionId);
       const publicKeys = publicKeysBySessionId.get(projectedEntry.sessionId);
       if (originalKeys?.length === 1 && publicKeys?.length === 1) {
-        existingRecovery = originalStore[originalKeys[0]!]?.mainRestartRecovery;
+        const originalEntry = originalStore[originalKeys[0]!];
+        existingRecovery = originalEntry ? readCoreRestartRecoveryState(originalEntry) : undefined;
       }
     }
     params.internalStore[sessionKey] = existingRecovery
-      ? { ...projectedEntry, mainRestartRecovery: existingRecovery }
+      ? { ...projectedEntry, ...existingRecovery }
       : projectedEntry;
   }
 }
 
-export function getPluginSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
+export function getPluginSessionEntry(
+  params: SessionStoreReadParams,
+): PluginSessionEntry | undefined {
   const entry = loadSessionEntry(toPluginSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
@@ -187,7 +230,7 @@ export function listPluginSessionEntries(
 
 export async function patchPluginSessionEntry(
   params: PatchSessionEntryParams,
-): Promise<SessionEntry | null> {
+): Promise<PluginSessionEntry | null> {
   const entry = await patchAccessorSessionEntry(
     toPluginSessionAccessScope(params),
     async (internalEntry, context) => {
@@ -205,7 +248,7 @@ export async function patchPluginSessionEntry(
       return params.replaceEntry
         ? {
             ...publicPatch,
-            ...(existingRecovery ? { mainRestartRecovery: existingRecovery } : {}),
+            ...existingRecovery,
           }
         : clearRecoveryStateForRotatedMergePatch(persistedEntry, publicPatch);
     },
@@ -228,7 +271,7 @@ export async function patchPluginSessionEntry(
 
 export async function updatePluginSessionStoreEntry(
   params: UpdateSessionStoreEntryParams,
-): Promise<SessionEntry | null> {
+): Promise<PluginSessionEntry | null> {
   const entry = await updateSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     async (internalEntry) => {
@@ -260,7 +303,7 @@ export async function upsertPluginSessionEntry(params: UpsertSessionEntryParams)
       );
       return {
         ...publicEntry,
-        ...(existingRecovery ? { mainRestartRecovery: existingRecovery } : {}),
+        ...existingRecovery,
       };
     },
     { fallbackEntry: publicEntry, replaceEntry: true },
@@ -269,14 +312,14 @@ export async function upsertPluginSessionEntry(params: UpsertSessionEntryParams)
 
 export async function recordPluginSessionMetaFromInbound(
   params: RecordInboundSessionMetaParams,
-): Promise<SessionEntry | null> {
+): Promise<PluginSessionEntry | null> {
   const entry = await recordAccessorInboundSessionMeta(params);
   return entry ? projectPluginSessionEntry(entry) : null;
 }
 
 export async function updatePluginSessionLastRoute(
   params: UpdateSessionLastRouteParams,
-): Promise<SessionEntry | null> {
+): Promise<PluginSessionEntry | null> {
   const entry = await updateAccessorSessionLastRoute(params);
   return entry ? projectPluginSessionEntry(entry) : null;
 }

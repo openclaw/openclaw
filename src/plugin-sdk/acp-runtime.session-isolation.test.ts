@@ -14,11 +14,28 @@ import {
   readAcpSessionEntry,
   testing,
   type AcpSessionManagerFacade,
+  type AcpSessionStoreEntry,
 } from "./acp-runtime.js";
 
 type AcpSdkReturnClaimsInternalClass =
   ReturnType<typeof getAcpSessionManager> extends AcpSessionManager ? true : false;
 const acpSdkReturnClaimsInternalClass: AcpSdkReturnClaimsInternalClass = false;
+type AcpStoreEntryExposesCurrentRecovery =
+  "restartRecoveryDeliveryReceiptState" extends keyof NonNullable<AcpSessionStoreEntry["entry"]>
+    ? true
+    : false;
+type AcpReadyResolution = Extract<
+  ReturnType<AcpSessionManagerFacade["resolveSession"]>,
+  { kind: "ready" }
+>;
+type AcpResolutionExposesCurrentRecovery =
+  "restartRecoveryDeliveryReceiptState" extends keyof NonNullable<AcpReadyResolution["entry"]>
+    ? true
+    : false;
+const acpStoreEntryExposesCurrentRecovery: AcpStoreEntryExposesCurrentRecovery = false;
+const acpResolutionExposesCurrentRecovery: AcpResolutionExposesCurrentRecovery = false;
+void acpStoreEntryExposesCurrentRecovery;
+void acpResolutionExposesCurrentRecovery;
 
 describe("acp-runtime session isolation", () => {
   let previousStateDir: string | undefined;
@@ -60,6 +77,9 @@ describe("acp-runtime session isolation", () => {
     };
     await replaceInternalSessionEntry({ sessionKey, storePath }, {
       mainRestartRecovery,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: "acp-message-call",
+      restartRecoveryRequesterAccountId: "acp-account",
       sessionId: "acp-session",
       updatedAt: 10,
     } as InternalSessionEntry);
@@ -84,8 +104,15 @@ describe("acp-runtime session isolation", () => {
 
     expect({
       directReadExposedPrivateState: Object.hasOwn(direct?.entry ?? {}, "mainRestartRecovery"),
+      directReadExposedCurrentRecoveryState: Object.hasOwn(
+        direct?.entry ?? {},
+        "restartRecoveryDeliveryReceiptState",
+      ),
       managerResolutionExposedPrivateState:
         resolved.kind === "ready" && Object.hasOwn(resolved.entry ?? {}, "mainRestartRecovery"),
+      managerResolutionExposedCurrentRecoveryState:
+        resolved.kind === "ready" &&
+        Object.hasOwn(resolved.entry ?? {}, "restartRecoveryDeliveryReceiptState"),
       managerFacadeIsStable: getAcpSessionManager() === manager,
       managerFacadeHidesConstructor: Reflect.get(manager, "constructor") === undefined,
       managerFacadeHidesDeps: Reflect.get(manager, "deps") === undefined,
@@ -94,7 +121,9 @@ describe("acp-runtime session isolation", () => {
       returnTypeClaimsInternalClass: acpSdkReturnClaimsInternalClass,
     }).toEqual({
       directReadExposedPrivateState: false,
+      directReadExposedCurrentRecoveryState: false,
       managerResolutionExposedPrivateState: false,
+      managerResolutionExposedCurrentRecoveryState: false,
       managerFacadeIsStable: true,
       managerFacadeHidesConstructor: true,
       managerFacadeHidesDeps: true,
@@ -106,5 +135,10 @@ describe("acp-runtime session isolation", () => {
       | InternalSessionEntry
       | undefined;
     expect(internalEntry?.mainRestartRecovery).toEqual(mainRestartRecovery);
+    expect(internalEntry).toMatchObject({
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: "acp-message-call",
+      restartRecoveryRequesterAccountId: "acp-account",
+    });
   });
 });

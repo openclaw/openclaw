@@ -10,7 +10,7 @@ import {
   type AcpManagerObservabilitySnapshot,
   type AcpRunTurnInput,
   type AcpSessionManager as InternalAcpSessionManager,
-  type AcpSessionResolution,
+  type AcpSessionResolution as InternalAcpSessionResolution,
   type AcpSessionRuntimeOptions,
   type AcpSessionStatus,
   type AcpStartupIdentityReconcileResult,
@@ -18,12 +18,25 @@ import {
 import { testing as registryTesting } from "../acp/runtime/registry.js";
 import {
   readAcpSessionEntry as readInternalAcpSessionEntry,
-  type AcpSessionStoreEntry,
+  type AcpSessionStoreEntry as InternalAcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
 import type { InternalSessionEntry } from "../config/sessions/main-session-recovery.types.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { projectPluginSessionEntry } from "../plugins/runtime/session-store-facade.js";
+import {
+  projectPluginSessionEntry,
+  type PluginSessionEntry,
+} from "../plugins/runtime/session-store-facade.js";
+
+type AcpSessionResolution =
+  | Exclude<InternalAcpSessionResolution, { kind: "ready" }>
+  | (Omit<Extract<InternalAcpSessionResolution, { kind: "ready" }>, "entry"> & {
+      entry?: PluginSessionEntry;
+    });
+
+export type AcpSessionStoreEntry = Omit<InternalAcpSessionStoreEntry, "entry"> & {
+  entry?: PluginSessionEntry;
+};
 
 /** Public ACP manager methods exposed without the internal class instance or dependencies. */
 export interface AcpSessionManagerFacade {
@@ -74,7 +87,7 @@ export interface AcpSessionManagerFacade {
 const pluginAcpManagerFacades = new WeakMap<InternalAcpSessionManager, AcpSessionManagerFacade>();
 
 function projectAcpSessionStoreEntry(
-  storeEntry: AcpSessionStoreEntry | null,
+  storeEntry: InternalAcpSessionStoreEntry | null,
 ): AcpSessionStoreEntry | null {
   if (!storeEntry?.entry) {
     return storeEntry;
@@ -161,7 +174,6 @@ export type {
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
-export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
 
 // Keep test helpers off the hot init path. Eagerly merging them here can
