@@ -1879,7 +1879,7 @@ jobs:
           # Same tree-OID gate as the boundary lane: restore only artifacts
           # produced from identical generative sources, so stale snapshots can
           # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types)"
+          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels)"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
@@ -2104,7 +2104,7 @@ jobs:
           # can false-skip a rebuild, and deleted/renamed sources can never
           # leave ghost declarations because a differing tree skips the
           # restore entirely and builds cold.
-          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types)"
+          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels)"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
@@ -2289,7 +2289,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types > "$sticky_root/.source-trees"
+          git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
