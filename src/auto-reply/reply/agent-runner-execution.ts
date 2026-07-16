@@ -31,7 +31,11 @@ import {
   clearRecoveredAutoFallbackPrimaryProbeSelection,
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-auto-fallback.js";
-import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
+import {
+  cancelOverloadRetryNotice,
+  handleAgentExecutionError,
+  type OverloadRetryState,
+} from "./agent-runner-error-handler.js";
 import type {
   AgentRunLoopResult,
   AgentTurnParams,
@@ -56,9 +60,10 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
-async function runAgentTurnWithFallbackInternal(
+async function runAgentTurnWithFallbackInternalWithRetryState(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
+  overloadRetryState: OverloadRetryState,
 ): Promise<AgentRunLoopResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -287,6 +292,7 @@ async function runAgentTurnWithFallbackInternal(
         liveModelSwitchRetries,
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
+        overloadRetryState,
         consumeTransientHttpRetry,
         modelPatch,
       });
@@ -398,6 +404,27 @@ async function runAgentTurnWithFallbackInternal(
     ),
     ...(terminalFailurePayload ? { terminalFailurePayload } : {}),
   };
+}
+
+async function runAgentTurnWithFallbackInternal(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
+  const overloadRetryState: OverloadRetryState = {
+    retryCount: 0,
+    turnStartedAtMs: Date.now(),
+    noticeSent: false,
+    completed: false,
+  };
+  try {
+    return await runAgentTurnWithFallbackInternalWithRetryState(
+      params,
+      commitTerminalOutcome,
+      overloadRetryState,
+    );
+  } finally {
+    await cancelOverloadRetryNotice(overloadRetryState);
+  }
 }
 
 /** Runs the agent turn with provider/model fallback, retry, and failure mapping. */

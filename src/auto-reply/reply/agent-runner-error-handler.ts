@@ -20,10 +20,13 @@ import {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import type { AgentRunLoopResult, AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -55,6 +58,36 @@ import {
 
 const MAX_LIVE_SWITCH_RETRIES = 2;
 const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
+// Overload recovery stays inside one turn: bounded backoff absorbs short provider incidents,
+// while the delayed notice prevents a long silent wait without becoming assistant content.
+const MAX_OVERLOAD_RETRIES = 10;
+const OVERLOAD_RETRY_BASE_DELAY_MS = 2_500;
+const OVERLOAD_RETRY_MAX_DELAY_MS = 30_000;
+const OVERLOAD_RETRY_NOTICE_AFTER_MS = 30_000;
+const OVERLOAD_RETRY_NOTICE_DELIVERY_TIMEOUT_MS = 5_000;
+const OVERLOAD_RETRY_NOTICE_TEXT =
+  "The AI service is temporarily overloaded. I’m still retrying; this may take a few minutes.";
+
+export type OverloadRetryState = {
+  retryCount: number;
+  turnStartedAtMs: number;
+  noticeSent: boolean;
+  noticeTimer?: ReturnType<typeof setTimeout>;
+  noticeDelivery?: Promise<void>;
+  noticeAbortController?: AbortController;
+  completed: boolean;
+};
+
+/** Stops the turn-owned overload notice once no retry can still be running. */
+export async function cancelOverloadRetryNotice(state: OverloadRetryState): Promise<void> {
+  state.completed = true;
+  if (state.noticeTimer) {
+    clearTimeout(state.noticeTimer);
+    state.noticeTimer = undefined;
+  }
+  state.noticeAbortController?.abort(new Error("overload retry finished"));
+  await state.noticeDelivery;
+}
 
 type ErrorAction =
   | { kind: "retry"; liveModelSwitchError?: LiveSessionModelSwitchError }
@@ -69,6 +102,7 @@ export async function handleAgentExecutionError(params: {
   liveModelSwitchRetries: number;
   shouldSurfaceToControlUi: boolean;
   timing: AgentTurnTimingTracker;
+  overloadRetryState: OverloadRetryState;
   consumeTransientHttpRetry: () => boolean;
   modelPatch: { fail: (error: unknown) => Promise<void> };
 }): Promise<ErrorAction> {
@@ -78,6 +112,23 @@ export async function handleAgentExecutionError(params: {
     const terminal = params.state.pendingLifecycleTerminal?.backstop;
     params.state.pendingLifecycleTerminal = undefined;
     return terminal;
+  };
+  const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
+    if (isReplyOperationRestartAbort(turn.replyOperation)) {
+      takePendingLifecycleTerminal()?.emit("end", abortError);
+      return {
+        kind: "final",
+        payload:
+          turn.isRestartRecoveryArmed?.() === true
+            ? { text: SILENT_REPLY_TOKEN }
+            : markAgentRunFailureReplyPayload({ text: buildRestartLifecycleReplyText() }),
+      };
+    }
+    if (isReplyOperationUserAbort(turn.replyOperation)) {
+      takePendingLifecycleTerminal()?.emit("error", abortError);
+      return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+    }
+    return undefined;
   };
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
@@ -120,6 +171,14 @@ export async function handleAgentExecutionError(params: {
     error: message,
   });
   const isFallbackSummary = isFallbackSummaryError(err);
+  const isPureOverloadSummary =
+    isFallbackSummary &&
+    err.attempts.length > 0 &&
+    err.attempts.every((attempt) => attempt.reason === "overloaded");
+  const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
+  const isOverloaded = isFallbackSummary
+    ? isPureOverloadSummary
+    : failoverReason === "overloaded" || isOverloadedErrorMessage(message);
   const isBilling = isFallbackSummary
     ? hasBillingAttemptSummary(err)
     : isFailoverError(err)
@@ -144,19 +203,9 @@ export async function handleAgentExecutionError(params: {
     isTransientHttpError(message) ||
     (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
-  if (isReplyOperationRestartAbort(turn.replyOperation)) {
-    takePendingLifecycleTerminal()?.emit("end", err);
-    return {
-      kind: "final",
-      payload:
-        turn.isRestartRecoveryArmed?.() === true
-          ? { text: SILENT_REPLY_TOKEN }
-          : markAgentRunFailureReplyPayload({ text: buildRestartLifecycleReplyText() }),
-    };
-  }
-  if (isReplyOperationUserAbort(turn.replyOperation)) {
-    takePendingLifecycleTerminal()?.emit("error", err);
-    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
+  const replyOperationAbortAction = resolveReplyOperationAbortAction(err);
+  if (replyOperationAbortAction) {
+    return replyOperationAbortAction;
   }
   const restartLifecycleError = resolveRestartLifecycleError(err);
   if (
@@ -198,6 +247,113 @@ export async function handleAgentExecutionError(params: {
       }),
     };
   }
+  if (isOverloaded && params.overloadRetryState.retryCount < MAX_OVERLOAD_RETRIES) {
+    params.state.pendingLifecycleTerminal = undefined;
+    params.overloadRetryState.retryCount += 1;
+    const retryCount = params.overloadRetryState.retryCount;
+    const retryDelayMs = Math.min(
+      OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (retryCount - 1),
+      OVERLOAD_RETRY_MAX_DELAY_MS,
+    );
+    const scheduleRetryNotice = () => {
+      if (
+        params.overloadRetryState.noticeSent ||
+        params.overloadRetryState.noticeTimer ||
+        params.overloadRetryState.completed ||
+        turn.isHeartbeat ||
+        !turn.opts?.onBlockReply
+      ) {
+        return;
+      }
+      const deliver = turn.opts.onBlockReply;
+      if (!deliver) {
+        return;
+      }
+      const sendRetryNotice = () => {
+        params.overloadRetryState.noticeTimer = undefined;
+        if (params.overloadRetryState.noticeSent || params.overloadRetryState.completed) {
+          return;
+        }
+        params.overloadRetryState.noticeSent = true;
+        turn.replyOperation?.recordActivity();
+        const currentMessageId = turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid;
+        const noticePayload = markReplyPayloadForSourceSuppressionDelivery(
+          turn.applyReplyToMode({
+            text: OVERLOAD_RETRY_NOTICE_TEXT,
+            ...(currentMessageId ? { replyToId: currentMessageId } : {}),
+            replyToCurrent: true,
+            isStatusNotice: true,
+          }),
+        );
+        const deliveryAbortController = new AbortController();
+        params.overloadRetryState.noticeAbortController = deliveryAbortController;
+        let deliveryTimeout: ReturnType<typeof setTimeout> | undefined;
+        const deliveryAborted = new Promise<void>((resolve) => {
+          deliveryAbortController.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        const deliveryTimedOut = new Promise<void>((resolve) => {
+          deliveryTimeout = setTimeout(() => {
+            deliveryAbortController.abort(new Error("overload retry notice delivery timed out"));
+            resolve();
+          }, OVERLOAD_RETRY_NOTICE_DELIVERY_TIMEOUT_MS);
+        });
+        const deliveryAttempt = Promise.resolve()
+          .then(async () => {
+            if (params.overloadRetryState.completed || deliveryAbortController.signal.aborted) {
+              return;
+            }
+            await deliver(noticePayload, {
+              abortSignal: deliveryAbortController.signal,
+              timeoutMs: OVERLOAD_RETRY_NOTICE_DELIVERY_TIMEOUT_MS,
+            });
+          })
+          .catch((noticeError) => {
+            logVerbose(`overload retry notice delivery failed (non-fatal): ${String(noticeError)}`);
+          });
+        params.overloadRetryState.noticeDelivery = Promise.race([
+          deliveryAttempt,
+          deliveryAborted,
+          deliveryTimedOut,
+        ]).finally(() => {
+          if (deliveryTimeout) {
+            clearTimeout(deliveryTimeout);
+          }
+          if (params.overloadRetryState.noticeAbortController === deliveryAbortController) {
+            params.overloadRetryState.noticeAbortController = undefined;
+          }
+        });
+      };
+      const noticeDelayMs = Math.max(
+        0,
+        OVERLOAD_RETRY_NOTICE_AFTER_MS - (Date.now() - params.overloadRetryState.turnStartedAtMs),
+      );
+      if (noticeDelayMs === 0) {
+        sendRetryNotice();
+        return;
+      }
+      params.overloadRetryState.noticeTimer = setTimeout(() => {
+        sendRetryNotice();
+      }, noticeDelayMs);
+    };
+    scheduleRetryNotice();
+    turn.replyOperation?.recordActivity();
+    defaultRuntime.error(
+      `Overloaded provider before reply (${sanitizeForLog(message)}). ` +
+        `Retrying ${retryCount}/${MAX_OVERLOAD_RETRIES} in ${retryDelayMs}ms.`,
+    );
+    const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
+    try {
+      await sleepWithAbort(retryDelayMs, retryAbortSignal);
+    } catch (sleepError) {
+      const abortAction = resolveReplyOperationAbortAction(sleepError);
+      if (abortAction) {
+        return abortAction;
+      }
+      throw sleepError;
+    }
+    turn.replyOperation?.recordActivity();
+    return { kind: "retry" };
+  }
   if (providerRequestError) {
     takePendingLifecycleTerminal()?.emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
@@ -219,8 +375,6 @@ export async function handleAgentExecutionError(params: {
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const isPureTransientSummary = isFallbackSummary ? isPureTransientRateLimitSummary(err) : false;
-  const failoverReason = !isFallbackSummary && isFailoverError(err) ? err.reason : undefined;
-  const isOverloaded = failoverReason === "overloaded" || isOverloadedErrorMessage(message);
   const isRateLimit = isFallbackSummary
     ? isPureTransientSummary
     : failoverReason
