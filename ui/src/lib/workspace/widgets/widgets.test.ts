@@ -154,6 +154,16 @@ describe("chart mapping", () => {
 
     const bounded = renderToContainer(renderChart(widget({ props: { min: 0, max: 1 } }), [1e308]));
     expect(bounded.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMin = renderToContainer(
+      renderChart(widget({ props: { min: Number.MIN_VALUE } }), [Number.MIN_VALUE]),
+    );
+    expect(subnormalMin.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMax = renderToContainer(
+      renderChart(widget({ props: { max: -Number.MIN_VALUE } }), [-Number.MIN_VALUE]),
+    );
+    expect(subnormalMax.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
   });
 
   it("announces data extrema rather than configured axis bounds", () => {

@@ -99,12 +99,12 @@ function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
       if (min === Number.MAX_VALUE) {
         return { status: "error", reason: "chart bounds cannot form a finite range" };
       }
-      max = min >= 0 ? Math.min(min * 1.1 || 1, Number.MAX_VALUE) : min / 2;
+      max = min >= 0 ? Math.min(min * 2 || 1, Number.MAX_VALUE) : min / 2;
     } else if (configuredMax !== undefined) {
       if (max === -Number.MAX_VALUE) {
         return { status: "error", reason: "chart bounds cannot form a finite range" };
       }
-      min = max <= 0 ? Math.max(max * 1.1 || -1, -Number.MAX_VALUE) : max / 2;
+      min = max <= 0 ? Math.max(max * 2 || -1, -Number.MAX_VALUE) : max / 2;
     } else if (min > 0) {
       min /= 2;
     } else if (max < 0) {
