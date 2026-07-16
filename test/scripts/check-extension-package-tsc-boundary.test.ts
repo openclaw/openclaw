@@ -696,7 +696,12 @@ describe("check-extension-package-tsc-boundary", () => {
       const childScript = [
         "const fs = require('node:fs');",
         "process.on('SIGTERM', () => {});",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        // Write the pid atomically: writeFileSync makes the file visible at open() (0 bytes)
+        // before the content lands, so an existsSync-then-read poller can catch an empty file
+        // and parse NaN. Rename only publishes the path once the pid is fully written.
+        `const pidPath = ${JSON.stringify(childPidPath)};`,
+        "fs.writeFileSync(pidPath + '.tmp', String(process.pid));",
+        "fs.renameSync(pidPath + '.tmp', pidPath);",
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [

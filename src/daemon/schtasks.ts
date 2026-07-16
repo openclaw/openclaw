@@ -838,6 +838,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
   if (process.platform !== "win32") {
+    // Use leader-checked default: gateway/listener termination paths resolve PIDs by argv
+    // or port ownership rather than spawn-time process-group creation, so we rely on the
+    // helper's process-group leader verification to avoid signaling the gateway's own group.
     killProcessTree(pid, { graceMs });
     return;
   }

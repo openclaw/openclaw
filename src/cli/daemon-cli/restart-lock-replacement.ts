@@ -5,8 +5,12 @@ import {
 } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
-export type GatewayLockReplacementWaitResult =
-  | { status: "replacement"; attemptsUsed: number }
+type GatewayLockReplacementWaitResult =
+  | {
+      status: "replacement";
+      attemptsUsed: number;
+      lockIdentity: GatewayLockIdentity;
+    }
   | { status: "timeout" };
 
 export async function waitForGatewayLockReplacement(params: {
@@ -57,7 +61,7 @@ export async function waitForGatewayLockReplacement(params: {
       currentLockIdentity &&
       !isSameGatewayLockIdentity(params.previousLockIdentity, currentLockIdentity)
     ) {
-      return { status: "replacement", attemptsUsed };
+      return { status: "replacement", attemptsUsed, lockIdentity: currentLockIdentity };
     }
 
     if (attemptsUsed >= params.attempts) {

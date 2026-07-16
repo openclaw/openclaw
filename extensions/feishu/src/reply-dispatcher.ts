@@ -9,6 +9,7 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  getReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
@@ -689,12 +690,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             : reply.text;
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
+        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+        const ttsTextAlreadyVisible = ttsSupplement?.visibleTextAlreadyDelivered === true;
         const hasVoiceMedia =
           hasMedia &&
           reply.mediaUrls.some((mediaUrl) =>
             shouldSuppressFeishuTextForVoiceMedia({
               mediaUrl,
               ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+              ttsSupplement,
             }),
           );
         const finalTextExceedsStreamingLimit =
@@ -728,7 +732,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
           (finalTextExceedsStreamingLimit ||
-            (hasMedia && ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal)));
+            (hasMedia &&
+              ((hasVoiceMedia && !shouldDeliverText && !ttsTextAlreadyVisible) ||
+                skipTextForDuplicateFinal)));
 
         if (!shouldDeliverText && !hasMedia) {
           return;

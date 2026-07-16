@@ -62,6 +62,7 @@ export function createCodexAppServerAgentHarness(options: {
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
+    autoSelection: { providerIds: [...providerIds] },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {

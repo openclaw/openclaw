@@ -103,7 +103,11 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: 5_000 });
+    const result = spawnSync(cmd, ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     // Require a clean exit, not just a successful spawn. An installed-but-broken
     // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
     // spawns fine but exits non-zero; without the status check it would be

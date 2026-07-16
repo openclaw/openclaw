@@ -235,7 +235,7 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 function runNpmTelegramArtifactValidation(params: {
   currentRunId: string;
   producerRunId: string;
-  producerStatus: "completed" | "in_progress";
+  producerStatus: "completed" | "in_progress" | "queued";
   producerConclusion: "success" | null;
 }) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
@@ -1633,7 +1633,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
     );
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
@@ -1643,12 +1643,12 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
-    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai");
     expect(workflow).toContain("suite_id: live-subagent-announce-docker");
     expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai");
     expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
@@ -1710,7 +1710,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-openrouter");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-xai");
-    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-zai");
+    expect(workflow).not.toContain("suite_id: native-live-src-gateway-profiles-zai");
+    expect(workflow).toContain("Z.AI API Platform validation is temporarily disabled");
     expect(workflow).not.toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,opencode-go,openrouter,xai,zai",
     );
@@ -3019,7 +3020,7 @@ describe("package artifact reuse", () => {
       '--arg digest "sha256:${ARTIFACT_DIGEST}"',
       "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
       'if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]',
-      '.status == "in_progress"',
+      '.status == "queued" or .status == "in_progress"',
       ".conclusion == null",
       "Package Telegram artifact predates the active producer run attempt.",
       '.status == "completed"',
@@ -3061,6 +3062,31 @@ describe("package artifact reuse", () => {
     });
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts active artifacts while GitHub still reports the workflow as queued", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunId: "123",
+      producerConclusion: null,
+      producerRunId: "123",
+      producerStatus: "queued",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects queued artifacts after GitHub assigns a conclusion", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunId: "123",
+      producerConclusion: "success",
+      producerRunId: "123",
+      producerStatus: "queued",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Current-run Package Telegram artifact is not from the active workflow attempt.",
+    );
   });
 
   it("keeps completed external producer attempts success-gated", () => {
