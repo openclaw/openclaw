@@ -199,6 +199,15 @@ describe("discord_widget", () => {
   it("orders missing-ID fallback by successful delivery", async () => {
     const runtime = createActivityTestRuntime();
     type SendResult = Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
+    const sendResult = (messageId: string): SendResult => ({
+      messageId,
+      channelId: "987654321",
+      receipt: createDiscordSendReceipt({
+        platformMessageIds: [messageId],
+        channelId: "987654321",
+        kind: "text",
+      }),
+    });
     const pending = new Map<string, (result: SendResult) => void>();
     const send = vi.fn(
       async (...args: Parameters<typeof sendDiscordComponentMessage>) =>
@@ -221,12 +230,12 @@ describe("discord_widget", () => {
     const second = tool.execute("second", { html: "<p>second</p>", title: "Second" });
     await vi.waitFor(() => expect(pending.has("Second")).toBe(true));
 
-    pending.get("Second")?.({ messageId: "second", channelId: "987654321", receipt: {} });
+    pending.get("Second")?.(sendResult("second"));
     const secondDetails = (await second).details as { widgetId: string };
     await expect(
       runtime.store.latestDeliveredWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
-    pending.get("First")?.({ messageId: "first", channelId: "987654321", receipt: {} });
+    pending.get("First")?.(sendResult("first"));
     const firstDetails = (await first).details as { widgetId: string };
 
     expect(firstDetails.widgetId).not.toBe(secondDetails.widgetId);
