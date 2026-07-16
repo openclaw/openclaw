@@ -1972,6 +1972,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
   it("emits JSON deliveryStatus before strict delivery failures rethrow", async () => {
     deliverOutboundPayloadsMock.mockRejectedValueOnce(new Error("Slack API timeout"));
+    const onDeliveryResult = vi.fn();
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
@@ -2003,6 +2004,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
         sessionEntry: undefined,
         payloads: [{ text: "here you go" }],
         result: createResult(),
+        onDeliveryResult,
       }),
     ).rejects.toThrow("Slack API timeout");
 
@@ -2014,6 +2016,11 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(json.deliveryStatus?.succeeded).toBe(false);
     expect(json.deliveryStatus?.error).toBe(true);
     expect(String(json.deliveryStatus?.errorMessage)).toContain("Slack API timeout");
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryStatus: expect.objectContaining({ status: "failed" }),
+      }),
+    );
   });
 
   it("emits JSON deliveryStatus before strict preflight failures rethrow", async () => {
@@ -2066,3 +2073,4 @@ describe("deliverAgentCommandResult payload normalization", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

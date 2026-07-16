@@ -1691,3 +1691,4 @@ test("sessions.patch preserves nested model ids under provider overrides", async
     expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

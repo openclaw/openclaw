@@ -16,11 +16,11 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -108,15 +108,15 @@ const testing = {
   filterCodexDynamicTools,
   resolveCodexDynamicToolDirectNames(
     params: EmbeddedRunAttemptParams,
-    hostCrestodianActive = false,
+    hostSystemAgentActive = false,
   ): string[] {
     const names: string[] = [];
     if (
-      hostCrestodianActive &&
+      hostSystemAgentActive &&
       params.toolsAllow?.length === 1 &&
-      params.toolsAllow[0] === "crestodian"
+      params.toolsAllow[0] === "openclaw"
     ) {
-      names.push("crestodian");
+      names.push("openclaw");
     }
     if (params.sourceReplyDeliveryMode === "message_tool_only") {
       names.push("message");
@@ -266,6 +266,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -419,14 +420,14 @@ function createCodexToolBridgeForTest(
   params: EmbeddedRunAttemptParams,
   tools: RuntimeDynamicToolForTest[],
   registeredTools: RuntimeDynamicToolForTest[] = tools,
-  hostCrestodianActive = false,
+  hostSystemAgentActive = false,
 ) {
   const signal = new AbortController().signal;
   return createCodexDynamicToolBridge({
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostCrestodianActive),
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params, hostSystemAgentActive),
   });
 }
 
@@ -6532,3 +6533,4 @@ describe("runCodexAppServerAttempt", () => {
     expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

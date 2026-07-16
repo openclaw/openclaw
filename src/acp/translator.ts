@@ -1754,3 +1754,4 @@ export class AcpGatewayAgent implements Agent {
     );
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

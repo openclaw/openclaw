@@ -49,8 +49,8 @@ let createMockTypingController: typeof import("./test-helpers.js").createMockTyp
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRegistry;
-let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
-let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let replyRunTestingForTest: typeof import("./reply-run-registry.test-support.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.test-support.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
@@ -514,7 +514,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
-  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  ({ testing: cliBackendsTestingForTest } =
+    await import("../../agents/cli-backends.test-support.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -530,8 +531,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     abortActiveReplyRuns: abortActiveReplyRunsForTest,
     createReplyOperation: createReplyOperationForTest,
     replyRunRegistry: replyRunRegistryForTest,
-    testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
+  ({ testing: replyRunTestingForTest } = await import("./reply-run-registry.test-support.js"));
   ({
     getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
     setReplyPayloadMetadata: setReplyPayloadMetadataForTest,
@@ -1077,7 +1078,7 @@ describe("createFollowupRunner reply-lane admission", () => {
 
     const pending = runner(
       createQueuedRun({
-        onFollowupAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
+        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
         run: {
           sessionId: "queued-session",
           sessionKey: "main",
@@ -3122,6 +3123,28 @@ describe("createFollowupRunner runtime config", () => {
     );
 
     expect(events).toEqual(["begin", "run", "end"]);
+  });
+
+  it("notifies the active dispatcher after queued followup admission", async () => {
+    const events: string[] = [];
+    runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return { payloads: [], meta: {} };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+      opts: {
+        onQueuedFollowupAdmitted: () => {
+          events.push("admitted");
+        },
+      },
+    });
+
+    await runner(createQueuedRun());
+
+    expect(events).toEqual(["admitted", "run"]);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {
@@ -7126,3 +7149,4 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

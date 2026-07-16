@@ -10,7 +10,7 @@ const QA_SMOKE_CI_PARTS = ["profile-1", "profile-2"] as const;
 const QA_SMOKE_CI_CHANNELS = ["matrix", OPENCLAW_CRABLINE_DEFAULT_CHANNEL] as const;
 const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "control-ui-chat-flow-playwright",
-  "crestodian-ring-zero-setup",
+  "system-agent-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
   "luna-thinking-visibility-switch",

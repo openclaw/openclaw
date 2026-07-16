@@ -5,15 +5,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
-import {
-  WorkboardStore,
-  type PersistedWorkboardAttachment,
-  type PersistedWorkboardBoard,
-  type PersistedWorkboardCard,
-  type PersistedWorkboardNotificationSubscription,
-  type WorkboardKeyedStore,
-} from "./store.js";
+import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   beforeRegister?: (key: string, value: T) => Promise<void> | void;
@@ -3038,3 +3038,4 @@ describe("WorkboardStore", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

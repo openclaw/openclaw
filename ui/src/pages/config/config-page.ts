@@ -17,6 +17,7 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
+  normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   patchSettings,
   type UiSettings,
@@ -61,7 +62,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
-type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "chatFollowUpMode" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -581,6 +582,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
@@ -785,6 +787,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      chatFollowUpMode: normalizeChatFollowUpMode(this.settings.chatFollowUpMode),
+      setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
@@ -980,3 +984,4 @@ export class ConfigPage extends OpenClawLightDomElement {
 }
 
 customElements.define("openclaw-config-page", ConfigPage);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
