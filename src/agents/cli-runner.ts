@@ -602,6 +602,7 @@ export async function runPreparedCliAgent(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         config: params.config,
+        storePath: params.storePath,
       })
     : [];
   const llmInputEvent = {
@@ -1188,6 +1189,7 @@ export async function runPreparedCliAgent(
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
+          storePath: params.storePath,
         })
       : [];
     const finishCliAttempt = async (

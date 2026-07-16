@@ -167,6 +167,7 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptTailEventsByJsonlBytes,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,

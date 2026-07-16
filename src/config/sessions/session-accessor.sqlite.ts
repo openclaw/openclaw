@@ -57,6 +57,7 @@ export {
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptTailEventsByJsonlBytesSync,
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";

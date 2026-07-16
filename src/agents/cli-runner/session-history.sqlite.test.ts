@@ -1,0 +1,258 @@
+// Covers SQLite-backed CLI session transcript loading boundaries.
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { cliBackendLog } from "./log.js";
+import { hasCliSessionTranscript, loadCliSessionHistoryMessages } from "./session-history.js";
+
+const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectMessageFields(value: unknown, expected: { role: string; content?: unknown }) {
+  const message = requireRecord(value, "message");
+  expect(message.role).toBe(expected.role);
+  if ("content" in expected) {
+    expect(message.content).toEqual(expected.content);
+  }
+}
+
+async function withCliSessionState<T>(stateDir: string, run: () => Promise<T>): Promise<T> {
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, run);
+}
+
+describe("SQLite CLI session history", () => {
+  it("loads branched history from markers used by CLI resumes", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-branch";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFiles = [
+      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+      formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath: path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      }),
+    ];
+
+    await withCliSessionState(stateDir, async () => {
+      await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        },
+        {
+          type: "message",
+          id: "root",
+          parentId: null,
+          message: { role: "user", content: "active root" },
+        },
+        {
+          type: "message",
+          id: "side-entry",
+          parentId: "root",
+          message: { role: "assistant", content: "side history" },
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "side-entry",
+          targetId: "root",
+        },
+        {
+          type: "message",
+          id: "active-tail",
+          parentId: "root",
+          message: { role: "assistant", content: "active history" },
+        },
+      ]);
+
+      for (const sessionFile of sessionFiles) {
+        await expect(
+          hasCliSessionTranscript({
+            sessionId,
+            sessionFile,
+            sessionKey,
+            agentId: "main",
+          }),
+        ).resolves.toBe(true);
+        const history = await loadCliSessionHistoryMessages({
+          sessionId,
+          sessionFile,
+          sessionKey,
+          agentId: "main",
+        });
+        expect(history).toHaveLength(2);
+        expectMessageFields(history[0], { role: "user", content: "active root" });
+        expectMessageFields(history[1], {
+          role: "assistant",
+          content: [{ type: "text", text: "active history" }],
+        });
+      }
+    });
+  });
+
+  it("loads only a bounded tail from oversized transcripts", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-oversized";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+          {
+            type: "session",
+            version: CURRENT_SESSION_VERSION,
+            id: sessionId,
+            timestamp: new Date(0).toISOString(),
+            cwd: stateDir,
+          },
+          {
+            type: "message",
+            id: "msg-0",
+            parentId: null,
+            message: {
+              role: "user",
+              content: "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES),
+            },
+          },
+          {
+            type: "message",
+            id: "msg-1",
+            parentId: "msg-0",
+            message: { role: "user", content: "tail history" },
+          },
+        ]);
+
+        const history = await loadCliSessionHistoryMessages({
+          sessionId,
+          sessionFile,
+          sessionKey,
+          agentId: "main",
+        });
+        expect(history).toHaveLength(1);
+        expectMessageFields(history[0], { role: "user", content: "tail history" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("cli session history truncated to last"),
+        );
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("honors an explicit session store passed to the CLI runner", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const customStoreDir = tempDirs.make("openclaw-cli-store-");
+    const sessionId = "session-sqlite-custom-store";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(customStoreDir, "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "session",
+        version: CURRENT_SESSION_VERSION,
+        id: sessionId,
+        timestamp: new Date(0).toISOString(),
+        cwd: stateDir,
+      },
+      {
+        type: "message",
+        id: "msg-0",
+        parentId: null,
+        message: { role: "user", content: "custom SQLite history" },
+      },
+    ]);
+
+    await withCliSessionState(stateDir, async () => {
+      const history = await loadCliSessionHistoryMessages({
+        sessionId,
+        sessionFile,
+        sessionKey,
+        agentId: "main",
+        storePath,
+      });
+      expect(history).toHaveLength(1);
+      expectMessageFields(history[0], { role: "user", content: "custom SQLite history" });
+    });
+  });
+
+  it("rejects markers outside the configured session identity and store", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-guard";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const otherStorePath = path.join(stateDir, "other", "sessions.json");
+
+    await withCliSessionState(stateDir, async () => {
+      const transcript = [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        },
+        {
+          type: "message",
+          id: "msg-0",
+          parentId: null,
+          message: { role: "user", content: "guarded history" },
+        },
+      ];
+      await replaceTranscriptEvents(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        transcript,
+      );
+      await replaceTranscriptEvents(
+        { agentId: "main", sessionId, sessionKey, storePath: otherStorePath },
+        transcript,
+      );
+
+      const invalidMarkers = [
+        formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "other-session",
+          storePath,
+        }),
+        formatSqliteSessionFileMarker({ agentId: "worker", sessionId, storePath }),
+        formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath: otherStorePath }),
+      ];
+      for (const sessionFile of invalidMarkers) {
+        await expect(
+          hasCliSessionTranscript({ sessionId, sessionFile, sessionKey, agentId: "main" }),
+        ).resolves.toBe(false);
+        await expect(
+          loadCliSessionHistoryMessages({
+            sessionId,
+            sessionFile,
+            sessionKey,
+            agentId: "main",
+          }),
+        ).resolves.toStrictEqual([]);
+      }
+    });
+  });
+});

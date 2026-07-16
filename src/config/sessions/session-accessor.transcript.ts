@@ -12,6 +12,7 @@ import {
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptTailEventsByJsonlBytesSync,
   readSqliteTranscriptStatsSync,
   readSqliteTranscriptEventAtSeqSync,
   publishSqliteTranscriptUpdate,
@@ -97,6 +98,14 @@ export function replaceTranscriptEventsSync(
 /** Reads parsed transcript records synchronously from the SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Reads the newest complete transcript rows within one JSONL-compatible byte budget. */
+export async function loadTranscriptTailEventsByJsonlBytes(
+  scope: SessionTranscriptReadScope,
+  maxBytes: number,
+): Promise<{ events: TranscriptEvent[]; truncated: boolean }> {
+  return loadSqliteTranscriptTailEventsByJsonlBytesSync(scope, maxBytes);
 }
 
 /** Reads only rows appended after a previously observed SQLite sequence. */

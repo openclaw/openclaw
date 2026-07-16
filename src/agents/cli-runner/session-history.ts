@@ -8,7 +8,14 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveStorePath,
 } from "../../config/sessions/paths.js";
+import {
+  loadTranscriptTailEventsByJsonlBytes,
+  readTranscriptStatsSync,
+} from "../../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
@@ -24,7 +31,11 @@ import {
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { migrateSessionEntries, parseSessionEntries } from "../sessions/session-manager.js";
+import {
+  migrateSessionEntries,
+  normalizeLoadedFileEntry,
+  parseSessionEntries,
+} from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
 
 /** Maximum transcript size read for CLI session history. */
@@ -57,6 +68,15 @@ type HistoryEntry = {
   firstKeptEntryId?: unknown;
   tokensBefore?: unknown;
   tokensAfter?: unknown;
+};
+
+type CliSessionTranscriptParams = {
+  sessionId: string;
+  sessionFile: string;
+  sessionKey?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
+  storePath?: string;
 };
 
 type RawTranscriptReseedReason =
@@ -299,7 +319,7 @@ async function readCliSessionHeaderLine(filePath: string): Promise<string | unde
   const handle = await fsp.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(CLI_SESSION_HISTORY_HEADER_READ_BYTES);
-    const bytesRead = await readFileWindowFully(handle, buffer, 0);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const firstChunk = buffer.subarray(0, bytesRead).toString("utf-8");
     const lineEnd = firstChunk.indexOf("\n");
     if (lineEnd < 0) {
@@ -409,13 +429,10 @@ function parseCliSessionEntries(
   return parseSessionEntries(content);
 }
 
-function resolveSafeCliSessionFile(params: {
-  sessionId: string;
+function resolveSafeCliSessionFile(params: CliSessionTranscriptParams): {
   sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): { sessionFile: string; sessionsDir: string } {
+  sessionsDir: string;
+} {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -423,7 +440,7 @@ function resolveSafeCliSessionFile(params: {
   });
   const pathOptions = resolveSessionFilePathOptions({
     agentId: sessionAgentId ?? defaultAgentId,
-    storePath: params.config?.session?.store,
+    storePath: params.storePath ?? params.config?.session?.store,
   });
   const sessionFile = resolveSessionFilePath(
     params.sessionId,
@@ -436,14 +453,100 @@ function resolveSafeCliSessionFile(params: {
   };
 }
 
-async function loadCliSessionEntries(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+function resolveSafeCliSqliteTranscript(params: CliSessionTranscriptParams):
+  | {
+      agentId: string;
+      sessionId: string;
+      sessionKey?: string;
+      storePath: string;
+    }
+  | undefined {
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (!marker) {
+    return undefined;
+  }
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  if (marker.sessionId !== params.sessionId || marker.agentId !== sessionAgentId) {
+    return undefined;
+  }
+  // SQLite markers feed persisted content into prompts. Accept only the current
+  // configured store so stale or caller-supplied markers cannot redirect history.
+  const storePath = resolveStorePath(params.storePath ?? params.config?.session?.store, {
+    agentId: sessionAgentId,
+  });
+  const expectedSqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: sessionAgentId,
+  }).path;
+  const markerSqlitePath = resolveSqliteTargetFromSessionStorePath(marker.storePath, {
+    agentId: sessionAgentId,
+  }).path;
+  if (
+    !expectedSqlitePath ||
+    !markerSqlitePath ||
+    path.resolve(markerSqlitePath) !== path.resolve(expectedSqlitePath)
+  ) {
+    return undefined;
+  }
+  return {
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    storePath,
+  };
+}
+
+function finalizeCliSessionEntries(params: {
+  entries: unknown[];
+  source: string;
+  truncated: boolean;
+}): unknown[] {
+  const entries = params.entries.map((entry) =>
+    normalizeLoadedFileEntry(entry as ReturnType<typeof parseSessionEntries>[number]),
+  );
+  const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
+  if (params.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
+    cliBackendLog.warn(
+      `cli session history truncated tail skipped because branch controls are incomplete: ${params.source}`,
+    );
+    return [];
+  }
+  migrateSessionEntries(entries);
+  const sessionEntries = entries.filter((entry) => entry.type !== "session");
+  if (params.truncated && !isSafeTruncatedCliSessionTail(sessionEntries)) {
+    cliBackendLog.warn(
+      `cli session history truncated tail skipped because branch controls are incomplete: ${params.source}`,
+    );
+    return [];
+  }
+  return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
+}
+
+async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promise<unknown[]> {
   try {
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      const transcriptScope = resolveSafeCliSqliteTranscript(params);
+      if (!transcriptScope) {
+        return [];
+      }
+      const transcript = await loadTranscriptTailEventsByJsonlBytes(
+        transcriptScope,
+        MAX_CLI_SESSION_HISTORY_FILE_BYTES,
+      );
+      if (transcript.truncated) {
+        cliBackendLog.warn(
+          `cli session history truncated to last ${MAX_CLI_SESSION_HISTORY_FILE_BYTES} bytes: ${params.sessionFile}`,
+        );
+      }
+      return finalizeCliSessionEntries({
+        entries: transcript.events,
+        source: params.sessionFile,
+        truncated: transcript.truncated,
+      });
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -467,22 +570,11 @@ async function loadCliSessionEntries(params: {
     if (!entries) {
       return [];
     }
-    const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
-    if (transcript.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
-      cliBackendLog.warn(
-        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
-      );
-      return [];
-    }
-    migrateSessionEntries(entries);
-    const sessionEntries = entries.filter((entry) => entry.type !== "session");
-    if (transcript.truncated && !isSafeTruncatedCliSessionTail(sessionEntries)) {
-      cliBackendLog.warn(
-        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
-      );
-      return [];
-    }
-    return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
+    return finalizeCliSessionEntries({
+      entries,
+      source: realSessionFile,
+      truncated: transcript.truncated,
+    });
   } catch (error) {
     if (!isFileNotFoundError(error)) {
       cliBackendLog.warn(`cli session history load failed: ${formatErrorMessage(error)}`);
@@ -492,14 +584,14 @@ async function loadCliSessionEntries(params: {
 }
 
 /** Checks whether a safe, bounded transcript file exists for a CLI session. */
-export async function hasCliSessionTranscript(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<boolean> {
+export async function hasCliSessionTranscript(
+  params: CliSessionTranscriptParams,
+): Promise<boolean> {
   try {
+    if (params.sessionFile.trim().startsWith("sqlite:")) {
+      const transcriptScope = resolveSafeCliSqliteTranscript(params);
+      return transcriptScope ? readTranscriptStatsSync(transcriptScope).eventCount > 0 : false;
+    }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
@@ -522,13 +614,9 @@ export async function hasCliSessionTranscript(params: {
 }
 
 /** Loads transcript messages for CLI lifecycle hook context. */
-export async function loadCliSessionHistoryMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+export async function loadCliSessionHistoryMessages(
+  params: CliSessionTranscriptParams,
+): Promise<unknown[]> {
   const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "message" ? [candidate.message] : [];
@@ -537,13 +625,9 @@ export async function loadCliSessionHistoryMessages(params: {
 }
 
 /** Loads transcript messages formatted for context-engine updates. */
-export async function loadCliSessionContextEngineMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-}): Promise<unknown[]> {
+export async function loadCliSessionContextEngineMessages(
+  params: CliSessionTranscriptParams,
+): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
@@ -581,15 +665,12 @@ export async function loadCliSessionContextEngineMessages(params: {
 }
 
 /** Loads compacted/raw transcript messages eligible for CLI session reseeding. */
-export async function loadCliSessionReseedMessages(params: {
-  sessionId: string;
-  sessionFile: string;
-  sessionKey?: string;
-  agentId?: string;
-  config?: OpenClawConfig;
-  allowRawTranscriptReseed?: boolean;
-  rawTranscriptReseedReason?: RawTranscriptReseedReason;
-}): Promise<unknown[]> {
+export async function loadCliSessionReseedMessages(
+  params: CliSessionTranscriptParams & {
+    allowRawTranscriptReseed?: boolean;
+    rawTranscriptReseedReason?: RawTranscriptReseedReason;
+  },
+): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const loadRawTail = () => {
     if (

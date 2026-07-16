@@ -1027,6 +1027,7 @@ export async function prepareCliRunContext(
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         config: params.config,
+        storePath: params.storePath,
       });
       return openClawHistoryMessages;
     };
@@ -1198,6 +1199,7 @@ export async function prepareCliRunContext(
             sessionKey: params.sessionKey,
             agentId: params.agentId,
             config: params.config,
+            storePath: params.storePath,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
           }),
@@ -1320,6 +1322,7 @@ export async function prepareCliRunContext(
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       config: contextEngineConfig,
+      storePath: params.storePath,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     const preparedParams: RunCliAgentParams = {
