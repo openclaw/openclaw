@@ -68,7 +68,7 @@ function googleLiveVideoMessage(frame: RealtimeTalkVideoFrame): unknown {
     },
   };
 }
-const GOOGLE_LIVE_WEBSOCKET_OPEN_TIMEOUT_MS = 30_000;
+const GOOGLE_LIVE_SETUP_TIMEOUT_MS = 30_000;
 
 // Browser sessions can still pin a 2.5 model, whose text and tool-response wire
 // contract differs from the 3.1 default carried in new session metadata.
@@ -106,7 +106,7 @@ function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult):
 
 export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private ws: WebSocket | null = null;
-  private openTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private media: MediaStream | null = null;
   private cameraMedia: MediaStream | null = null;
   private captureVideo: HTMLVideoElement | null = null;
@@ -175,19 +175,18 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
     ws.binaryType = "arraybuffer";
-    this.openTimeout = globalThis.setTimeout(() => {
+    this.setupTimeout = globalThis.setTimeout(() => {
       if (this.closed || this.ws !== ws) {
         return;
       }
-      this.openTimeout = null;
+      this.setupTimeout = null;
       this.ctx.callbacks.onStatus?.(
         "error",
-        `Realtime connection timed out after ${GOOGLE_LIVE_WEBSOCKET_OPEN_TIMEOUT_MS}ms`,
+        `Realtime connection timed out after ${GOOGLE_LIVE_SETUP_TIMEOUT_MS}ms`,
       );
       this.stop();
-    }, GOOGLE_LIVE_WEBSOCKET_OPEN_TIMEOUT_MS);
+    }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
     ws.addEventListener("open", () => {
-      this.clearOpenTimeout(ws);
       if (this.closed || this.ws !== ws) {
         return;
       }
@@ -195,7 +194,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.startMicrophonePump();
     });
     ws.addEventListener("message", (event) => {
-      void this.handleMessage(event.data);
+      void this.handleMessage(ws, event.data);
     });
     ws.addEventListener("close", () => {
       this.failSocket(ws, "Realtime connection closed");
@@ -295,7 +294,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.cameraSetupController?.abort();
     this.cameraSetupController = null;
     this.setupComplete = false;
-    this.clearOpenTimeout();
+    this.clearSetupTimeout();
     for (const controller of this.consultAbortControllers) {
       controller.abort();
     }
@@ -316,15 +315,15 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.ws = null;
   }
 
-  private clearOpenTimeout(ws?: WebSocket): void {
+  private clearSetupTimeout(ws?: WebSocket): void {
     // A stopped socket can emit after a replacement starts. Keep stale events
     // from clearing the replacement attempt's startup deadline.
     if (ws && this.ws !== ws) {
       return;
     }
-    if (this.openTimeout !== null) {
-      globalThis.clearTimeout(this.openTimeout);
-      this.openTimeout = null;
+    if (this.setupTimeout !== null) {
+      globalThis.clearTimeout(this.setupTimeout);
+      this.setupTimeout = null;
     }
   }
 
@@ -334,7 +333,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed || this.ws !== ws) {
       return;
     }
-    this.clearOpenTimeout(ws);
+    this.clearSetupTimeout(ws);
     this.ctx.callbacks.onStatus?.("error", message);
     this.stop();
   }
@@ -367,8 +366,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     return false;
   }
 
-  private async handleMessage(data: unknown): Promise<void> {
-    if (this.closed) {
+  private async handleMessage(ws: WebSocket, data: unknown): Promise<void> {
+    if (this.closed || this.ws !== ws) {
       return;
     }
     let message: GoogleLiveMessage;
@@ -377,11 +376,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     } catch {
       return;
     }
-    if (this.closed) {
+    if (this.closed || this.ws !== ws) {
       return;
     }
     if (message.setupComplete) {
       this.setupComplete = true;
+      this.clearSetupTimeout(ws);
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
       this.startVideoFrames();

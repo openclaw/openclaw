@@ -384,17 +384,44 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(onStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("clears the WebSocket opening timeout after open", async () => {
+  it("times out when WebSocket opens but Google setup never completes", async () => {
+    vi.useFakeTimers();
+    const stopTrack = vi.fn();
+    getUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: stopTrack }],
+    });
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const transport = createTransport({ onStatus, onTalkEvent });
+
+    await transport.start();
+    latestWebSocket().emitOpen();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith(
+      "error",
+      "Realtime connection timed out after 30000ms",
+    );
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(audioContexts.every((context) => context.close.mock.calls.length === 1)).toBe(true);
+    expect(onTalkEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "session.closed", final: true }),
+    );
+  });
+
+  it("clears the startup timeout after Google setup completes", async () => {
     vi.useFakeTimers();
     const onStatus = vi.fn();
     const transport = createTransport({ onStatus });
 
     await transport.start();
-    latestWebSocket().emitOpen();
-    const statusCalls = onStatus.mock.calls.slice();
+    const ws = latestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage(encodeJsonFrame({ setupComplete: {} }));
+    await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(onStatus.mock.calls).toStrictEqual(statusCalls);
+    expect(onStatus).toHaveBeenCalledExactlyOnceWith("listening");
     transport.stop();
   });
 
