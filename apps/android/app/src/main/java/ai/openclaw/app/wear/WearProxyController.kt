@@ -173,6 +173,24 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
   }
 }
 
+internal fun projectedWearMessageText(message: JsonElement?): String? {
+  val content = (message as? JsonObject)?.get("content")
+  val text =
+    when (content) {
+      is JsonPrimitive -> content.contentOrNull
+      is JsonArray ->
+        content.joinToString(separator = "") { part ->
+          when (part) {
+            is JsonPrimitive -> part.contentOrNull.orEmpty()
+            is JsonObject -> part.stringOrNull("text").orEmpty()
+            else -> ""
+          }
+        }
+      else -> null
+    }
+  return text?.takeIf { it.isNotEmpty() }
+}
+
 private fun projectHistory(source: JsonObject): JsonObject =
   buildJsonObject {
     copyString(source, "sessionKey", MAX_SESSION_KEY_CHARS)
