@@ -12,6 +12,7 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
+import { purgeAgentCronJobs } from "../cron/store/purge-agent-cron-jobs.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -126,6 +127,12 @@ export async function agentsDeleteCommand(
     agentId,
     deleteFiles: true,
   });
+
+  // Purge cron jobs through the canonical store path regardless of which
+  // deletion path succeeded. The cron service is either stopped (transport
+  // error) or will pick up the change on its next load cycle.
+  await purgeAgentCronJobs(agentId);
+
   if (gatewayResult) {
     const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
     const workspaceRetained = workspaceSharedWith.length > 0;

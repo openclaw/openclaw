@@ -30,6 +30,10 @@ const gatewayMocks = vi.hoisted(() => ({
   isGatewayTransportError: vi.fn(),
 }));
 
+const cronMocks = vi.hoisted(() => ({
+  purgeAgentCronJobs: vi.fn(),
+}));
+
 function resolveCurrentWorkspaceAttestationPath(dir: string): string {
   const [attestationPath] = resolveWorkspaceAttestationPaths(dir);
   if (!attestationPath) {
@@ -48,6 +52,10 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
   isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
   isGatewayTransportError: gatewayMocks.isGatewayTransportError,
+}));
+
+vi.mock("../cron/store/purge-agent-cron-jobs.js", () => ({
+  purgeAgentCronJobs: cronMocks.purgeAgentCronJobs,
 }));
 
 vi.mock("../infra/fs-safe.js", () => ({
@@ -144,6 +152,7 @@ describe("agents delete command", () => {
     gatewayMocks.isGatewayTransportError.mockImplementation(
       (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
     );
+    cronMocks.purgeAgentCronJobs.mockReset();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
@@ -539,6 +548,33 @@ describe("agents delete command", () => {
       });
     },
   );
+
+  it("purges cron_jobs rows on agent delete", async () => {
+    await withStateDirEnv("openclaw-agents-delete-cron-", async ({ stateDir }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+        },
+      });
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(cronMocks.purgeAgentCronJobs).toHaveBeenCalledOnce();
+      expect(cronMocks.purgeAgentCronJobs).toHaveBeenCalledWith("ops");
+    });
+  });
 
   it("trashes workspace when no other agent shares it", async () => {
     await withStateDirEnv("openclaw-agents-delete-unique-workspace-", async ({ stateDir }) => {
