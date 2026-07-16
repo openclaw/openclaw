@@ -317,7 +317,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         }
         const existingEntry =
           agentExecutionStarted && scope.sessionKey === sessionKey
-            ? { ...current, lifecycleRevision: "replacement-revision" }
+            ? { ...writeBase, lifecycleRevision: "replacement-revision" }
             : current;
         const committed = update(structuredClone(writeBase), {
           existingEntry: existingEntry ? structuredClone(existingEntry) : undefined,
