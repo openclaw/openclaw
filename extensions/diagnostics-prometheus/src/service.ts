@@ -2,12 +2,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
+  AISafetyEventMetadata,
+  DiagnosticAISafetyEventPayload,
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
 } from "../api.js";
-import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
+import {
+  isInternalDiagnosticEventMetadata,
+  onAISafetyDiagnosticEvent,
+  redactSensitiveText,
+} from "../api.js";
 
 type LabelSet = Record<string, string>;
 
@@ -556,6 +562,26 @@ function recordModelUsage(
   );
 }
 
+// Unified low-cardinality counter for all AI safety taxonomy events.
+// Labels are limited to {event_type, severity, channel} to stay within
+// MAX_PROMETHEUS_SERIES=2048. High-cardinality fields (tool_name, eval_name,
+// session_id) are excluded; use OTEL per-event counters for finer breakdowns.
+function recordAISafetyEvent(
+  store: PrometheusMetricStore,
+  evt: DiagnosticAISafetyEventPayload,
+  _metadata: AISafetyEventMetadata,
+): void {
+  store.counter(
+    "openclaw_ai_safety_events_total",
+    "AI safety taxonomy events by event type, severity, and channel.",
+    {
+      event_type: lowCardinalityLabel(evt.type),
+      severity: lowCardinalityLabel("severity" in evt ? evt.severity : undefined, "none"),
+      channel: lowCardinalityLabel(evt.channel, "none"),
+    },
+  );
+}
+
 function recordDiagnosticEvent(
   store: PrometheusMetricStore,
   evt: DiagnosticEventPayload,
@@ -994,31 +1020,6 @@ function recordDiagnosticEvent(
         BYTE_BUCKETS,
       );
       return;
-    case "ai_safety.prompt_injection.signal":
-    case "ai_safety.tool_policy.decision":
-    case "ai_safety.external_content.consumed":
-    case "ai_safety.user_feedback.received":
-    case "ai_safety.memory_context.selected":
-    case "ai_safety.eval.result":
-      // Unified low-cardinality counter for all AI safety taxonomy events.
-      // Labels are intentionally limited to {event_type, severity, channel} to stay well
-      // within MAX_PROMETHEUS_SERIES=2048. High-cardinality fields such as tool_name,
-      // eval_name, and session_id are excluded from Prometheus labels; use the OTEL
-      // per-event counters (openclaw.ai_safety.*_total) for finer-grained breakdowns.
-      //
-      // Note on tool_policy.decision vs tool.execution.blocked: these two events cover
-      // distinct moments in the tool lifecycle (policy evaluation vs execution block) and
-      // are not double-counted here.
-      store.counter(
-        "openclaw_ai_safety_events_total",
-        "AI safety taxonomy events by event type, severity, and channel.",
-        {
-          event_type: lowCardinalityLabel(evt.type),
-          severity: lowCardinalityLabel("severity" in evt ? evt.severity : undefined, "none"),
-          channel: lowCardinalityLabel(evt.channel, "none"),
-        },
-      );
-      return;
     default:
   }
 }
@@ -1048,6 +1049,7 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
 export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeAISafety: (() => void) | undefined;
 
   const service = {
     id: "diagnostics-prometheus",
@@ -1066,6 +1068,15 @@ export function createDiagnosticsPrometheusExporter() {
           );
         }
       });
+      unsubscribeAISafety = onAISafetyDiagnosticEvent((event, metadata) => {
+        try {
+          recordAISafetyEvent(store, event, metadata);
+        } catch (err) {
+          ctx.logger.error(
+            `diagnostics-prometheus: ai safety event handler failed (${event.type}): ${safeErrorMessage(err)}`,
+          );
+        }
+      });
       ctx.internalDiagnostics?.emit({
         type: "telemetry.exporter",
         exporter: "diagnostics-prometheus",
@@ -1077,6 +1088,8 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
+      unsubscribeAISafety?.();
+      unsubscribeAISafety = undefined;
       store.reset();
     },
   } satisfies OpenClawPluginService;

@@ -234,7 +234,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   advanced: "fileCode",
   debug: "bug",
   logs: "scrollText",
-  safety: "shieldAlert",
+  safety: "alertTriangle",
   plugin: "puzzle",
   "new-session": "plus",
 };

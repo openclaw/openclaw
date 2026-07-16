@@ -117,7 +117,7 @@ describe("navigationIconForRoute", () => {
       advanced: "fileCode",
       debug: "bug",
       logs: "scrollText",
-      safety: "shieldAlert",
+      safety: "alertTriangle",
     });
   });
 

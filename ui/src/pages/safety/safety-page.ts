@@ -3,7 +3,7 @@ import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { SafetyEventRecord } from "../../../../src/infra/safety-event-store.js";
-import type { GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -24,7 +24,7 @@ function buildKpi(events: SafetyEventRecord[]): SafetyKpi {
   for (const e of events) {
     kpi.total++;
     if (e.severity in kpi) {
-      (kpi as Record<string, number>)[e.severity]++;
+      (kpi as Record<string, number>)[e.severity]!++;
     }
   }
   return kpi;
@@ -62,10 +62,20 @@ class SafetyPage extends OpenClawLightDomElement {
     },
   );
 
+  override disconnectedCallback() {
+    this.subscriptions.clear();
+    super.disconnectedCallback();
+  }
+
   private async fetchEvents(gateway: ApplicationContext["gateway"]): Promise<void> {
     this.loading = true;
     this.error = null;
     try {
+      const client: GatewayBrowserClient | null = gateway.snapshot.client;
+      if (!client) {
+        this.error = "Gateway not connected.";
+        return;
+      }
       const params: Record<string, unknown> = { limit: MAX_LIVE_EVENTS };
       if (this.filterSeverity) {
         params["severity"] = this.filterSeverity;
@@ -73,7 +83,7 @@ class SafetyPage extends OpenClawLightDomElement {
       if (this.filterType) {
         params["eventType"] = this.filterType;
       }
-      const result = await gateway.call<SafetyEventsListResult>("safety.events.list", params);
+      const result = await client.request<SafetyEventsListResult>("safety.events.list", params);
       this.events = result.events ?? [];
     } catch (err) {
       this.error = err instanceof Error ? err.message : "Failed to load safety events.";
