@@ -193,10 +193,14 @@ export interface WebSocketLike {
   close(): void;
 }
 
-export function createReefWebSocket(url: string): WebSocketLike {
+export function createReefWebSocket(
+  url: string,
+  // Short hang floors for stalled-handshake regressions only; production omits this.
+  opts?: { handshakeTimeoutMs?: number },
+): WebSocketLike {
   return new WebSocket(url, {
     maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES,
-    handshakeTimeout: REEF_WS_HANDSHAKE_MS,
+    handshakeTimeout: opts?.handshakeTimeoutMs ?? REEF_WS_HANDSHAKE_MS,
   });
 }
 
