@@ -67,6 +67,14 @@ describe("terminal PTY teardown", () => {
 });
 
 describe("terminal PTY invocation", () => {
+  const nonInteractiveEnvironments: Array<Record<string, string>> = [
+    {},
+    { TERM: "" },
+    { TERM: "dumb" },
+    { TERM: "DUMB" },
+    { TERM: " dumb " },
+  ];
+
   beforeEach(() => {
     mocks.spawn.mockReset();
   });
@@ -75,7 +83,7 @@ describe("terminal PTY invocation", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([{}, { TERM: "" }, { TERM: "dumb" }, { TERM: "DUMB" }, { TERM: " dumb " }])(
+  it.each(nonInteractiveEnvironments)(
     "upgrades non-interactive TERM for a real PTY: %o",
     async (env) => {
       mocks.spawn.mockReturnValueOnce(fakePty());
