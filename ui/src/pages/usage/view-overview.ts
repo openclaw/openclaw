@@ -36,6 +36,32 @@ function formatAnalysisCost(value: number): string {
   return formatCost(value, decimals);
 }
 
+function handleSummaryHintClick(event: MouseEvent) {
+  const button = event.currentTarget as HTMLElement;
+  const tooltip = button.nextElementSibling;
+  if (!(tooltip instanceof HTMLElement) || tooltip.localName !== "wa-tooltip") {
+    return;
+  }
+  const controller = tooltip as HTMLElement & {
+    show: () => Promise<void>;
+    hide: () => Promise<void>;
+  };
+  if (button.dataset.tooltipClickOpen === "true") {
+    delete button.dataset.tooltipClickOpen;
+    void controller.hide();
+    return;
+  }
+  button.dataset.tooltipClickOpen = "true";
+  void controller.show();
+}
+
+function handleSummaryHintHide(event: Event) {
+  const button = (event.currentTarget as HTMLElement).previousElementSibling;
+  if (button instanceof HTMLElement && button.classList.contains("usage-summary-hint")) {
+    delete button.dataset.tooltipClickOpen;
+  }
+}
+
 function handleDailyBarKeydown(
   event: KeyboardEvent,
   day: string,
@@ -592,6 +618,7 @@ function renderPeakErrorList(
 }
 
 function renderSummaryStat(params: {
+  hintId: string;
   title: string;
   hint: string;
   value: string | number;
@@ -600,6 +627,8 @@ function renderSummaryStat(params: {
   className?: string;
   compactValue?: boolean;
 }) {
+  const hintId = `usage-summary-hint-${params.hintId}`;
+  const tooltipId = `${hintId}-tooltip`;
   const classes = [
     "stat",
     "usage-summary-card",
@@ -620,7 +649,24 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <span class="usage-summary-hint" title=${params.hint}>?</span>
+        <button
+          id=${hintId}
+          type="button"
+          class="usage-summary-hint"
+          aria-label=${params.hint}
+          @click=${handleSummaryHintClick}
+        >
+          ?
+        </button>
+        <wa-tooltip
+          id=${tooltipId}
+          class="usage-summary-tooltip"
+          for=${hintId}
+          trigger="hover focus"
+          @wa-hide=${handleSummaryHintHide}
+        >
+          ${params.hint}
+        </wa-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
       <div class="usage-summary-sub">${params.sub}</div>
@@ -733,6 +779,7 @@ function renderUsageInsights(
         <div class="usage-overview-layout">
           <div class="usage-summary-grid">
             ${renderSummaryStat({
+              hintId: "messages",
               title: t("usage.overview.messages"),
               hint: t("usage.overview.messagesHint"),
               value: aggregates.messages.total,
@@ -740,6 +787,7 @@ function renderUsageInsights(
               className: "usage-summary-card--hero",
             })}
             ${renderSummaryStat({
+              hintId: "throughput",
               title: t("usage.overview.throughput"),
               hint: throughputHint,
               value: throughputLabel,
@@ -748,6 +796,7 @@ function renderUsageInsights(
               compactValue: true,
             })}
             ${renderSummaryStat({
+              hintId: "tool-calls",
               title: t("usage.overview.toolCalls"),
               hint: t("usage.overview.toolCallsHint"),
               value: aggregates.tools.totalCalls,
@@ -755,6 +804,7 @@ function renderUsageInsights(
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
+              hintId: "average-tokens",
               title: t("usage.overview.avgTokens"),
               hint: tokensHint,
               value: formatTokens(avgTokens),
@@ -764,6 +814,7 @@ function renderUsageInsights(
               className: "usage-summary-card--half",
             })}
             ${renderSummaryStat({
+              hintId: "cache-hit-rate",
               title: t("usage.overview.cacheHitRate"),
               hint: cacheHint,
               value: cacheHitLabel,
@@ -772,6 +823,7 @@ function renderUsageInsights(
               className: "usage-summary-card--medium",
             })}
             ${renderSummaryStat({
+              hintId: "error-rate",
               title: t("usage.overview.errorRate"),
               hint: errorHint,
               value: `${errorRatePct.toFixed(2)}%`,
@@ -780,6 +832,7 @@ function renderUsageInsights(
               className: "usage-summary-card--medium",
             })}
             ${renderSummaryStat({
+              hintId: "average-cost",
               title: t("usage.overview.avgCost"),
               hint: costHint,
               value: formatAnalysisCost(avgCost),
@@ -787,6 +840,7 @@ function renderUsageInsights(
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
+              hintId: "sessions",
               title: t("usage.overview.sessions"),
               hint: t("usage.overview.sessionsHint"),
               value: sessionCount,
@@ -794,6 +848,7 @@ function renderUsageInsights(
               className: "usage-summary-card--compact",
             })}
             ${renderSummaryStat({
+              hintId: "errors",
               title: t("usage.overview.errors"),
               hint: t("usage.overview.errorsHint"),
               value: aggregates.messages.errors,

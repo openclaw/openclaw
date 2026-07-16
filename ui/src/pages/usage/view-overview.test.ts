@@ -102,6 +102,60 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
+  it("renders overview hints as click-capable tooltip buttons", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsageInsights(
+        totals,
+        aggregates,
+        {
+          durationSumMs: 0,
+          durationCount: 0,
+          avgDurationMs: 0,
+          errorRate: 0,
+        },
+        false,
+        true,
+        [],
+        1,
+        1,
+      ),
+      container,
+    );
+
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button.usage-summary-hint")];
+    const tooltips = [...container.querySelectorAll("wa-tooltip.usage-summary-tooltip")];
+    expect(buttons).toHaveLength(9);
+    expect(tooltips).toHaveLength(9);
+    expect(
+      buttons.every(
+        (button) =>
+          button.type === "button" &&
+          !button.hasAttribute("title") &&
+          Boolean(button.getAttribute("aria-label")),
+      ),
+    ).toBe(true);
+    expect(
+      tooltips.every(
+        (tooltip) =>
+          tooltip.getAttribute("trigger") === "hover focus" &&
+          buttons.some((button) => button.id === tooltip.getAttribute("for")),
+      ),
+    ).toBe(true);
+
+    const firstTooltip = tooltips[0] as HTMLElement & {
+      show: () => Promise<void>;
+      hide: () => Promise<void>;
+    };
+    const show = vi.spyOn(firstTooltip, "show").mockResolvedValue();
+    const hide = vi.spyOn(firstTooltip, "hide").mockResolvedValue();
+    buttons[0]?.click();
+    expect(show).toHaveBeenCalledOnce();
+    buttons[0]?.click();
+    expect(hide).toHaveBeenCalledOnce();
+  });
+
   it("includes cache writes in cache-hit-rate denominator", () => {
     const container = document.createElement("div");
 
