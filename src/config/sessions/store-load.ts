@@ -5,31 +5,28 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { resolveAgentHarnessSessionStoreError } from "../../sessions/agent-harness-session-key.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { normalizeRestartRecoveryEntryFields } from "./restart-recovery-state.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   cloneSessionStoreSnapshotEntry,
-  cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
-  readSessionStoreSnapshotCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
-  writeSessionStoreSnapshotCache,
-  type SessionStoreSnapshot,
-  type SessionStoreSnapshotEntries,
   type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import { resolveSessionStoreEntry } from "./store-entry.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -42,7 +39,7 @@ import {
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
-export type LoadSessionStoreOptions = {
+type LoadSessionStoreOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
@@ -50,7 +47,7 @@ export type LoadSessionStoreOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
-export type ReadSessionEntryOptions = {
+type ReadSessionEntryOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
@@ -73,10 +70,6 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -166,10 +159,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
     assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
   }
-  assign(
-    "restartRecoveryDeliveryRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-  );
+  normalizeRestartRecoveryEntryFields(entry, assign);
 
   return next;
 }
@@ -296,7 +286,12 @@ function sameDeliveryChannelRoute(
   );
 }
 
-function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+/**
+ * Rebuilds malformed/legacy delivery `route` state from the entry's delivery
+ * fields. Runs on file-era store loads and on the doctor SQLite import so the
+ * SQLite store only holds canonical delivery shapes; SQLite reads do no repair.
+ */
+export function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const entryRoute = normalizeDeliveryChannelRoute(entry.route);
   const normalized = normalizeSessionDeliveryFields({
     route: entryRoute,
@@ -351,17 +346,29 @@ export function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
 export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
+    const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
     const shaped = normalizePersistedSessionEntryShape(entry);
     if (!shaped) {
+      if (modelSelectionLocked) {
+        // Never normalize a protected row into absence. Writers must see the
+        // corruption and fail closed instead of persisting an implicit unlock.
+        throw new Error(`Invalid model-selection-locked session entry: ${key}`);
+      }
       delete store[key];
       changed = true;
       continue;
+    }
+    const normalizedRuntimeFields = normalizeSessionRuntimeModelFields(shaped);
+    if (modelSelectionLocked && normalizedRuntimeFields !== shaped) {
+      // The persisted provider/model pair is part of the harness-owned runtime
+      // identity. Do not repair it before validating the durable lock.
+      throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
     const normalized = stripPersistedSkillsCache(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizePendingFinalDeliveryFields(
-            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+            normalizeSessionEntryDelivery(modelSelectionLocked ? shaped : normalizedRuntimeFields),
           ),
         ),
       ),
@@ -371,6 +378,10 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       store[key] = normalized;
       changed = true;
     }
+  }
+  const harnessStoreError = resolveAgentHarnessSessionStoreError(store);
+  if (harnessStoreError) {
+    throw new Error(harnessStoreError);
   }
   return changed;
 }
@@ -394,13 +405,13 @@ export function loadSessionStore(
     }
   }
 
-  // Retry a few times on Windows because readers can briefly observe empty or
+  // Retry a few times because readers can briefly observe empty or
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
   const fileStat = getFileStatSnapshot(storePath);
   const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  const maxReadAttempts = 3;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
@@ -418,7 +429,12 @@ export function loadSessionStore(
       // writes the file after readFileSync returns, a post-read stat could tag
       // stale content as current and make future cache hits return old data.
       break;
-    } catch {
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const isPermanentReadError = code === "ENOENT" || code === "EACCES" || code === "EPERM";
+      if (isPermanentReadError) {
+        break;
+      }
       if (attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;
@@ -442,7 +458,10 @@ export function loadSessionStore(
     let pruned = 0;
     let capped = 0;
     if (maintenance.mode === "enforce") {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+        storePath,
+        store,
+      });
       if (
         shouldRunModelRunPrune({
           maintenance,
@@ -456,7 +475,10 @@ export function loadSessionStore(
       }
     }
     if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
-      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+        storePath,
+        store,
+      });
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
@@ -504,32 +526,6 @@ export function loadSessionStore(
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }
 
-export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
-  const currentFileStat = getFileStatSnapshot(storePath);
-  const cacheEnabled = isSessionStoreCacheEnabled();
-  if (cacheEnabled) {
-    const cached = readSessionStoreSnapshotCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
-    }
-  }
-
-  const store = loadSessionStore(storePath, { clone: false });
-  if (!cacheEnabled) {
-    return cloneSessionStoreSnapshot(store);
-  }
-  return writeSessionStoreSnapshotCache({
-    storePath,
-    store,
-    mtimeMs: currentFileStat?.mtimeMs,
-    sizeBytes: currentFileStat?.sizeBytes,
-  });
-}
-
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
@@ -544,8 +540,4 @@ export function readSessionEntry(
     sessionKey,
   });
   return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
-}
-
-export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {
-  return Object.entries(readSessionStoreSnapshot(storePath)) as SessionStoreSnapshotEntries;
 }

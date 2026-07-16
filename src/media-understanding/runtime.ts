@@ -1,7 +1,8 @@
 // Public file-oriented media-understanding runtime for image, audio, video, and
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
@@ -107,7 +108,7 @@ function buildFileContext(params: {
 }
 
 function isRemoteMediaReference(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
+  return hasHttpUrlPrefix(value.trim());
 }
 
 function concreteMime(mime: string | undefined): string | undefined {
@@ -309,10 +310,15 @@ async function readImageDescriptionInput(params: {
     params.mediaUrl ??
     (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
   if (!remoteRef) {
+    const { buffer } = await readLocalFileSafely({ filePath: params.filePath });
     return {
-      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
+      buffer,
       fileName: basenameFromMediaReference(params.filePath),
-      mime: params.mime,
+      mime: await detectMime({
+        buffer,
+        filePath: params.filePath,
+        headerMime: concreteMime(params.mime),
+      }),
     };
   }
   const attachments = normalizeMediaAttachments(
@@ -330,7 +336,9 @@ async function readImageDescriptionInput(params: {
     return {
       buffer: media.buffer,
       fileName: media.fileName || basenameFromMediaReference(remoteRef),
-      mime: concreteMime(params.mime) ?? media.mime,
+      // The attachment cache has already resolved MIME from bytes, filename, and headers.
+      // Keep the caller hint only as a fallback for cache implementations with no MIME result.
+      mime: media.mime ?? concreteMime(params.mime),
     };
   } finally {
     await cache.cleanup();

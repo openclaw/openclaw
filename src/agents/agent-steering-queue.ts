@@ -1,4 +1,5 @@
 /** Leases and formats completed subagent results for injection into requester turns. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -58,7 +59,9 @@ function describeOutcome(payload: PendingFinalDeliveryPayload): string {
 
 function promptLiteral(value: string): string {
   const literal = sanitizeForPromptLiteral(value).trim();
-  return literal.length > MAX_METADATA_CHARS ? literal.slice(0, MAX_METADATA_CHARS) : literal;
+  return literal.length > MAX_METADATA_CHARS
+    ? truncateUtf16Safe(literal, MAX_METADATA_CHARS)
+    : literal;
 }
 
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {
@@ -78,7 +81,7 @@ function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQue
 }
 
 /** List pending completion payloads that should be steered into a requester turn. */
-export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
+function listPendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
   now?: number;
@@ -111,7 +114,7 @@ export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Build the merged runtime prompt for one or more pending steering items. */
-export function buildMergedAgentSteeringPrompt(
+function buildMergedAgentSteeringPrompt(
   items: readonly AgentSteeringQueueItem[],
 ): string | undefined {
   const sections: string[] = [];

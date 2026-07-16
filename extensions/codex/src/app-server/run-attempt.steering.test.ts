@@ -1,7 +1,7 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   createParams,
@@ -16,6 +16,30 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+
+const activeRunRegistrationMocks = vi.hoisted(() => ({
+  clearActiveEmbeddedRun: vi.fn(),
+  setActiveEmbeddedRun: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    clearActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.clearActiveEmbeddedRun>
+    ): ReturnType<typeof actual.clearActiveEmbeddedRun> => {
+      activeRunRegistrationMocks.clearActiveEmbeddedRun(...args);
+      return actual.clearActiveEmbeddedRun(...args);
+    },
+    setActiveEmbeddedRun: (
+      ...args: Parameters<typeof actual.setActiveEmbeddedRun>
+    ): ReturnType<typeof actual.setActiveEmbeddedRun> => {
+      activeRunRegistrationMocks.setActiveEmbeddedRun(...args);
+      return actual.setActiveEmbeddedRun(...args);
+    },
+  };
+});
 
 setupRunAttemptTestHooks();
 
@@ -119,6 +143,52 @@ describe("runCodexAppServerAttempt steering", () => {
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("passes session files through active Codex app-server registration for command lookup", async () => {
+    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
+    const params = createSteeringParams();
+    activeRunRegistrationMocks.setActiveEmbeddedRun.mockClear();
+    activeRunRegistrationMocks.clearActiveEmbeddedRun.mockClear();
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+
+    expect(activeRunRegistrationMocks.setActiveEmbeddedRun).toHaveBeenCalledWith(
+      params.sessionId,
+      expect.anything(),
+      params.sessionKey,
+      params.sessionFile,
+    );
+
+    await waitAndQueueActiveRunMessage(params.sessionId, "session-file registered", {
+      debounceMs: 0,
+    });
+
+    await vi.waitFor(
+      () =>
+        expect(requests.filter((entry) => entry.method === "turn/steer")).toEqual([
+          {
+            method: "turn/steer",
+            params: {
+              threadId: "thread-1",
+              expectedTurnId: "turn-1",
+              input: [{ type: "text", text: "session-file registered", text_elements: [] }],
+            },
+          },
+        ]),
+      fastWait,
+    );
+
+    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(activeRunRegistrationMocks.clearActiveEmbeddedRun).toHaveBeenCalledWith(
+      params.sessionId,
+      expect.anything(),
+      params.sessionKey,
+      params.sessionFile,
+    );
   });
 
   it("flushes batched default queued steering during normal turn cleanup", async () => {

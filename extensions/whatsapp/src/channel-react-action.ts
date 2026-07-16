@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements channel react action behavior.
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import {
   isWhatsAppGroupJid,
@@ -54,24 +55,6 @@ function readUploadFileCaptionText(args: Record<string, unknown>): string {
   );
 }
 
-function readBooleanParam(args: Record<string, unknown>, key: string): boolean | undefined {
-  const value = args[key];
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true") {
-    return true;
-  }
-  if (normalized === "false") {
-    return false;
-  }
-  return undefined;
-}
-
 function hasUploadFileBufferPayload(args: Record<string, unknown>): boolean {
   return readStringParam(args, "buffer", { trim: false }) !== undefined;
 }
@@ -93,7 +76,8 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
 
 function extractBase64Payload(encoded: string): string {
   const match = /^data:[^;]+;base64,(.*)$/i.exec(encoded.trim());
-  return match ? match[1] : encoded;
+  const payload = match?.[1];
+  return payload !== undefined ? payload : encoded;
 }
 
 function estimateBase64DecodedBytes(encoded: string): number {

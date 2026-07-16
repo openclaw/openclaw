@@ -1,3 +1,4 @@
+import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -5,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,12 +16,8 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
-  extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
@@ -60,16 +58,13 @@ export {
   formatRateLimitOrOverloadedErrorCopy,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./sanitize-user-facing-text.js";
 
 export {
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
-  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -131,6 +126,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
     lower.includes("request_too_large") ||
+    isConfiguredContextSizeOverflowError(errorMessage) ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
@@ -306,7 +302,7 @@ function normalizeFailoverDetailString(value: string | undefined): string | unde
     return undefined;
   }
   return trimmed.length > MAX_FAILOVER_DETAIL_CHARS
-    ? trimmed.slice(0, MAX_FAILOVER_DETAIL_CHARS)
+    ? truncateUtf16Safe(trimmed, MAX_FAILOVER_DETAIL_CHARS)
     : trimmed;
 }
 
@@ -731,7 +727,10 @@ function toReasonClassification(reason: FailoverReason): FailoverClassification 
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 export function isTransientHttpError(raw: string): boolean {
@@ -744,39 +743,6 @@ export function isTransientHttpError(raw: string): boolean {
     return false;
   }
   return TRANSIENT_HTTP_ERROR_CODES.has(status.code);
-}
-
-export function classifyFailoverReasonFromHttpStatus(
-  status: number | undefined,
-  message?: string,
-  opts?: { provider?: string },
-): FailoverReason | null {
-  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
-  const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
-        includeProviderPluginHooks: !hasProviderStatusSignal,
-      })
-    : null;
-  const providerPluginReason = hasProviderStatusSignal
-    ? classifyProviderPluginError({
-        errorMessage: message ?? "",
-        provider: opts?.provider,
-        status,
-      })
-    : null;
-  const effectiveMessageClassification = providerPluginReason
-    ? toReasonClassification(providerPluginReason)
-    : messageClassification;
-  return failoverReasonFromClassification(
-    classifyFailoverClassificationFromHttpStatus(
-      status,
-      message,
-      effectiveMessageClassification,
-      status,
-      opts?.provider,
-      { preserveProviderSignalClassification: providerPluginReason !== null },
-    ),
-  );
 }
 
 function classifyFailoverClassificationFromHttpStatus(
@@ -902,6 +868,8 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
+// Only cross-provider structured codes classify in core; provider-native
+// mappings belong to provider hooks.
 function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
@@ -1242,8 +1210,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
@@ -1577,12 +1546,12 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+    log.warn(`Long error truncated: ${truncateUtf16Safe(raw, 200)}`);
   }
   return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
-export function isRawAssistantErrorPassthrough(params: {
+function isRawAssistantErrorPassthrough(params: {
   friendlyError?: string;
   rawError?: string;
 }): boolean {
@@ -1648,7 +1617,7 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
-export function isMissingToolCallInputError(raw: string): boolean {
+function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
     return false;
   }
@@ -1732,7 +1701,7 @@ export function parseImageDimensionError(raw: string): {
   };
 }
 
-export function isImageDimensionErrorMessage(raw: string): boolean {
+function isImageDimensionErrorMessage(raw: string): boolean {
   return Boolean(parseImageDimensionError(raw));
 }
 
@@ -1754,7 +1723,7 @@ export function parseImageSizeError(raw: string): {
   };
 }
 
-export function isImageSizeError(errorMessage?: string): boolean {
+function isImageSizeError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
@@ -1813,3 +1782,4 @@ export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,8 +3,18 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type {
+  ChannelDoctorConfigMutation,
+  ChannelDoctorLegacyConfigRule,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  archiveLegacyStateSource,
+  defineChannelAliasMigration,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeStoredConversationId } from "./src/conversation-store-helpers.js";
 import {
   buildMSTeamsConversationStateKey,
@@ -42,6 +52,24 @@ import {
   normalizeMSTeamsSsoStoredToken,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
+
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "msteams",
+  // Teams previews default to partial streaming, matching the runtime default
+  // in reply-dispatcher when no mode is configured.
+  streaming: { defaultMode: "partial" },
+});
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
+  streamingAliasMigration.legacyConfigRules;
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  return streamingAliasMigration.normalizeChannelConfig({ cfg });
+}
 
 type FeedbackLearningEntry = {
   sessionKey: string;
@@ -107,7 +135,8 @@ function resolveLegacySanitizedSessionKey(
   const matches = knownSessionKeys.filter(
     (sessionKey) => legacySanitizeSessionKey(sessionKey) === fileStem,
   );
-  return matches.length === 1 ? matches[0] : null;
+  const [match] = matches;
+  return matches.length === 1 && match ? match : null;
 }
 
 function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {
@@ -132,15 +161,6 @@ function listCandidateStorePaths(params: {
   return [...paths];
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
 function resolveStateFilePath(stateDir: string, filename: string): string {
   return path.join(stateDir, filename);
 }
@@ -154,10 +174,6 @@ async function readLegacyJsonFile<T>(
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -268,28 +284,6 @@ async function listLegacyLearningFiles(
   return files;
 }
 
-async function archiveLegacySource(params: {
-  filePath: string;
-  label?: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  const label = params.label ?? "Microsoft Teams feedback-learning";
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ${label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ${label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ${label} legacy source: ${String(err)}`);
-  }
-}
-
 function mergeLearnings(legacy: string[], existing?: FeedbackLearningEntry): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -350,7 +344,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} conversation ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} conversation`,
         changes,
@@ -425,7 +419,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       changes.push(
         `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} poll ${imported === 1 ? "entry" : "entries"} -> plugin state`,
       );
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} poll`,
         changes,
@@ -489,7 +483,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           `Skipped ${skipped} malformed ${MSTEAMS_PLUGIN_ID} SSO token ${skipped === 1 ? "entry" : "entries"} during migration`,
         );
       }
-      await archiveLegacySource({
+      await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} SSO-token`,
         changes,
@@ -558,7 +552,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           updatedAt: Date.now(),
         });
         imported++;
-        await archiveLegacySource({ filePath: file.filePath, changes, warnings });
+        await archiveLegacyStateSource({
+          filePath: file.filePath,
+          label: "Microsoft Teams feedback-learning",
+          changes,
+          warnings,
+        });
       }
       if (imported > 0) {
         changes.unshift(

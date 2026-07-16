@@ -1,4 +1,5 @@
 // Verifies generated models.json preserves source secret markers from runtime snapshots.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
@@ -48,8 +49,8 @@ let clearConfigCache: typeof import("../config/io.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/io.js").setRuntimeConfigSnapshot;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
-let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.js").planOpenClawModelsJsonWithDeps;
+let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
+let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 const fixtureSuite = createFixtureSuite("openclaw-models-runtime-source-");
 
@@ -57,9 +58,9 @@ beforeAll(async () => {
   await fixtureSuite.setup();
   ({ clearConfigCache, clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../config/io.js"));
-  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
-    await import("./models-config.js"));
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.js"));
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
+  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
   ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
 });
 
@@ -182,9 +183,13 @@ function createOpenAiHeaderRuntimeConfig(): OpenClawConfig {
   };
 }
 
+function getOpenAiProvider(config: OpenClawConfig) {
+  return expectDefined(config.models?.providers?.openai, "OpenAI provider config");
+}
+
 function createOpenAiSourceConfigWithHeadersAndApiKey(): OpenClawConfig {
   const config = createOpenAiHeaderSourceConfig();
-  config.models!.providers!.openai.apiKey = {
+  getOpenAiProvider(config).apiKey = {
     source: "env",
     provider: "default",
     id: "OPENAI_API_KEY", // pragma: allowlist secret
@@ -194,7 +199,7 @@ function createOpenAiSourceConfigWithHeadersAndApiKey(): OpenClawConfig {
 
 function createOpenAiRuntimeConfigWithHeadersAndApiKey(): OpenClawConfig {
   const config = createOpenAiHeaderRuntimeConfig();
-  config.models!.providers!.openai.apiKey = "sk-runtime-resolved"; // pragma: allowlist secret
+  getOpenAiProvider(config).apiKey = "sk-runtime-resolved"; // pragma: allowlist secret
   return config;
 }
 
@@ -263,7 +268,7 @@ describe("models-config runtime source snapshot", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: createOpenAiApiKeySourceConfig().models!.providers!.openai,
+          openai: getOpenAiProvider(createOpenAiApiKeySourceConfig()),
           moonshot: {
             baseUrl: "https://api.moonshot.ai/v1",
             apiKey: { source: "file", provider: "vault", id: "/moonshot/apiKey" },
@@ -276,7 +281,7 @@ describe("models-config runtime source snapshot", () => {
     const runtimeConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: createOpenAiApiKeyRuntimeConfig().models!.providers!.openai,
+          openai: getOpenAiProvider(createOpenAiApiKeyRuntimeConfig()),
           moonshot: {
             baseUrl: "https://api.moonshot.ai/v1",
             apiKey: "sk-runtime-moonshot", // pragma: allowlist secret
@@ -349,7 +354,7 @@ describe("models-config runtime source snapshot", () => {
         models: {
           providers: {
             openai: {
-              ...runtimeConfig.models!.providers!.openai,
+              ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://api.openai.com/v1",
               headers: {
                 "X-OpenClaw-Test": "one",
@@ -363,7 +368,7 @@ describe("models-config runtime source snapshot", () => {
         models: {
           providers: {
             openai: {
-              ...runtimeConfig.models!.providers!.openai,
+              ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://mirror.example/v1",
               headers: {
                 "X-OpenClaw-Test": "two",

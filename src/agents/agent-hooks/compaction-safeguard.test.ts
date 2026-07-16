@@ -21,7 +21,8 @@ import {
   setCompactionSafeguardCancelReason,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import compactionSafeguardExtension, { testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension from "./compaction-safeguard.js";
+import { testing } from "./compaction-safeguard.test-support.js";
 
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
@@ -310,7 +311,7 @@ describe("compaction-safeguard tool failures", () => {
     ];
 
     const failures = collectToolFailures(messages);
-    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+    expect(failures.map((failure: { toolCallId: string }) => failure.toolCallId)).toEqual([
       "call-spawn-error",
       "call-spawn-forbidden",
     ]);
@@ -358,7 +359,7 @@ describe("compaction-safeguard tool failures", () => {
     ];
 
     const failures = collectToolFailures(messages);
-    expect(failures.map((failure) => failure.toolCallId)).toEqual([
+    expect(failures.map((failure: { toolCallId: string }) => failure.toolCallId)).toEqual([
       "call-exec-failed",
       "call-other-lookalike",
     ]);
@@ -390,6 +391,21 @@ describe("compaction-safeguard tool failures", () => {
 
     const section = formatToolFailuresSection(failures);
     expect(section).toContain("exec (exitCode=2): failed");
+  });
+
+  it("keeps bounded tool-failure text UTF-16 safe", () => {
+    const failures = collectToolFailures([
+      {
+        role: "toolResult",
+        toolCallId: "call-boundary",
+        toolName: "exec",
+        isError: true,
+        content: [{ type: "text", text: `${"x".repeat(236)}🚀tail` }],
+        timestamp: Date.now(),
+      },
+    ]);
+
+    expect(failures[0]?.summary).toBe(`${"x".repeat(236)}...`);
   });
 
   it("caps the number of failures and adds overflow line", () => {
@@ -452,6 +468,18 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
     expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("keeps compaction summary prefixes UTF-16 safe", () => {
+    const prefixBudget = MAX_COMPACTION_SUMMARY_CHARS - SUMMARY_TRUNCATED_MARKER.length;
+    const oversized = `${"x".repeat(prefixBudget - 1)}🚀${"z".repeat(
+      SUMMARY_TRUNCATED_MARKER.length + 10,
+    )}`;
+
+    expect(capCompactionSummary(oversized)).toBe(
+      `${"x".repeat(prefixBudget - 1)}${SUMMARY_TRUNCATED_MARKER}`,
+    );
+    expect(capCompactionSummary(`${"x".repeat(9)}🚀tail`, 10)).toBe("x".repeat(9));
   });
 
   it("preserves workspace critical rules suffix when capping", () => {
@@ -521,6 +549,10 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("## Tool Failures");
     expect(capped).toContain("<read-files>");
     expect(capped).toContain("## Session Startup");
+  });
+
+  it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
+    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("tail");
   });
 });
 
@@ -817,7 +849,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       recentTurnsPreserve: 1,
     });
 
-    expect(split.preservedMessages.map((msg) => msg.role)).toEqual([
+    expect(split.preservedMessages.map((msg: AgentMessage) => msg.role)).toEqual([
       "user",
       "assistant",
       "toolResult",
@@ -825,13 +857,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ]);
     expect(
       split.preservedMessages.some(
-        (msg) => msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
+        (msg: AgentMessage) =>
+          msg.role === "user" && (msg as { content?: unknown }).content === "recent ask",
       ),
     ).toBe(true);
 
     const summarizableToolResultIds = split.summarizableMessages
-      .filter((msg) => msg.role === "toolResult")
-      .map((msg) => (msg as { toolCallId?: unknown }).toolCallId);
+      .filter((msg: AgentMessage) => msg.role === "toolResult")
+      .map((msg: AgentMessage) => (msg as { toolCallId?: unknown }).toolCallId);
     expect(summarizableToolResultIds).toContain("call_old");
     expect(summarizableToolResultIds).not.toContain("call_recent");
   });
@@ -906,6 +939,18 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("[non-text content: image]");
   });
 
+  it("keeps bounded preserved-turn text UTF-16 safe", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: `${"x".repeat(599)}🚀tail`,
+        timestamp: 1,
+      },
+    ]);
+
+    expect(section).toContain(`- User: ${"x".repeat(599)}...`);
+  });
+
   it("does not add non-text placeholders for text-only content blocks", () => {
     const section = formatPreservedTurnsSection([
       {
@@ -973,7 +1018,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(split.preservedMessages).toHaveLength(6);
     expect(
       split.preservedMessages.some(
-        (msg) =>
+        (msg: AgentMessage) =>
           msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
       ),
     ).toBe(true);
@@ -1037,7 +1082,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
     );
     expect(
-      identifiers.reduce((count, id) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), 0), // pragma: allowlist secret
+      identifiers.reduce(
+        (count: number, id: string) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), // pragma: allowlist secret
+        0,
+      ),
     ).toBe(1);
   });
 
@@ -2172,6 +2220,32 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
+  it("proceeds with keyless SDK-managed auth (ok:true, no apiKey/headers)", async () => {
+    // Regression: aws-sdk/oauth providers sign requests later and resolve with
+    // neither apiKey nor headers. `ok: true` must be trusted so compaction runs
+    // instead of wedging every message with a false "no credentials" cancel.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({ provider: "amazon-bedrock" });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true });
+    const mockContext = createCompactionContext({ sessionManager, getApiKeyAndHeadersMock });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({ messageText: "summarize me", tokensBefore: 1000 });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+  });
+
   it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 
@@ -2692,6 +2766,14 @@ describe("readWorkspaceContextForSummary", () => {
     expect(result).not.toContain("Ignore me");
   });
 
+  it("keeps bounded workspace rules UTF-16 safe", async () => {
+    const heading = "## Session Startup\n";
+    const safePrefix = `${heading}${"x".repeat(1_999 - heading.length)}`;
+    const result = await withWorkspaceSummary(`${safePrefix}🚀tail\n`, ["Session Startup"]);
+
+    expect(result).toContain(`${safePrefix}\n...[truncated]...`);
+  });
+
   it("reads workspace context from the configured workspace instead of process cwd", async () => {
     const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
@@ -2745,3 +2827,4 @@ describe("readWorkspaceContextForSummary", () => {
     },
   );
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

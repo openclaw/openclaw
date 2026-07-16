@@ -1,4 +1,6 @@
 // Mattermost plugin module implements monitor resources behavior.
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -15,7 +17,7 @@ import {
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
 
-export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
+type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
 export type MattermostMediaInfo = {
   path: string;
@@ -23,8 +25,29 @@ export type MattermostMediaInfo = {
   kind: MattermostMediaKind;
 };
 
+export function formatMattermostInboundMediaText(params: {
+  body: string;
+  mediaPlaceholder: string;
+  expectedCount: number;
+  mediaCount: number;
+}): string {
+  const unavailableCount = Math.max(0, params.expectedCount - params.mediaCount);
+  if (unavailableCount === 0) {
+    return params.body;
+  }
+  return formatInboundMediaUnavailableText({
+    body: params.body,
+    mediaPlaceholder: params.mediaCount === 0 ? params.mediaPlaceholder : undefined,
+    notice: `[mattermost ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
+  });
+}
+
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
+const MONITOR_RESOURCE_CACHE_MAX_ENTRIES = 1000;
+// Match Telegram/Tlon inbound media: header wait is independent of body idle.
+const MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+const MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
 
 type SaveRemoteMedia = (params: {
   url: string;
@@ -32,6 +55,8 @@ type SaveRemoteMedia = (params: {
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
+  responseHeaderTimeoutMs?: number;
+  readIdleTimeoutMs?: number;
 }) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
@@ -80,7 +105,11 @@ export function createMattermostMonitorResources(params: {
   ): void => {
     const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs });
     if (expiresAt !== undefined) {
+      // Concurrent misses can resolve the same key out of order. Reinsert on
+      // writes so the cap keeps the most recently resolved resources.
+      cache.delete(key);
       cache.set(key, { value, expiresAt });
+      pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
     }
   };
 
@@ -104,6 +133,10 @@ export function createMattermostMonitorResources(params: {
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
+          // Without these, a Mattermost host that never returns headers can stall
+          // inbound preprocessing indefinitely (idle timeout never starts).
+          responseHeaderTimeoutMs: MATTERMOST_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+          readIdleTimeoutMs: MATTERMOST_MEDIA_READ_IDLE_TIMEOUT_MS,
         });
         const contentType = saved.contentType ?? undefined;
         out.push({

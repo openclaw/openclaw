@@ -70,8 +70,6 @@ export interface GatewayPluginRuntime {
   };
 }
 
-export type { ProcessedAttachments } from "./inbound-attachments.js";
-
 export interface OutboundResult {
   channel: string;
   messageId?: string;
@@ -221,6 +219,12 @@ export interface CoreGatewayContext {
    */
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
+  /**
+   * Invoked when the gateway websocket closes or permanently stops
+   * (fatal close code / reconnect attempts exhausted). Without this the
+   * channel status keeps reporting the last `connected: true` snapshot.
+   */
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */
   runtime: GatewayPluginRuntime;
