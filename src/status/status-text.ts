@@ -39,6 +39,7 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -621,8 +622,25 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     (await resolveDefaultThinkingLevel()) ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     "off";
-  const effectiveThinkLevel =
+  // Active profiles can forbid `off` (for example, always-thinking models). Absence means
+  // there is no prepared policy fact, so status must not fall back to manifest discovery.
+  const activeThinkingProfile =
     requestedThinkLevel === "off"
+      ? resolveActiveProviderThinkingProfile({
+          provider: selectedLookupProvider,
+          context: {
+            provider: selectedLookupProvider,
+            modelId: selectedLookupModel,
+            agentRuntime: effectiveHarness,
+          },
+        })
+      : undefined;
+  const activeProfileSupportsOff = activeThinkingProfile?.levels.some(
+    (level) => level.id === "off",
+  );
+  const effectiveThinkLevel =
+    requestedThinkLevel === "off" &&
+    (activeThinkingProfile == null || activeProfileSupportsOff === true)
       ? "off"
       : (await loadThinkingLevelRuntime()).resolveSupportedThinkingLevel({
           provider: selectedLookupProvider,

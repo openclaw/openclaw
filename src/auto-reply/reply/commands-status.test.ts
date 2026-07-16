@@ -15,6 +15,7 @@ import {
 } from "../../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -40,6 +41,14 @@ const providerUsageMock = vi.hoisted(() => ({
     updatedAt: Date.now(),
     providers: [],
   })),
+}));
+const activeProviderThinkingMock = vi.hoisted(() => ({
+  resolveThinkingProfile: vi.fn<
+    (params: {
+      provider: string;
+      context: { modelId: string };
+    }) => ProviderThinkingProfile | null | undefined
+  >(() => undefined),
 }));
 type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
@@ -72,6 +81,11 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../plugins/provider-thinking-active.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-thinking-active.js")>()),
+  resolveActiveProviderThinkingProfile: activeProviderThinkingMock.resolveThinkingProfile,
+}));
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntimeMock);
 
@@ -201,6 +215,8 @@ afterEach(() => {
     updatedAt: Date.now(),
     providers: [],
   });
+  activeProviderThinkingMock.resolveThinkingProfile.mockReset();
+  activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue(undefined);
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
     plugins: [],
@@ -2273,6 +2289,46 @@ describe("buildStatusReply subagent summary", () => {
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Think: max");
     expect(normalized).not.toContain("Think: ultra");
+  });
+
+  it("clamps off to the active provider's always-thinking level", async () => {
+    activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-kimi-k3",
+        updatedAt: 0,
+        thinkingLevel: "off",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "moonshot",
+      model: "kimi-k3",
+      contextTokens: 262_144,
+      resolvedThinkLevel: "off",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Think: max");
+    expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "moonshot",
+        context: expect.objectContaining({ modelId: "kimi-k3" }),
+      }),
+    );
   });
 
   it("treats the persisted harness id as observational in /status", async () => {
