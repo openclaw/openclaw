@@ -89,11 +89,18 @@ describe("chat realtime actions", () => {
   );
 
   it("keeps the selected input in memory when persistence fails and shares it across panes", async () => {
-    const firstPane = createState();
-    const secondPane = createState();
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    // Install a fresh storage mock whose own `setItem` throws, so the
+    // persistence-blocked path is actually exercised. Spying on
+    // `Storage.prototype.setItem` would not help here because the mock
+    // returned by `createStorageMock()` defines `setItem` as an own
+    // property that shadows the prototype.
+    const failingStorage = createStorageMock();
+    vi.spyOn(failingStorage, "setItem").mockImplementation(() => {
       throw new DOMException("blocked", "SecurityError");
     });
+    vi.stubGlobal("localStorage", failingStorage);
+    const firstPane = createState();
+    const secondPane = createState();
 
     firstPane.selectRealtimeTalkInput("usb-mic");
     await secondPane.toggleRealtimeTalk();
