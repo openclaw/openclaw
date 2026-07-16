@@ -1879,7 +1879,7 @@ jobs:
           # Same tree-OID gate as the boundary lane: restore only artifacts
           # produced from identical generative sources, so stale snapshots can
           # neither false-skip rebuilds nor leave ghost declarations.
-          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels)"
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; lint prepares cold"
             exit 0
@@ -2098,13 +2098,14 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Restore only when the generative source trees are identical to the
-          # snapshotting run (tree OIDs cover content exactly). This makes the
-          # restored artifacts valid by construction: no clock-skew mtime race
-          # can false-skip a rebuild, and deleted/renamed sources can never
-          # leave ghost declarations because a differing tree skips the
-          # restore entirely and builds cold.
-          current_trees="$(git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels)"
+          # Restore only when the generative source trees AND the runner
+          # toolchain match the snapshotting run. Tree OIDs cover source
+          # content exactly; the node/pnpm versions cover toolchain-only
+          # changes (the sticky key already hashes config/scripts/lockfile, so
+          # those force a fresh key). Restored artifacts are valid by
+          # construction: no clock-skew mtime race can false-skip a rebuild,
+          # and deleted/renamed sources or a toolchain bump build cold.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
           if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
             echo "boundary source trees changed since snapshot; building cold"
             echo "restored=false" >> "$GITHUB_OUTPUT"
@@ -2289,7 +2290,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
-          git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels > "$sticky_root/.source-trees"
+          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; } > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
