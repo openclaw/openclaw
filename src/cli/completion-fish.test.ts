@@ -41,4 +41,28 @@ describe("completion-fish helpers", () => {
       `complete -c openclaw -n "__fish_seen_subcommand_from completion" -l write-state -d 'Write cache'\n`,
     );
   });
+
+  it("skips Commander value placeholders and keeps only real flags", () => {
+    const line = buildFishOptionCompletionLine({
+      rootCmd: "openclaw",
+      condition: "__fish_use_subcommand",
+      flags: "--trigger-script <path|->",
+      description: "Condition script file, or - for stdin",
+    });
+    expect(line).toBe(
+      `complete -c openclaw -n "__fish_use_subcommand" -l trigger-script -d 'Condition script file, or - for stdin'\n`,
+    );
+  });
+
+  it("skips both angle-bracket and square-bracket value placeholders", () => {
+    const line = buildFishOptionCompletionLine({
+      rootCmd: "openclaw",
+      condition: "__fish_use_subcommand",
+      flags: "-o, --output <file>",
+      description: "Write to file",
+    });
+    expect(line).toBe(
+      `complete -c openclaw -n "__fish_use_subcommand" -s o -l output -d 'Write to file'\n`,
+    );
+  });
 });

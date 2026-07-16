@@ -3,8 +3,12 @@ function escapeFishDescription(value: string): string {
   return value.replace(/'/g, "'\\''");
 }
 
+function isCommanderValuePlaceholder(token: string): boolean {
+  return /[<>[\]]/.test(token);
+}
+
 function parseOptionFlags(flags: string): { long?: string; short?: string } {
-  const parts = flags.split(/[ ,|]+/);
+  const parts = flags.split(/[ ,|]+/).filter((token) => !isCommanderValuePlaceholder(token));
   const long = parts.find((flag) => flag.startsWith("--"))?.replace(/^--/, "");
   const short = parts
     .find((flag) => flag.startsWith("-") && !flag.startsWith("--"))
