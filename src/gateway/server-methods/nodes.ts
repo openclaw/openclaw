@@ -88,6 +88,7 @@ import { emitDeviceManagementSecurityEvent } from "./device-management-security.
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
+  clearNodeWakeState as clearRemovedNodeWakeState,
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
@@ -373,6 +374,7 @@ function clearRemovedNodeRuntimeState(params: {
   context: Pick<GatewayRequestContext, "nodeRegistry">;
 }) {
   pendingNodeActionsById.delete(params.nodeId);
+  clearRemovedNodeWakeState(params.nodeId);
   params.context.nodeRegistry.updateSurface(params.nodeId, {
     caps: [],
     commands: [],

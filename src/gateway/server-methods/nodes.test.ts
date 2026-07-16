@@ -18,6 +18,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -32,6 +33,8 @@ async function createState(label: string): Promise<OpenClawTestState> {
 afterEach(async () => {
   resetDiagnosticEventsForTest();
   resetRemoteNodeSkillsForTests();
+  nodeWakeById.clear();
+  nodeWakeNudgeById.clear();
   vi.clearAllMocks();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
@@ -210,6 +213,25 @@ async function readPaired(stateDir: string): Promise<Record<string, unknown>> {
 }
 
 describe("nodeHandlers node.pair.remove", () => {
+  it("clears wake state when removing a disconnected device-backed node", async () => {
+    const state = await createState("node-remove-clears-wake-state");
+    const nodeId = "disconnected-ios-node";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeById.set(nodeId, Date.now());
+
+    const { opts } = createOptions({ nodeId });
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
+    await Promise.resolve();
+
+    expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
+    expect(nodeWakeById.has(nodeId)).toBe(false);
+    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+  });
+
   it("removes Android device-backed node rows from the paired-device store", async () => {
     const state = await createState("node-remove-android-device-backed");
     const nodeId = "android-node-1";
