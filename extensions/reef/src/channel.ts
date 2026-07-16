@@ -360,9 +360,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             ctx.log?.error?.(`reef rejection notice failed for ${receiptId}: ${String(error)}`),
         },
       );
-      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
-      setActiveReef({ flow, friends, reviews });
-
       const reconcile = async () => {
         await friends.reconcile();
         await friends.surfacePairingCandidates(async ({ peer, fingerprint, approvalToken }) => {
@@ -374,7 +371,11 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           });
         });
       };
+      // Refresh peer keys before recovery can dispatch an agent turn. Activate
+      // only after reconciliation, but before that turn can use Reef outbound.
       await reconcile();
+      setActiveReef({ flow, friends, reviews });
+      await receiptNotifier.notifyRejections(trust.pendingOutboundRejections());
       ctx.setStatus({ accountId: "default", running: true, connected: false });
       const inbox = new ReefInboxConnection(
         transport,
