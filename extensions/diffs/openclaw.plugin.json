@@ -5,7 +5,7 @@
   },
   "name": "Diffs",
   "description": "OpenClaw read-only diff viewer plugin and file renderer for agents.",
-  "icon": "https://raw.githubusercontent.com/openclaw/openclaw/main/ui/public/plugin-art/diffs.webp",
+  "icon": "https://raw.githubusercontent.com/openclaw/openclaw/401f278f111fa5ea1b79521112ba350852328dc0/ui/public/plugin-art/diffs.webp",
   "catalog": { "featured": true, "order": 40 },
   "contracts": {
     "tools": ["diffs"]

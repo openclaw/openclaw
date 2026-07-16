@@ -2,7 +2,7 @@
   "id": "memory-lancedb",
   "name": "Memory LanceDB",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
-  "icon": "https://avatars.githubusercontent.com/u/108903835?v=4",
+  "icon": "https://raw.githubusercontent.com/lancedb/lancedb/f05140f21c12b2f9c6598145004e83bcf1dfeb82/plugins/lancedb/skills/lancedb/assets/icon.png",
   "catalog": { "featured": true, "order": 70 },
   "commandAliases": [{ "name": "ltm" }],
   "activation": {
