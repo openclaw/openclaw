@@ -4,7 +4,9 @@ import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_POLL_MS,
+  captureNodeWakeLifecycle,
   clearNodeWakeState,
+  isNodeWakeLifecycleCurrent,
   nodeWakeById,
   nodeWakeNudgeById,
 } from "./nodes-wake-state.js";
@@ -85,6 +87,19 @@ describe("clearNodeWakeState", () => {
     clearNodeWakeState("node-1");
     expect(nodeWakeById.has("node-1")).toBe(false);
     expect(nodeWakeNudgeById.has("node-1")).toBe(false);
+  });
+
+  it("invalidates an in-flight lifecycle before the node id can be reused", () => {
+    const removedLifecycle = captureNodeWakeLifecycle("node-1");
+    expect(isNodeWakeLifecycleCurrent("node-1", removedLifecycle)).toBe(true);
+
+    clearNodeWakeState("node-1");
+
+    expect(removedLifecycle.aborted).toBe(true);
+    expect(isNodeWakeLifecycleCurrent("node-1", removedLifecycle)).toBe(false);
+    const replacementLifecycle = captureNodeWakeLifecycle("node-1");
+    expect(replacementLifecycle).not.toBe(removedLifecycle);
+    expect(isNodeWakeLifecycleCurrent("node-1", replacementLifecycle)).toBe(true);
   });
 
   it("is a no-op when the node id does not exist", () => {

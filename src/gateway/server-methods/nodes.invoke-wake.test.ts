@@ -6,6 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
+import { nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -649,6 +650,8 @@ describe("plugin surface refresh", () => {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
+    nodeWakeById.clear();
+    nodeWakeNudgeById.clear();
     mocks.getRuntimeConfig.mockClear();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
@@ -1297,6 +1300,41 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate wake state after removal invalidates an in-flight invoke", async () => {
+    vi.useFakeTimers();
+    const nodeId = "ios-node-remove-during-wake";
+    mockDirectWakeConfig(nodeId);
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    const nodeRegistry = createMissingNodeRegistry();
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-remove-during-wake" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+
+    clearNodeWakeState(nodeId);
+    await vi.advanceTimersByTimeAsync(20_000);
+    const respond = await invokePromise;
+
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+    expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
+    expect(nodeWakeById.has(nodeId)).toBe(false);
+    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe("node not connected");
   });
 
   it("queues iOS foreground-only command failures and keeps them until acked", async () => {

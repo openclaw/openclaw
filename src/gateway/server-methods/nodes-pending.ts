@@ -14,6 +14,7 @@ import {
 } from "../node-pending-work.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import {
+  captureNodeWakeLifecycle,
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -85,6 +86,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       });
       let wakeTriggered = false;
       if (p.wake !== false && !queued.deduped && !context.nodeRegistry.get(p.nodeId)) {
+        const wakeLifecycle = captureNodeWakeLifecycle(p.nodeId);
         const wakeReqId = queued.item.id;
         context.logGateway.info(
           `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
@@ -93,6 +95,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
         const wake = await maybeWakeNodeWithApns(p.nodeId, {
           wakeReason: "node.pending",
           cfg,
+          lifecycle: wakeLifecycle,
         });
         context.logGateway.info(
           `node pending wake stage=wake1 node=${p.nodeId} req=${wakeReqId} ` +
@@ -108,6 +111,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
             nodeId: p.nodeId,
             context,
             timeoutMs: NODE_WAKE_RECONNECT_WAIT_MS,
+            lifecycle: wakeLifecycle,
           });
           context.logGateway.info(
             `node pending wake stage=wait1 node=${p.nodeId} req=${wakeReqId} ` +
@@ -121,6 +125,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
             force: true,
             wakeReason: "node.pending",
             cfg,
+            lifecycle: wakeLifecycle,
           });
           context.logGateway.info(
             `node pending wake stage=wake2 node=${p.nodeId} req=${wakeReqId} force=true ` +
@@ -133,6 +138,7 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
               nodeId: p.nodeId,
               context,
               timeoutMs: NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
+              lifecycle: wakeLifecycle,
             });
             context.logGateway.info(
               `node pending wake stage=wait2 node=${p.nodeId} req=${wakeReqId} ` +
@@ -141,7 +147,10 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
           }
         }
         if (!context.nodeRegistry.get(p.nodeId)) {
-          const nudge = await maybeSendNodeWakeNudge(p.nodeId, { cfg });
+          const nudge = await maybeSendNodeWakeNudge(p.nodeId, {
+            cfg,
+            lifecycle: wakeLifecycle,
+          });
           context.logGateway.info(
             `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
               `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
