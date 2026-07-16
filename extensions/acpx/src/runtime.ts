@@ -569,12 +569,11 @@ function normalizeCodexAcpModelOverride(
 }
 
 function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
-  if (!override.model) {
-    return "";
-  }
-  return override.reasoningEffort
-    ? `${override.model}/${override.reasoningEffort}`
-    : override.model;
+  // Return the bare model id. Reasoning effort is supplied separately through
+  // the adapter command-line config overrides (model_reasoning_effort), not
+  // appended to the session model id. Appending reasoning to the model id
+  // (e.g. gpt-5.6-sol/medium) causes ACP_BACKEND_UNSUPPORTED_CONTROL errors.
+  return override.model ?? "";
 }
 
 function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
@@ -1296,36 +1295,27 @@ export class AcpxRuntime implements AcpRuntime {
       return;
     }
     if (isCodexAcp) {
+      // Reasoning effort is supplied when launching the Codex adapter;
+      // the adapter does not advertise it as a mutable config option and
+      // rejects it with ACP_BACKEND_UNSUPPORTED_CONTROL. Only forward
+      // explicit model changes; drop thinking/effort keys silently.
       if (
-        key === "model" ||
         key === "thinking" ||
         key === "thought_level" ||
         key === "reasoning_effort"
       ) {
-        const override =
-          key === "model"
-            ? normalizeCodexAcpModelOverride(input.value)
-            : normalizeCodexAcpModelOverride(undefined, input.value);
-        if (!override && key !== "model") {
-          return;
+        return;
+      }
+      if (key === "model") {
+        const override = normalizeCodexAcpModelOverride(input.value);
+        if (override?.model) {
+          await delegate.setConfigOption({
+            ...input,
+            key: "model",
+            value: override.model,
+          });
         }
-        if (override) {
-          if (override.model) {
-            await delegate.setConfigOption({
-              ...input,
-              key: "model",
-              value: override.model,
-            });
-          }
-          if (override.reasoningEffort) {
-            await delegate.setConfigOption({
-              ...input,
-              key: "reasoning_effort",
-              value: override.reasoningEffort,
-            });
-          }
-          return;
-        }
+        return;
       }
     }
     if (isClaudeAcpCommand(command) && key === "model") {
