@@ -1408,6 +1408,7 @@ jobs:
           - name: profile 2/4
             lane: profile-2
             slug: profile-2-of-4
+            docker_cache: true
           - name: profile 3/4
             lane: profile-3
             slug: profile-3-of-4
@@ -1420,6 +1421,12 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Set up Blacksmith Docker layer cache
+        if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+        with:
+          max-cache-size-mb: 800000
 
       - name: Build QA smoke runtime
         env:

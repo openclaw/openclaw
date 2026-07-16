@@ -64,6 +64,7 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
+    expect(primaryScenarioIds[1]).toContain("system-agent-ring-zero-setup");
     const primaryRunCosts = primaryScenarioIds.map((ids) =>
       ids.reduce(
         (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),

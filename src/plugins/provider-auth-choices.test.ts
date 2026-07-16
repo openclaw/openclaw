@@ -52,8 +52,9 @@ const {
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
-const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
-  await import("../agents/provider-auth-aliases.js");
+const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+const { resetProviderAuthAliasMapCacheForTest } =
+  await import("../agents/provider-auth-aliases.test-support.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {

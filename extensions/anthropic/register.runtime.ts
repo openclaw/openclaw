@@ -810,12 +810,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
       {
         id: "cli",
         label: "Claude CLI",
-        hint: "Reuse a local Claude CLI login and run Anthropic models through the Claude CLI runtime",
+        hint: "Keep using a local Claude CLI login and run Anthropic models through the Claude CLI runtime",
         kind: "custom",
         wizard: {
           choiceId: "anthropic-cli",
           choiceLabel: "Anthropic Claude CLI",
-          choiceHint: "Reuse a local Claude CLI login on this host",
+          choiceHint: "Keep using an existing Claude Code CLI login on this host",
           assistantPriority: -20,
           groupId: "anthropic",
           groupLabel: "Anthropic",
@@ -837,12 +837,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
       {
         id: "setup-token",
         label: "Anthropic setup-token",
-        hint: "Manual bearer token path",
+        hint: "Paste a long-lived token created with 'claude setup-token'",
         kind: "token",
         wizard: {
           choiceId: "setup-token",
           choiceLabel: "Anthropic setup-token",
-          choiceHint: "Manual token path",
+          choiceHint: "Token created by running 'claude setup-token' in your terminal",
           assistantPriority: 40,
           groupId: "anthropic",
           groupLabel: "Anthropic",

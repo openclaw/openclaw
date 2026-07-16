@@ -188,7 +188,7 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
-  it("saturates unsafe stat size output without returning NaN", async () => {
+  it("normalizes stat output locale and saturates unsafe sizes", async () => {
     // Remote stat output is untrusted shell text; unsafe numeric fields should
     // clamp to deterministic values instead of leaking NaN into callers.
     await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
@@ -216,8 +216,11 @@ describe("remote sandbox fs bridge", () => {
             };
           }
           if (command.script.includes('stat -c "%F|%s|%y"')) {
+            const kind = command.script.includes('LC_ALL=C stat -c "%F|%s|%y"')
+              ? "regular file"
+              : "reguläre Datei";
             return {
-              stdout: Buffer.from("regular file|9007199254740992|8640000000001\n"),
+              stdout: Buffer.from(`${kind}|9007199254740992|8640000000001\n`),
               stderr: Buffer.alloc(0),
               code: 0,
             };

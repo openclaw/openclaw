@@ -80,6 +80,11 @@ and shows why the previous one failed. If several options are found you can
 switch between them before continuing. Automatic local discovery never pulls
 or downloads a model.
 
+To use a Claude subscription when the Gateway host has no Claude CLI login, run
+`claude setup-token` on any machine with Claude Code installed, then paste the
+printed token as **Anthropic setup-token** under **Connect with an API key or
+token**.
+
 Gemini CLI and Antigravity remain available for normal use after setup. Their
 installed CLIs are shown for context but are not auto-tested because neither can
 enforce the tool-free inference probe.

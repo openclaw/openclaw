@@ -73,6 +73,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
+import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 /** Logger surface used by plugin update flows. */
 type PluginUpdateLogger = {
@@ -1287,17 +1288,6 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
-function removeDisabledPluginIdFromList(
-  list: string[] | undefined,
-  pluginId: string,
-): string[] | undefined {
-  if (!Array.isArray(list) || !list.includes(pluginId)) {
-    return list;
-  }
-  const next = list.filter((id) => id !== pluginId);
-  return next.length > 0 ? next : undefined;
-}
-
 function resetDisabledPluginSlots(
   slots: NonNullable<OpenClawConfig["plugins"]>["slots"] | undefined,
   pluginId: string,
@@ -1321,23 +1311,17 @@ function resetDisabledPluginSlots(
   return next;
 }
 
-function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const pluginsConfig = config.plugins ?? {};
-  const existingEntry = pluginsConfig.entries?.[pluginId];
+function disablePluginAfterUpdateFailure(config: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
+    updateChannelConfig: false,
+  });
+  const pluginsConfig = disabled.plugins ?? {};
   return {
-    ...config,
+    ...disabled,
     plugins: {
       ...pluginsConfig,
-      allow: removeDisabledPluginIdFromList(pluginsConfig.allow, pluginId),
-      deny: removeDisabledPluginIdFromList(pluginsConfig.deny, pluginId),
+      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
       slots: resetDisabledPluginSlots(pluginsConfig.slots, pluginId),
-      entries: {
-        ...pluginsConfig.entries,
-        [pluginId]: {
-          ...existingEntry,
-          enabled: false,
-        },
-      },
     },
   };
 }
@@ -1459,7 +1443,7 @@ export async function updateNpmInstalledPlugins(params: {
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
         message;
       logger.warn?.(disabledMessage);
-      next = disablePluginConfigEntry(next, pluginId);
+      next = disablePluginAfterUpdateFailure(next, pluginId);
       changed = true;
       outcomes.push({
         pluginId,
