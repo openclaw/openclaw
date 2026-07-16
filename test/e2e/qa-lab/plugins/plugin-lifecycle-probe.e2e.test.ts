@@ -220,14 +220,13 @@ describe("plugin lifecycle matrix probe", () => {
         ["--input-type=module", "-e", parentScript],
         {
           env: { ...process.env, OPENCLAW_TEST_DESCENDANT_PID: descendantPidPath },
-          timeoutKillGraceMs: 250,
-          timeoutMs: 500,
+          timeoutKillGraceMs: 100,
+          timeoutMs: 200,
         },
       );
       await waitForFile(descendantPidPath, 2_000);
-      await sleep(300);
 
-      await expect(run).rejects.toThrow(/timed out after 500ms/u);
+      await expect(run).rejects.toThrow(/timed out after 200ms/u);
 
       descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
       expect(isProcessRunning(descendantPid)).toBe(false);
