@@ -1,11 +1,20 @@
 // Covers the CI node test shard runner: plan resolution from job env and
 // bounded-concurrency execution with per-child Vitest cache isolation.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildChildEnv,
+  pruneFsModuleCache,
   resolveShardChildCommand,
   resolveShardPlans,
   runShardPlans,
@@ -141,6 +150,71 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(peakActive).toBeLessThanOrEqual(2);
     expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
+  });
+
+  it("reuses isolated persistent cache slots across serial work", async () => {
+    const scratchDir = makeScratchDir();
+    const persistentRoot = path.join(makeScratchDir(), "persistent");
+    mkdirSync(persistentRoot, { recursive: true });
+    const seenCaches = new Set<string>();
+    const activeCaches = new Set<string>();
+    let sharedWriter = false;
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
+      }),
+      {
+        concurrency: 2,
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+        runChild: async (_args: string[], childEnv: Record<string, string | undefined>) => {
+          const cache = childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH ?? "";
+          if (activeCaches.has(cache)) {
+            sharedWriter = true;
+          }
+          activeCaches.add(cache);
+          seenCaches.add(cache);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          activeCaches.delete(cache);
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(sharedWriter).toBe(false);
+    expect([...seenCaches].toSorted()).toEqual([
+      path.join(persistentRoot, "vitest-cache-0"),
+      path.join(persistentRoot, "vitest-cache-1"),
+    ]);
+  });
+
+  it("prunes oldest transform entries while preserving Vitest metadata", () => {
+    const persistentRoot = makeScratchDir();
+    const slot = path.join(persistentRoot, "vitest-cache-0");
+    mkdirSync(slot, { recursive: true });
+    const metadata = path.join(slot, "_metadata.json");
+    const oldest = path.join(slot, "oldest");
+    const newest = path.join(slot, "newest");
+    writeFileSync(metadata, "{}", "utf8");
+    writeFileSync(oldest, "aaaaaaaa", "utf8");
+    writeFileSync(newest, "bbbbbbbb", "utf8");
+    utimesSync(oldest, new Date(1_000), new Date(1_000));
+    utimesSync(newest, new Date(2_000), new Date(2_000));
+
+    expect(pruneFsModuleCache(persistentRoot, 16)).toEqual({
+      beforeBytes: 18,
+      afterBytes: 10,
+      removedFiles: 1,
+    });
+    expect(existsSync(metadata)).toBe(true);
+    expect(existsSync(oldest)).toBe(false);
+    expect(existsSync(newest)).toBe(true);
   });
 
   it("stops scheduling new plans after a failure and reports the first failing code", async () => {

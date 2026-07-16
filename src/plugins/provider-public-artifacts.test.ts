@@ -132,6 +132,24 @@ describe("provider public artifacts", () => {
     });
   });
 
+  it("loads Kimi Code K3 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("kimi");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId: "k3",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "max",
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
   it("loads trusted official external provider policy before runtime registration", () => {
     const bundledPluginsDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),

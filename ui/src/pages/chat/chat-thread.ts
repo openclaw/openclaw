@@ -43,6 +43,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
+import type { PlanStatus } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 type BuildChatItemsProps = {
@@ -60,6 +61,9 @@ type BuildChatItemsProps = {
   showToolCalls: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
+  /** True while the current session has an abortable live run. */
+  runActive?: boolean;
+  planStatus?: PlanStatus | null;
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
   searchOpen?: boolean;
@@ -77,7 +81,9 @@ type RenderChatItem = ReturnType<typeof buildChatItems>[number];
 type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
-  parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
+  parts: Array<
+    Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "plan" }>
+  >;
 };
 
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
@@ -1095,6 +1101,7 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "stream":
       return item.startedAt;
     case "reading-indicator":
+    case "plan":
       return null;
   }
   return null;
@@ -1469,6 +1476,9 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
       items.push({ kind: "reading-indicator", key, startedAt });
     }
   }
+  if (props.runActive === true && props.planStatus && props.planStatus.steps.length > 0) {
+    items.push({ kind: "plan", key: `plan:${props.sessionKey}:active` });
+  }
 
   return annotateToolTurnOutcome(
     groupMessages(
@@ -1532,6 +1542,8 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       );
     case "reading-indicator":
       return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+    case "plan":
+      return previous.kind === "plan";
   }
   return false;
 }
@@ -1632,6 +1644,8 @@ function sameChatItemsStructuralInput(
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
     previous.runWorking === next.runWorking &&
+    previous.runActive === next.runActive &&
+    Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery
@@ -1732,7 +1746,7 @@ export function coalesceStreamRuns(
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream and reading-indicator items render under one
+  // Contiguous in-flight stream, plan, and reading-indicator items render under one
   // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
@@ -1742,7 +1756,7 @@ export function coalesceStreamRuns(
     }
   };
   for (const item of items) {
-    if (item.kind === "stream" || item.kind === "reading-indicator") {
+    if (item.kind === "stream" || item.kind === "reading-indicator" || item.kind === "plan") {
       run.push(item);
       continue;
     }

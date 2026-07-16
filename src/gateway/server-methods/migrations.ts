@@ -107,27 +107,13 @@ function fingerprintMemoryPlan(params: {
     .createHash("sha256")
     .update(
       stableStringify({
-        version: 2,
+        version: 3,
         agentId: params.agentId,
         workspace: params.workspace,
         providerId: params.providerId,
         overwrite: params.overwrite === true,
-        plan: {
-          source: params.plan.source,
-          target: params.plan.target ?? null,
-          items: params.plan.items.map((item) => ({
-            id: item.id,
-            kind: item.kind,
-            action: item.action,
-            status: item.status,
-            source: item.source ?? null,
-            target: item.target ?? null,
-            reason: item.reason ?? null,
-            sensitive: item.sensitive === true,
-            sourceRevision: item.sourceRevision ?? null,
-            details: item.details ?? null,
-          })),
-        },
+        // Apply receives the full plan, so every provider-visible field must bind to the review.
+        plan: params.plan,
       }),
     )
     .digest("hex");

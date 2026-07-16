@@ -231,7 +231,6 @@ describe("qa scenario catalog", () => {
 
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
-    const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
     const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
@@ -244,14 +243,6 @@ describe("qa scenario catalog", () => {
     );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
-    expect(uxMatrix.execution.kind).toBe("script");
-    if (uxMatrix.execution.kind !== "script") {
-      throw new Error(`expected script scenario, got ${uxMatrix.execution.kind}`);
-    }
-    expect(uxMatrix.execution.path).toBe("scripts/qa/ux-matrix-evidence-producer.ts");
-    expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
-    expect(uxMatrix.execution.config).toBeUndefined();
-    expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
     expect(otelSmoke.execution.kind).toBe("script");
     if (otelSmoke.execution.kind !== "script") {
       throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);

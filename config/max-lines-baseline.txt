@@ -893,7 +893,6 @@ src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
-src/gateway/session-transcript-readers.ts
 src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts

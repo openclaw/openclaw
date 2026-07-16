@@ -59,7 +59,8 @@ longer package exports: `agent-runtime-test-contracts`,
 `plugin-state-test-runtime`, `plugin-test-api`, `plugin-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
 `reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
-`test-node-mocks`, and `testing`. The private bundled helper surfaces
+`test-live`, `test-live-auth`, `test-media-generation`,
+`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surfaces
 `ssrf-runtime-internal` and `codex-native-task-runtime` are also repo-local
 only.
 
