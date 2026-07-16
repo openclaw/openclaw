@@ -74,6 +74,16 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 
+  it("rejects gateway ports above the TCP port range", () => {
+    const result = validateConfigObjectRaw({ gateway: { port: 65_536 } });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "gateway.port");
+      expect(issue.message).toContain("(maximum: 65535)");
+    }
+  });
+
   it("surfaces specific sub-issue for invalid_union bindings errors instead of generic 'Invalid input'", () => {
     const result = validateConfigObjectRaw({
       bindings: [
