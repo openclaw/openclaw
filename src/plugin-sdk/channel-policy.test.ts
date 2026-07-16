@@ -38,7 +38,7 @@ describe("mutable allowlist table helpers", () => {
 
   it("builds a detector from prefixes and a stable-id pattern", () => {
     const detector = buildMutableAllowEntryDetector({
-      prefixes: ["demo:", "user:"],
+      prefixes: ["", "demo:", "user:"],
       stableIdPattern: /^U\d+$/,
     });
     expect(detector("demo:user:U123")).toBe(false);

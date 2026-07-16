@@ -66,7 +66,7 @@ const matrixRoomSchema = buildGroupEntrySchema({
   users: AllowFromListSchema,
 })
   .omit({ toolsBySender: true, allowFrom: true })
-  .strip()
+  .strict()
   .optional();
 
 const matrixNetworkSchema = z

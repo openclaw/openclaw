@@ -181,12 +181,13 @@ export function buildMutableAllowEntryDetector(params: {
   prefixes?: readonly string[];
   stableIdPattern: RegExp;
 }): (entry: string) => boolean {
+  const prefixes = (params.prefixes ?? []).filter((prefix) => prefix.length > 0);
   return (entry) => {
     const text = entry.trim();
     if (!text || text === "*") {
       return false;
     }
-    const normalized = stripMutableAllowEntryPrefixes(text, params.prefixes ?? []);
+    const normalized = stripMutableAllowEntryPrefixes(text, prefixes);
     if (!normalized) {
       return false;
     }
