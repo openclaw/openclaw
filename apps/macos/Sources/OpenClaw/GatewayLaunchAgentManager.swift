@@ -1,6 +1,11 @@
 import Foundation
 
 enum GatewayLaunchAgentManager {
+    struct LoadedGatewayState: Equatable, Sendable {
+        let runningPID: Int32?
+        let reusablePID: Int32?
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = ".openclaw/disable-launchagent"
 
@@ -59,15 +64,23 @@ enum GatewayLaunchAgentManager {
     }
 
     static func reusableLoadedGatewayPID(port: Int) async -> Int32? {
-        guard let service = await self.readDaemonService(),
-              let pid = self.runningGatewayPID(from: service),
-              let configAudit = service["configAudit"] as? [String: Any],
-              configAudit["ok"] as? Bool == true,
-              self.gatewayPort(from: service) == port
-        else {
-            return nil
+        await self.loadedGatewayState(port: port).reusablePID
+    }
+
+    static func loadedGatewayState(port: Int) async -> LoadedGatewayState {
+        guard let service = await self.readDaemonService() else {
+            return LoadedGatewayState(runningPID: nil, reusablePID: nil)
         }
-        return pid
+        let runningPID = self.runningGatewayPID(from: service)
+        let configAudit = service["configAudit"] as? [String: Any]
+        let reusablePID: Int32? = if configAudit?["ok"] as? Bool == true,
+                                     self.gatewayPort(from: service) == port
+        {
+            runningPID
+        } else {
+            nil
+        }
+        return LoadedGatewayState(runningPID: runningPID, reusablePID: reusablePID)
     }
 
     static func runningGatewayPID() async -> Int32? {
@@ -231,7 +244,11 @@ extension GatewayLaunchAgentManager {
                 try? await Task.sleep(nanoseconds: self.testingDaemonCommandDelayNanoseconds)
             }
             let payload = if args.first == "status" {
-                self.testingDaemonStatusPayload ?? "{\"ok\":true}"
+                if self.testingDaemonStatusPayloads.isEmpty {
+                    self.testingDaemonStatusPayload ?? "{\"ok\":true}"
+                } else {
+                    self.testingDaemonStatusPayloads.removeFirst()
+                }
             } else {
                 "{\"ok\":true}"
             }
@@ -290,6 +307,7 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingInterceptDaemonCommands = false
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
     private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
+    private nonisolated(unsafe) static var testingDaemonStatusPayloads: [String] = []
     private nonisolated(unsafe) static var testingDaemonCommandDelayNanoseconds: UInt64 = 0
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
@@ -302,6 +320,12 @@ extension GatewayLaunchAgentManager {
 
     static func setTestingDaemonStatusPayload(_ payload: String?) {
         self.testingDaemonStatusPayload = payload
+        self.testingDaemonStatusPayloads = []
+    }
+
+    static func setTestingDaemonStatusPayloads(_ payloads: [String]) {
+        self.testingDaemonStatusPayload = nil
+        self.testingDaemonStatusPayloads = payloads
     }
 
     static func setTestingDaemonCommandDelayNanoseconds(_ nanoseconds: UInt64) {
