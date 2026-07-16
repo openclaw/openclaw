@@ -386,7 +386,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
-    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {

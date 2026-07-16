@@ -217,7 +217,7 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD });
+      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
     } catch (err) {
       settle({
         ok: false,
