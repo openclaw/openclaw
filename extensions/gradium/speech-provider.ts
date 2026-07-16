@@ -81,8 +81,17 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeGradiumProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => GRADIUM_VOICES.map((v) => ({ id: v.id, name: v.name })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readGradiumProviderConfig(providerConfig).apiKey || process.env.GRADIUM_API_KEY),
+    isConfigured: ({ providerConfig }) => {
+      try {
+        return Boolean(
+          readGradiumProviderConfig(providerConfig).apiKey || process.env.GRADIUM_API_KEY,
+        );
+      } catch {
+        // A malformed baseUrl is not a configuration error we want to surface
+        // from a predicate; synthesis still validates before dispatch.
+        return false;
+      }
+    },
     synthesize: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
