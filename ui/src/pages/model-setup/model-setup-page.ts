@@ -187,9 +187,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private canVerify(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
     const snapshot = this.context.gateway.snapshot;
-    return Boolean(
+    return (
       this.canUseSetup(client) &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.verify") === true,
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.verify") === true
     );
   }
 
