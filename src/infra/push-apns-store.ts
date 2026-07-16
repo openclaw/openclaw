@@ -426,6 +426,20 @@ function apnsRegistrationsEqual(left: ApnsRegistration, right: ApnsRegistration)
   );
 }
 
+function nextApnsRegistrationVersion(nodeId: string, previousVersions: readonly number[]): number {
+  let latest = -1;
+  for (const version of previousVersions) {
+    if (!Number.isSafeInteger(version) || version < 0) {
+      throw new Error(`invalid APNs registration version for node ${nodeId}`);
+    }
+    latest = Math.max(latest, version);
+  }
+  if (latest === Number.MAX_SAFE_INTEGER) {
+    throw new Error(`APNs registration version exhausted for node ${nodeId}`);
+  }
+  return Math.max(Date.now(), latest + 1);
+}
+
 /** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
@@ -501,17 +515,21 @@ export async function registerApnsRegistration(
         .select("updated_at_ms")
         .where("node_id", "=", nodeId),
     );
-    if (current && (!Number.isSafeInteger(current.updated_at_ms) || current.updated_at_ms < 0)) {
-      throw new Error(`invalid APNs registration version for node ${nodeId}`);
-    }
-    if (current?.updated_at_ms === Number.MAX_SAFE_INTEGER) {
-      throw new Error(`APNs registration version exhausted for node ${nodeId}`);
-    }
-    // A monotonic version keeps compare-and-delete safe when two registrations
-    // land in the same millisecond or the wall clock moves backward.
+    const tombstone = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("apns_registration_tombstones")
+        .select("deleted_at_ms")
+        .where("node_id", "=", nodeId),
+    );
+    // The tombstone carries the deleted row's successor version. Advancing past
+    // both rows keeps stale compare-and-delete callers harmless after re-registration.
+    const previousVersions = [current?.updated_at_ms, tombstone?.deleted_at_ms].filter(
+      (version): version is number => version !== undefined,
+    );
     const next: ApnsRegistration = {
       ...candidate,
-      updatedAtMs: Math.max(Date.now(), (current?.updated_at_ms ?? -1) + 1),
+      updatedAtMs: nextApnsRegistrationVersion(nodeId, previousVersions),
     };
     const row = apnsRegistrationToRow(next);
     const {
@@ -642,7 +660,17 @@ export async function clearApnsRegistrationIfCurrent(params: {
     ) {
       return false;
     }
-    const deletedAtMs = Date.now();
+    const tombstone = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("apns_registration_tombstones")
+        .select("deleted_at_ms")
+        .where("node_id", "=", normalizedNodeId),
+    );
+    const previousVersions = [currentRow.updated_at_ms, tombstone?.deleted_at_ms].filter(
+      (version): version is number => version !== undefined,
+    );
+    const deletedAtMs = nextApnsRegistrationVersion(normalizedNodeId, previousVersions);
     // Doctor may not have retired the old JSON yet. This durable tombstone
     // prevents that stale source from restoring an invalidated registration.
     executeSqliteQuerySync(

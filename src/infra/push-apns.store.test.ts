@@ -221,16 +221,27 @@ describe("push APNs registration store", () => {
     const database = openOpenClawStateDatabase({ env: databaseEnv(baseDir) });
     expect(
       database.db
-        .prepare("SELECT node_id FROM apns_registration_tombstones WHERE node_id = ?")
+        .prepare(
+          "SELECT node_id, deleted_at_ms FROM apns_registration_tombstones WHERE node_id = ?",
+        )
         .get("ios-node-1"),
-    ).toEqual({ node_id: "ios-node-1" });
+    ).toEqual({ node_id: "ios-node-1", deleted_at_ms: fresh.updatedAtMs + 1 });
 
-    await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    const replacement = await registerDirectApnsRegistration({ nodeId: "ios-node-1", baseDir });
+    expect(replacement.updatedAtMs).toBe(fresh.updatedAtMs + 2);
     expect(
       database.db
         .prepare("SELECT node_id FROM apns_registration_tombstones WHERE node_id = ?")
         .get("ios-node-1"),
     ).toBeUndefined();
+    await expect(
+      clearApnsRegistrationIfCurrent({
+        nodeId: "ios-node-1",
+        registration: fresh,
+        baseDir,
+      }),
+    ).resolves.toBe(false);
+    await expect(loadApnsRegistration("ios-node-1", baseDir)).resolves.toEqual(replacement);
   });
 
   it("rejects invalid direct and relay inputs", async () => {
