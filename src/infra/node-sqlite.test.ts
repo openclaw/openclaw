@@ -42,14 +42,13 @@ async function withNodeSharedSqliteValue(value: unknown, run: () => Promise<void
 function expectedUnsafeSqliteError(version: string, shared: boolean): string {
   const wording = shared ? "uses shared system" : "embeds";
   const remediation = shared
-    ? "Upgrade the system SQLite library to 3.51.3+ or specific patched versions (3.44.6/3.50.7), or use a Node build embedding a safe version."
+    ? "Upgrade the system SQLite library to one of those safe versions, or use a Node build embedding a safe version."
     : "Upgrade to Node 22.22.3+, 24.15.0+, or 25.9.0+ before retrying.";
   return (
     "SQLite support is unavailable or unsafe in this Node runtime. " +
-    "OpenClaw requires SQLite 3.51.3+ (or the specific patched versions 3.44.6+ in the 3.44.x series or 3.50.7+ in the 3.50.x series) for WAL safety; " +
+    "OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x for WAL safety; " +
     `Node ${process.versions.node} ${wording} SQLite ${version}, which is affected by the upstream WAL-reset ` +
-    `database corruption bug. The SQLite team released fixes for 3.51.3+, 3.50.7+ (3.50.x only), and 3.44.6+ (3.44.x only). ` +
-    remediation
+    `database corruption bug. ${remediation}`
   );
 }
 
@@ -70,21 +69,13 @@ describe("node SQLite safety", () => {
     },
   );
 
-  it.each([
-    "3.51.2",
-    "3.51.0",
-    "3.50.6",
-    "3.49.1",
-    "3.46.1",
-    "3.46.0",
-    "3.45.0",
-    "3.44.5",
-    "invalid",
-    "3.51",
-  ])("rejects vulnerable or unknown SQLite %s", async (version) => {
-    const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
-    expect(() => requireNodeSqlite()).toThrow(`SQLite ${version}, which is affected`);
-  });
+  it.each(["3.51.2", "3.51.0", "3.50.6", "3.49.1", "3.46.1", "3.44.5", "invalid", "3.51"])(
+    "rejects vulnerable or unknown SQLite %s",
+    async (version) => {
+      const { requireNodeSqlite } = await loadNodeSqliteWithVersion(version);
+      expect(() => requireNodeSqlite()).toThrow(`SQLite ${version}, which is affected`);
+    },
+  );
 
   it.each([true, "true"])(
     "rejects vulnerable shared SQLite with system-library remediation (%j)",
