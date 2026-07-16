@@ -135,6 +135,13 @@ describe("chart mapping", () => {
         (bar) => Number(bar.getAttribute("height")) > 0.5,
       ),
     ).toBe(true);
+
+    const zeroBars = renderToContainer(renderChart(widget({ props: { type: "bar" } }), [0, 0]));
+    expect(
+      [...zeroBars.querySelectorAll(".workspace-chart__bars rect")].every(
+        (bar) => Number(bar.getAttribute("height")) === 0,
+      ),
+    ).toBe(true);
   });
 
   it("keeps extreme finite ranges within valid SVG coordinates", () => {

@@ -189,11 +189,12 @@ function drawBars(model: Extract<ChartModel, { status: "ready" }>): SVGTemplateR
   return svg`<g class="workspace-chart__bars">
     ${model.values.map((value, index) => {
       const y = yScale(value, model.min, model.max);
+      const height = Math.abs(baseline - y);
       return svg`<rect
         x=${PADDING + index * slot + gap / 2}
         y=${Math.min(y, baseline)}
         width=${slot - gap}
-        height=${Math.max(Math.abs(baseline - y), 0.5)}
+        height=${height === 0 ? 0 : Math.max(height, 0.5)}
       />`;
     })}
   </g>`;
