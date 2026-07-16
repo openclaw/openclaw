@@ -72,6 +72,7 @@ describe("tui session actions", () => {
     activityStatus: "idle",
     statusTimeout: null,
     lastCtrlCAt: 0,
+    loopState: null,
     ...overrides,
   });
 
@@ -943,6 +944,7 @@ describe("tui session actions", () => {
       activityStatus: "idle",
       statusTimeout: null,
       lastCtrlCAt: 0,
+      loopState: null,
     };
 
     const { refreshSessionInfo } = createSessionActions({

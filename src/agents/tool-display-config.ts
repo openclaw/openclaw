@@ -670,5 +670,25 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "TTS",
       detailKeys: ["text", "channel"],
     },
+    loop_status: {
+      emoji: "🔄",
+      title: "Loop Status",
+      detailKeys: [],
+    },
+    loop_complete: {
+      emoji: "✅",
+      title: "Loop Complete",
+      detailKeys: ["summary", "reason", "subtasks"],
+    },
+    loop_phase: {
+      emoji: "📌",
+      title: "Loop Phase",
+      detailKeys: ["phase", "summary", "passed"],
+    },
+    loop_update: {
+      emoji: "📊",
+      title: "Loop Update",
+      detailKeys: ["phase", "subtaskId", "status", "result", "error"],
+    },
   },
 };

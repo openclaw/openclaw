@@ -227,7 +227,9 @@
     <string name="native_262c897a1f408b0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपने Gateway से कनेक्ट करें"</string>
     <string name="native_2682bd813a3bccbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw qr से सेटअप कोड दर्ज करें।"</string>
     <string name="native_268f14bbfe119c1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"डायग्नोस्टिक्स"</string>
+    <string name="native_269f6f1318591771" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loop Phase"</string>
     <string name="native_26f0dd993530eb2d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"अपने-आप फिर से प्रयास किया जा रहा है"</string>
+    <string name="native_26f4b7ca89db61bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loop Complete"</string>
     <string name="native_2728740a95d465c6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s भूमिकाएँ"</string>
     <string name="native_272955a627b71681" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 आइटम अनुपलब्ध है"</string>
     <string name="native_2732406e3be52c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कोई मेल खाता सेशन नहीं मिला"</string>
@@ -960,6 +962,7 @@
     <string name="native_a92f0449a9f7235b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"कार्य चल रहा है"</string>
     <string name="native_a9624cf0b6ae80c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"बोलना शुरू करें..."</string>
     <string name="native_a9ac253267d07365" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"फ़ोन नोड"</string>
+    <string name="native_a9c0bb2ced1fa87e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loop Update"</string>
     <string name="native_a9d4d060cdc21d3d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Xhigh"</string>
     <string name="native_aa1983a56dc4a1eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway होस्ट पर चलाएँ:"</string>
     <string name="native_aa6e887501659d7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skill में बदलाव के लिए operator.admin आवश्यक है। एडमिन-सक्षम gateway token के साथ फिर से कनेक्ट करें।"</string>
@@ -1006,6 +1009,7 @@
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$sदि"</string>
     <string name="native_b10d60f36b858926" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s उपलब्ध"</string>
     <string name="native_b140db2544c7f8f5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw फिर से सिंक हो रहा है"</string>
+    <string name="native_b19bc7ddb8f6e853" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Loop Status"</string>
     <string name="native_b1b3f74fe7e32ae1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"इवेंट स्ट्रीम बाधित हुई; रीफ़्रेश करने का प्रयास करें।"</string>
     <string name="native_b1c1be6b126d151f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"नोड और डिवाइस लोड नहीं किए जा सके।"</string>
     <string name="native_b205bb47f81a3096" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"सत्र खोलें"</string>

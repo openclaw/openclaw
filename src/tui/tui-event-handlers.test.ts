@@ -102,6 +102,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     activityStatus: "idle",
     statusTimeout: null,
     lastCtrlCAt: 0,
+    loopState: null,
     ...overrides,
   });
 
@@ -2308,6 +2309,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     activityStatus: "idle",
     statusTimeout: null,
     lastCtrlCAt: 0,
+    loopState: null,
     ...overrides,
   });
 

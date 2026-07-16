@@ -1112,6 +1112,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
         setActivityStatus("idle");
         forceRender = true;
+        // Notify /loop continuation mechanism that this run has ended
+        if (state._onRunEnd) {
+          const cb = state._onRunEnd;
+          state._onRunEnd = null;
+          cb(evt.runId);
+        }
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
@@ -1119,6 +1125,14 @@ export function createEventHandlers(context: EventHandlerContext) {
           return;
         }
         const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
+        if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
+          // Notify /loop that this run ended with an error so the loop doesn't hang
+          if (state._onRunEnd) {
+            const cb = state._onRunEnd;
+            state._onRunEnd = null;
+            cb(evt.runId);
+          }
+        }
         if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
           const errorMessage =
             typeof evt.data?.error === "string"

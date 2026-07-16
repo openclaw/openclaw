@@ -3,6 +3,7 @@ import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
+import type { LoopPhase, LoopSubtask } from "../loop/loop-types.js";
 
 export type TuiOptions = {
   local?: boolean;
@@ -160,6 +161,26 @@ export type GatewayStatusSummary = {
   };
 };
 
+export type TuiLoopState = {
+  task: string;
+  iteration: number;
+  maxIterations: number;
+  tokenBudget?: number;
+  /** Set to true when the agent calls loop_complete */
+  completed: boolean;
+  /** Summary from loop_complete */
+  summary?: string;
+  // ── Multi-phase fields ───────────────────────────────────────────
+  /** Current active phase, or "idle" / "complete" */
+  currentPhase: LoopPhase;
+  /** Subtask list from the plan phase */
+  subtasks: LoopSubtask[];
+  /** Path to the loop log directory */
+  loopDir?: string;
+  /** Whether the current phase is complete */
+  phaseComplete: boolean;
+};
+
 export type TuiStateAccess = {
   agentDefaultId: string;
   sessionMainKey: string;
@@ -182,4 +203,7 @@ export type TuiStateAccess = {
   activityStatus: string;
   statusTimeout: ReturnType<typeof setTimeout> | null;
   lastCtrlCAt: number;
+  loopState: TuiLoopState | null;
+  /** Internal: resolves when the current active agent run ends. Used by /loop. */
+  _onRunEnd?: ((runId: string) => void) | null;
 };

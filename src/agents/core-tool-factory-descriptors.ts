@@ -49,6 +49,10 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "video_generate", family: "openclaw" },
   { name: "web_fetch", family: "openclaw" },
   { name: "web_search", family: "openclaw" },
+  { name: "loop_status", family: "openclaw" },
+  { name: "loop_complete", family: "openclaw" },
+  { name: "loop_phase", family: "openclaw" },
+  { name: "loop_update", family: "openclaw" },
 ] as const satisfies readonly CoreToolFactoryDescriptor[];
 
 const CORE_TOOL_FACTORY_FAMILY_BY_NAME = new Map<string, CoreToolFactoryFamily>(
