@@ -341,10 +341,14 @@ function parseChangePayload(
     value.changes.length > 500 ||
     !value.changes.every(isPublisherFeedChange) ||
     !isNullableString(value.nextCursor) ||
-    value.startIndex + value.changes.length > value.changeCount ||
-    value.changes.some(
-      (change) => change.sequence <= value.fromSequence || change.sequence > value.toSequence,
-    )
+    value.startIndex + value.changes.length > value.changeCount
+  ) {
+    return null;
+  }
+  const fromSequence = value.fromSequence;
+  const toSequence = value.toSequence;
+  if (
+    value.changes.some((change) => change.sequence <= fromSequence || change.sequence > toSequence)
   ) {
     return null;
   }
