@@ -1,5 +1,10 @@
 package ai.openclaw.app
 
+internal fun String.firstCodePointOrNull(): String? {
+  if (isEmpty()) return null
+  return substring(0, offsetByCodePoints(0, 1))
+}
+
 internal fun String.takeUtf16Safe(maxChars: Int): String {
   if (length <= maxChars) return this
   // Keep the code-unit cap without leaving a high surrogate at its boundary.
