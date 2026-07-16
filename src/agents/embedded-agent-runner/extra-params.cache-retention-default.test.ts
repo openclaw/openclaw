@@ -2,7 +2,8 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
-import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
+import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 import { log } from "./logger.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 

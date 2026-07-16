@@ -646,6 +646,8 @@ export const th: TranslationMap = {
     archiveSession: "เก็บเซสชันถาวร",
     archiveSessionCount: "เก็บถาวร {count} รายการ",
     restoreSession: "กู้คืนเซสชัน",
+    stopCloudWorker: "หยุด Cloud Worker…",
+    stopCloudWorkerConfirm: 'หยุด Cloud Worker สำหรับ "{session}" หรือไม่?',
     deleteSessionMenu: "Delete…",
     deleteSessionCount: "ลบ {count} รายการ…",
     deleteSessionConfirm: 'Delete "{session}" and its transcript?',

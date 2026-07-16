@@ -44,7 +44,6 @@ import {
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { listLiveTransportQaAdapterFactories } from "./live-transports/cli.js";
-import { loadNonYamlScenarioRefs } from "./live-transports/shared/live-transport-scenarios.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -71,6 +70,7 @@ import {
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import {
+  listQaScenariosForExecutionProfile,
   QA_RUNTIME_PARITY_TIERS,
   readQaScenarioPack,
   type QaRuntimeParityTier,
@@ -158,6 +158,9 @@ export type QaSuiteCommandOptions = QaScenarioRunCommandOptions & {
   runtimePair?: string;
   runtimeParityTier?: string[];
   sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+  explicitScenarioSelection?: boolean;
 };
 
 function normalizeQaSuiteChannelDriver(
@@ -984,13 +987,14 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (liveChannelId && !liveAdapterFactory) {
     throw new Error(`unknown live QA adapter: ${liveChannelId}`);
   }
+  // liveChannelId exists only for the live driver, and explicit IDs always win.
+  // This keeps adapter profiles out of non-live and explicit-selection paths.
   const liveScenarioIds =
     liveAdapterFactory && scenarioIds.length === 0
-      ? [...(liveAdapterFactory.scenarioIds ?? [])]
+      ? listQaScenariosForExecutionProfile(`${liveChannelId}:adapter`).map(
+          (scenario) => scenario.id,
+        )
       : scenarioIds;
-  if (liveAdapterFactory && liveScenarioIds.length === 0) {
-    throw new Error(`live QA adapter ${liveChannelId} does not declare default scenarios`);
-  }
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
@@ -1119,6 +1123,10 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
             adapterOptions: {
               repoRoot,
               sutAccountId: opts.sutAccountId,
+              credentialSource: opts.credentialSource,
+              credentialRole: opts.credentialRole,
+              explicitScenarioSelection:
+                opts.explicitScenarioSelection ?? Boolean(opts.scenarioIds?.length),
             },
           }
         : {}),
@@ -1362,9 +1370,7 @@ export async function runQaCoverageReportCommand(opts: {
         : renderQaScenarioMatchesMarkdownReport({ query, matches });
       outputLabel = "QA scenario match report";
     } else {
-      const inventory = buildQaCoverageInventory(scenarios, {
-        nonYamlScenarios: await loadNonYamlScenarioRefs(),
-      });
+      const inventory = buildQaCoverageInventory(scenarios);
       body = opts.json
         ? `${JSON.stringify(inventory, null, 2)}\n`
         : renderQaCoverageMarkdownReport(inventory);

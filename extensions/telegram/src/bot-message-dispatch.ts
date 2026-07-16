@@ -299,6 +299,8 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  // Controllers retain this callback but cannot run it before turn dispatch.
+  // Acquire the fence afterward so controller setup failures claim no ownership.
   const isDispatchSuperseded = () => fence.isSuperseded();
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,

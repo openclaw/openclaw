@@ -406,6 +406,14 @@ export async function runLegacyMigrationPlans(
             warnings,
           });
         }
+        if (allEntriesCovered && plan.cleanupSource === "remove" && fileExists(plan.sourcePath)) {
+          try {
+            fs.unlinkSync(plan.sourcePath);
+            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+          } catch (err) {
+            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+          }
+        }
         if (allEntriesCovered && plan.removeSource) {
           try {
             await plan.removeSource();

@@ -357,6 +357,10 @@ export type AgentEventHandlerOptions = {
   }) => { active: boolean; runIds: string[] };
 };
 
+type AgentEventHandler = ((event: AgentEventPayload) => void) & {
+  dispose: () => void;
+};
+
 function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -381,7 +385,7 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+}: AgentEventHandlerOptions): AgentEventHandler {
   const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
     const claimId = evt.contextClaimId;
     if (!claimId) {
@@ -1280,7 +1284,7 @@ export function createAgentEventHandler({
     }
   };
 
-  return (event: AgentEventPayload) => {
+  const handleEvent = (event: AgentEventPayload) => {
     const evt = event as AgentEventRuntimePayload;
     if (!shouldProcessOwnedEvent(evt)) {
       return;
@@ -1625,5 +1629,16 @@ export function createAgentEventHandler({
       }
     }
   };
+
+  return Object.assign(handleEvent, {
+    dispose: () => {
+      // Deferred provider errors belong to this gateway subscription. Letting
+      // them outlive shutdown can project stale terminal state into a successor.
+      for (const pending of pendingTerminalLifecycleErrors.values()) {
+        clearTimeout(pending.timer);
+      }
+      pendingTerminalLifecycleErrors.clear();
+    },
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,10 +13,18 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
+  "src/agents/compaction-planning.worker.ts!",
+  "scripts/print-cli-backend-live-metadata.ts!",
+  "scripts/repro/code-mode-namespace-live.ts!",
   "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   // Loaded lazily by the registry; its callbacks form the orphan-recovery runtime contract.
   "src/agents/subagent-orphan-recovery.ts!",
+  // Task cancellation loads this control facade by string path to avoid a registry cycle.
+  "src/tasks/task-registry-control.runtime.ts!",
+  // Human plugin listing lazily loads its formatter to keep JSON startup lean.
+  "src/cli/plugins-list-format.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
@@ -44,17 +52,29 @@ const bundledPluginEntries = [
   "*.ts!",
   "index.ts!",
   "setup-entry.ts!",
+  // Core resolves these public plugin artifacts by basename rather than by a
+  // static import from the plugin entry module.
+  "*-api.ts!",
+  "cli-metadata.ts!",
+  "channel-entry.ts!",
+  // Provider catalogs and web tools resolve these manifest/convention-owned
+  // modules from the plugin root at runtime.
+  "provider-discovery.ts!",
+  "{web-search,web-fetch}-provider.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
   "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface,mcp-serve}.ts!",
   "src/subagent-hooks-api.ts!",
 ] as const;
 
+const strictBundledPluginEntries = bundledPluginEntries.filter((entry) => entry !== "*.ts!");
+
 const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/claude-agent-acp",
   "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
+  "@discord/embedded-app-sdk",
   "@discordjs/opus",
   "@homebridge/ciao",
   "@lit/context",
@@ -92,6 +112,14 @@ const rootBundledPluginRuntimeDependencies = [
   "clawpdf",
   "tokenjuice",
 ] as const;
+
+function strictBundledPluginWorkspace() {
+  return {
+    entry: strictBundledPluginEntries,
+    project: ["*.ts!", "src/**/*.{js,mjs,ts}!"],
+    ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
+  } as const;
+}
 
 // These files are test infrastructure, so their exports are intentionally
 // available to tests without becoming part of the production dead-code scan.
@@ -213,7 +241,29 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/agent-core": {
-      entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
+      entry: [
+        "src/index.ts!",
+        "src/agent.ts!",
+        "src/agent-loop.ts!",
+        "src/llm.ts!",
+        "src/node.ts!",
+        "src/runtime-deps.ts!",
+        "src/validation.ts!",
+        "src/types.ts!",
+        "src/harness/agent-harness.ts!",
+        "src/harness/types.ts!",
+        "src/harness/messages.ts!",
+        "src/harness/env/kill-tree.ts!",
+        "src/harness/session.ts!",
+        "src/harness/session/jsonl-storage.ts!",
+        "src/harness/session/memory-storage.ts!",
+        "src/harness/session/uuid.ts!",
+        "src/harness/compaction.ts!",
+        "src/harness/branch-summarization.ts!",
+        "src/harness/prompt-template-arguments.ts!",
+        "src/harness/skills.ts!",
+        "src/harness/utils/truncate.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/gateway-client": {
@@ -239,19 +289,74 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/markdown-core": {
-      entry: ["src/*.ts!"],
+      entry: [
+        "src/index.ts!",
+        "src/code-spans.ts!",
+        "src/fences.ts!",
+        "src/frontmatter.ts!",
+        "src/ir.ts!",
+        "src/render.ts!",
+        "src/render-aware-chunking.ts!",
+        "src/tables.ts!",
+        "src/types.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/media-core": {
-      entry: ["src/*.ts!"],
+      entry: [
+        "src/index.ts!",
+        "src/base64.ts!",
+        "src/constants.ts!",
+        "src/content-length.ts!",
+        "src/file-name.ts!",
+        "src/inbound-path-policy.ts!",
+        "src/inline-image-data-url.ts!",
+        "src/media-source-url.ts!",
+        "src/mime.ts!",
+        "src/read-byte-stream-with-limit.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/acp-core": {
-      entry: ["src/*.ts!"],
+      entry: [
+        "src/index.ts!",
+        "src/normalize-text.ts!",
+        "src/meta.ts!",
+        "src/numeric-options.ts!",
+        "src/record-shared.ts!",
+        "src/session.ts!",
+        "src/session-interaction-mode.ts!",
+        "src/session-lineage-meta.ts!",
+        "src/types.ts!",
+        "src/runtime/error-text.ts!",
+        "src/runtime/errors.ts!",
+        "src/runtime/session-identifiers.ts!",
+        "src/runtime/session-identity.ts!",
+        "src/runtime/types.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/terminal-core": {
-      entry: ["src/*.ts!"],
+      entry: [
+        "src/index.ts!",
+        "src/ansi.ts!",
+        "src/decorative-emoji.ts!",
+        "src/health-style.ts!",
+        "src/links.ts!",
+        "src/note.ts!",
+        "src/osc-progress.ts!",
+        "src/palette.ts!",
+        "src/progress-line.ts!",
+        "src/prompt-select-styled.ts!",
+        "src/prompt-select-styled-params.ts!",
+        "src/prompt-style.ts!",
+        "src/restore.ts!",
+        "src/safe-text.ts!",
+        "src/stream-writer.ts!",
+        "src/table.ts!",
+        "src/terminal-link.ts!",
+        "src/theme.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
@@ -267,6 +372,33 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/amazon-bedrock-mantle`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/acpx`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/cloudflare-ai-gateway`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/deepgram`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/elevenlabs`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/featherless`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/fireworks`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/google`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/huggingface`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/minimax`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/mistral`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/moonshot`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: strictBundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
@@ -277,6 +409,7 @@ const config = {
         ...bundledPluginIgnoredRuntimeDependencies,
       ],
     },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: strictBundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
       // Reef vendors its wire protocol under protocol/, which owns the noble
       // crypto dependencies. The protocol barrel is the vendored library's
