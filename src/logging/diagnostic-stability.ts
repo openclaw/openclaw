@@ -734,9 +734,6 @@ export function startDiagnosticStabilityRecorder(): void {
     return;
   }
   state.unsubscribe = onDiagnosticEvent((event) => {
-    if (event.type === "log.record") {
-      return;
-    }
     appendRecord(sanitizeDiagnosticEvent(event));
   });
 }
