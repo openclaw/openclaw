@@ -265,16 +265,8 @@ final class MacNodeModeCoordinator: NSObject {
                 forKey: computerControlEnabledKey) as? Bool ?? false)
     }
 
-    func currentCanvasPluginSurfaceURL() async -> String? {
-        await self.session.currentCanvasHostUrl()
-    }
-
     func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
         await self.session.currentCanvasHostRoute()
-    }
-
-    func refreshCanvasPluginSurfaceURL(replacing observedURL: String?) async -> String? {
-        await self.session.refreshCanvasHostUrl(replacing: observedURL)
     }
 
     func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {

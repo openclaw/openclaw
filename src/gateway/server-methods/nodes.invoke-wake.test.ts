@@ -483,7 +483,10 @@ describe("node plugin surface refresh", () => {
       'nodeHandlers["node.pluginSurface.refresh"] test invariant',
     )({
       req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
-      params: { surface: "canvas" },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
       client: client as never,
       isWebchatConnect: () => false,
       respond,
@@ -506,6 +509,45 @@ describe("node plugin surface refresh", () => {
     expect(capabilityToken.length).toBeGreaterThan(0);
     expect(capabilityToken).not.toBe("old-token");
     expect(client.pluginSurfaceUrls.canvas).toBe(canvasUrl);
+  });
+
+  it("reuses a capability rotated after the caller observed its surface", async () => {
+    const respond = vi.fn();
+    const currentUrl = "http://127.0.0.1:18789/__openclaw__/cap/current-token";
+    const client = {
+      connect: {
+        client: { id: "node-1", mode: "node" },
+      },
+      pluginSurfaceUrls: { canvas: currentUrl },
+      pluginNodeCapabilitySurfaces: {
+        canvas: { surface: "canvas", ttlMs: 100 },
+      },
+    };
+
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
+      req: { type: "req", id: "r2", method: "node.pluginSurface.refresh", params: {} },
+      params: {
+        surface: "canvas",
+        observedUrl: "https://gateway.example/__openclaw__/cap/old-token",
+      },
+      client: client as never,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(call[1]).toEqual({
+      surface: "canvas",
+      pluginSurfaceUrls: { canvas: currentUrl },
+    });
+    expect(client.pluginSurfaceUrls.canvas).toBe(currentUrl);
+    expect(client).not.toHaveProperty("pluginNodeCapabilities");
   });
 });
 

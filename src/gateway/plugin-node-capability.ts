@@ -152,6 +152,35 @@ function replacePluginNodeCapabilityInScopedHostUrl(
   }
 }
 
+function pluginNodeCapabilityFromScopedHostUrl(rawUrl: string): string | undefined {
+  try {
+    const pathname = new URL(rawUrl).pathname;
+    const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
+    const markerStart = pathname.indexOf(prefix);
+    if (markerStart < 0) {
+      return undefined;
+    }
+    const capabilityStart = markerStart + prefix.length;
+    const nextSlashIndex = pathname.indexOf("/", capabilityStart);
+    const capabilityEnd = nextSlashIndex >= 0 ? nextSlashIndex : pathname.length;
+    if (capabilityEnd <= capabilityStart) {
+      return undefined;
+    }
+    return normalizeCapability(decodeURIComponent(pathname.slice(capabilityStart, capabilityEnd)));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Detect conflicting scoped capabilities while allowing transport host rewriting. */
+export function pluginNodeCapabilityScopedHostUrlsConflict(first: string, second: string): boolean {
+  const firstCapability = pluginNodeCapabilityFromScopedHostUrl(first);
+  const secondCapability = pluginNodeCapabilityFromScopedHostUrl(second);
+  return Boolean(
+    firstCapability && secondCapability && !safeEqualSecret(firstCapability, secondCapability),
+  );
+}
+
 /** Parse and rewrite scoped capability URLs into canonical paths plus query tokens. */
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,

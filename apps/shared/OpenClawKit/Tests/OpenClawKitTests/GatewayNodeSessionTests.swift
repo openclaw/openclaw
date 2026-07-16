@@ -679,7 +679,7 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test func `timed out surface caller does not start another rotation`() async throws {
+    @Test func `timed out surface caller does not cancel rotation with longer waiter`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let options = GatewayConnectOptions(
@@ -701,11 +701,11 @@ struct GatewayNodeSessionTests {
             onDisconnected: { _ in },
             onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
 
-        async let longWait = gateway.refreshCanvasHostUrl(replacing: nil)
         async let shortWait = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         try await waitUntil("single surface refresh sent") {
             session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
         }
+        async let longWait = gateway.refreshCanvasHostUrl(replacing: nil)
         let shortValue = await shortWait
         #expect(shortValue == nil)
 
@@ -729,10 +729,9 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test func `stalled surface rotation releases for retry after operation timeout`() async throws {
+    @Test func `last timed out surface waiter releases stalled rotation for retry`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
-        await gateway._test_setPluginSurfaceRefreshOperationTimeoutMs(200)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -754,6 +753,55 @@ struct GatewayNodeSessionTests {
 
         let first = await gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         #expect(first == nil)
+
+        async let retry = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
+        let task = try #require(session.latestTask())
+        try await waitUntil("second surface refresh sent") {
+            task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
+        }
+        let request = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        try task.emitResponse(
+            id: #require(request["id"] as? String),
+            payload: [
+                "surface": "canvas",
+                "pluginSurfaceUrls": [
+                    "canvas": "http://gateway.example.invalid/__openclaw__/cap/retry-token",
+                ],
+            ])
+
+        let retryValue = await retry
+        #expect(retryValue?.hasSuffix("/retry-token") == true)
+        await gateway.disconnect()
+    }
+
+    @Test func `cancelled unbounded surface waiter releases stalled rotation for retry`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: ["canvas"],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+        let stalled = Task { await gateway.refreshCanvasHostUrl(timeoutSeconds: 0) }
+        try await waitUntil("first surface refresh sent") {
+            session.latestTask()?.sentRequestCount(method: "node.pluginSurface.refresh") == 1
+        }
+        stalled.cancel()
+        #expect(await stalled.value == nil)
 
         async let retry = gateway.refreshCanvasHostUrl(timeoutSeconds: 1)
         let task = try #require(session.latestTask())
@@ -818,6 +866,8 @@ struct GatewayNodeSessionTests {
             task.sentRequestCount(method: "node.pluginSurface.refresh") == 2
         }
         let rotateRequest = try #require(task.sentRequests(method: "node.pluginSurface.refresh").last)
+        let rotateParams = try #require(rotateRequest["params"] as? [String: Any])
+        #expect(rotateParams["observedUrl"] as? String == oldURL)
         try task.emitResponse(
             id: #require(rotateRequest["id"] as? String),
             payload: [

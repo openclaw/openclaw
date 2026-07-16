@@ -6,6 +6,7 @@ import {
   hasAuthorizedPluginNodeCapability,
   indexPluginNodeCapabilitySurfaces,
   normalizePluginNodeCapabilityScopedUrl,
+  pluginNodeCapabilityScopedHostUrlsConflict,
   refreshClientPluginNodeCapability,
   setClientPluginNodeCapability,
 } from "./plugin-node-capability.js";
@@ -53,6 +54,22 @@ describe("plugin node capability helpers", () => {
       scopedPath: true,
       malformedScopedPath: false,
     });
+  });
+
+  test("detects conflicting scoped host capabilities across rewritten hosts", () => {
+    expect(
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "http://127.0.0.1:18789/__openclaw__/cap/token%20value",
+        "https://gateway.example:7443/__openclaw__/cap/token%20value",
+      ),
+    ).toBe(false);
+    expect(
+      pluginNodeCapabilityScopedHostUrlsConflict(
+        "https://gateway.example/__openclaw__/cap/old-token",
+        "https://gateway.example/__openclaw__/cap/new-token",
+      ),
+    ).toBe(true);
+    expect(pluginNodeCapabilityScopedHostUrlsConflict("not-a-url", "also-not-a-url")).toBe(false);
   });
 
   test("treats the scoped path capability as authoritative over a stale query", () => {

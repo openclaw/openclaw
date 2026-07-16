@@ -299,12 +299,12 @@ public actor GatewayNodeSession {
         let channelGeneration: UInt64
         let admissionGeneration: UInt64
         let task: Task<String?, Never>
+        var waiterIDs: Set<UUID>
     }
 
     /// Surface tokens belong to the shared session. A second rotation can invalidate
     /// the URL returned to another chat before its web view has loaded it.
     private var pluginSurfaceRefreshes: [String: PluginSurfaceRefresh] = [:]
-    private var pluginSurfaceRefreshOperationTimeoutMs = GatewayNodeSession.pluginSurfaceRefreshTimeoutMs
 
     private struct PluginSurfaceRefreshResponse: Decodable {
         let pluginSurfaceUrls: [String: AnyCodable]?
@@ -667,8 +667,8 @@ public actor GatewayNodeSession {
             timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
     }
 
-    @discardableResult
     // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
+    @discardableResult
     public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
         let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedSurface.isEmpty else { return nil }
@@ -691,31 +691,53 @@ public actor GatewayNodeSession {
         }
         let channelGeneration = self.channelGeneration
         let admissionGeneration = self.admissionGeneration
-        if let refresh = self.pluginSurfaceRefreshes[trimmedSurface],
-           refresh.channelGeneration == channelGeneration,
-           refresh.admissionGeneration == admissionGeneration
+        let waiterID = UUID()
+        let refresh: PluginSurfaceRefresh
+        if var activeRefresh = self.pluginSurfaceRefreshes[trimmedSurface],
+           activeRefresh.channelGeneration == channelGeneration,
+           activeRefresh.admissionGeneration == admissionGeneration
         {
-            return await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
-        }
-
-        let id = UUID()
-        let task = Task<String?, Never> { [weak self] in
-            guard let self else { return nil }
-            let refreshed = await self.requestPluginSurfaceRefresh(
-                channel: channel,
+            activeRefresh.waiterIDs.insert(waiterID)
+            self.pluginSurfaceRefreshes[trimmedSurface] = activeRefresh
+            refresh = activeRefresh
+        } else {
+            // A reconnect retires the old channel owner. Do not leave its
+            // deadline-free request alive after installing the new generation.
+            self.pluginSurfaceRefreshes.removeValue(forKey: trimmedSurface)?.task.cancel()
+            let id = UUID()
+            let task = Task<String?, Never> { [weak self] in
+                guard let self else { return nil }
+                return await self.requestPluginSurfaceRefresh(
+                    channel: channel,
+                    channelGeneration: channelGeneration,
+                    admissionGeneration: admissionGeneration,
+                    surface: trimmedSurface,
+                    observedURL: observedURL)
+            }
+            refresh = PluginSurfaceRefresh(
+                id: id,
                 channelGeneration: channelGeneration,
                 admissionGeneration: admissionGeneration,
-                surface: trimmedSurface,
-                observedURL: observedURL)
-            await self.finishPluginSurfaceRefresh(surface: trimmedSurface, id: id)
-            return refreshed
+                task: task,
+                waiterIDs: [waiterID])
+            self.pluginSurfaceRefreshes[trimmedSurface] = refresh
         }
-        self.pluginSurfaceRefreshes[trimmedSurface] = PluginSurfaceRefresh(
-            id: id,
-            channelGeneration: channelGeneration,
-            admissionGeneration: admissionGeneration,
-            task: task)
-        return await self.awaitPluginSurfaceRefresh(task, timeoutMs: timeoutMs)
+
+        let value = await withTaskCancellationHandler {
+            await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
+        } onCancel: {
+            Task {
+                await self.releasePluginSurfaceRefreshWaiter(
+                    surface: trimmedSurface,
+                    refreshID: refresh.id,
+                    waiterID: waiterID)
+            }
+        }
+        self.releasePluginSurfaceRefreshWaiter(
+            surface: trimmedSurface,
+            refreshID: refresh.id,
+            waiterID: waiterID)
+        return value
     }
 
     private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
@@ -734,9 +756,17 @@ public actor GatewayNodeSession {
         }
     }
 
-    private func finishPluginSurfaceRefresh(surface: String, id: UUID) {
-        if self.pluginSurfaceRefreshes[surface]?.id == id {
+    private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {
+        guard var refresh = self.pluginSurfaceRefreshes[surface], refresh.id == refreshID else { return }
+        guard refresh.waiterIDs.remove(waiterID) != nil else { return }
+        if refresh.waiterIDs.isEmpty {
+            // The request itself has no deadline because callers may select different
+            // timeouts. The last waiter cancels locally; observedUrl makes any retry
+            // reuse an on-wire predecessor's rotation instead of invalidating it.
             self.pluginSurfaceRefreshes[surface] = nil
+            refresh.task.cancel()
+        } else {
+            self.pluginSurfaceRefreshes[surface] = refresh
         }
     }
 
@@ -747,8 +777,8 @@ public actor GatewayNodeSession {
         await self.refreshPluginSurfaceUrl(surface: "canvas", replacing: observedURL)
     }
 
-    @discardableResult
     // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
+    @discardableResult
     public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
         await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
     }
@@ -1102,14 +1132,18 @@ extension GatewayNodeSession {
     {
         let method = "node.pluginSurface.refresh"
         do {
-            // One server-side rotation owns the surface until it responds or the
-            // canonical operation deadline expires. Callers keep independent,
-            // shorter deadlines without issuing a second rotation that could
-            // invalidate the first result.
+            // Waiters own independent deadlines around this shared request. Zero
+            // leaves its lifetime unbounded; the last waiter cancels channel work.
+            var params = ["surface": AnyCodable(surface)]
+            if let observedURL {
+                // The gateway compares capability tokens, not hosts, because
+                // native clients rewrite loopback surface URLs for remote access.
+                params["observedUrl"] = AnyCodable(observedURL)
+            }
             let data = try await channel.request(
                 method: method,
-                params: ["surface": AnyCodable(surface)],
-                timeoutMs: self.pluginSurfaceRefreshOperationTimeoutMs)
+                params: params,
+                timeoutMs: 0)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
@@ -1348,10 +1382,6 @@ extension GatewayNodeSession {
         self.broadcastServerEvent(event)
     }
 
-    // periphery:ignore - package tests prove a stalled surface rotation releases for retry.
-    func _test_setPluginSurfaceRefreshOperationTimeoutMs(_ timeoutMs: Double) {
-        self.pluginSurfaceRefreshOperationTimeoutMs = max(1, timeoutMs)
-    }
     #endif
 
     private func cancelActiveInvokes(

@@ -120,6 +120,14 @@ class GatewaySessionInvokeTest {
                   ?.jsonPrimitive
                   ?.content,
               )
+              assertTrue(
+                frame["params"]
+                  ?.jsonObject
+                  ?.get("observedUrl")
+                  ?.jsonPrimitive
+                  ?.content
+                  ?.endsWith("/old-token") == true,
+              )
               webSocket.send(
                 """{"type":"res","id":"$id","ok":true,"payload":{"surface":"canvas","pluginSurfaceUrls":{"canvas":"http://127.0.0.1:18789/__openclaw__/cap/new-token"}}}""",
               )

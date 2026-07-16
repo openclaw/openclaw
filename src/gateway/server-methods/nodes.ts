@@ -69,7 +69,10 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
+import {
+  pluginNodeCapabilityScopedHostUrlsConflict,
+  refreshClientPluginNodeCapability,
+} from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   deniesCrossDeviceManagement,
@@ -187,7 +190,9 @@ function listNodesForClient(params: {
   return nodes.map((node) => safeNodeReadProjection(node, ownDeviceId)).filter(isVisibleNode);
 }
 
-function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
+function normalizePluginSurfaceRefreshParams(
+  params: unknown,
+): { surface: string; observedUrl?: string } | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
   }
@@ -195,14 +200,34 @@ function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string
   if (!surface) {
     return undefined;
   }
-  return { surface };
+  const observedUrl = normalizeOptionalString((params as { observedUrl?: unknown }).observedUrl);
+  return { surface, ...(observedUrl ? { observedUrl } : {}) };
 }
 
 function respondRefreshedPluginSurface(params: {
   surface: string;
+  observedUrl?: string;
   client: GatewayClient | null;
   respond: RespondFn;
 }) {
+  const currentUrl = params.client?.pluginSurfaceUrls?.[params.surface];
+  if (
+    currentUrl &&
+    params.observedUrl &&
+    pluginNodeCapabilityScopedHostUrlsConflict(currentUrl, params.observedUrl)
+  ) {
+    // A prior in-flight request already rotated this capability. Return its
+    // result instead of invalidating it with a second rotation.
+    params.respond(
+      true,
+      {
+        surface: params.surface,
+        pluginSurfaceUrls: { [params.surface]: currentUrl },
+      },
+      undefined,
+    );
+    return;
+  }
   const refreshed = params.client
     ? refreshClientPluginNodeCapability({
         client: params.client,
@@ -1226,6 +1251,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     respondRefreshedPluginSurface({
       surface: parsed.surface,
+      observedUrl: parsed.observedUrl,
       client,
       respond,
     });

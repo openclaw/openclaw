@@ -424,7 +424,7 @@ class GatewaySession(
     observedSurfaceUrl: String?,
     requireObservedMatch: Boolean,
   ): String? {
-    val (lease, target) =
+    val (lease, target, requestObservedSurfaceUrl) =
       synchronized(lifecycleLock) {
         val current = pluginSurfaceUrls["canvas"]
         if (requireObservedMatch && current != observedSurfaceUrl) return current
@@ -433,13 +433,16 @@ class GatewaySession(
           desired
             ?.takeIf { it.endpoint.stableId == capturedLease.endpointStableId }
             ?: return null
-        capturedLease to capturedTarget
+        Triple(capturedLease, capturedTarget, current)
       }
     val response =
       runCatching {
         lease.request(
           GatewayMethod.NodePluginSurfaceRefresh.rawValue,
-          buildJsonObject { put("surface", JsonPrimitive("canvas")) }.toString(),
+          buildJsonObject {
+            put("surface", JsonPrimitive("canvas"))
+            requestObservedSurfaceUrl?.let { put("observedUrl", JsonPrimitive(it)) }
+          }.toString(),
           timeoutMs = 8_000,
         )
       }.getOrNull() ?: return null

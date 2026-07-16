@@ -1843,7 +1843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1507,
+      "line": 1510,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -1851,7 +1851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1507,
+      "line": 1510,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -36195,7 +36195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 255,
+      "line": 229,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatInlineWidgetView.swift",
       "source": "Widget unavailable",
       "surface": "apple",
