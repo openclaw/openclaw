@@ -66,9 +66,7 @@ import {
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
 } from "./config-write-flow.js";
-import {
-  sanitizePathForLog,
-} from "./open-path.js";
+import { sanitizePathForLog } from "./open-path.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

@@ -98,7 +98,7 @@ async function observeXdgOpenStartup(command: ConfigOpenCommand): Promise<void> 
       },
       (error: unknown) => {
         clearTimeout(startupTimer);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(formatConfigOpenError(error)));
       },
     );
   });
