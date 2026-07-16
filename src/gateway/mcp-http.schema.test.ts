@@ -1,8 +1,18 @@
 // Gateway tests cover MCP loopback schema projection behavior.
-import { describe, expect, it } from "vitest";
-import { buildMcpToolSchema } from "./mcp-http.schema.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
+vi.mock("../logger.js", () => ({
+  logWarn: logWarnMock,
+}));
+
+import { buildMcpToolSchema, resetEmittedSchemaWarningsForTest } from "./mcp-http.schema.js";
 
 describe("buildMcpToolSchema", () => {
+  beforeEach(() => {
+    logWarnMock.mockClear();
+    resetEmittedSchemaWarningsForTest();
+  });
   it("keeps union schema properties named like Object prototype keys", () => {
     const [entry] = buildMcpToolSchema([
       {
@@ -80,5 +90,33 @@ describe("buildMcpToolSchema", () => {
     ]);
 
     expect(entry?.inputSchema.required).toEqual([]);
+  });
+
+  it("bounds the schema warning cache at 4096 entries and re-warns evicted messages", () => {
+    const makeTool = (index: number) =>
+      ({
+        name: `tool_${index}`,
+        description: "proof",
+        parameters: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { [`field_${index}`]: 1 },
+            },
+          ],
+        },
+      }) as never;
+
+    const tools = Array.from({ length: 4096 }, (_, index) => makeTool(index));
+    buildMcpToolSchema(tools);
+    expect(logWarnMock).toHaveBeenCalledTimes(4096);
+
+    logWarnMock.mockClear();
+    buildMcpToolSchema([makeTool(4096)]);
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
+
+    logWarnMock.mockClear();
+    buildMcpToolSchema(tools.slice(0, 1));
+    expect(logWarnMock).toHaveBeenCalledTimes(1);
   });
 });

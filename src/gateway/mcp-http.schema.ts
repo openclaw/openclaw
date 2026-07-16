@@ -2,6 +2,7 @@
 // Converts gateway-scoped tools into MCP tools/list-compatible schemas.
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
@@ -212,16 +213,20 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
 // Dedupe on the full message: distinct (tool, field, reason) still each warn once,
 // but rebuilds collapse to one line. Named per tool.field so a conflict in one tool
 // no longer suppresses a genuinely different conflict on the same field name in
-// another tool. Bounded by the process-stable universe of loopback tool + field
-// names (gateway tool metadata does not change without restart or explicit reload).
-const emittedSchemaWarnings = new Set<string>();
+// another tool. Bounded to 4096 entries so the process-stable universe of loopback
+// tool + field names cannot grow without limit.
+const emittedSchemaWarnings = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
 
 function warnSchemaOnce(message: string) {
-  if (emittedSchemaWarnings.has(message)) {
+  if (emittedSchemaWarnings.check(message)) {
     return;
   }
-  emittedSchemaWarnings.add(message);
   logWarn(message);
+}
+
+/** Resets the schema-warning dedupe cache. For tests only. */
+export function resetEmittedSchemaWarningsForTest() {
+  emittedSchemaWarnings.clear();
 }
 
 /** Builds MCP-compatible tool schemas for loopback-visible gateway tools. */
