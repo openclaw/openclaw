@@ -1332,47 +1332,36 @@ export function startDiagnosticHeartbeat(
           thresholdMs: stuckSessionWarnMs,
           abortThresholdMs: stuckSessionAbortMs,
         });
-        if (classification?.recoveryEligible && !shouldDeferRecovery) {
-          requestStuckSessionRecovery({
-            recover: opts?.recoverStuckSession ?? recoverStuckSession,
-            classification,
-            request: {
-              sessionId: state.sessionId,
-              sessionKey: state.sessionKey,
-              sessionFile: state.sessionFile,
-              ageMs: attentionAgeMs,
-              queueDepth: state.queueDepth,
-              expectedState: state.state,
-              stateGeneration: state.generation,
-              staleActiveProgressAbortMs: stuckSessionAbortMs,
-              compactionSafetyTimeoutMs,
-            },
-          });
-        } else if (
-          classification &&
-          !shouldDeferRecovery &&
+        if (!classification || shouldDeferRecovery) {
+          continue;
+        }
+        const activeAbortEligible =
+          !classification.recoveryEligible &&
           isActiveAbortRecoveryEligible({
             classification,
             activity,
             stuckSessionAbortMs,
-          })
-        ) {
-          requestStuckSessionRecovery({
-            recover: opts?.recoverStuckSession ?? recoverStuckSession,
-            classification,
-            request: {
-              sessionId: state.sessionId,
-              sessionKey: state.sessionKey,
-              sessionFile: state.sessionFile,
-              ageMs: attentionAgeMs,
-              queueDepth: state.queueDepth,
-              allowActiveAbort: true,
-              expectedState: state.state,
-              stateGeneration: state.generation,
-              compactionSafetyTimeoutMs,
-            },
           });
+        if (!classification.recoveryEligible && !activeAbortEligible) {
+          continue;
         }
+        requestStuckSessionRecovery({
+          recover: opts?.recoverStuckSession ?? recoverStuckSession,
+          classification,
+          request: {
+            sessionId: state.sessionId,
+            sessionKey: state.sessionKey,
+            sessionFile: state.sessionFile,
+            ageMs: attentionAgeMs,
+            queueDepth: state.queueDepth,
+            expectedState: state.state,
+            stateGeneration: state.generation,
+            ...(activeAbortEligible
+              ? { allowActiveAbort: true }
+              : { staleActiveProgressAbortMs: stuckSessionAbortMs }),
+            compactionSafetyTimeoutMs,
+          },
+        });
       }
     }
   }, DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);

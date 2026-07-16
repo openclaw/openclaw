@@ -73,6 +73,7 @@ export type SessionListOptions = {
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
+  includeDerivedTitles?: boolean;
   showArchived?: boolean;
   append?: boolean;
 };
@@ -177,6 +178,7 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
+  refreshReplacement: (agentId?: string | null) => Promise<void>;
   createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
@@ -293,6 +295,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (options.configuredAgentsOnly !== undefined) {
     params.configuredAgentsOnly = options.configuredAgentsOnly;
+  }
+  if (options.includeDerivedTitles === true) {
+    params.includeDerivedTitles = true;
   }
   if (options.showArchived === true) {
     params.archived = true;
@@ -626,6 +631,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   >();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
+  let hasForegroundListOptions = false;
+  let hasSeededListOptions = false;
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
 
@@ -702,7 +709,19 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return;
     }
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    lastListOptions = requestOptions;
+    const durableListOptions: SessionListOptions = { ...requestOptions };
+    // Pagination is request-local. Replacement refreshes restart at page one
+    // while retaining the filters and response enrichments that shape the list.
+    delete durableListOptions.offset;
+    // Foreground options become authoritative before I/O so a concurrent
+    // mutation cannot queue a replacement refresh with stale filters.
+    if (!backgroundHydrate) {
+      lastListOptions = durableListOptions;
+      hasForegroundListOptions = true;
+    } else if (!hasForegroundListOptions && !hasSeededListOptions) {
+      lastListOptions = durableListOptions;
+      hasSeededListOptions = true;
+    }
     if (!backgroundHydrate) {
       publish({ ...state, loading: true, error: null, deletedSessions: [] });
     }
@@ -798,6 +817,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
+  const refreshReplacement = (agentId?: string | null) => {
+    const options = { ...lastListOptions };
+    const normalizedAgentId = agentId?.trim();
+    if (normalizedAgentId) {
+      options.agentId = normalizedAgentId;
+    }
+    return refresh({ ...options, force: true });
+  };
+
   const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
     if (!scope) {
@@ -812,7 +840,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      await refresh({ agentId: params.agentId, force: true });
+      await refreshReplacement(params.agentId);
       if (!isCurrentConnection(scope)) {
         return null;
       }
@@ -1073,7 +1101,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         restoreModelOverride();
         return null;
       }
-      await refresh({ agentId: options.agentId, force: true });
+      await refreshReplacement(options.agentId);
       if (!isCurrentConnection(scope)) {
         restoreModelOverride();
         return null;
@@ -1160,7 +1188,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
-      await refresh({ agentId: options.agentId, force: true });
+      await refreshReplacement(options.agentId);
       return {
         deleted: isCurrentConnection(scope),
         ...(response.worktreePreserved ? { worktreePreserved: response.worktreePreserved } : {}),
@@ -1212,7 +1240,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       for (const key of deleted) {
         setModelOverride(key, undefined);
       }
-      await refresh({ force: true });
+      await refreshReplacement();
     }
     return isCurrentConnection(scope)
       ? { deleted, errors, preservedWorktrees }
@@ -1360,10 +1388,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
-    await refresh({
-      agentId: options.agentId ?? state.agentId ?? undefined,
-      force: true,
-    });
+    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
@@ -1383,10 +1408,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
-    await refresh({
-      agentId: options.agentId ?? state.agentId ?? undefined,
-      force: true,
-    });
+    await refreshReplacement(options.agentId ?? state.agentId ?? undefined);
     if (!isCurrentConnection(scope)) {
       throw new Error("Session checkpoint operation completed on a replaced Gateway connection");
     }
@@ -1436,6 +1458,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             const sessionKey = gateway.snapshot.sessionKey?.trim();
             await refresh({
               ...(sessionKey ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey) : {}),
+              includeDerivedTitles: true,
               backgroundHydrate: true,
               force: true,
             });
@@ -1496,6 +1519,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     reconcileChanged,
     reconcileRunTerminal,
     refresh,
+    refreshReplacement,
     createResult,
     create,
     patch,

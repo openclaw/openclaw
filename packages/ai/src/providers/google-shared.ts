@@ -18,7 +18,6 @@ import type {
   Api,
   AssistantMessage,
   Context,
-  ImageContent,
   Model,
   SimpleStreamOptions,
   StopReason,
@@ -33,7 +32,11 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -277,7 +280,7 @@ export function convertMessages<T extends GoogleApiType>(
       // Extract text and image content
       const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
-        ? msg.content.filter((c): c is ImageContent => c.type === "image")
+        ? msg.content.filter(isImageWithMediaPayload)
         : [];
 
       const hasText = textResult.length > 0;

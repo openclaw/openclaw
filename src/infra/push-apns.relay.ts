@@ -119,10 +119,9 @@ function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined
   return undefined;
 }
 
-/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
-export function normalizeApnsRelayBaseUrl(
+function normalizeApnsRelayBaseUrlWithPolicy(
   baseUrl: string,
-  env: NodeJS.ProcessEnv = process.env,
+  allowLoopbackHttpWithoutEnvOptIn: boolean,
 ): { ok: true; value: string } | { ok: false; error: string } {
   try {
     const parsed = new URL(baseUrl);
@@ -133,11 +132,13 @@ export function normalizeApnsRelayBaseUrl(
       throw new Error("host required");
     }
     // Plain HTTP is only for local relay development; production relay URLs must use TLS.
-    if (parsed.protocol === "http:" && !readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP)) {
+    if (parsed.protocol === "http:" && !allowLoopbackHttpWithoutEnvOptIn) {
       throw new Error(
         "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
       );
     }
+    // Persisted development URLs may bypass only the current env opt-in;
+    // the loopback boundary remains mandatory during every decode.
     if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
       throw new Error("http relay URLs are limited to loopback hosts");
     }
@@ -151,6 +152,26 @@ export function normalizeApnsRelayBaseUrl(
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }
+}
+
+/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
+export function normalizeApnsRelayBaseUrl(
+  baseUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true; value: string } | { ok: false; error: string } {
+  return normalizeApnsRelayBaseUrlWithPolicy(
+    baseUrl,
+    readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP),
+  );
+}
+
+/** Revalidate a canonical persisted relay URL without reapplying current input policy. */
+export function normalizePersistedApnsRelayBaseUrl(
+  baseUrl: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  // Stored loopback HTTP URLs already passed the explicit development-only
+  // policy before commit; decoding must survive later environment changes.
+  return normalizeApnsRelayBaseUrlWithPolicy(baseUrl, true);
 }
 
 function buildRelayGatewaySignaturePayload(params: {

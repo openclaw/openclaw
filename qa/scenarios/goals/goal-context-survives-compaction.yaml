@@ -33,7 +33,7 @@ scenario:
   execution:
     kind: flow
     summary: Start a goal, compact the session, then inspect the next mock-provider request for active-goal context.
-    driver: qa-channel
+    channel: qa-channel
     config:
       requiredProviderMode: mock-openai
       conversationId: goal-context-compaction

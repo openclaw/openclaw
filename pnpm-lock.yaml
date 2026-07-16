@@ -136,6 +136,9 @@ importers:
       hosted-git-info:
         specifier: 10.1.1
         version: 10.1.1
+      iconv-lite:
+        specifier: 0.7.2
+        version: 0.7.2
       ignore:
         specifier: 7.0.5
         version: 7.0.5
