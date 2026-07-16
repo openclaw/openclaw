@@ -58,19 +58,16 @@ enum GatewayLaunchAgentManager {
         return nil
     }
 
-    static func canReuseLoadedGateway(port: Int) async -> Bool {
+    static func reusableLoadedGatewayPID(port: Int) async -> Int32? {
         guard let service = await self.readDaemonService(),
-              service["loaded"] as? Bool == true,
-              let runtime = service["runtime"] as? [String: Any],
-              runtime["status"] as? String == "running",
-              let pid = runtime["pid"] as? Int,
-              pid > 0,
+              let pid = self.runningGatewayPID(from: service),
               let configAudit = service["configAudit"] as? [String: Any],
-              configAudit["ok"] as? Bool == true
+              configAudit["ok"] as? Bool == true,
+              self.gatewayPort(from: service) == port
         else {
-            return false
+            return nil
         }
-        return self.gatewayPort(from: service) == port
+        return pid
     }
 
     static func runningGatewayPID() async -> Int32? {

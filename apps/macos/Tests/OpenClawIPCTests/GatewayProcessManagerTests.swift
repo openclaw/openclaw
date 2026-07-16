@@ -167,6 +167,7 @@ struct GatewayProcessManagerTests {
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
             }
 
             _ = await GatewayProcessManager.shared._testEnableLaunchAgentIfNeeded(
@@ -176,6 +177,91 @@ struct GatewayProcessManagerTests {
             let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(calls.filter { $0.first == "status" }.count == 1)
             #expect(calls.allSatisfy { $0.first != "install" })
+        }
+    }
+
+    @Test func `repairs only a stable launch agent PID after readiness fails`() async throws {
+        let port = 19085
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4242},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
+            }
+
+            let manager = GatewayProcessManager.shared
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
+            var calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "install" }.isEmpty)
+
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
+
+            calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "status" }.count == 1)
+            #expect(calls.filter { $0.first == "install" }.count == 1)
+        }
+    }
+
+    @Test func `gives a replacement launch agent PID a full readiness cycle`() async throws {
+        let port = 19086
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-launchagent-marker-\(UUID().uuidString)")
+        try await self.withLocalGatewayConfig {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                """
+                {"ok":true,"service":{
+                  "loaded":true,
+                  "runtime":{"status":"running","pid":4243},
+                  "command":{"programArguments":["openclaw","gateway","--port","\(port)"]},
+                  "configAudit":{"ok":true,"issues":[]}
+                }}
+                """)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared._testClearLaunchAgentReadinessFailure()
+            }
+
+            let manager = GatewayProcessManager.shared
+            await manager._testRecordLaunchAgentReadinessFailure(port: port, startingPID: 4242)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            _ = await manager._testEnableLaunchAgentIfNeeded(
+                bundlePath: "/Applications/OpenClaw.app",
+                port: port)
+
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls.filter { $0.first == "status" }.count == 1)
+            #expect(calls.filter { $0.first == "install" }.isEmpty)
         }
     }
 

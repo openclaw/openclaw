@@ -11,6 +11,11 @@ final class GatewayProcessManager {
         let port: Int
     }
 
+    private struct LaunchAgentReadinessFailure: Equatable {
+        let port: Int
+        let pid: Int32
+    }
+
     enum Status: Equatable {
         case stopped
         case starting
@@ -50,6 +55,7 @@ final class GatewayProcessManager {
     private var launchAgentEnableTask: Task<String?, Never>?
     private var launchAgentEnableCurrentRequest: LaunchAgentEnableRequest?
     private var launchAgentEnablePendingRequest: LaunchAgentEnableRequest?
+    private var launchAgentReadinessFailure: LaunchAgentReadinessFailure?
     #if DEBUG
     private var testingConnection: GatewayConnection?
     private var testingSkipControlChannelRefresh = false
@@ -139,15 +145,48 @@ final class GatewayProcessManager {
     private func performLaunchAgentEnable(_ request: LaunchAgentEnableRequest) async -> String? {
         // App startup and onboarding can request persistence together. One drain owns all installs;
         // a second forced install would kill the first Gateway during startup migrations.
-        if await GatewayLaunchAgentManager.canReuseLoadedGateway(port: request.port) {
-            return nil
+        if let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: request.port) {
+            let failure = LaunchAgentReadinessFailure(port: request.port, pid: pid)
+            if self.launchAgentReadinessFailure != failure {
+                // A new launchd PID may still be running migrations. It must fail one complete
+                // readiness cycle before a later retry is allowed to replace it.
+                self.launchAgentReadinessFailure = nil
+                return nil
+            }
+
+            if let listener = await PortGuardian.shared.describe(port: request.port) {
+                // Never replace a service while any process owns its port. Only the matching PID
+                // proves this launch finished; a foreign listener is reported by the attach path.
+                if listener.pid == pid {
+                    self.launchAgentReadinessFailure = nil
+                }
+                return nil
+            }
+
+            self.appendLog(
+                "[gateway] launchd pid \(pid) failed readiness without binding port \(request.port); repairing\n")
+            self.logger.warning(
+                "gateway launchd pid=\(pid) failed readiness without binding port=\(request.port); repairing")
         }
+        self.launchAgentReadinessFailure = nil
         self.appendLog(
             "[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(request.port)\n")
         return await GatewayLaunchAgentManager.set(
             enabled: true,
             bundlePath: request.bundlePath,
             port: request.port)
+    }
+
+    private func recordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
+        guard let startingPID,
+              let pid = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port),
+              pid == startingPID,
+              await PortGuardian.shared.describe(port: port) == nil
+        else {
+            self.launchAgentReadinessFailure = nil
+            return
+        }
+        self.launchAgentReadinessFailure = LaunchAgentReadinessFailure(port: port, pid: pid)
     }
 
     func startIfNeeded() {
@@ -182,6 +221,7 @@ final class GatewayProcessManager {
         self.desiredActive = false
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
+        self.launchAgentReadinessFailure = nil
         self.status = .stopped
         self.logger.info("gateway stop requested")
         if CommandResolver.connectionModeIsRemote() {
@@ -261,6 +301,7 @@ final class GatewayProcessManager {
                 let snap = decodeHealthSnapshot(from: data)
                 let details = self.describe(details: instanceText, port: port, snap: snap)
                 self.existingGatewayDetails = details
+                self.launchAgentReadinessFailure = nil
                 self.clearLastFailure()
                 self.status = .attachedExisting(details: details)
                 self.appendLog("[gateway] using existing instance: \(details)\n")
@@ -386,6 +427,7 @@ final class GatewayProcessManager {
             return
         }
 
+        let readinessPID = await GatewayLaunchAgentManager.reusableLoadedGatewayPID(port: port)
         // Best-effort: wait for the gateway to accept connections.
         let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
@@ -394,6 +436,7 @@ final class GatewayProcessManager {
                 _ = try await self.connection.requestRaw(method: .health, timeoutMs: 1500)
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
+                self.launchAgentReadinessFailure = nil
                 self.clearLastFailure()
                 self.status = .running(details: details)
                 self.logger.info("gateway started details=\(details ?? "ok")")
@@ -405,6 +448,9 @@ final class GatewayProcessManager {
             }
         }
 
+        // Only a PID that survived this entire readiness cycle may be replaced later. launchd can
+        // restart the service while polling; that replacement needs its own full startup chance.
+        await self.recordLaunchAgentReadinessFailure(port: port, startingPID: readinessPID)
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
         self.logger.warning("gateway start timed out")
@@ -498,6 +544,14 @@ extension GatewayProcessManager {
 
     func _testEnableLaunchAgentIfNeeded(bundlePath: String, port: Int) async -> String? {
         await self.enableLaunchAgentIfNeeded(bundlePath: bundlePath, port: port)
+    }
+
+    func _testRecordLaunchAgentReadinessFailure(port: Int, startingPID: Int32?) async {
+        await self.recordLaunchAgentReadinessFailure(port: port, startingPID: startingPID)
+    }
+
+    func _testClearLaunchAgentReadinessFailure() {
+        self.launchAgentReadinessFailure = nil
     }
 }
 #endif
