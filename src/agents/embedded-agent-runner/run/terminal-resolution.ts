@@ -190,6 +190,32 @@ export async function resolveEmbeddedRunTerminal(input: {
     );
     return { action: "retry" };
   }
+  const nextToolUseTerminalInstruction = emptyAssistantReplyIsSilent
+    ? null
+    : resolveToolUseTerminalContinuationInstruction({
+        provider: input.activeErrorContext.provider,
+        modelId: input.activeErrorContext.model,
+        modelApi: input.modelApi,
+        executionContract: input.executionContract,
+        aborted: input.terminalAborted,
+        timedOut: input.terminalTimedOut,
+        attempt,
+      });
+  if (nextToolUseTerminalInstruction && retryState.toolUseTerminalAttempts < 1) {
+    // Skip continuation retry if a tool already produced a terminal presentation
+    // (e.g., web_fetch results, cron status) — surface that output instead of retrying.
+    const earlyTerminalPresentation = input.readTerminalToolPresentation();
+    if (!earlyTerminalPresentation) {
+      retryState.toolUseTerminalAttempts += 1;
+      input.activateInternalPrompt(nextToolUseTerminalInstruction, false);
+      log.warn(
+        `tool-use terminal turn detected: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model} — retrying ${retryState.toolUseTerminalAttempts}/1 ` +
+          `with tool-use continuation`,
+      );
+      return { action: "retry" };
+    }
+  }
   if (
     !nextReasoningOnlyRetryInstruction &&
     nextEmptyResponseRetryInstruction &&

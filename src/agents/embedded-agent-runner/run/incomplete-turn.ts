@@ -851,6 +851,66 @@ export function resolveEmptyResponseRetryInstruction(params: {
   return null;
 }
 
+const TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION =
+  "The previous assistant turn executed tools successfully but did not produce a final user-visible response. The tool results are already present in the conversation. Continue from the current state and produce the final visible answer now. Do not re-run any tools or restart from scratch.";
+
+/**
+ * Builds the continuation instruction for tool-use terminal turns where tools
+ * already executed (side effects committed) but no visible assistant text was
+ * produced. This is a continuation, not a replay — the tool results remain in
+ * the transcript.
+ */
+export function resolveToolUseTerminalContinuationInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError
+  ) {
+    return null;
+  }
+
+  if (hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns)) {
+    return null;
+  }
+
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  if (!assistant || assistant.stopReason !== "toolUse") {
+    return null;
+  }
+
+  if (params.attempt.toolMetas.length === 0) {
+    return null;
+  }
+
+  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
+    return null;
+  }
+
+  if (
+    !shouldApplyNonVisibleTurnRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      executionContract: params.executionContract,
+    })
+  ) {
+    return null;
+  }
+
+  return TOOL_USE_TERMINAL_CONTINUATION_INSTRUCTION;
+}
+
 function shouldApplyNonVisibleTurnRetryGuard(params: {
   provider?: string;
   modelId?: string;
