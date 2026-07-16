@@ -64,6 +64,16 @@ describe("buildXiaomiSpeechProvider", () => {
       process.env.XIAOMI_API_KEY = "sk-env";
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     });
+
+    it("returns false when XIAOMI_API_KEY env var is whitespace only", () => {
+      process.env.XIAOMI_API_KEY = "   ";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
+
+    it("returns false when XIAOMI_API_KEY env var is blank", () => {
+      process.env.XIAOMI_API_KEY = "";
+      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
+    });
   });
 
   describe("resolveConfig", () => {
@@ -392,6 +402,28 @@ describe("buildXiaomiSpeechProvider", () => {
     it("throws when API key is missing", async () => {
       const savedKey = process.env.XIAOMI_API_KEY;
       delete process.env.XIAOMI_API_KEY;
+      try {
+        await expect(
+          provider.synthesize({
+            text: "Test",
+            cfg: {} as never,
+            providerConfig: {},
+            target: "audio-file",
+            timeoutMs: 30000,
+          }),
+        ).rejects.toThrow("Xiaomi API key missing");
+      } finally {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
+          process.env.XIAOMI_API_KEY = savedKey;
+        }
+      }
+    });
+
+    it("throws when XIAOMI_API_KEY env var is whitespace only", async () => {
+      const savedKey = process.env.XIAOMI_API_KEY;
+      process.env.XIAOMI_API_KEY = "   ";
       try {
         await expect(
           provider.synthesize({

@@ -295,11 +295,14 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     parseDirectiveToken,
     listVoices: async () => XIAOMI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readXiaomiTtsProviderConfig(providerConfig).apiKey || process.env.XIAOMI_API_KEY),
+      Boolean(
+        readXiaomiTtsProviderConfig(providerConfig).apiKey ||
+        trimToUndefined(process.env.XIAOMI_API_KEY),
+      ),
     synthesize: async (req) => {
       const config = readXiaomiTtsProviderConfig(req.providerConfig);
       const overrides = readXiaomiTtsOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XIAOMI_API_KEY;
+      const apiKey = config.apiKey || trimToUndefined(process.env.XIAOMI_API_KEY);
       if (!apiKey) {
         throw new Error("Xiaomi API key missing");
       }
