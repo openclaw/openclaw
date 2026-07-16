@@ -1,4 +1,3 @@
-// Defines Discord channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
   ChannelStreamingProgressConfig,
@@ -13,6 +12,7 @@ import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
+import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type {
   DmConfig,
   MentionPatternsPolicyConfig,
@@ -96,6 +96,7 @@ export type DiscordGuildEntry = {
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
   roles?: string[];
+  presenceEvents?: DiscordPresenceEventsConfig;
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -156,7 +157,7 @@ export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md"
 export type DiscordVoiceRealtimeConfig = {
   /** Realtime voice provider id, for example "openai". */
   provider?: string;
-  /** Provider realtime session model, for example "gpt-realtime-2". */
+  /** Provider realtime session model, for example "gpt-realtime-2.1". */
   model?: string;
   /** Provider realtime output voice name, for example "cedar". */
   speakerVoice?: string;
@@ -170,9 +171,9 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
-  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  /** OpenAI agent-proxy wake-name policy. Unset adapts to the room: off for one human, on for two or more. True always requires; false never requires. */
   requireWakeName?: boolean;
-  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond when the gate is active. Defaults to the routed agent name plus OpenClaw, or the agent id plus OpenClaw. */
   wakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
   bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
@@ -337,6 +338,7 @@ export type DiscordAccountConfig = {
   token?: SecretInput;
   /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
   applicationId?: string;
+  activities?: { clientSecret?: string; applicationId?: string };
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */

@@ -11,10 +11,12 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { type AgentPlanStep, normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
@@ -29,15 +31,22 @@ import {
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { truncateUtf16Safe } from "../utils.js";
+import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   consumeStructuredReplaySafeToolCall,
+  consumeTrackedToolExecutionStarted,
 } from "./agent-tools.before-tool-call.state.js";
 import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -54,6 +63,7 @@ import {
   isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
@@ -62,6 +72,7 @@ import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
+  capLiveExecResult,
   extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
@@ -74,13 +85,19 @@ import {
   isToolResultTimedOut,
   sanitizeToolArgs,
   sanitizeToolResult,
+  truncateLiveExecOutput,
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
+import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -94,13 +111,38 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
-const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
+const fallbackToolTerminalObservers = new WeakMap<
+  ToolHandlerContext["state"],
+  ReturnType<typeof createToolTerminalObserver>
+>();
+
+function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
+  const existing = fallbackToolTerminalObservers.get(ctx.state);
+  if (existing) {
+    return existing;
+  }
+  const created = createToolTerminalObserver(ctx.params.runId);
+  fallbackToolTerminalObservers.set(ctx.state, created);
+  return created;
+}
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
 const TRACE_REQUIRED_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path" }],
   write: REQUIRED_PARAM_GROUPS.write,
   edit: REQUIRED_PARAM_GROUPS.edit,
 } satisfies Record<string, readonly RequiredParamGroup[]>;
+
+function readUpdatePlanResult(
+  result: unknown,
+): { explanation?: string; steps: AgentPlanStep[] } | undefined {
+  const details = readToolResultDetails(result);
+  if (details?.status !== "updated" || !Array.isArray(details.plan)) {
+    return undefined;
+  }
+  const steps = normalizeAgentPlanSteps(details.plan) ?? [];
+  const explanation = readStringValue(details.explanation);
+  return { ...(explanation ? { explanation } : {}), steps };
+}
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -200,7 +242,17 @@ function traceToolExecutionStart(params: {
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
-const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
+
+function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): string | undefined {
+  if (rawArgsPreview == null) {
+    return undefined;
+  }
+  // Bound before regex normalization so malformed tool args cannot make warning work unbounded.
+  const wasTruncated = rawArgsPreview.length > TOOL_START_WARNING_PREVIEW_MAX_CHARS;
+  const bounded = truncateUtf16Safe(rawArgsPreview, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  const preview = sanitizeForConsole(bounded, TOOL_START_WARNING_PREVIEW_MAX_CHARS);
+  return wasTruncated && preview ? `${preview}…` : preview;
+}
 
 type ToolStartRecord = {
   startTime: number;
@@ -225,6 +277,16 @@ export function countActiveToolExecutions(runId: string): number {
     }
   }
   return count;
+}
+
+/** Cleans up tool start data for a run that has been unsubscribed or aborted. */
+export function cleanupRunToolStartData(runId: string): void {
+  const prefix = `${runId}:`;
+  for (const key of toolStartData.keys()) {
+    if (key.startsWith(prefix)) {
+      toolStartData.delete(key);
+    }
+  }
 }
 
 function isCronAddAction(args: unknown): boolean {
@@ -306,35 +368,26 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
   });
 }
 
-function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
-  ctx.log.warn(`${label} callback failed: ${String(error)}`);
-}
-
 function emitExecutionPhaseBestEffort(
   ctx: ToolHandlerContext,
   info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
 ): void {
-  try {
-    ctx.params.onExecutionPhase?.(info);
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool execution phase", error);
-  }
+  runBestEffortCallback({
+    label: "tool execution phase",
+    log: ctx.log,
+    callback: () => ctx.params.onExecutionPhase?.(info),
+  });
 }
 
 function emitAgentEventCallbackBestEffort(
   ctx: ToolHandlerContext,
   event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
 ): void {
-  try {
-    const result = ctx.params.onAgentEvent?.(event);
-    if (isPromiseLike<void>(result)) {
-      void Promise.resolve(result).catch((error: unknown) => {
-        warnBestEffortEventFailure(ctx, "tool agent event", error);
-      });
-    }
-  } catch (error) {
-    warnBestEffortEventFailure(ctx, "tool agent event", error);
-  }
+  runBestEffortCallback({
+    label: "tool agent event",
+    log: ctx.log,
+    callback: () => ctx.params.onAgentEvent?.(event),
+  });
 }
 
 function applyCurrentMessageProvider(
@@ -397,39 +450,6 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
   return details as ExecToolDetails;
 }
 
-function truncateLiveExecOutput(text: string): string {
-  if (text.length <= LIVE_EXEC_OUTPUT_MAX_CHARS) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, LIVE_EXEC_OUTPUT_MAX_CHARS)}\n...(live output truncated)...`;
-}
-
-function capLiveExecResult(result: unknown): unknown {
-  const execDetails = readExecToolDetails(result);
-  if (
-    !execDetails ||
-    !("aggregated" in execDetails) ||
-    typeof execDetails.aggregated !== "string"
-  ) {
-    return result;
-  }
-  const aggregated = truncateLiveExecOutput(execDetails.aggregated);
-  if (aggregated === execDetails.aggregated) {
-    return result;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return result;
-  }
-  const details = readToolResultDetails(result);
-  return {
-    ...(result as Record<string, unknown>),
-    details: {
-      ...details,
-      aggregated,
-    },
-  };
-}
-
 function extractExecOutput(result: unknown): string | undefined {
   const execDetails = readExecToolDetails(result);
   const output =
@@ -444,10 +464,121 @@ function extractLiveExecOutput(result: unknown): string | undefined {
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
 }
 
+function isOpenClawExecutable(token: string | undefined): boolean {
+  const executable = normalizeOptionalLowercaseString(token);
+  return executable?.split(/[\\/]/).at(-1) === "openclaw";
+}
+
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  const packageSpec = normalizeOptionalLowercaseString(token);
+  return packageSpec?.startsWith("openclaw@") === true && packageSpec.length > "openclaw@".length;
+}
+
+function skipOpenClawPackageRunner(
+  tokens: string[],
+  startIndex: number,
+): { commandIndex: number; acceptsPackageSpec: boolean } {
+  let commandIndex = startIndex;
+  let acceptsPackageSpec = false;
+  let runner = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    runner === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 1;
+    runner = "pnpm";
+  }
+  if (runner === "pnpm") {
+    const subcommand = normalizeOptionalLowercaseString(tokens[commandIndex + 1]);
+    if (subcommand === "exec" || subcommand === "dlx") {
+      commandIndex += 2;
+      acceptsPackageSpec = subcommand === "dlx";
+    } else {
+      commandIndex = startIndex;
+    }
+  } else if (runner === "npx" || runner === "bunx") {
+    commandIndex += 1;
+    acceptsPackageSpec = true;
+    while (true) {
+      const option = normalizeOptionalLowercaseString(tokens[commandIndex]);
+      if (
+        option === "-y" ||
+        option === "--yes" ||
+        option === "--no-install" ||
+        option === "--bun"
+      ) {
+        commandIndex += 1;
+        continue;
+      }
+      if (option === "-p" || option === "--package") {
+        commandIndex += 2;
+        continue;
+      }
+      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
+        commandIndex += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[commandIndex] === "--") {
+    commandIndex += 1;
+  }
+  return { commandIndex, acceptsPackageSpec };
+}
+
+function isOpenClawCronAddShellCommand(args: unknown): boolean {
+  const record = asOptionalObjectRecord(args);
+  const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
+  if (!command || hasTopLevelShellControlOperator(command)) {
+    return false;
+  }
+  const tokens = splitShellArgs(command);
+  if (!tokens || tokens.length < 3) {
+    return false;
+  }
+
+  // Compound shell programs need a real shell AST; only count direct CLI invocations.
+  let commandIndex = 0;
+  if (normalizeOptionalLowercaseString(tokens[commandIndex]) === "env") {
+    commandIndex += 1;
+  }
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
+    commandIndex += 1;
+  }
+  const packageRunner = skipOpenClawPackageRunner(tokens, commandIndex);
+  commandIndex = packageRunner.commandIndex;
+
+  let cliArgIndex = commandIndex + 1;
+  for (
+    let consumed = consumeRootOptionToken(tokens, cliArgIndex);
+    consumed > 0;
+    consumed = consumeRootOptionToken(tokens, cliArgIndex)
+  ) {
+    cliArgIndex += consumed;
+  }
+  const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
+  const actionArgs = tokens.slice(cliArgIndex + 2);
+  return (
+    (isOpenClawExecutable(tokens[commandIndex]) ||
+      (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
+    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (action === "add" || action === "create") &&
+    !actionArgs.some((token) => token === "-h" || token === "--help")
+  );
+}
+
+function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
+  if (!isOpenClawCronAddShellCommand(args)) {
+    return false;
+  }
+  const details = readExecToolDetails(result);
+  return details?.status === "completed" && details.exitCode === 0;
+}
+
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
   const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
-  // Only an explicit typed progress field crosses into channel UI. Tool output
-  // and details may contain fetched content or private args, so never infer.
+  // Only typed progress crosses into UI; tool output/details may contain private data.
   if (progress?.visibility !== "channel" || progress.privacy !== "public") {
     return undefined;
   }
@@ -554,6 +685,21 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
+}
+
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -628,6 +774,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   channelLabel?: string;
   accountId?: string;
   sentApproverDms?: boolean;
+  host?: "gateway" | "node";
+  nodeId?: string;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -656,6 +804,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     channelLabel: readStringValue(details.channelLabel),
     accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -686,9 +836,9 @@ async function emitToolResultOutput(params: {
     }
     ctx.state.deterministicApprovalPromptPending = true;
     try {
-      const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
+      const { buildTypedExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
       await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
+        buildTypedExecApprovalPendingReplyPayload({
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
@@ -725,6 +875,8 @@ async function emitToolResultOutput(params: {
           channelLabel: approvalUnavailable.channelLabel,
           accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
+          host: approvalUnavailable.host,
+          nodeId: approvalUnavailable.nodeId,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
@@ -788,10 +940,14 @@ export function handleToolExecutionStart(
     toolCallId: string;
     args: unknown;
     replaySafe?: boolean;
+    hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
         continueToolExecutionStart();
@@ -804,6 +960,7 @@ export function handleToolExecutionStart(
   const continueToolExecutionStart = () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
@@ -815,7 +972,6 @@ export function handleToolExecutionStart(
       source: "embedded-agent",
     });
 
-    // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
@@ -838,10 +994,7 @@ export function handleToolExecutionStart(
       if (!filePath) {
         const argsType = typeof args;
         const rawArgsPreview = readStringValue(args);
-        const argsPreview = sanitizeForConsole(
-          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
-          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
-        );
+        const argsPreview = buildToolStartWarningArgsPreview(rawArgsPreview);
         const safeRunId = sanitizeForConsole(runId) ?? "-";
         const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
         const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
@@ -911,6 +1064,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -923,6 +1077,7 @@ export function handleToolExecutionStart(
       meta,
       toolCallId,
       startedAt,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
@@ -933,6 +1088,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
@@ -1026,17 +1182,18 @@ export function handleToolExecutionUpdate(
     toolName: string;
     toolCallId: string;
     partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
-  // Typed progress already has a sanitized item update path. Suppress the raw
-  // partial-result event for those updates to avoid duplicate preview lines.
+  // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate =
     !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
   if (emitDetailedLiveUpdate) {
@@ -1048,6 +1205,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1059,6 +1217,7 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
@@ -1071,6 +1230,7 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1118,6 +1278,7 @@ export async function handleToolExecutionEnd(
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1151,6 +1312,7 @@ export async function handleToolExecutionEnd(
       ? (startData.args as Record<string, unknown>)
       : {};
   const adjustedArgs = consumeAdjustedParamsForToolCall(toolCallId, runId);
+  const trackedExecutionStarted = consumeTrackedToolExecutionStarted(toolCallId, runId);
   const executionPrevented = consumePreExecutionBlockedToolCall(toolCallId, runId);
   const structuredReplaySafe = consumeStructuredReplaySafeToolCall(toolCallId, runId);
   const startArgs =
@@ -1164,10 +1326,10 @@ export async function handleToolExecutionEnd(
     initialCallSummary?.instanceReplaySafe === true,
     structuredReplaySafe,
   );
-  // Older/custom event producers omit executionStarted. Treat omission as
-  // executed; only an explicit false can prove preparation stopped the call.
-  const executionStarted = evt.executionStarted !== false && !executionPrevented;
-  const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
+  // A racing observer can consume the active wrapper boundary. Settled and
+  // custom producers use their terminal fact, while policy blocks override it.
+  const executionStarted =
+    (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
   const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
@@ -1176,6 +1338,7 @@ export async function handleToolExecutionEnd(
     toolName,
     meta,
     replaySafe: callSummary.replaySafe,
+    ...(isToolError ? { isError: true } : {}),
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
   });
   const acceptedSessionSpawn =
@@ -1187,37 +1350,35 @@ export async function handleToolExecutionEnd(
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
-  if (isToolError) {
-    const errorMessage = extractToolErrorMessage(sanitizedResult);
-    const errorCode = extractToolErrorCode(sanitizedResult);
-    ctx.state.lastToolError = {
-      toolName,
-      meta,
-      ...(errorCode ? { errorCode } : {}),
-      error: errorMessage,
-      timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
-      middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
-      mutatingAction: attemptedMutatingAction,
-      actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
-      fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
-    };
-  } else if (ctx.state.lastToolError) {
-    // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
-        })
-      ) {
-        ctx.state.lastToolError = undefined;
-      }
-    } else {
-      ctx.state.lastToolError = undefined;
-    }
-  }
+  const errorMessage = isToolError ? extractToolErrorMessage(sanitizedResult) : undefined;
+  const errorCode = isToolError ? extractToolErrorCode(sanitizedResult) : undefined;
+  const validationErrorSummary =
+    isToolError && evt.executionStarted === false && evt.errorKind === "argument-validation"
+      ? createToolValidationErrorSummary(toolName)
+      : undefined;
+  const terminal = (ctx.params.observeToolTerminal ?? resolveFallbackToolTerminalObserver(ctx))({
+    toolCallId,
+    toolName,
+    arguments: startArgs,
+    ...(meta ? { meta } : {}),
+    executionStarted,
+    outcome: isToolError ? "failure" : "success",
+    ...(isToolError
+      ? {
+          failure: {
+            ...(errorCode ? { errorCode } : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(validationErrorSummary ? { validationErrorSummary } : {}),
+            timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
+            middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
+          },
+        }
+      : {}),
+  });
+  ctx.state.lastToolError = terminal.lastToolError;
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1245,6 +1406,7 @@ export async function handleToolExecutionEnd(
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
@@ -1277,6 +1439,7 @@ export async function handleToolExecutionEnd(
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
@@ -1295,6 +1458,7 @@ export async function handleToolExecutionEnd(
       })
     ) {
       ctx.state.messageToolOnlySourceReplyDelivered = true;
+      ctx.params.onDeliveredMessageToolOnlySourceReply?.();
     }
     const sourceReplyPayload = extractMessagingToolSourceReplyPayload(result);
     if (sourceReplyPayload) {
@@ -1302,9 +1466,12 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
-
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
@@ -1315,9 +1482,29 @@ export async function handleToolExecutionEnd(
       const isFirstHeartbeatResponse = ctx.state.heartbeatToolResponse === undefined;
       ctx.state.heartbeatToolResponse = response;
       if (isFirstHeartbeatResponse) {
-        void ctx.params.onHeartbeatToolResponse?.(response);
+        runBestEffortCallback({
+          label: "heartbeat tool response",
+          log: ctx.log,
+          callback: () => ctx.params.onHeartbeatToolResponse?.(response),
+        });
       }
     }
+  }
+
+  const planUpdate =
+    !isToolError && toolName === "update_plan" ? readUpdatePlanResult(sanitizedResult) : undefined;
+  if (planUpdate) {
+    const planEvent = {
+      stream: "plan" as const,
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "openclaw",
+        ...planUpdate,
+      },
+    };
+    emitAgentEvent({ runId: ctx.params.runId, ...planEvent });
+    emitAgentEventCallbackBestEffort(ctx, planEvent);
   }
 
   emitAgentEvent({
@@ -1330,6 +1517,8 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -1345,6 +1534,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
@@ -1358,6 +1548,8 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
 
@@ -1586,3 +1778,4 @@ export async function handleToolExecutionEnd(
       });
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

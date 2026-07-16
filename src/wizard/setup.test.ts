@@ -110,6 +110,12 @@ const enableDefaultOnboardingInternalHooks = vi.hoisted(() =>
 const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
 const listSetupMigrationOptions = vi.hoisted(() => vi.fn(async () => []));
 const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
+const runSetupMemoryImportStep = vi.hoisted(() => vi.fn(async () => {}));
+const verifySetupInference = vi.hoisted(() =>
+  vi.fn<() => Promise<import("../system-agent/setup-inference.js").VerifySetupInferenceResult>>(
+    async () => ({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 250 }),
+  ),
+);
 
 const setupChannels = vi.hoisted(() =>
   vi.fn(
@@ -283,6 +289,14 @@ vi.mock("./setup.migration-import.js", () => ({
   runSetupMigrationImport,
 }));
 
+vi.mock("./setup.memory-import.js", () => ({
+  runSetupMemoryImportStep,
+}));
+
+vi.mock("../system-agent/setup-inference.js", () => ({
+  verifySetupInference,
+}));
+
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
   createConfigIO,
@@ -447,6 +461,14 @@ describe("runSetupWizard", () => {
     warnIfModelConfigLooksOff.mockResolvedValue(undefined);
     buildPluginCompatibilitySnapshotNotices.mockReset();
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([]);
+    verifySetupInference.mockReset();
+    verifySetupInference.mockResolvedValue({
+      ok: true,
+      modelRef: "openai/gpt-5.5",
+      latencyMs: 250,
+    });
+    runSetupMemoryImportStep.mockReset();
+    runSetupMemoryImportStep.mockResolvedValue(undefined);
   });
 
   it("exits successfully after the auto-launched TUI returns", async () => {
@@ -832,6 +854,101 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("runs memory import after workspace bootstrap in QuickStart", async () => {
+    const workspaceDir = await makeCaseDir("memory-import-step-");
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ workspace: workspaceDir }),
+          }),
+        }),
+        runtime,
+      }),
+    );
+    expect(ensureWorkspaceAndSessions.mock.invocationCallOrder[0]).toBeLessThan(
+      runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not run the memory page after the full import flow", async () => {
+    const workspaceDir = await makeCaseDir("full-import-flow-");
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        importFrom: "hermes",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+  });
+
+  it("treats --import-source alone as import intent instead of prompting for a setup mode", async () => {
+    const workspaceDir = await makeCaseDir("import-source-intent-");
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        importSource: "~/.hermes",
+        authChoice: "skip",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expect(runSetupMigrationImport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opts: expect.objectContaining({ importSource: "~/.hermes" }),
+      }),
+    );
+    expect(prompter.select).not.toHaveBeenCalled();
+  });
+
   it("allows size-drop writes for pending plugin install record migration", async () => {
     replaceConfigFile.mockClear();
     readConfigFileSnapshot.mockResolvedValueOnce({
@@ -888,7 +1005,8 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(replaceConfigFile).toHaveBeenCalledTimes(3);
+    // Migration write + pre-channels persist + post-channels write + final write.
+    expect(replaceConfigFile).toHaveBeenCalledTimes(4);
     const migrationParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
       "migration config replacement params",
@@ -904,7 +1022,7 @@ describe("runSetupWizard", () => {
     expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
 
     const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, 2, 0, "config replacement"),
+      getMockCallArg(replaceConfigFile, 3, 0, "config replacement"),
       "config replacement params",
     );
     expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
@@ -1714,4 +1832,102 @@ describe("runSetupWizard", () => {
       "default model prompt params",
     );
   });
+
+  it("offers a live AI check after classic model setup", async () => {
+    applyAuthChoice.mockResolvedValueOnce({
+      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+    });
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ confirm });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "demo-provider",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Test AI access now with a live completion?" }),
+    );
+    expect(verifySetupInference).toHaveBeenCalledOnce();
+  });
+
+  it("continues classic setup when live AI verification fails", async () => {
+    applyAuthChoice.mockResolvedValueOnce({
+      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+    });
+    verifySetupInference.mockResolvedValueOnce({
+      ok: false,
+      status: "auth",
+      error: "login expired",
+    });
+    const select = vi.fn(async () => "continue") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    await expect(
+      runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "demo-provider",
+          installDaemon: false,
+          skipChannels: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        createRuntime(),
+        prompter,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "How would you like to continue?" }),
+    );
+    expect(verifySetupInference).toHaveBeenCalledOnce();
+  });
+
+  it("re-enters model/auth setup once and re-verifies after a failed AI check", async () => {
+    applyAuthChoice.mockResolvedValue({
+      config: { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } },
+    });
+    promptAuthChoiceGrouped.mockResolvedValue("demo-provider");
+    verifySetupInference
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "login expired" })
+      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 300 });
+    const select = vi.fn(async () => "fix") as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true), select });
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "demo-provider",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(verifySetupInference).toHaveBeenCalledTimes(2);
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

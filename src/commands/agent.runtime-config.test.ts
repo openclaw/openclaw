@@ -17,6 +17,7 @@ type ResolveCommandConfigParams = {
   config: OpenClawConfig;
   commandName: string;
   targetIds: Set<string>;
+  allowedPaths?: Set<string>;
   runtime: RuntimeEnv;
 };
 
@@ -36,6 +37,48 @@ vi.mock("../cli/command-secret-targets.js", () => ({
       "models.providers.*.apiKey",
       ...(params?.includeChannelTargets === true ? ["channels.telegram.botToken"] : []),
     ]),
+  getScopedChannelsCommandSecretTargets: (params: {
+    config: OpenClawConfig;
+    channel?: string;
+    accountId?: string;
+    defaultAccountWhenMissing?: boolean;
+  }) => {
+    const channelConfig = params.config.channels?.[params.channel ?? ""] as
+      | { defaultAccount?: string }
+      | undefined;
+    const accountId =
+      params.accountId ??
+      (params.defaultAccountWhenMissing ? (channelConfig?.defaultAccount ?? "default") : undefined);
+    return {
+      targetIds: new Set(
+        params.channel === "telegram"
+          ? ["channels.telegram.botToken", "channels.telegram.accounts.*.botToken"]
+          : params.channel === "discord"
+            ? ["channels.discord.token"]
+            : [],
+      ),
+      ...(params.channel === "telegram" && accountId
+        ? {
+            allowedPaths: new Set([
+              "channels.telegram.botToken",
+              `channels.telegram.accounts.${accountId}.botToken`,
+            ]),
+          }
+        : {}),
+    };
+  },
+}));
+
+vi.mock("../secrets/target-registry.js", () => ({
+  discoverConfigSecretTargetsByIds: (
+    config: OpenClawConfig,
+    targetIds: Iterable<string>,
+  ): Array<{ path: string }> => {
+    const ids = new Set(targetIds);
+    return ids.has("models.providers.*.apiKey") && config.models?.providers?.openai?.apiKey
+      ? [{ path: "models.providers.openai.apiKey" }]
+      : [];
+  },
 }));
 
 const setRuntimeConfigSnapshotMock = vi.hoisted(() =>
@@ -192,6 +235,120 @@ describe("agentCommand runtime config", () => {
 
       const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
+    });
+  });
+
+  it("scopes session-only recipient routing secrets to the selected channel", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      loadedConfig.channels = {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      } as unknown as OpenClawConfig["channels"];
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime, {
+        runtimeChannelSecretScope: { channel: "telegram" },
+      });
+
+      const targetIds = requireResolveCommandConfigParams().targetIds;
+      expect(targetIds.has("channels.telegram.botToken")).toBe(true);
+      expect(targetIds.has("channels.discord.token")).toBe(false);
+      expect(requireResolveCommandConfigParams().allowedPaths).toEqual(
+        new Set(["channels.telegram.botToken", "channels.telegram.accounts.default.botToken"]),
+      );
+    });
+  });
+
+  it("scopes session-only routing secrets to the channel default account", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      loadedConfig.channels = {
+        telegram: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_OPS_TOKEN" },
+            },
+            chat: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_CHAT_TOKEN" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig["channels"];
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime, {
+        runtimeChannelSecretScope: { channel: "telegram" },
+      });
+
+      const resolution = requireResolveCommandConfigParams();
+      expect(resolution.allowedPaths).toEqual(
+        new Set(["channels.telegram.botToken", "channels.telegram.accounts.ops.botToken"]),
+      );
+      expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
+    });
+  });
+
+  it("scopes session-only recipient routing secrets to the selected account", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const loadedConfig = mockConfig(home, store);
+      loadedConfig.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+            models: [],
+          },
+        },
+      } as OpenClawConfig["models"];
+      loadedConfig.channels = {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          accounts: {
+            ops: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_OPS_TOKEN" },
+            },
+            chat: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_CHAT_TOKEN" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig["channels"];
+      resolveCommandConfigWithSecretsMock.mockResolvedValueOnce({
+        resolvedConfig: loadedConfig,
+        effectiveConfig: loadedConfig,
+        diagnostics: [],
+      });
+
+      await resolveAgentRuntimeConfig(runtime, {
+        runtimeChannelSecretScope: { channel: "telegram", accountId: "ops" },
+      });
+
+      const resolution = requireResolveCommandConfigParams();
+      expect(resolution.allowedPaths).toEqual(
+        new Set([
+          "models.providers.openai.apiKey",
+          "channels.telegram.botToken",
+          "channels.telegram.accounts.ops.botToken",
+        ]),
+      );
+      expect(resolution.allowedPaths?.has("channels.telegram.accounts.chat.botToken")).toBe(false);
     });
   });
 

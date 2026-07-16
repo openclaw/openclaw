@@ -15,8 +15,9 @@ describe("acpx package manifest", () => {
   it("keeps runtime dependencies in the package manifest", () => {
     expect(packageJson.dependencies?.acpx).toBeTypeOf("string");
     expect(packageJson.dependencies?.acpx).not.toBe("");
-    expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBe("0.15.0");
-    expect(packageJson.dependencies?.["@agentclientprotocol/claude-agent-acp"]).toBe("0.39.0");
+    expect(packageJson.dependencies?.["@agentclientprotocol/codex-acp"]).toBe("1.1.2");
+    expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBeUndefined();
+    expect(packageJson.dependencies?.["@agentclientprotocol/claude-agent-acp"]).toBe("0.55.0");
     expect(packageJson.devDependencies?.["@agentclientprotocol/claude-agent-acp"]).toBeUndefined();
   });
 });

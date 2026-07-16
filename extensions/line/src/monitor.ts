@@ -20,17 +20,18 @@ import {
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
+  runDetachedWebhookWork,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { resolveLineDurableReplyOptions } from "./monitor-durable.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
-  createImageMessage,
   createLocationMessage,
   createQuickReplyItems,
   createTextMessageWithQuickReplies,
@@ -46,7 +47,7 @@ import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
-export interface MonitorLineProviderOptions {
+interface MonitorLineProviderOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
@@ -57,23 +58,12 @@ export interface MonitorLineProviderOptions {
   webhookPath?: string;
 }
 
-export interface LineProviderMonitor {
+interface LineProviderMonitor {
   account: ResolvedLineAccount;
   handleWebhook: (body: webhook.CallbackRequest) => Promise<void>;
   stop: () => void;
 }
 
-const runtimeState = new Map<
-  string,
-  {
-    running: boolean;
-    lastStartAt: number | null;
-    lastStopAt: number | null;
-    lastError: string | null;
-    lastInboundAt?: number | null;
-    lastOutboundAt?: number | null;
-  }
->();
 const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
@@ -87,36 +77,6 @@ type LineWebhookTarget = {
 };
 
 const lineWebhookTargets = new Map<string, LineWebhookTarget[]>();
-
-function recordChannelRuntimeState(params: {
-  channel: string;
-  accountId: string;
-  state: Partial<{
-    running: boolean;
-    lastStartAt: number | null;
-    lastStopAt: number | null;
-    lastError: string | null;
-    lastInboundAt: number | null;
-    lastOutboundAt: number | null;
-  }>;
-}): void {
-  const key = `${params.channel}:${params.accountId}`;
-  const existing = runtimeState.get(key) ?? {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  };
-  runtimeState.set(key, { ...existing, ...params.state });
-}
-
-export function getLineRuntimeState(accountId: string) {
-  return runtimeState.get(`line:${accountId}`);
-}
-
-export function clearLineRuntimeStateForTests() {
-  runtimeState.clear();
-}
 
 function startLineLoadingKeepalive(params: {
   cfg: OpenClawConfig;
@@ -188,14 +148,6 @@ export async function monitorLineProvider(
 
       const { ctxPayload, replyToken, route } = ctx;
 
-      recordChannelRuntimeState({
-        channel: "line",
-        accountId: resolvedAccountId,
-        state: {
-          lastInboundAt: Date.now(),
-        },
-      });
-
       const shouldShowLoading = Boolean(ctx.userId && !ctx.isGroup);
 
       const displayNamePromise = ctx.userId
@@ -258,7 +210,7 @@ export async function monitorLineProvider(
                     }).catch(() => {});
                   }
 
-                  const { replyTokenUsed: nextReplyTokenUsed } = await deliverLineAutoReply({
+                  const deliveryResult = await deliverLineAutoReply({
                     payload,
                     lineData,
                     to: ctxPayload.From,
@@ -279,7 +231,7 @@ export async function monitorLineProvider(
                       createTextMessageWithQuickReplies,
                       pushMessagesLine,
                       createFlexMessage,
-                      createImageMessage,
+                      buildMediaMessage: buildLineMediaMessage,
                       createLocationMessage,
                       onReplyError: (replyErr) => {
                         logVerbose(
@@ -288,15 +240,17 @@ export async function monitorLineProvider(
                       },
                     },
                   });
-                  replyTokenUsed = nextReplyTokenUsed;
+                  replyTokenUsed = deliveryResult.replyTokenUsed;
 
-                  recordChannelRuntimeState({
-                    channel: "line",
-                    accountId: resolvedAccountId,
-                    state: {
-                      lastOutboundAt: Date.now(),
-                    },
-                  });
+                  if (deliveryResult.status === "partial") {
+                    // Text reached the user but a rich/media bubble did not.
+                    // Surface the tagged partial failure after adopting the
+                    // consumed reply-token state so later blocks in this turn
+                    // route correctly without retrying text the user already saw.
+                    throw deliveryResult.error;
+                  }
+
+                  return { visibleReplySent: deliveryResult.visibleReplySent };
                 },
                 onError: (err, info) => {
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
@@ -430,13 +384,15 @@ export async function monitorLineProvider(
 
           if (body.events && body.events.length > 0) {
             logVerbose(`line: received ${body.events.length} webhook events`);
-            void Promise.resolve()
-              .then(() => match.target.bot.handleWebhook(body))
-              .catch((err: unknown) => {
+            // Detach event processing from the request admission before the ack
+            // releases it; an inherited released admission refuses queue work.
+            void runDetachedWebhookWork(() => match.target.bot.handleWebhook(body)).catch(
+              (err: unknown) => {
                 match.target.runtime.error?.(
                   danger(`line webhook dispatch failed: ${String(err)}`),
                 );
-              });
+              },
+            );
           }
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
@@ -464,15 +420,6 @@ export async function monitorLineProvider(
     },
   });
 
-  recordChannelRuntimeState({
-    channel: "line",
-    accountId: resolvedAccountId,
-    state: {
-      running: true,
-      lastStartAt: Date.now(),
-    },
-  });
-
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   let stopped = false;
@@ -483,14 +430,6 @@ export async function monitorLineProvider(
     stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
-    recordChannelRuntimeState({
-      channel: "line",
-      accountId: resolvedAccountId,
-      state: {
-        running: false,
-        lastStopAt: Date.now(),
-      },
-    });
   };
 
   if (abortSignal?.aborted) {

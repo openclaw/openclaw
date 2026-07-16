@@ -6,29 +6,31 @@ import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
 import type { ApprovalsConfig } from "./types.approvals.js";
 import type { AuthConfig } from "./types.auth.js";
-import type { DiagnosticsConfig, LoggingConfig, SessionConfig, WebConfig } from "./types.base.js";
+import type {
+  AuditConfig,
+  DiagnosticsConfig,
+  LoggingConfig,
+  SessionConfig,
+  WebConfig,
+} from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
-import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
-import type {
-  AudioConfig,
-  BroadcastConfig,
-  CommandsConfig,
-  MessagesConfig,
-} from "./types.messages.js";
+import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.messages.js";
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { SystemAgentConfig } from "./types.system-agent.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
@@ -76,6 +78,16 @@ export type SecurityConfig = {
       allowInsecurePath?: boolean;
       allowSymlinkCommand?: boolean;
     };
+  };
+};
+
+export type WorktreesConfig = {
+  /** Retention limits enforced by hourly managed-worktree cleanup. */
+  cleanup?: {
+    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
+    maxCount?: number;
+    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
+    maxTotalSizeGb?: number;
   };
 };
 
@@ -134,15 +146,17 @@ export type OpenClawConfig = {
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
   /** CLI defaults and command-specific settings. */
   cli?: CliConfig;
-  /** Crestodian rescue/maintenance integration settings. */
-  crestodian?: CrestodianConfig;
+  /** System-agent rescue/maintenance integration settings. */
+  systemAgent?: SystemAgentConfig;
   update?: {
-    /** Update channel for git + npm installs ("stable", "beta", or "dev"). */
-    channel?: "stable" | "beta" | "dev";
+    /** Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). */
+    channel?: "stable" | "extended-stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
     /** Core auto-update policy for package installs. */
@@ -199,8 +213,6 @@ export type OpenClawConfig = {
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  /** Audio command and media handling settings. */
-  audio?: AudioConfig;
   media?: {
     /** Preserve original uploaded filenames when storing inbound media. */
     preserveFilenames?: boolean;
@@ -221,6 +233,8 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
+  /** Managed worktree retention settings. */
+  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
@@ -233,6 +247,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
+  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */

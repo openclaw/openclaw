@@ -12,32 +12,26 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
-import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
+  type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
-export {
-  buildChannelInboundEventContext,
-  filterChannelInboundSupplementalContext,
-} from "../inbound-event/context.js";
-export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
-export {
-  clearChannelBotPairLoopGuardForTests,
-  recordChannelBotPairLoopAndCheckSuppression,
-} from "./bot-loop-protection.js";
-export { createChannelHistoryWindow } from "./history-window.js";
-export type { ChannelHistoryWindow } from "./history-window.js";
+
+export { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
+
 export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+
+const NO_ADDITIONAL_DELIVERY_SIGNALS: ChannelTurnVisibleDeliverySignals = {};
+
 export {
-  deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
@@ -45,7 +39,6 @@ export {
 export type {
   DurableInboundReplyDeliveryOptions,
   DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
 } from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
@@ -62,63 +55,19 @@ import type {
   PreflightFacts,
   RunChannelTurnParams,
 } from "./types.js";
-export { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
+
 export {
-  EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
-  type ChannelTurnDispatchResultLike,
-  type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
-export type {
-  AccessFacts,
-  AssembledChannelTurn,
-  ChannelDeliveryInfo,
-  ChannelDeliveryResult,
-  ChannelEventClass,
-  ChannelTurnAdapter,
-  ChannelTurnAdmission,
-  ChannelEventDeliveryAdapter,
-  ChannelTurnDroppedHistoryOptions,
-  ChannelTurnHistoryFinalizeOptions,
-  ChannelTurnDispatcherOptions,
-  ChannelTurnLogEvent,
-  ChannelTurnRecordOptions,
-  ChannelTurnReplyPipelineOptions,
-  ChannelTurnResolved,
-  ChannelTurnResult,
-  DispatchedChannelTurnResult,
-  ConversationFacts,
-  MessageFacts,
-  NormalizedTurnInput,
-  PreflightFacts,
-  PreparedChannelTurn,
-  ReplyPlanFacts,
-  RouteFacts,
-  RunChannelTurnParams,
-  SenderFacts,
-  SupplementalContextFacts,
-} from "./types.js";
-export type { InboundMediaFacts } from "./types.js";
+export type { ChannelTurnResult, DispatchedChannelTurnResult } from "./types.js";
 
 const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
   canStartAgentTurn: true,
 };
 const log = createSubsystemLogger("channels/turn/kernel");
-
-/**
- * @deprecated Compatibility assembly for legacy buffered reply dispatchers.
- * New channel plugins should expose `defineChannelMessageAdapter(...)` from
- * `openclaw/plugin-sdk/channel-outbound` and route send/receive behavior through
- * the message lifecycle helpers.
- */
-export function createChannelTurnReplyPipeline(
-  params: CreateChannelReplyPipelineParams,
-): ReturnType<typeof createChannelReplyPipeline> {
-  return createChannelReplyPipeline(params);
-}
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
   if (!value || typeof value !== "object") {
@@ -153,7 +102,7 @@ function emit(params: {
   });
 }
 
-export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
+function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
   // Observe-only channels still need an adapter shape for shared turn plumbing.
   return {
     deliver: async () => ({
@@ -197,7 +146,7 @@ function resolveDroppedHistoryBody(input: NormalizedTurnInput, preflight: Prefli
   );
 }
 
-export async function recordDroppedChannelTurnHistory(params: {
+async function recordDroppedChannelTurnHistory(params: {
   input: NormalizedTurnInput;
   preflight: PreflightFacts;
   admission?: ChannelTurnAdmission;
@@ -241,10 +190,11 @@ export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistor
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
+  const onTurnAdopted = params.onTurnAdopted ?? params.replyOptions?.onTurnAdopted;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: params.replyOptions,
+      replyOptions: onTurnAdopted ? { ...params.replyOptions, onTurnAdopted } : params.replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -262,6 +212,7 @@ function resolveAssembledReplyPipeline(
     replyOptions: {
       onModelSelected,
       ...params.replyOptions,
+      ...(onTurnAdopted ? { onTurnAdopted } : {}),
     },
   };
 }
@@ -297,7 +248,7 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   // Suppress the silent-drop warning using the canonical visible-delivery signal, which
   // includes observedReplyDelivery and other non-count delivery paths. A partial count-only
   // check would falsely flag observed-path deliveries (queuedFinal=false, zero counts) as drops.
-  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
+  if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;
   }
   log.warn(
@@ -652,20 +603,16 @@ type PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
   botLoopProtection?: undefined;
 };
 
-export function runPreparedChannelTurn<
-  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
->(
+function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
   params: PreparedChannelTurnWithBotLoopProtection<TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
-export function runPreparedChannelTurn<
-  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
->(
+function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
   params: PreparedChannelTurnWithoutBotLoopProtection<TDispatchResult>,
 ): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
-export function runPreparedChannelTurn<
-  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
->(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>>;
-export async function runPreparedChannelTurn<
+function runPreparedChannelTurn<TDispatchResult = DispatchedChannelTurnResult["dispatchResult"]>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
@@ -673,7 +620,7 @@ export async function runPreparedChannelTurn<
 
 export const runPreparedInboundReply = runPreparedChannelTurn;
 
-export async function runChannelTurn<
+async function runChannelTurn<
   TRaw,
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
@@ -762,20 +709,27 @@ export async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
+    // Prepared runDispatch was assembled earlier and ignores late options (including onTurnAdopted).
     const dispatchResult = await dispatchResolvedChannelTurn(
-      admission.kind === "observeOnly"
+      "runDispatch" in resolved
         ? {
             ...resolved,
-            delivery: createNoopChannelEventDeliveryAdapter(),
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
           }
         : {
             ...resolved,
+            ...(admission.kind === "observeOnly"
+              ? { delivery: createNoopChannelEventDeliveryAdapter() }
+              : {}),
             admission,
             log: params.log,
             messageId: input.id,
+            ...(params.onTurnAdopted ? { onTurnAdopted: params.onTurnAdopted } : {}),
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;
@@ -838,3 +792,4 @@ export async function runChannelTurn<
 }
 
 export const runChannelInboundEvent = runChannelTurn;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

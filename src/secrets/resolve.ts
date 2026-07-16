@@ -1,7 +1,7 @@
 /** Resolves SecretRef values from env, file, and exec secret providers. */
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -19,12 +19,10 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import {
-  forceKillChildProcessTree,
-  shouldDetachChildForProcessTree,
-} from "../process/child-process-tree.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -56,6 +54,8 @@ const DEFAULT_FILE_MAX_BYTES = 1024 * 1024;
 const DEFAULT_FILE_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
+// Exec diagnostics cross CLI, RPC, and log boundaries; surface only canonical safe codes.
+const SAFE_EXEC_ERROR_CODES = new Set(["AMBIGUOUS_DUPLICATE_KEY", "NOT_FOUND"]);
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -78,7 +78,7 @@ type ProviderResolutionOutput = Map<string, unknown>;
 
 /** Error for failures that affect an entire configured secret provider. */
 /** Error emitted when a configured secret provider cannot resolve a ref. */
-export class SecretProviderResolutionError extends Error {
+class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -97,7 +97,7 @@ export class SecretProviderResolutionError extends Error {
 }
 
 /** Error for failures limited to one SecretRef id under a provider. */
-export class SecretRefResolutionError extends Error {
+class SecretRefResolutionError extends Error {
   readonly scope = "ref" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -339,13 +339,8 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
-  if (cachedFilePayload) {
-    return await cachedFilePayload;
-  }
-
-  const filePath = resolveUserPath(params.providerConfig.path);
-  const readPromise = (async () => {
+  const read = async () => {
+    const filePath = resolveUserPath(params.providerConfig.path);
     const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
@@ -375,15 +370,15 @@ async function readFileProviderPayload(params: {
       }
       throw error;
     }
-  })();
+  };
 
-  if (cache) {
-    // Cache the in-flight read, not just the fulfilled payload, so concurrent refs share one
-    // permission-checked file read and observe the same provider error.
-    cache.filePayloadByProvider ??= new Map();
-    cache.filePayloadByProvider.set(cacheKey, readPromise);
+  if (!cache) {
+    return await read();
   }
-  return await readPromise;
+  // Cache the in-flight read, not just the fulfilled payload, so concurrent refs share one
+  // permission-checked file read and observe the same provider error.
+  cache.filePayloadByProvider ??= new Map();
+  return await getOrCreatePromise(cache.filePayloadByProvider, cacheKey, read);
 }
 
 async function resolveEnvRefs(params: {
@@ -471,137 +466,6 @@ async function resolveFileRefs(params: {
   return resolved;
 }
 
-type ExecRunResult = {
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  termination: "exit" | "timeout" | "no-output-timeout";
-};
-
-function isIgnorableStdinWriteError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return false;
-  }
-  const code = String(error.code);
-  return code === "EPIPE" || code === "ERR_STREAM_DESTROYED";
-}
-
-async function runExecResolver(params: {
-  command: string;
-  args: string[];
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  input: string;
-  timeoutMs: number;
-  noOutputTimeoutMs: number;
-  maxOutputBytes: number;
-}): Promise<ExecRunResult> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(params.command, params.args, {
-      cwd: params.cwd,
-      env: params.env,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-      windowsHide: true,
-      detached: shouldDetachChildForProcessTree(),
-    });
-
-    let settled = false;
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-    let noOutputTimedOut = false;
-    let outputBytes = 0;
-    let noOutputTimer: NodeJS.Timeout | null = null;
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      forceKillChildProcessTree(child);
-    }, params.timeoutMs);
-
-    const clearTimers = () => {
-      clearTimeout(timeoutTimer);
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-        noOutputTimer = null;
-      }
-    };
-
-    const armNoOutputTimer = () => {
-      if (noOutputTimer) {
-        clearTimeout(noOutputTimer);
-      }
-      noOutputTimer = setTimeout(() => {
-        noOutputTimedOut = true;
-        forceKillChildProcessTree(child);
-      }, params.noOutputTimeoutMs);
-    };
-
-    const append = (chunk: Buffer | string, target: "stdout" | "stderr") => {
-      const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      outputBytes += Buffer.byteLength(text, "utf8");
-      if (outputBytes > params.maxOutputBytes) {
-        forceKillChildProcessTree(child);
-        if (!settled) {
-          settled = true;
-          clearTimers();
-          reject(
-            new Error(`Exec provider output exceeded maxOutputBytes (${params.maxOutputBytes}).`),
-          );
-        }
-        return;
-      }
-      if (target === "stdout") {
-        stdout += text;
-      } else {
-        stderr += text;
-      }
-      armNoOutputTimer();
-    };
-
-    armNoOutputTimer();
-    child.on("error", (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error);
-    });
-    child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
-    child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
-    child.on("close", (code, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      resolve({
-        stdout,
-        stderr,
-        code,
-        signal,
-        termination: noOutputTimedOut ? "no-output-timeout" : timedOut ? "timeout" : "exit",
-      });
-    });
-
-    const handleStdinError = (error: unknown) => {
-      if (isIgnorableStdinWriteError(error) || settled) {
-        return;
-      }
-      settled = true;
-      clearTimers();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    child.stdin?.on("error", handleStdinError);
-    try {
-      child.stdin?.end(params.input);
-    } catch (error) {
-      handleStdinError(error);
-    }
-  });
-}
-
 function parseExecValues(params: {
   providerName: string;
   ids: string[];
@@ -622,7 +486,7 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: trimmed };
     }
   } else {
     try {
@@ -638,7 +502,7 @@ function parseExecValues(params: {
 
   if (!isRecord(parsed)) {
     if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
-      return { [params.ids[0]]: parsed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: parsed };
     }
     throw providerResolutionError({
       source: "exec",
@@ -664,24 +528,18 @@ function parseExecValues(params: {
   const responseErrors = isRecord(parsed.errors) ? parsed.errors : null;
   const out: Record<string, unknown> = {};
   for (const id of params.ids) {
-    if (responseErrors && id in responseErrors) {
+    if (responseErrors && Object.hasOwn(responseErrors, id)) {
       const entry = responseErrors[id];
-      if (isRecord(entry) && typeof entry.message === "string" && entry.message.trim()) {
-        throw refResolutionError({
-          source: "exec",
-          provider: params.providerName,
-          refId: id,
-          message: `Exec provider "${params.providerName}" failed for id "${id}" (${entry.message.trim()}).`,
-        });
-      }
+      const code = isRecord(entry) && typeof entry.code === "string" ? entry.code : null;
+      const safeCode = code && SAFE_EXEC_ERROR_CODES.has(code) ? code : null;
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,
         refId: id,
-        message: `Exec provider "${params.providerName}" failed for id "${id}".`,
+        message: `Exec provider "${params.providerName}" failed for id "${id}"${safeCode ? ` (${safeCode})` : ""}.`,
       });
     }
-    if (!(id in responseValues)) {
+    if (!Object.hasOwn(responseValues, id)) {
       throw refResolutionError({
         source: "exec",
         provider: params.providerName,
@@ -768,18 +626,24 @@ async function resolveExecRefs(params: {
   );
   const jsonOnly = params.providerConfig.jsonOnly ?? true;
 
-  let result: ExecRunResult;
+  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
   try {
-    result = await runExecResolver({
-      command: secureCommandPath,
-      args: params.providerConfig.args ?? [],
-      cwd: path.dirname(secureCommandPath),
-      env: childEnv,
-      input,
-      timeoutMs,
-      noOutputTimeoutMs,
-      maxOutputBytes,
-    });
+    result = await runCommandWithTimeout(
+      [secureCommandPath, ...(params.providerConfig.args ?? [])],
+      {
+        baseEnv: {},
+        cwd: path.dirname(secureCommandPath),
+        env: childEnv,
+        input,
+        killProcessTree: true,
+        maxCombinedOutputBytes: maxOutputBytes,
+        maxOutputBytes,
+        noOutputTimeoutMs,
+        outputCapture: "head",
+        terminateOnOutputLimit: true,
+        timeoutMs,
+      },
+    );
   } catch (err) {
     throwUnknownProviderResolutionError({
       source: "exec",
@@ -799,6 +663,13 @@ async function resolveExecRefs(params: {
       source: "exec",
       provider: params.providerName,
       message: `Exec provider "${params.providerName}" produced no output for ${noOutputTimeoutMs}ms.`,
+    });
+  }
+  if (result.outputLimitExceeded) {
+    throw providerResolutionError({
+      source: "exec",
+      provider: params.providerName,
+      message: `Exec provider output exceeded maxOutputBytes (${maxOutputBytes}).`,
     });
   }
   if (result.code !== 0) {
@@ -950,7 +821,7 @@ export async function resolveSecretRefValues(
         });
       }
       const providerConfig = resolveConfiguredProvider({
-        ref: group.refs[0],
+        ref: expectDefined(group.refs[0], "refs entry at 0"),
         config: options.config,
         env: options.env ?? process.env,
         manifestRegistry: options.manifestRegistry,
@@ -1001,12 +872,7 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
-  if (cachedResolvedValue) {
-    return await cachedResolvedValue;
-  }
-
-  const promise = (async () => {
+  const resolve = async () => {
     const resolved = await resolveSecretRefValues([ref], options);
     if (!resolved.has(key)) {
       throw refResolutionError({
@@ -1017,14 +883,14 @@ export async function resolveSecretRefValue(
       });
     }
     return resolved.get(key);
-  })();
+  };
 
-  if (cache) {
-    // Store the in-flight promise so repeated callers do not race duplicate provider work.
-    cache.resolvedByRefKey ??= new Map();
-    cache.resolvedByRefKey.set(key, promise);
+  if (!cache) {
+    return await resolve();
   }
-  return await promise;
+  // Store the in-flight promise so repeated callers do not race duplicate provider work.
+  cache.resolvedByRefKey ??= new Map();
+  return await getOrCreatePromise(cache.resolvedByRefKey, key, resolve);
 }
 
 /** Resolves one SecretRef and requires a non-empty string result. */
@@ -1040,3 +906,4 @@ export async function resolveSecretRefString(
   }
   return resolved;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

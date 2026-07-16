@@ -118,7 +118,7 @@ export function applyAgentConfig(
     name?: string;
     workspace?: string;
     agentDir?: string;
-    model?: string;
+    model?: string | null;
     identity?: IdentityConfig;
   },
 ): OpenClawConfig {
@@ -126,16 +126,21 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = index >= 0 ? list[index] : { id: agentId };
+  const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,
     ...(name ? { name } : {}),
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
     ...(mergedIdentity ? { identity: mergedIdentity } : {}),
   };
+  // Model is tri-state: omission preserves the override, null restores inheritance.
+  if (params.model === null) {
+    delete nextEntry.model;
+  } else if (params.model !== undefined) {
+    nextEntry.model = params.model;
+  }
   const nextList = [...list];
   if (index >= 0) {
     nextList[index] = nextEntry;

@@ -24,6 +24,7 @@ import {
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
+import { shouldIncludeSkill } from "./config.js";
 import { buildWorkspaceSkillsPrompt } from "./workspace.js";
 
 vi.mock("./plugin-skills.js", () => ({
@@ -213,7 +214,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(commands.find((entry) => entry.skillName === "hidden-skill")).toBeUndefined();
   });
 
-  it("truncates descriptions and preserves tool-dispatch metadata", async () => {
+  it("preserves descriptions and tool-dispatch metadata", async () => {
     const workspaceDir = await makeWorkspace();
     const longDescription =
       "This is a very long description that exceeds Discord's 100 character limit for slash command descriptions and should be truncated";
@@ -243,8 +244,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const shortCmd = commands.find((entry) => entry.skillName === "short-desc");
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
 
-    expect(longCmd?.description.length).toBeLessThanOrEqual(100);
-    expect(longCmd?.description.endsWith("…")).toBe(true);
+    expect(longCmd?.description).toBe(longDescription);
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
     expect(cmd?.skillSource).toBe("workspace");
@@ -500,6 +500,62 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("hidden-skill");
     expect(prompt).not.toContain("Hidden from the prompt");
     expect(prompt).not.toContain(path.join(hiddenSkillDir, "SKILL.md"));
+  });
+});
+
+describe("shouldIncludeSkill", () => {
+  const envName = "OPENCLAW_TEST_SKILL_REQUIREMENT";
+  const entry = makeSkillEntry("env-skill", {
+    primaryEnv: envName,
+    requires: { env: [envName] },
+  });
+
+  function shouldInclude(config?: OpenClawConfig): boolean {
+    return shouldIncludeSkill({ entry, config, bundledAllowlist: undefined });
+  }
+
+  it("requires non-blank host and configured env values", () => {
+    withClearedEnv([envName], () => {
+      expect(shouldInclude()).toBe(false);
+
+      process.env[envName] = "   ";
+      expect(shouldInclude()).toBe(false);
+
+      process.env[envName] = " example ";
+      expect(shouldInclude()).toBe(true);
+
+      delete process.env[envName];
+      expect(
+        shouldInclude({ skills: { entries: { "env-skill": { env: { [envName]: "   " } } } } }),
+      ).toBe(false);
+      expect(
+        shouldInclude({
+          skills: { entries: { "env-skill": { env: { [envName]: " example " } } } },
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("requires a non-blank primary apiKey", () => {
+    withClearedEnv([envName], () => {
+      expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", "   "))).toBe(false);
+      expect(shouldInclude(resolvedSkillApiKeyConfig("env-skill", " example "))).toBe(true);
+      expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(true);
+    });
+  });
+
+  it("keeps always-on skills eligible without credentials", () => {
+    withClearedEnv([envName], () => {
+      expect(
+        shouldIncludeSkill({
+          entry: makeSkillEntry("always-skill", {
+            always: true,
+            requires: { env: [envName] },
+          }),
+          bundledAllowlist: undefined,
+        }),
+      ).toBe(true);
+    });
   });
 });
 

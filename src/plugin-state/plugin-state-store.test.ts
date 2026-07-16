@@ -11,18 +11,20 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  clearPluginStateStoreForTests,
   closePluginStateDatabase,
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
-  PluginStateStoreError,
-  probePluginStateStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
+import {
+  clearPluginStateStoreForTests,
+  probePluginStateStore,
+  seedPluginStateEntriesForTests,
+  setMaxPluginStateEntriesPerPluginForTests,
+} from "./plugin-state-store.test-helpers.js";
+import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 let testState: OpenClawTestState | undefined;
 
@@ -216,6 +218,56 @@ describe("plugin state keyed store", () => {
       await expect(store.entries()).resolves.toEqual([
         { key: "claim", value: { version: 2 }, createdAt: 1200 },
       ]);
+    });
+  });
+
+  it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
+    await withPluginStateTestState(async () => {
+      vi.useFakeTimers();
+      const store = createPluginStateKeyedStore<number>("codex", {
+        namespace: "durable-bindings",
+        maxEntries: 2,
+        overflowPolicy: "reject-new",
+      });
+      vi.setSystemTime(1000);
+      await store.register("first", 1);
+      vi.setSystemTime(2000);
+      await store.register("second", 2);
+
+      await expect(store.register("third", 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.registerIfAbsent("first", 99)).resolves.toBe(false);
+      if (!store.update) {
+        throw new Error("plugin state update unavailable");
+      }
+      vi.setSystemTime(3000);
+      await expect(store.update("first", () => 10)).resolves.toBe(true);
+      await expect(store.update("third", () => 3)).rejects.toMatchObject({
+        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+      });
+      await expect(store.entries()).resolves.toEqual([
+        expect.objectContaining({ key: "second", value: 2 }),
+        expect.objectContaining({ key: "first", value: 10 }),
+      ]);
+    });
+  });
+
+  it("deletes an entry only when the current value matches", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore<{ version: number }>("device-pair", {
+        namespace: "notify-subscribers",
+        maxEntries: 10,
+      });
+      await store.register("chat", { version: 1 });
+      if (!store.deleteIf) {
+        throw new Error("plugin state conditional delete unavailable");
+      }
+
+      await expect(store.deleteIf("chat", (current) => current.version === 2)).resolves.toBe(false);
+      await expect(store.lookup("chat")).resolves.toEqual({ version: 1 });
+      await expect(store.deleteIf("chat", (current) => current.version === 1)).resolves.toBe(true);
+      await expect(store.lookup("chat")).resolves.toBeUndefined();
     });
   });
 

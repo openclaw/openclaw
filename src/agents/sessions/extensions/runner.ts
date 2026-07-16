@@ -162,13 +162,13 @@ type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends {
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
-export type NewSessionHandler = (options?: {
+type NewSessionHandler = (options?: {
   parentSession?: string;
   setup?: (sessionManager: SessionManager) => Promise<void>;
   withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
 }) => Promise<{ cancelled: boolean }>;
 
-export type ForkHandler = (
+type ForkHandler = (
   entryId: string,
   options?: {
     position?: "before" | "at";
@@ -176,7 +176,7 @@ export type ForkHandler = (
   },
 ) => Promise<{ cancelled: boolean }>;
 
-export type NavigateTreeHandler = (
+type NavigateTreeHandler = (
   targetId: string,
   options?: {
     summarize?: boolean;
@@ -186,12 +186,12 @@ export type NavigateTreeHandler = (
   },
 ) => Promise<{ cancelled: boolean }>;
 
-export type SwitchSessionHandler = (
+type SwitchSessionHandler = (
   sessionPath: string,
   options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
 ) => Promise<{ cancelled: boolean }>;
 
-export type ReloadHandler = () => Promise<void>;
+type ReloadHandler = () => Promise<void>;
 
 export type ShutdownHandler = () => void;
 
@@ -1145,3 +1145,4 @@ export class ExtensionRunner {
       : { action: "continue" };
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

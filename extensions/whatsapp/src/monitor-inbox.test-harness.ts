@@ -7,7 +7,6 @@ import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env"
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
-  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
   resetPairingSecurityMocks,
   upsertPairingRequestMock as pairingUpsertPairingRequestMock,
 } from "./pairing-security.test-harness.js";
@@ -30,15 +29,15 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
-export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
-export type MockSock = {
+type MockSock = {
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
+  fetchAccountReachoutTimelock: AnyMockFn;
   readMessages: AnyMockFn;
   groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
@@ -186,8 +185,12 @@ const inboundRuntimeMocks = vi.hoisted(() => {
     return current;
   }
 
+  async function* fakeMediaStream() {
+    yield Buffer.from("fake-media-data");
+  }
+
   return {
-    downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
+    downloadMediaMessage: vi.fn(() => fakeMediaStream()),
     isJidGroup: vi.fn((jid: string | undefined | null) =>
       typeof jid === "string" ? jid.endsWith("@g.us") : false,
     ),
@@ -213,6 +216,7 @@ function createMockSock(): MockSock {
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
+    fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
       id: jid,

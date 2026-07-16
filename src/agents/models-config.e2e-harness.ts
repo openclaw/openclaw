@@ -7,7 +7,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
 
 /** Runs a models-config test with an isolated temp HOME and no session cleanup. */
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -112,6 +112,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENCLAW_AGENT_DIR",
   "QIANFAN_API_KEY",
   "QWEN_API_KEY",
+  "QWEN_TOKEN_PLAN_API_KEY",
   "MODELSTUDIO_API_KEY",
   "SYNTHETIC_API_KEY",
   "STEPFUN_API_KEY",

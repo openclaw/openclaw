@@ -175,14 +175,14 @@ def play_metadata_path
 end
 
 def play_screenshot_paths
-  Dir[File.join(play_metadata_path, "**", "images", "**", "*.png")]
+  Dir[File.join(play_metadata_path, "**", "images", "**", "*.{png,jpg,jpeg}")]
 end
 
 def validate_android_screenshots!
   return unless play_screenshot_upload_requested?
 
   if play_screenshot_paths.empty?
-    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no PNG screenshots were found under apps/android/fastlane/metadata/android/*/images.")
+    UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no screenshots were found under apps/android/fastlane/metadata/android/*/images.")
   end
 end
 

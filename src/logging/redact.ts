@@ -1,8 +1,12 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { readLoggingConfig } from "./config.js";
 import { replacePatternBounded } from "./redact-bounded.js";
+import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
+import { redactRegisteredSecretValues } from "./secret-redaction-registry.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 export type RedactPattern = string | RegExp;
@@ -88,9 +92,10 @@ const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key[-_]?material|keyMaterial|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
+  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -123,11 +128,17 @@ const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALON
 // data-URL media is never corrupted while tokens in URL paths or assignments still redact.
 const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
 const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
+const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
+const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN,
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
+]);
+const CHUNK_UNSAFE_PATTERN_SOURCES = new Set([
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
@@ -143,7 +154,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // lower-case URL secrets stay redacted without hiding config-key diagnostics.
   String.raw`/[?&](?:${AUTH_QUERY_KEYS}|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&#\s<>]+)/gi`,
   // JSON fields.
-  String.raw`"(?:apiKey|api_key|token|secret|password|passwd|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
+  String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
   // HTTP client diagnostics often stringify request config objects using
   // JSON or util.inspect-style fields rather than env/CLI syntax.
   String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
@@ -247,8 +258,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(api_org_[A-Za-z0-9]{20,})`,
   String.raw`(r8_[A-Za-z0-9]{10,})`,
   // Telegram Bot API URLs embed the token as `/bot<token>/...` (no word-boundary before digits).
-  String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
-  String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
+  TELEGRAM_BOT_TOKEN_REDACT_PATTERN,
+  TELEGRAM_TOKEN_REDACT_PATTERN,
 ];
 let defaultResolvedPatterns: RegExp[] | undefined;
 
@@ -307,8 +318,11 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   } else if (raw.trim()) {
     const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
     if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      pattern = compileConfigRegex(match[1], flags)?.regex ?? null;
+      const flags = expectDefined(match[2], "redact regex capture 2").includes("g")
+        ? match[2]
+        : `${match[2]}g`;
+      pattern =
+        compileConfigRegex(expectDefined(match[1], "redact regex capture 1"), flags)?.regex ?? null;
     } else {
       pattern = compileConfigRegex(raw, "gi")?.regex ?? null;
     }
@@ -319,7 +333,9 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   if (
     pattern &&
     typeof raw === "string" &&
-    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) || raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY))
+    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) ||
+      raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) ||
+      CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
   }
@@ -351,8 +367,8 @@ function maskToken(token: string): string {
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
   }
-  const start = token.slice(0, DEFAULT_REDACT_KEEP_START);
-  const end = token.slice(-DEFAULT_REDACT_KEEP_END);
+  const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
+  const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
   return `${start}…${end}`;
 }
 
@@ -849,7 +865,7 @@ function redactMatch(
 function redactText(
   text: string,
   patterns: RegExp[],
-  options?: { redactFormBodies?: boolean },
+  options?: { fullContext?: boolean; redactFormBodies?: boolean },
 ): string {
   let next = text;
   if (options?.redactFormBodies) {
@@ -872,9 +888,10 @@ function redactText(
       const input = typeof args[inputIndex] === "string" ? args[inputIndex] : "";
       return redactMatch(match, groups, pattern, { input, offset });
     };
-    next = chunkUnsafePatterns.has(pattern)
-      ? next.replace(pattern, replacer)
-      : replacePatternBounded(next, pattern, replacer);
+    next =
+      options?.fullContext || chunkUnsafePatterns.has(pattern)
+        ? next.replace(pattern, replacer)
+        : replacePatternBounded(next, pattern, replacer);
   }
   return next;
 }
@@ -984,18 +1001,21 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
+  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
   const resolvedOptions = options ?? resolveConfigRedaction();
   if (normalizeMode(resolvedOptions.mode) === "off") {
-    return text;
+    return exactRedacted;
   }
-  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(text)) {
-    return text;
+  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(exactRedacted)) {
+    return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
   if (!resolved.patterns.length) {
-    return text;
+    return exactRedacted;
   }
-  return redactText(text, resolved.patterns, { redactFormBodies: resolved.redactFormBodies });
+  return redactText(exactRedacted, resolved.patterns, {
+    redactFormBodies: resolved.redactFormBodies,
+  });
 }
 
 export function redactToolDetail(detail: string): string {
@@ -1027,6 +1047,14 @@ export function redactToolPayloadTextWithConfig(
   if (!text) {
     return text;
   }
+  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
+  if (isFullContextToolPayloadRedaction(loggingConfig)) {
+    const resolved = resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
+    return redactText(exactRedacted, resolved.patterns, {
+      fullContext: true,
+      redactFormBodies: resolved.redactFormBodies,
+    });
+  }
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
 }
 
@@ -1038,12 +1066,14 @@ function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
   options: RedactOptions,
+  path: readonly string[] = [key],
 ): string {
+  const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   const resolved = resolveRedactOptions(options);
   if (resolved.mode === "off") {
-    return value;
+    return exactRedacted;
   }
-  const redacted = redactText(value, resolved.patterns, {
+  const redacted = redactText(exactRedacted, resolved.patterns, {
     redactFormBodies: resolved.redactFormBodies,
   });
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
@@ -1056,13 +1086,23 @@ function redactSensitiveFieldValueWithOptions(
   if (redacted !== value) {
     return redacted;
   }
-  if (isSensitiveFieldKey(key)) {
-    if (isShellReferenceToKey(key, value)) {
-      return value;
-    }
+  const normalizedStructuredKey = key.toLowerCase();
+  if (shouldRedactStructuredAuthorizationCode(normalizedStructuredKey, path)) {
     return maskToken(value);
   }
-  return value;
+  if (
+    normalizedStructuredKey === "session" &&
+    STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(exactRedacted)
+  ) {
+    return exactRedacted;
+  }
+  if (isSensitiveFieldKey(key)) {
+    if (isShellReferenceToKey(key, exactRedacted)) {
+      return exactRedacted;
+    }
+    return maskToken(exactRedacted);
+  }
+  return exactRedacted;
 }
 
 export function redactSensitiveFieldValue(
@@ -1085,6 +1125,39 @@ export function redactSensitiveFieldValueWithConfig(
   );
 }
 
+function pathEndsWith(path: readonly string[], suffix: readonly string[]): boolean {
+  if (path.length < suffix.length) {
+    return false;
+  }
+  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
+}
+
+function shouldRedactStructuredAuthorizationCode(
+  normalizedKey: string,
+  path: readonly string[],
+): boolean {
+  if (normalizedKey !== "code") {
+    return false;
+  }
+  const normalizedPath = path.map((part) => part.toLowerCase());
+  if (
+    normalizedPath.length === 1 ||
+    pathEndsWith(normalizedPath, ["error", "code"]) ||
+    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
+    pathEndsWith(normalizedPath, ["status", "code"]) ||
+    pathEndsWith(normalizedPath, ["details", "code"]) ||
+    pathEndsWith(normalizedPath, ["warnings", "code"])
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
+  const normalizedKey = key.toLowerCase();
+  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
+}
+
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -1095,22 +1168,23 @@ function redactStructuredSecretValue(
   value: unknown,
   seen: WeakSet<object>,
   options: RedactOptions,
+  path: readonly string[] = key ? [key] : [],
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path);
   }
   if (value === null || value === undefined) {
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return value;
+    return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
-    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options));
+    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options, path));
     seen.delete(value);
     return out;
   }
@@ -1124,7 +1198,10 @@ function redactStructuredSecretValue(
     seen.add(value);
     const out: Record<string, unknown> = {};
     for (const [nestedKey, nestedValue] of Object.entries(value)) {
-      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options);
+      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options, [
+        ...path,
+        nestedKey,
+      ]);
     }
     seen.delete(value);
     return out;
@@ -1163,3 +1240,4 @@ export function redactSensitiveLines(lines: string[], resolved: ResolvedRedactOp
     : lines;
   return redactText(redactedLines.join("\n"), resolved.patterns).split("\n");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

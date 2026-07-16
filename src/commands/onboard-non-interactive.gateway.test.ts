@@ -135,6 +135,10 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
+    resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
     waitForGatewayReachable: (params: {
       url: string;
       token?: string;
@@ -177,13 +181,13 @@ vi.mock("../daemon/diagnostics.js", () => ({
 }));
 
 let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
-let resolveInstallDaemonGatewayHealthTiming: typeof import("./onboard-non-interactive/local.js").resolveInstallDaemonGatewayHealthTiming;
+let resolveInstallDaemonGatewayHealthTiming: typeof import("./onboard-non-interactive/local.test-support.js").resolveInstallDaemonGatewayHealthTiming;
 
 async function loadGatewayOnboardModules(): Promise<void> {
   vi.resetModules();
   ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
   ({ resolveInstallDaemonGatewayHealthTiming } =
-    await import("./onboard-non-interactive/local.js"));
+    await import("./onboard-non-interactive/local.test-support.js"));
 }
 
 function getPseudoPort(base: number): number {
