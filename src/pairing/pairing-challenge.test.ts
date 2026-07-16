@@ -91,6 +91,22 @@ describe("issuePairingChallenge", () => {
         expectReplyTexts(sent, ["custom ZXCV"]);
       },
     },
+    {
+      name: "renders the configured pairing template",
+      issueParams: {
+        channel: "line",
+        senderId: "u2",
+        senderIdLine: "Your line id: u2",
+        pairingTemplate: "Approve {channel} for {senderIdLine} with {code}: {approveCommand}",
+        upsertPairingRequest: async () => ({ code: "ASDF", created: true }),
+      },
+      expectedResult: { created: true, code: "ASDF" },
+      assertReply: (sent: string[]) => {
+        expectReplyTexts(sent, [
+          "Approve line for Your line id: u2 with ASDF: openclaw pairing approve line ASDF",
+        ]);
+      },
+    },
   ] as const)("$name", async ({ issueParams, expectedResult, assertReply }) => {
     await expectIssuedChallengeCase({
       issueParams,
