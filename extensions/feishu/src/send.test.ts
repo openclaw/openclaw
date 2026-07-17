@@ -704,42 +704,43 @@ describe("getMessageFeishu", () => {
       },
     ]);
   });
+
+  it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
+    mockClientGet.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        message_id: "om_bad_json",
+        chat_id: "oc_test",
+        chat_type: "group",
+        msg_type: "text",
+        body: {
+          content: "{bad json}",
+        },
+        sender: {
+          id: "ou_1",
+          sender_type: "user",
+        },
+      },
+    });
+
+    const result = await getMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_bad_json",
+    });
+
+    expect(mockLogVerbose).toHaveBeenCalledWith(
+      expect.stringContaining("feishu message content parse failed for text message"),
+    );
+    // Ensure raw content is NOT logged (security: prevent message content leaks)
+    expect(mockLogVerbose).not.toHaveBeenCalledWith(expect.stringContaining("{bad json}"));
+    expect(result).toMatchObject({
+      messageId: "om_bad_json",
+      contentType: "text",
+      content: "{bad json}",
+    });
+  });
 });
 
-it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
-  mockClientGet.mockResolvedValueOnce({
-    code: 0,
-    data: {
-      message_id: "om_bad_json",
-      chat_id: "oc_test",
-      chat_type: "group",
-      msg_type: "text",
-      body: {
-        content: "{bad json}",
-      },
-      sender: {
-        id: "ou_1",
-        sender_type: "user",
-      },
-    },
-  });
-
-  const result = await getMessageFeishu({
-    cfg: {} as ClawdbotConfig,
-    messageId: "om_bad_json",
-  });
-
-  expect(mockLogVerbose).toHaveBeenCalledWith(
-    expect.stringContaining("feishu message content parse failed for text message"),
-  );
-  // Ensure raw content is NOT logged (security: prevent message content leaks)
-  expect(mockLogVerbose).not.toHaveBeenCalledWith(expect.stringContaining("{bad json}"));
-  expect(result).toMatchObject({
-    messageId: "om_bad_json",
-    contentType: "text",
-    content: "{bad json}",
-  });
-});
 
 describe("editMessageFeishu", () => {
   beforeEach(() => {
