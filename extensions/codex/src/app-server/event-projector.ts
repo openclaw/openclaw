@@ -25,7 +25,10 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
-import { normalizeCodexTokenUsage } from "./event-projector-usage.js";
+import {
+  normalizeCodexResponseTokenUsage,
+  normalizeCodexThreadTokenUsage,
+} from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
   readItem,
@@ -50,6 +53,7 @@ import {
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
+import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
 import { promptSnapshot } from "./user-prompt-message.js";
 
 export { CodexNativeToolLifecycleProjector };
@@ -96,7 +100,8 @@ export class CodexAppServerEventProjector {
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
-  private tokenUsage: ReturnType<typeof normalizeCodexTokenUsage>;
+  private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
+  private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
   private completedCompactionCount = 0;
 
   constructor(
@@ -263,10 +268,14 @@ export class CodexAppServerEventProjector {
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
+      case "rawResponse/completed":
+        this.handleRawResponseCompleted(params);
+        break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
+        this.responseUsage = undefined;
         if (params.willRetry === true) {
           break;
         }
@@ -288,6 +297,10 @@ export class CodexAppServerEventProjector {
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
     const reasoningText = this.reasoningProjection.reasoningText();
     const planText = this.reasoningProjection.planText();
+    // A terminal timeout must not publish exact usage, but the timeout watcher
+    // can still recover a completed assistant. Keep the snapshot masked until
+    // recovery clears the abort instead of destroying it in markTimedOut().
+    const projectedUsage = this.aborted ? this.tokenUsage : (this.responseUsage ?? this.tokenUsage);
     const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
     const legacyFailClosed =
       !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -305,7 +318,7 @@ export class CodexAppServerEventProjector {
       this.promptErrorSource = this.promptErrorSource ?? "prompt";
     }
     const assistantMessageOptions = {
-      tokenUsage: this.tokenUsage,
+      tokenUsage: projectedUsage,
       aborted: this.aborted,
       promptError: this.promptError,
     };
@@ -402,7 +415,7 @@ export class CodexAppServerEventProjector {
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
-      attemptUsage: this.tokenUsage,
+      attemptUsage: projectedUsage,
       replayMetadata: {
         hadPotentialSideEffects,
         replaySafe: !hadPotentialSideEffects,
@@ -429,6 +442,7 @@ export class CodexAppServerEventProjector {
     callId: string;
     tool: string;
     asyncStarted?: boolean;
+    terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
@@ -446,6 +460,7 @@ export class CodexAppServerEventProjector {
 
   markAborted(): void {
     this.aborted = true;
+    this.responseUsage = undefined;
   }
 
   isCompacting(): boolean {
@@ -556,16 +571,22 @@ export class CodexAppServerEventProjector {
   }
 
   private handleTokenUsage(params: JsonObject): void {
-    // v2 ThreadTokenUsageUpdatedNotification: tokenUsage = {total, last, modelContextWindow}.
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
     const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
     if (!last) {
       return;
     }
-    const usage = normalizeCodexTokenUsage(last);
+    const usage = normalizeCodexThreadTokenUsage(last);
     if (usage) {
       this.tokenUsage = usage;
     }
+  }
+
+  private handleRawResponseCompleted(params: JsonObject): void {
+    const usage = isJsonObject(params.usage) ? params.usage : undefined;
+    // Every provider completion replaces the prior response snapshot. A final
+    // response with missing or malformed usage must leave freshness unknown.
+    this.responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
@@ -574,15 +595,18 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.completedTurn = turn;
+    if (turn.status !== "completed") {
+      this.responseUsage = undefined;
+    }
     if (turn.status === "failed") {
-      this.promptError =
-        formatCodexUsageLimitErrorMessage({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.options.readRecentRateLimits?.(),
-        }) ??
-        turn.error?.message ??
-        "codex app-server turn failed";
+      const usageLimitMessage = formatCodexUsageLimitErrorMessage({
+        message: turn.error?.message,
+        codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
+        rateLimits: this.options.readRecentRateLimits?.(),
+      });
+      this.promptError = usageLimitMessage
+        ? createCodexUsageLimitPromptError(usageLimitMessage)
+        : (turn.error?.message ?? "codex app-server turn failed");
       this.promptErrorSource = "prompt";
     }
     const turnItems = turn.items ?? [];
@@ -614,6 +638,7 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
     }
+    this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();
   }
@@ -674,15 +699,16 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private formatCodexErrorMessage(params: JsonObject): string | undefined {
+  private formatCodexErrorMessage(params: JsonObject): string | Error | undefined {
     const error = isJsonObject(params.error) ? params.error : undefined;
-    return (
-      formatCodexUsageLimitErrorMessage({
-        message: error ? readString(error, "message") : undefined,
-        codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.options.readRecentRateLimits?.(),
-      }) ?? readCodexErrorNotificationMessage(params)
-    );
+    const usageLimitMessage = formatCodexUsageLimitErrorMessage({
+      message: error ? readString(error, "message") : undefined,
+      codexErrorInfo: error?.codexErrorInfo,
+      rateLimits: this.options.readRecentRateLimits?.(),
+    });
+    return usageLimitMessage
+      ? createCodexUsageLimitPromptError(usageLimitMessage)
+      : readCodexErrorNotificationMessage(params);
   }
 
   private emitAgentEvent(

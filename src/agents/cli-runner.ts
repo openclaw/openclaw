@@ -13,6 +13,10 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+} from "../plugins/before-agent-reply.js";
+import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
@@ -213,21 +217,6 @@ async function assertSuccessfulCliRuntimeBindingCurrent(
   if (currentOwner !== context.runtimeOwnerFingerprint) {
     throw new Error("CLI runtime owner changed during successful inference");
   }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
 }
 
 function buildCliHookUserMessage(prompt: string): unknown {
@@ -481,68 +470,66 @@ export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAge
 
 async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
-  // Cron gate must fire before prepareCliRunContext — that call allocates
+  // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
-  if (params.trigger === "cron") {
-    const startedAt = Date.now();
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_agent_reply")) {
-      const hookContext = {
-        runId: params.runId,
-        jobId: params.jobId,
-        agentId: params.agentId,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
+  const hookStartedAt = Date.now();
+  const hookResult = await runBeforeAgentReplyForTurn({
+    runId: params.runId,
+    trigger: params.trigger,
+    event: { cleanedBody: params.prompt },
+    context: {
+      runId: params.runId,
+      jobId: params.jobId,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      workspaceDir: params.workspaceDir,
+      trigger: params.trigger,
+      ...buildAgentHookContextChannelFields(params),
+      ...buildAgentHookContextIdentityFields({
         trigger: params.trigger,
-        ...buildAgentHookContextChannelFields(params),
-        ...buildAgentHookContextIdentityFields({
-          trigger: params.trigger,
-          senderId: params.senderId,
-          chatId: params.chatId,
-          channelContext: params.channelContext,
-        }),
-      } as const;
+        senderId: params.senderId,
+        chatId: params.chatId,
+        channelContext: params.channelContext,
+      }),
+    },
+    onDispatch: () =>
       params.onExecutionPhase?.({
         phase: "before_agent_reply",
         provider: params.provider,
         model: params.model ?? "",
-      });
-      const hookResult = await hookRunner.runBeforeAgentReply(
-        { cleanedBody: params.prompt },
-        hookContext,
-      );
-      if (hookResult?.handled) {
-        const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
-        const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
-          agentId: params.agentId,
-        });
-        const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
-        cliBackendLog.info(
-          `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - startedAt} ${formatCliBackendOutputDigest(finalText)}`,
-        );
-        return {
-          payloads: buildHandledReplyPayloads(hookResult.reply),
-          meta: {
-            durationMs: Date.now() - startedAt,
-            agentMeta: {
-              sessionId: "",
-              provider: params.provider,
-              model: params.model ?? "",
-              ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
-            },
-            finalAssistantVisibleText: finalText,
-            finalAssistantRawText: finalText,
-          },
-        };
-      }
+      }),
+    onDeclined: () =>
       params.onExecutionPhase?.({
         phase: "runtime_plugins",
         provider: params.provider,
         model: params.model ?? "",
-      });
-    }
+      }),
+  });
+  if (hookResult?.handled) {
+    const finalText = hookResult.reply?.text ?? SILENT_REPLY_TOKEN;
+    const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
+      agentId: params.agentId,
+    });
+    const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
+    cliBackendLog.info(
+      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
+    );
+    return {
+      payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+      meta: {
+        durationMs: Date.now() - hookStartedAt,
+        agentMeta: {
+          sessionId: "",
+          provider: params.provider,
+          model: params.model ?? "",
+          ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
+        },
+        finalAssistantVisibleText: finalText,
+        finalAssistantRawText: finalText,
+      },
+    };
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);

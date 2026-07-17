@@ -93,7 +93,10 @@ export const EnvironmentsCreateParamsSchema = closedObject({
 export const EnvironmentsCreateResultSchema = createEnvironmentSummarySchema();
 
 /** Destroys one durable worker environment by its gateway-owned id. */
-export const EnvironmentsDestroyParamsSchema = closedObject({ environmentId: NonEmptyString });
+export const EnvironmentsDestroyParamsSchema = closedObject({
+  environmentId: NonEmptyString,
+  force: Type.Optional(Type.Boolean()),
+});
 
 /** Destroy result exposes the terminal worker lifecycle state. */
 export const EnvironmentsDestroyResultSchema = createEnvironmentSummarySchema();

@@ -976,12 +976,8 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.SupplementalContext).toMatchObject({
-      quote: {
-        body: "Quoted body",
-        sender: "Alice",
-      },
-    });
+    expect(ctx.ReplyToBody).toBe("Quoted body");
+    expect(ctx.ReplyToSender).toBe("Alice");
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -994,7 +990,8 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.SupplementalContext).toEqual({});
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
     expect(ctx.BodyForAgent).toBe("Current message");
   });
 
@@ -1027,7 +1024,7 @@ describe("msteams monitor handler authz", () => {
     // group chat: the fetched body would bypass the supplemental-quote visibility
     // allowlist. Only 1:1 DMs may fetch full text.
     const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
-    expect(ctx.SupplementalContext).toMatchObject({ quote: { body: "secret snippet…" } });
+    expect(ctx.ReplyToBody).toBe("secret snippet…");
     expect(graphThreadMockState.fetchChatMessageText).not.toHaveBeenCalled();
   });
 
@@ -1067,10 +1064,9 @@ describe("msteams monitor handler authz", () => {
         timeoutMs: 10_000,
       }),
     );
-    expect(recordFromMockCall(firstSettledDispatch().ctxPayload).SupplementalContext).toMatchObject(
-      {
-        quote: { id: "message-1", body: "complete quoted message", sender: "Bot" },
-      },
-    );
+    const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
+    expect(ctx.ReplyToId).toBe("message-1");
+    expect(ctx.ReplyToBody).toBe("complete quoted message");
+    expect(ctx.ReplyToSender).toBe("Bot");
   });
 });

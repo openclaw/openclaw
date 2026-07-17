@@ -36,6 +36,7 @@ type docChunkStructure struct {
 	tagCounts             map[string]int
 	headingLevels         []int
 	listShapes            []markdownListShape
+	listMarkerPrefixes    []string
 	inlineCodeSpans       []string
 	linkDestinations      []string
 	protectedLinkLabels   []string
@@ -72,6 +73,7 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
 	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
@@ -96,6 +98,12 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
+	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
+		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
+	}
+	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
+		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
 	}
 	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
 		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
@@ -287,6 +295,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
+	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
+		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
 	}
 	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
 		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
@@ -494,6 +505,7 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		tagCounts:             countsWithoutFence(counts),
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
+		listMarkerPrefixes:    extractMarkdownListMarkerPrefixes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
 		linkDestinations:      extractMarkdownLinkDestinations(text),
 		protectedLinkLabels:   extractProtectedMarkdownLinkLabels(text),

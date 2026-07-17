@@ -16,11 +16,11 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   buildCodexOpenClawPromptContext,
@@ -266,6 +266,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    loopDetectionPreToolUseRelay: true,
     connectionClass: "local-loopback",
     remoteAppsSubstrate: "preconfigured",
   };
@@ -2232,6 +2233,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
+    const llmInput = vi.fn();
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
       prependSystemContext: "pre system",
@@ -2240,7 +2242,10 @@ describe("runCodexAppServerAttempt", () => {
       appendContext: "tail context",
     }));
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "llm_input", handler: llmInput },
+      ]),
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2258,11 +2263,19 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      { messages?: Array<{ role?: string }>; prompt?: string },
+      {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+        prompt?: string;
+      },
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([]);
+    expect(hookInput.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "previous turn" }],
+      }),
+    ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
@@ -2279,6 +2292,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
     ]);
+    expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
+      { historyMessages?: unknown[]; prompt?: string },
+      unknown,
+    ];
+    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
+    expect(llmInputPayload.historyMessages).toEqual([]);
+    expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
@@ -2372,8 +2393,15 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
     let hookCalls = 0;
-    const beforePromptBuild = vi.fn(async () => {
+    type HookInputForTest = {
+      messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+    };
+    const beforePromptBuild = vi.fn(async (event: unknown) => {
       hookCalls += 1;
+      (event as HookInputForTest).messages?.push({
+        role: "assistant",
+        content: [{ type: "text", text: `hook-side mutation ${hookCalls}` }],
+      });
       return {
         systemPrompt: `custom codex system ${hookCalls}`,
         prependContext: `queued context ${hookCalls}`,
@@ -2397,7 +2425,17 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(beforePromptBuild).toHaveBeenCalled();
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const [, secondHookInput] = beforePromptBuild.mock.calls.map(
+      ([event]) => event as HookInputForTest,
+    );
+    const secondHookMessageTexts =
+      secondHookInput?.messages?.flatMap(
+        (message) => message.content?.map((part) => part.text ?? "") ?? [],
+      ) ?? [];
+    expect(secondHookMessageTexts).toContain("prior visible context");
+    expect(secondHookMessageTexts).toContain("prior assistant context");
+    expect(secondHookMessageTexts).not.toContain("hook-side mutation 1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
@@ -2408,6 +2446,7 @@ describe("runCodexAppServerAttempt", () => {
       "";
     expect(inputText).toContain("queued context");
     expect(inputText).toContain("prior visible context");
+    expect(inputText).not.toContain("hook-side mutation");
   });
 
   it("does not replay mirrored history already covered by an existing Codex binding", async () => {
@@ -5589,7 +5628,7 @@ describe("runCodexAppServerAttempt", () => {
         ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            throw new Error("write EPIPE");
+            throw Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
           }
           return {};
         }),

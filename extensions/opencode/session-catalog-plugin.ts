@@ -1,7 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { resolveExecutableFromPathEnv } from "openclaw/plugin-sdk/node-host";
+import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -37,15 +37,8 @@ import {
   type OpenCodeSessionPage,
 } from "./session-catalog.js";
 
-export {
-  OPENCODE_SESSIONS_LIST_COMMAND,
-  OPENCODE_SESSION_READ_COMMAND,
-  OPENCODE_TERMINAL_RESUME_COMMAND,
-} from "./session-catalog-shared.js";
-
 const MAX_HOSTS = 100;
 const MAX_CURSOR_LENGTH = 128;
-const MAX_SEARCH_LENGTH = 500;
 const TRANSCRIPT_ITEM_TYPES = new Set([
   "userMessage",
   "agentMessage",
@@ -148,7 +141,7 @@ function fullConfigCatalogEnabled(config: unknown): boolean {
   return entry.config.sessionCatalog.enabled !== false;
 }
 
-export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
+function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean {
   return (
     !isRecord(pluginConfig) ||
     !isRecord(pluginConfig.sessionCatalog) ||
@@ -156,7 +149,7 @@ export function isOpenCodeSessionCatalogEnabled(pluginConfig: unknown): boolean 
   );
 }
 
-export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
+function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
   const available = ({ config, env }: { config: unknown; env: NodeJS.ProcessEnv }) =>
     fullConfigCatalogEnabled(config) && executableOnPath("opencode", env);
   return [
@@ -180,7 +173,7 @@ export function createOpenCodeSessionNodeHostCommands(): OpenClawPluginNodeHostC
   ];
 }
 
-export function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
+function createOpenCodeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
       commands: [
@@ -243,9 +236,7 @@ async function listOpenCodeNodeHost(
       command: OPENCODE_SESSIONS_LIST_COMMAND,
       params: {
         ...(query.limitPerHost ? { limit: query.limitPerHost } : {}),
-        ...(query.search?.trim()
-          ? { searchTerm: query.search.trim().slice(0, MAX_SEARCH_LENGTH) }
-          : {}),
+        ...(query.search ? { searchTerm: query.search } : {}),
         ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
       },
       timeoutMs: NODE_TIMEOUT_MS,
@@ -316,12 +307,13 @@ async function listOpenCodeHosts(
   query: Parameters<SessionCatalogProvider["list"]>[0],
 ): Promise<SessionCatalogHost[]> {
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const searchTerm = query.search?.trim().slice(0, MAX_SEARCH_LENGTH) || undefined;
   const hosts: SessionCatalogHost[] = [];
   if (
     (!requested || requested.has(LOCAL_HOST_ID)) &&
-    resolveExecutableFromPathEnv("opencode", process.env.PATH ?? "", process.env, {
-      fallbackToLoginShell: true,
+    resolveNodeHostExecutable("opencode", {
+      env: process.env,
+      pathEnv: process.env.PATH ?? "",
+      strategy: "fallback",
     })
   ) {
     try {
@@ -332,7 +324,7 @@ async function listOpenCodeHosts(
         connected: true,
         ...(await listLocalOpenCodeSessionPage({
           limit: query.limitPerHost,
-          ...(searchTerm ? { searchTerm } : {}),
+          ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) => setTerminalCapability(page, true))),
       });

@@ -2956,9 +2956,27 @@ class AutoreviewHardeningTests(unittest.TestCase):
             'token: "token-oversized"',
             'API_KEY = "clawrouter-e2e-secret"',
             'token: "very-long-browser-token-0123456789"',
+            'token: "config-token"',
         ):
             with self.subTest(content=content):
                 self.assertFalse(self.helper["secret_text_risk"](content))
+
+    def test_synthetic_secret_fixture_prefixes_are_generic(self) -> None:
+        for prefix in self.helper["SYNTHETIC_SECRET_PREFIXES"]:
+            with self.subTest(prefix=prefix):
+                self.assertTrue(
+                    self.helper["synthetic_secret_fixture"](
+                        f"{prefix}-token",
+                        "token",
+                    )
+                )
+
+        self.assertFalse(
+            self.helper["synthetic_secret_fixture"](
+                "test-correct-horse-battery-staple",
+                "password",
+            )
+        )
 
     def test_secret_detector_does_not_trust_in_band_suppressions(self) -> None:
         for marker in ("pragma: allowlist secret", "gitleaks:allow"):
@@ -3063,6 +3081,21 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 self.helper["branch_bundle"](repo, base)
             with self.assertRaisesRegex(SystemExit, "secret-like content"):
                 self.helper["commit_bundle"](repo, "HEAD")
+
+    def test_local_bundle_allows_deleted_test_token_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            path = repo / "fixture.test.ts"
+            path.write_text('const request = { token: "test-token" };\n', encoding="utf-8")
+            git(repo, "add", path.name)
+            git(repo, "commit", "-q", "-m", "base")
+
+            path.write_text('const request = { token: String() };\n', encoding="utf-8")
+
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn('-const request = { token: "test-token" };', bundle)
+            self.assertFalse(truncated)
 
     def test_pi_refuses_truncated_review_input(self) -> None:
         reviewer = argparse.Namespace(engine="pi", tools=True)
@@ -4148,6 +4181,53 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 "temporary directory must be outside",
             ):
                 self.helper["safe_temp_root"](repo)
+
+    @unittest.skipIf(os.name == "nt", "POSIX Testbox temp-root behavior")
+    def test_testbox_parallel_test_temp_root_stays_within_socket_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            long_temp = root / ("macos-temp-root-" + "x" * 96)
+            long_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(long_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "1"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, Path("/tmp").resolve())
+            socket_path = (
+                selected
+                / ("autoreview-test-home-" + "x" * 8)
+                / ".blacksmith"
+                / "c"
+                / "6d146d2f25180c1d.sock"
+            )
+            self.assertLess(len(os.fsencode(socket_path)), 104)
+
+    def test_parallel_test_temp_root_keeps_configured_root_without_testbox(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            configured_temp = root / "configured-temp"
+            configured_temp.mkdir()
+
+            with mock.patch.object(
+                tempfile,
+                "gettempdir",
+                return_value=str(configured_temp),
+            ), mock.patch.dict(
+                os.environ,
+                {"OPENCLAW_TESTBOX": "0"},
+            ):
+                selected = self.helper["parallel_test_temp_root"](repo)
+
+            self.assertEqual(selected, configured_temp.resolve())
 
     def test_claude_fable_alias_requires_fable_safe_mode_version(self) -> None:
         args = argparse.Namespace(

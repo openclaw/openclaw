@@ -66,6 +66,12 @@ export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
 export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
 
+export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
+  return CHAT_FOLLOW_UP_MODES.includes(value as ChatFollowUpMode)
+    ? (value as ChatFollowUpMode)
+    : undefined;
+}
+
 const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
 export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
@@ -339,7 +345,6 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatSendShortcut: "enter",
-    chatFollowUpMode: "steer",
     catalogOpenTarget: "viewer",
     splitRatio: 0.6,
     navCollapsed: false,
@@ -391,7 +396,7 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
-      chatFollowUpMode: normalizeChatFollowUpMode(parsed.chatFollowUpMode),
+      chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       splitRatio:
@@ -458,11 +463,28 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
   }
 }
 
+export function saveLocalUserIdentity(next: LocalUserIdentity): LocalUserIdentity {
+  const storage = getSafeLocalStorage();
+  const normalized = normalizeLocalUserIdentity(next);
+  try {
+    if (normalized.name === null && normalized.avatar === null) {
+      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
+    } else {
+      storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
+    }
+  } catch {
+    // best-effort — quota exceeded or security restrictions should not
+    // prevent in-memory identity updates from being applied
+  }
+  return normalized;
+}
+
 function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
+  const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
     const source = readSettingsForGateway(storage, next.gatewayUrl);
@@ -497,10 +519,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),
-    // Steer is the default; only the opt-out queue mode persists.
-    ...(normalizeChatFollowUpMode(next.chatFollowUpMode) === "queue"
-      ? { chatFollowUpMode: "queue" as const }
-      : {}),
+    ...(chatFollowUpMode ? { chatFollowUpMode } : {}),
     ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
       ? { catalogOpenTarget: "terminal" as const }
       : {}),

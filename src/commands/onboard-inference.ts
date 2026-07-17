@@ -85,12 +85,12 @@ function detectCliCredentialState(params: {
   return params.platform === "darwin" ? undefined : false;
 }
 
-function describeCliDetail(credentials: boolean | undefined): string {
+function describeCliDetail(credentials: boolean | undefined, loginHint: string): string {
   if (credentials === true) {
     return "logged in";
   }
   if (credentials === false) {
-    return "installed, not logged in";
+    return `installed, not logged in — ${loginHint}, then check again`;
   }
   return "installed";
 }
@@ -155,7 +155,7 @@ async function probeCodexCommand(params: {
   return pathProbe;
 }
 /** Detects a native Codex App Server without coupling it to inference selection. */
-export async function detectNativeCodexAppServer(
+async function detectNativeCodexAppServer(
   options: DetectNativeCodexAppServerOptions = {},
 ): Promise<LocalCommandProbe> {
   return await probeCodexCommand({
@@ -163,6 +163,12 @@ export async function detectNativeCodexAppServer(
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
+    detectNativeCodexAppServer,
+  };
 }
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
@@ -241,7 +247,7 @@ export async function detectInferenceBackends(
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "run `claude auth login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
@@ -257,7 +263,7 @@ export async function detectInferenceBackends(
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "run `codex login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
@@ -269,7 +275,7 @@ export async function detectInferenceBackends(
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "sign in to Gemini CLI"),
       credentials,
     });
   }

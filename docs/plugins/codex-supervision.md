@@ -9,8 +9,9 @@ read_when:
 ---
 
 Codex supervision is an opt-in capability of the official `codex` plugin. It
-shows non-archived Codex Desktop and CLI source sessions from the Gateway
-computer and opted-in paired computers in the normal sessions sidebar and Chat pane.
+shows non-archived Codex CLI, VS Code, Atlas, and ChatGPT source sessions from
+the Gateway computer and opted-in paired computers in the normal sessions
+sidebar and Chat pane.
 
 The initial release deliberately keeps ownership narrow:
 
@@ -264,11 +265,11 @@ the source thread or displaying the pending Chat. Starting a distinct canonical
 harness thread on the first turn lets another Codex process keep owning the
 source without creating competing rollout writers.
 
-The original CLI or VS Code source remains visible to native clients and the
-OpenClaw catalog. The canonical branch is stored as a native Codex thread, but
-its source kind is `appServer`; Codex Desktop or another native client may filter
-that source kind, so the branch itself is not guaranteed to appear in every
-native history view.
+The original CLI, VS Code, Atlas, or ChatGPT source remains visible to native
+clients and the OpenClaw catalog. The canonical branch is stored as a native
+Codex thread, but its source kind is `appServer`; Codex Desktop or another
+native client may filter that source kind, so the branch itself is not guaranteed
+to appear in every native history view.
 
 An active row reported by OpenClaw's App Server cannot start a new branch. Wait
 for the current turn to finish and refresh the catalog. Codex App Server

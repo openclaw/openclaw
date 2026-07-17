@@ -3,6 +3,7 @@
 import { rm } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -32,6 +33,7 @@ describe("web_fetch provider fallback normalization", () => {
     resolveWebFetchDefinitionMock.mockReset();
     runtimeState.activeSecretsRuntimeSnapshot = null;
     runtimeState.activeRuntimeWebToolsMetadata = null;
+    setActiveDegradedSecretOwners([]);
   });
 
   afterEach(() => {
@@ -39,6 +41,35 @@ describe("web_fetch provider fallback normalization", () => {
     vi.restoreAllMocks();
     runtimeState.activeSecretsRuntimeSnapshot = null;
     runtimeState.activeRuntimeWebToolsMetadata = null;
+    setActiveDegradedSecretOwners([]);
+  });
+
+  it("returns typed unavailability for only the isolated fetch provider", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "web-fetch:firecrawl",
+        state: "unavailable",
+        paths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+        refKeys: ["env:default:MISSING_FIRECRAWL_KEY"],
+        reason: "missing test ref",
+      },
+    ]);
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { provider: "firecrawl" } } },
+      } as OpenClawConfig,
+    });
+
+    await expect(
+      tool?.execute?.("call-provider-fallback", { url: "https://example.com" }),
+    ).rejects.toMatchObject({
+      name: "SecretSurfaceUnavailableError",
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "web-fetch:firecrawl",
+    });
+    expect(resolveWebFetchDefinitionMock).not.toHaveBeenCalled();
   });
 
   it("re-wraps and truncates provider fallback payloads before caching or returning", async () => {
