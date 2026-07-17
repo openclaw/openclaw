@@ -73,6 +73,38 @@ describe("tool schema hints", () => {
     expect(outputHint!.length).toBeLessThanOrEqual(600);
   });
 
+  it("keeps contracts with explicitly opaque leaves complete", () => {
+    const outputSchema = Type.Object(
+      {
+        count: Type.Number(),
+        messages: Type.Array(Type.Unknown()),
+        payload: Type.Optional(Type.Unknown()),
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBe(
+      "{ count: number; messages: Array<unknown>; payload?: unknown }",
+    );
+  });
+
+  it("renders a bare top-type schema as unknown without demoting", () => {
+    expect(compactToolOutputHint(Type.Unknown())).toBe("unknown");
+    expect(compactToolOutputHint(Type.Any())).toBe("unknown");
+  });
+
+  it("still fails closed for constrained but untyped leaves", () => {
+    const outputSchema = Type.Object(
+      {
+        id: Type.String(),
+        blob: { minLength: 1 } as unknown as ReturnType<typeof Type.Unknown>,
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBeUndefined();
+  });
+
   it("includes null in AJV-style nullable output hints", () => {
     expect(compactToolOutputHint({ type: "string", nullable: true })).toBe("string | null");
     expect(

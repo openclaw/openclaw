@@ -287,7 +287,16 @@ function compactSchemaType(
   depth = 0,
   limits: CompactSchemaLimits = INPUT_LIMITS,
 ): SchemaHint {
-  if (!isRecord(schema) || depth >= limits.maxDepth) {
+  if (!isRecord(schema)) {
+    return UNKNOWN_HINT;
+  }
+  // An empty schema is JSON Schema's top type: it accepts any value, so
+  // `unknown` is its exact rendering, not a truncation. Without this, one
+  // opaque leaf (Type.Unknown/Type.Any) demotes an otherwise-exact contract.
+  if (Object.keys(schema).length === 0) {
+    return completeHint("unknown");
+  }
+  if (depth >= limits.maxDepth) {
     return UNKNOWN_HINT;
   }
   const normalizedNullableSchema = normalizeNullableSchemaForHint(schema);
