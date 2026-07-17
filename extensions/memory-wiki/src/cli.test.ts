@@ -224,7 +224,7 @@ describe("memory-wiki cli", () => {
     const { rootDir, config } = await createCliVault();
     const bodyPath = path.join(rootDir, "oversized-body.md");
     await fs.mkdir(rootDir, { recursive: true });
-    await fs.writeFile(bodyPath, `${"x".repeat(1_048_577)}`, "utf8");
+    await fs.writeFile(bodyPath, "x".repeat(1_048_577), "utf8");
     const program = new Command();
     program.name("test");
     program.exitOverride();
