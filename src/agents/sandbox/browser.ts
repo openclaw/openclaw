@@ -102,6 +102,7 @@ async function waitForSandboxCdp(params: {
         if (res.ok) {
           return true;
         }
+        await res.body?.cancel().catch(() => undefined);
       } finally {
         clearTimeout(t);
       }
