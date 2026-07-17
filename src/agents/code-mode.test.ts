@@ -387,18 +387,105 @@ describe("Code Mode", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("`tools.search(query)`");
+    expect(execTool.description).toContain("one exec invocation");
+    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
+    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
     expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(entry.id)`");
-    expect(execTool.description).toContain("`tools.call(entry.id, args)`");
+    expect(execTool.description).toContain("`tools.describe(id: string)`");
+    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
+    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
+    expect(execTool.description).toContain("Never invent or transform a tool id");
+    expect(execTool.description).toContain("Quick-index input hints are not output schemas");
+    expect(execTool.description).toContain("never guess result field names");
+    expect(execTool.description).toContain("return the raw tool value unchanged");
+    expect(execTool.description).toContain("filter or map it only in a later exec");
+    expect(execTool.description).toContain("returns its JSON value directly");
+    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
 
-    expect(parameters.properties?.code?.description).toContain("`tools` object");
+    expect(parameters.properties?.code?.description).toContain(
+      "`tools.search` takes a query string, not an object",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Select exact ids from `ALL_TOOLS` or `tools.search`",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "never put dependent calls in Promise.all",
+    );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
     expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "Leave unset for ordinary calls",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
+  });
+
+  it("primes the exec schema with exact native tool ids and compact inputs", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        pluginTool("zeta_tool", "Description stays deferred."),
+        pluginTool("alpha_tool", "Another deferred description."),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("descriptions are intentionally deferred");
+    expect(description).toContain('- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> ?');
+    expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
+    expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
+    expect(description).not.toContain("Description stays deferred.");
+    expect(description).not.toContain("Another deferred description.");
+  });
+
+  it("keeps a typical 72-tool catalog fully indexed", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const catalogTools = Array.from({ length: 72 }, (_, index) =>
+      pluginTool(`tool_${index.toString().padStart(3, "0")}`, "Deferred", "catalog-owner"),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain('"openclaw:catalog-owner:tool_071"');
+    expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+  });
+
+  it("bounds the model-visible native tool index", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).not.toContain("fake_099");
   });
 
   it("adds registered namespace docs to the model-visible exec schema", () => {
@@ -443,7 +530,7 @@ describe("Code Mode", () => {
     const description = compacted.tools[0]?.description ?? "";
     // Base tool guidance always stays; MCP/API and namespace guidance drop out so
     // the model never probes an empty virtual API surface.
-    expect(description).toContain("`tools.search(query)`");
+    expect(description).toContain("`tools.search(query: string, options?)`");
     expect(description).not.toContain("API.list");
     expect(description).not.toContain("MCP tools are available only through");
     expect(description).not.toContain("Registered plugin namespaces are available");
@@ -455,7 +542,16 @@ describe("Code Mode", () => {
     const compacted = applyCodeModeCatalog({
       tools: [
         ...tools,
-        mcpTool({ name: "github__create_issue", serverName: "github", toolName: "create_issue" }),
+        pluginTool("fake_noop", "Noop"),
+        mcpTool({
+          name: "github__create_issue",
+          serverName: "github",
+          toolName: "create_issue",
+          parameters: {
+            type: "object",
+            properties: { malicious_prompt: { type: "string" } },
+          },
+        }),
       ],
       config,
       sessionId: "session-code-mode",
@@ -467,6 +563,9 @@ describe("Code Mode", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("API.list(prefix?)");
     expect(description).toContain("MCP tools are available only through");
+    expect(description).toContain('"openclaw:fake-code-mode:fake_noop"');
+    expect(description).not.toContain("github__create_issue");
+    expect(description).not.toContain("malicious_prompt");
   });
 
   it("validates namespace registrations before exposing globals", () => {
@@ -849,10 +948,9 @@ describe("Code Mode", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const hits = await tools.search("ticket", { limit: 1 });
-        const described = await tools.describe(hits[0].id);
-        const called = await tools.call(described.id, { value: "ship" });
+        const called = await tools.callValue(hits[0].id, { value: "ship" });
         text("created");
-        return called.result.details;
+        return called;
       `,
     });
 
@@ -862,6 +960,7 @@ describe("Code Mode", () => {
       input: { value: "ship" },
     });
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
+    expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -901,8 +1000,8 @@ describe("Code Mode", () => {
           code: `
             const ids = [];
             for (let index = 0; index < 5; index += 1) {
-              const called = await tools.call("fake_create_ticket", { value: index });
-              ids.push(called.result.details.input.value);
+              const called = await tools.callValue("fake_create_ticket", { value: index });
+              ids.push(called.input.value);
             }
             return ids;
           `,

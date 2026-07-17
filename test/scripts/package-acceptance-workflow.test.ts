@@ -570,6 +570,9 @@ describe("package acceptance workflow", () => {
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
     expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe("${{ github.ref_name }}");
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "otherwise approve and monitor the detached runs separately",
+    );
     expectTextToIncludeAll(publishOrchestration.run, [
       'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
@@ -580,8 +583,8 @@ describe("package acceptance workflow", () => {
       'wait_for_run android-release.yml "${android_release_run_id}" "${TARGET_SHA}"',
       'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
-      'approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"',
-      'approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"',
+      "plugin-clawhub-release.yml: detached; approval and publish not awaited",
+      "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
   });
 
@@ -1269,6 +1272,26 @@ describe("package acceptance workflow", () => {
     ]);
     expect(workflow).toContain('performanceBlocking: ($releaseProfile != "beta")');
     expect(workflow).toContain('blocking: ($releaseProfile != "beta")');
+  });
+
+  it("keeps beta performance advisory at the publish gate", () => {
+    const validationStep = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target"),
+      "Validate full release validation manifest",
+    );
+    const npmValidationStep = workflowStep(
+      workflowJob(".github/workflows/openclaw-npm-release.yml", "publish_openclaw_npm"),
+      "Verify full release validation target",
+    );
+
+    expectTextToIncludeAll(validationStep.run, [
+      'if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]',
+      "Full release validation manifest does not record blocking product performance evidence.",
+    ]);
+    expectTextToIncludeAll(npmValidationStep.run, [
+      'if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]',
+      "Full release validation manifest does not record blocking product performance evidence.",
+    ]);
   });
 
   it("keeps child-job fail-fast polling best-effort", () => {
@@ -3452,6 +3475,7 @@ describe("package artifact reuse", () => {
       ".github/workflows/openclaw-npm-release.yml",
       "publish_openclaw_npm",
     );
+    const npmCheckout = workflowStep(npmPublishJob, "Checkout");
     const npmFullRun = workflowStep(npmPublishJob, "Verify full release validation run metadata");
     const npmDownload = workflowStep(npmPublishJob, "Download full release validation manifest");
     const npmTarget = workflowStep(npmPublishJob, "Verify full release validation target");
@@ -3526,6 +3550,9 @@ describe("package artifact reuse", () => {
       FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ steps.full_run.outputs.attempt }}",
     });
+    expect(npmCheckout.with?.["fetch-depth"]).toBe(
+      "${{ inputs.preflight_run_id != '' && 1 || 0 }}",
+    );
     expect(workflow).toContain(
       "Full release validation must run rerun_group=all before npm publish",
     );
@@ -3903,6 +3930,11 @@ describe("package artifact reuse", () => {
       releasePublishJob,
       "Checkout trusted release tooling",
     );
+    const releaseNodeSetup = workflowStep(releasePublishJob, "Setup Node environment");
+    const trustedReleaseToolingInstall = workflowStep(
+      releasePublishJob,
+      "Install trusted release tooling dependencies",
+    );
     const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
@@ -3916,6 +3948,12 @@ describe("package artifact reuse", () => {
     );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(releaseNodeSetup.with?.["install-deps"]).toBe("false");
+    expect(trustedReleaseToolingInstall.run).toContain("--dir .release-harness");
+    expect(trustedReleaseToolingInstall.run).toContain("--frozen-lockfile");
+    expect(trustedReleaseToolingInstall.run).toContain(
+      "ln -s .release-harness/node_modules node_modules",
     );
     expect(fastPretagScript).toContain(
       "node --import tsx scripts/plugin-release-pretag-pack-check.ts",

@@ -7,7 +7,6 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
@@ -21,6 +20,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
+  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   makeContext,
   type AgentHandlerArgs,
@@ -260,7 +260,9 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        subagentRegistryTesting.setDepsForTest({
+        // Route through the harness helper so the ensureRuntimePluginsLoaded
+        // pin survives this wholesale deps override.
+        applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow: () => {
             throw new Error("disk full");
           },
@@ -2030,7 +2032,14 @@ describe("gateway agent handler", () => {
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();
       const finalizeError = new Error("finalize boom");
+      // The background run completes off-turn; signal finalize instead of
+      // polling for it so contended runners cannot outlast a fixed poll budget.
+      let signalFinalizeCalled: () => void = () => {};
+      const finalizeCalled = new Promise<void>((resolve) => {
+        signalFinalizeCalled = resolve;
+      });
       const finalizeTaskRunByRunIdSpy = vi.fn(() => {
+        signalFinalizeCalled();
         throw finalizeError;
       });
       setDetachedTaskLifecycleRuntime({
@@ -2050,9 +2059,12 @@ describe("gateway agent handler", () => {
         { context, respond, reqId: "task-registry-finalize-throw" },
       );
 
+      // Event-driven wait bounded by the test timeout; the follow-up
+      // observations land in the same completion path right after finalize.
+      await finalizeCalled;
+      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
       await waitForAssertion(() => {
         // Finalize threw, but the run must still complete (second res frame with ok status).
-        expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
         const completed = respond.mock.calls.some(([ok, payload]) => {
           return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
         });

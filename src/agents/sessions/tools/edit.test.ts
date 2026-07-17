@@ -222,15 +222,21 @@ describe("edit tool", () => {
     expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
-  it("strips model-added metadata while retaining the strict edit schema", async () => {
+  it("accepts and strips model-added metadata while keeping required fields strict", async () => {
     const filePath = await createTempFile("before\n");
     const tool = createEditTool(tmpDir);
-    const prepared = tool.prepareArguments?.({
+    const raw = {
       path: filePath,
       reason: "model explanation",
       edits: [{ oldText: "before", newText: "after", reason: "why" }],
-    });
+    };
+    const prepared = tool.prepareArguments?.(raw);
 
+    expect(Value.Check(tool.parameters, raw)).toBe(true);
+    expect(Value.Check(tool.parameters, { edits: raw.edits })).toBe(false);
+    expect(Value.Check(tool.parameters, { path: filePath, edits: [{ oldText: "before" }] })).toBe(
+      false,
+    );
     expect(prepared).toEqual({
       path: filePath,
       edits: [{ oldText: "before", newText: "after" }],

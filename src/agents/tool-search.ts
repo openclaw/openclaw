@@ -53,6 +53,10 @@ const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const MAX_COMPACT_INPUT_HINT_CHARS = 300;
+const MAX_COMPACT_INPUT_PROPERTIES = 16;
+const MAX_COMPACT_SCHEMA_DEPTH = 4;
+const MAX_COMPACT_UNION_TYPES = 4;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
 type ToolSearchMode = "code" | "tools" | "directory";
@@ -66,6 +70,12 @@ type UnknownToolErrorOptions = {
   exactIdOnly?: boolean;
   recoverySurface?: UnknownToolRecoverySurface;
 };
+type ToolSearchCallOptions = CatalogVisibilityOptions &
+  UnknownToolErrorOptions & {
+    parentToolCallId?: string;
+    signal?: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+  };
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -1141,7 +1151,117 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   throw new ToolInputError("Tool Search catalog is unavailable for this run.");
 }
 
-function compactEntry(entry: ToolSearchCatalogEntry) {
+function compactSchemaType(schema: unknown, depth = 0): string {
+  if (!isRecord(schema) || depth >= MAX_COMPACT_SCHEMA_DEPTH) {
+    return "unknown";
+  }
+  const enumValues =
+    Array.isArray(schema.enum) &&
+    schema.enum.length > 0 &&
+    schema.enum.length <= 6 &&
+    schema.enum.every(
+      (value): value is string | number | boolean | null =>
+        value === null ||
+        typeof value === "string" ||
+        (typeof value === "number" && Number.isFinite(value)) ||
+        typeof value === "boolean",
+    )
+      ? schema.enum
+      : [];
+  if (enumValues.length > 0 && enumValues.length <= 6) {
+    const rendered = enumValues.map((value) => JSON.stringify(value)).join(" | ");
+    if (rendered.length <= 96) {
+      return rendered;
+    }
+  }
+  const type = schema.type;
+  if (Array.isArray(type)) {
+    if (type.length > MAX_COMPACT_UNION_TYPES) {
+      return "unknown";
+    }
+    const types = type
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => compactSchemaType({ ...schema, type: value }, depth + 1));
+    return types.length > 0 ? types.join(" | ") : "unknown";
+  }
+  if (type === "integer" || type === "number") {
+    return "number";
+  }
+  if (type === "array") {
+    return `Array<${compactSchemaType(schema.items, depth + 1)}>`;
+  }
+  if (type === "string" || type === "boolean" || type === "null" || type === "object") {
+    return type;
+  }
+  return "unknown";
+}
+
+function compactInputHint(parameters: unknown): string {
+  if (!isRecord(parameters)) {
+    return "unknown";
+  }
+  if (!isRecord(parameters.properties)) {
+    if (parameters.type !== "object") {
+      return compactSchemaType(parameters);
+    }
+    const hasRequired =
+      Array.isArray(parameters.required) &&
+      parameters.required.some((value) => typeof value === "string");
+    return hasRequired || parameters.additionalProperties !== false ? "{ ... }" : "{}";
+  }
+  const properties = parameters.properties;
+  const requiredValues = Array.isArray(parameters.required) ? parameters.required : [];
+  const required = new Set(
+    requiredValues
+      .slice(0, MAX_COMPACT_INPUT_PROPERTIES)
+      .filter((value): value is string => typeof value === "string"),
+  );
+  // Search hits cross the model/guest boundary. Required-first sorting and
+  // work/output bounds keep prompt bytes deterministic without exposing full schemas.
+  const selected = new Set<string>();
+  const keys: string[] = [];
+  for (const key of required) {
+    if (Object.hasOwn(properties, key)) {
+      selected.add(key);
+      keys.push(key);
+    }
+  }
+  let omitted =
+    requiredValues.length > MAX_COMPACT_INPUT_PROPERTIES ||
+    requiredValues
+      .slice(0, MAX_COMPACT_INPUT_PROPERTIES)
+      .some((value) => typeof value === "string" && !Object.hasOwn(properties, value)) ||
+    parameters.additionalProperties === true;
+  for (const key in properties) {
+    if (!Object.hasOwn(properties, key) || selected.has(key)) {
+      continue;
+    }
+    if (keys.length >= MAX_COMPACT_INPUT_PROPERTIES) {
+      omitted = true;
+      break;
+    }
+    selected.add(key);
+    keys.push(key);
+  }
+  keys.sort((a, b) => Number(required.has(b)) - Number(required.has(a)) || a.localeCompare(b));
+  const parts: string[] = [];
+  for (const key of keys) {
+    const name = /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) ? key : JSON.stringify(key);
+    const part = `${name}${required.has(key) ? "" : "?"}: ${compactSchemaType(properties[key])}`;
+    const next = `{ ${[...parts, part].join("; ")} }`;
+    if (next.length > MAX_COMPACT_INPUT_HINT_CHARS) {
+      omitted = true;
+      break;
+    }
+    parts.push(part);
+  }
+  if (parts.length === 0) {
+    return keys.length === 0 && !omitted ? "{}" : "{ ... }";
+  }
+  return `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`;
+}
+
+export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   return {
     id: entry.id,
     source: entry.source,
@@ -1150,6 +1270,9 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     name: entry.name,
     label: entry.label,
     description: entry.description,
+    // MCP schemas are server-provided, untrusted metadata. Keep them deferred
+    // until the model explicitly describes or calls the selected tool.
+    ...(entry.source === "mcp" ? {} : { input: compactInputHint(entry.parameters) }),
   };
 }
 
@@ -1166,7 +1289,9 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+function formatToolDirectoryEntry(
+  entry: ReturnType<typeof compactToolSearchCatalogEntry>,
+): string | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -1189,7 +1314,9 @@ function renderToolSearchCatalogDirectory(lines: string[], total: number): strin
   return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
 }
 
-function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compactEntry>>): string {
+function formatToolSearchCatalogDirectory(
+  entries: Array<ReturnType<typeof compactToolSearchCatalogEntry>>,
+): string {
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
@@ -1525,7 +1652,7 @@ export function estimateToolSchemaDirectoryToolNames(params: {
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
-    ...compactEntry(entry),
+    ...compactToolSearchCatalogEntry(entry),
     parameters: entry.parameters ?? {},
   };
 }
@@ -1756,18 +1883,20 @@ export class ToolSearchRuntime {
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
       .slice(0, limit)
-      .map((hit) => compactEntry(hit.entry));
+      .map((hit) => compactToolSearchCatalogEntry(hit.entry));
   };
 
   all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
   };
 
   namespaceEntries = () => {
     const catalog = resolveCatalog(this.ctx);
     return catalog.entries.map((entry) =>
-      Object.assign(compactEntry(entry), {
+      Object.assign(compactToolSearchCatalogEntry(entry), {
         parameters: entry.parameters ?? {},
       }),
     );
@@ -1779,18 +1908,9 @@ export class ToolSearchRuntime {
     return describeEntry(findEntry(catalog, id, options, options));
   };
 
-  call = async (
-    id: string,
-    input?: unknown,
-    options?: {
-      parentToolCallId?: string;
-      signal?: AbortSignal;
-      onUpdate?: AgentToolUpdateCallback;
-      recoverySurface?: UnknownToolRecoverySurface;
-    },
-  ) => {
+  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntry(catalog, id, undefined, options);
+    const entry = findEntry(catalog, id, options, options);
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1808,6 +1928,11 @@ export class ToolSearchRuntime {
     const entry = findEntryByExactId(catalog, id, options);
     return await this.callEntry(catalog, entry, input, options);
   };
+
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    // Resolve, execute, and unwrap on the host. Code Mode otherwise builds a
+    // full description before every call and sends a larger envelope to QuickJS.
+    unwrapToolResultValue((await this.call(id, input, options)).result);
 
   isReplaySafeExactId = (id: string): boolean => {
     let entry: ToolSearchCatalogEntry;
@@ -1865,7 +1990,7 @@ export class ToolSearchRuntime {
       onUpdate: options?.onUpdate,
     });
     return {
-      tool: compactEntry(entry),
+      tool: compactToolSearchCatalogEntry(entry),
       result,
     };
   };
@@ -1873,6 +1998,10 @@ export class ToolSearchRuntime {
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+function unwrapToolResultValue(result: AgentToolResult<unknown>): unknown {
+  return isRecord(result) && "details" in result ? result.details : result;
 }
 
 /** Compact a native tool list into visible control tools plus hidden catalog entries. */
@@ -2324,7 +2453,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
       label: "Tool Search Code",
       description:
-        "Run JavaScript in an isolated Node subprocess with openclaw.tools.search, openclaw.tools.describe, and openclaw.tools.call for large tool catalogs.",
+        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
       parameters: Type.Object({
         code: Type.String({
           description:
@@ -2344,7 +2473,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
-      description: "Search the effective Tool Search catalog.",
+      description:
+        "Search the effective Tool Search catalog. Pass an exact result id or name to tool_call; use tool_describe only when you need its input schema.",
       parameters: Type.Object({
         query: Type.String({ description: "Search query." }),
         limit: Type.Optional(Type.Number({ description: "Maximum number of results." })),
@@ -2357,7 +2487,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
-      description: "Load the full schema and metadata for one search result.",
+      description:
+        "Load the full schema and metadata for one search result when its input is not already clear.",
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
@@ -2367,7 +2498,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
-      description: "Call a selected Tool Search catalog entry through OpenClaw.",
+      description: "Call an exact Tool Search result id or name through OpenClaw.",
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
         args: Type.Optional(

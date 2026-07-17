@@ -539,6 +539,8 @@ export type GatewaySessionRow = {
   modelProvider?: string;
   modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
+  effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;

@@ -22,6 +22,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const TRANSIENT_PLUGIN_BLOB_MARKER = `transient-plugin-blob-${"sensitive".repeat(32)}`;
 const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
+const STATE_LEASE_MARKER = "snapshot-must-not-retain-active-lease";
 
 async function createTempDir(): Promise<string> {
   const tempDir = tempDirs.make("openclaw-snapshot-repository-");
@@ -156,6 +157,24 @@ function createAgentDatabase(databasePath: string, agentId: string): void {
         `,
       )
       .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
+  } finally {
+    database.close();
+  }
+}
+
+function seedStateLease(databasePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    database
+      .prepare(
+        `
+          INSERT INTO state_leases (
+            scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at
+          ) VALUES (?, 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+        `,
+      )
+      .run(STATE_LEASE_MARKER);
   } finally {
     database.close();
   }
@@ -1084,6 +1103,7 @@ describe("local SQLite snapshot repository", () => {
     const repositoryPath = path.join(tempDir, "snapshots");
     createGlobalDatabase(sourcePath);
     seedGlobalPluginBlobSnapshotFixtures(sourcePath);
+    seedStateLease(sourcePath);
     const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
     const snapshot = await provider.create({
       path: sourcePath,
@@ -1094,6 +1114,7 @@ describe("local SQLite snapshot repository", () => {
     expect(artifactBytes.includes("do-not-restore")).toBe(false);
     expect(artifactBytes.includes(TRANSIENT_PLUGIN_BLOB_MARKER)).toBe(false);
     expect(artifactBytes.includes(DURABLE_PLUGIN_BLOB_MARKER)).toBe(true);
+    expect(artifactBytes.includes(STATE_LEASE_MARKER)).toBe(false);
     const sqlite = requireNodeSqlite();
     const artifact = new sqlite.DatabaseSync(artifactPath, { readOnly: true });
     try {
@@ -1107,6 +1128,9 @@ describe("local SQLite snapshot repository", () => {
           )
           .all(),
       ).toEqual([{ plugin_id: "durable-plugin", entry_key: "durable" }]);
+      expect(artifact.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 0,
+      });
     } finally {
       artifact.close();
     }
@@ -1126,6 +1150,9 @@ describe("local SQLite snapshot repository", () => {
         { plugin_id: "diffs", entry_key: "transient" },
         { plugin_id: "durable-plugin", entry_key: "durable" },
       ]);
+      expect(source.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 1,
+      });
     } finally {
       source.close();
     }
@@ -1138,6 +1165,37 @@ describe("local SQLite snapshot repository", () => {
     await expect(
       provider.create({ path: wrongRolePath, identity: { role: "global" } }),
     ).rejects.toThrow(/expected global/u);
+  });
+
+  it("sanitizes transient leases from agent snapshots without touching the source", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "openclaw-agent.sqlite");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    createAgentDatabase(sourcePath, "worker-1");
+    seedStateLease(sourcePath);
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+    const snapshot = await provider.create({
+      path: sourcePath,
+      identity: { role: "agent", agentId: "worker-1" },
+    });
+    const sqlite = requireNodeSqlite();
+    const artifact = new sqlite.DatabaseSync(
+      path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME),
+      { readOnly: true },
+    );
+    const source = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+    try {
+      expect(artifact.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 0,
+      });
+      expect(source.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 1,
+      });
+    } finally {
+      source.close();
+      artifact.close();
+    }
   });
 
   it("enforces the exact agent owner and canonical agent id", async () => {

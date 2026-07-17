@@ -39,9 +39,12 @@ identically-named `exec`/`wait` tools.
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
-- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden from
-  the model prompt and exposed inside the guest program through `ALL_TOOLS`
+- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
+  standalone model tool and exposed inside the guest program through `ALL_TOOLS`
   and `tools`.
+- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
+  catalog ids and compact input hints. It omits descriptions, full schemas, MCP
+  entries, and overflow entries; guest-side catalog lookup remains the fallback.
 - Guest code searches the hidden catalog, describes a tool's schema, and calls
   a tool through the same execution path used by normal agent turns (policy,
   approvals, hooks, telemetry all still apply).
@@ -56,8 +59,9 @@ behavior, or model selection.
 
 ## Why use it
 
-- Smaller prompt surface: providers get two control tools and only the few
-  required direct tools instead of dozens or hundreds of full tool schemas.
+- Smaller prompt surface: providers get two control tools, a bounded native-tool
+  index, and only the few required direct tools instead of dozens or hundreds
+  of full tool schemas.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
@@ -375,7 +379,18 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 `ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not
-contain full schemas by default.
+contain full schemas by default. The model-visible `exec` description also
+includes a bounded, deterministic subset of exact OpenClaw/plugin ids and
+compact input hints so common calls can start without a separate catalog
+discovery turn. Descriptions remain deferred so adversarial catalog prose cannot
+steer the model. When that index omits a tool, read `ALL_TOOLS` or call
+`tools.search(...)` inside the guest program.
+
+Compact entries describe tool inputs, not result schemas, so the index marks
+their result shape as `-> ?` (output unknown). When a workflow needs result
+fields, the first `exec` must return the raw
+`tools.callValue(...)` result unchanged. Filter or map the observed shape only
+in a later `exec` call instead of guessing field names.
 
 ```typescript
 type ToolCatalogEntry = {
@@ -385,8 +400,12 @@ type ToolCatalogEntry = {
   description: string;
   source: "openclaw" | "mcp" | "client";
   sourceName?: string;
+  input: string;
 };
 ```
+
+`input` is a bounded TypeScript-style signature for the common case. Use
+`tools.describe(...)` when the exact full schema is still needed.
 
 Plugin tools use `source: "openclaw"` with `sourceName` set to the owning
 plugin id; there is no separate `"plugin"` source value. `source: "mcp"` is
@@ -407,6 +426,7 @@ Catalog helpers:
 type ToolCatalog = {
   search(query: string, options?: { limit?: number }): Promise<ToolCatalogEntry[]>;
   describe(id: string): Promise<ToolCatalogEntryWithSchema>;
+  callValue(id: string, input?: unknown): Promise<unknown>;
   call(id: string, input?: unknown): Promise<unknown>;
   [safeToolName: string]: unknown;
 };
@@ -417,17 +437,21 @@ Convenience tool functions are installed only for unambiguous safe names:
 ```typescript
 const files = await tools.search("read local file");
 const fileRead = await tools.describe(files[0].id);
-const content = await tools.call(fileRead.id, { path: "README.md" });
+const content = await tools.callValue(fileRead.id, { path: "README.md" });
 
 // If the hidden catalog has an unambiguous `web_search` entry:
 const hits = await tools.web_search({ query: "OpenClaw code mode" });
 ```
 
-MCP catalog entries are not callable through `tools.call(...)` or convenience
-functions in code mode; they are exposed only through the generated `MCP`
-namespace. TypeScript-style declaration files are available through the
-read-only `API` virtual file surface, so agents can inspect MCP signatures
-without adding MCP schemas to the prompt:
+`tools.callValue(...)` returns a normal tool's JSON `details` value directly.
+`tools.call(...)` preserves the raw `{ tool, result }` envelope for callers
+that need content blocks or other result metadata.
+
+MCP catalog entries are not callable through `tools.callValue(...)`,
+`tools.call(...)`, or convenience functions in code mode; they are exposed
+only through the generated `MCP` namespace. TypeScript-style declaration files
+are available through the read-only `API` virtual file surface, so agents can
+inspect MCP signatures without adding MCP schemas to the prompt:
 
 ```typescript
 const files = await API.list("mcp");
@@ -731,7 +755,7 @@ because their structured results cannot cross the QuickJS bridge.
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with
 normal tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
-`tools.describe(...)`, and `tools.call(...)` views omit MCP entries. The
+`tools.describe(...)`, `tools.callValue(...)`, and `tools.call(...)` views omit MCP entries. The
 generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
 exact catalog id and dispatches through the same executor path.
 
@@ -944,7 +968,7 @@ Code mode coverage should prove:
 - all catalog-eligible effective non-MCP tools appear in `ALL_TOOLS`
 - direct-only tools stay model-visible and do not appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
-- `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
+- `tools.search`, `tools.describe`, `tools.callValue`, and `tools.call` work for OpenClaw tools
 - `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
   MCP declarations without a bridge/tool call
 - MCP namespace `$api()` remains available as an inline fallback for schemas
@@ -981,7 +1005,7 @@ Run these as integration or end-to-end tests when changing the runtime:
 7. In `exec`, read `ALL_TOOLS` and assert the catalog-eligible effective test
    tools are present while direct-only tools are absent.
 8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
-   `tools.describe`, and `tools.call`.
+   `tools.describe`, and `tools.callValue` (or raw `tools.call`).
 9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
    assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and

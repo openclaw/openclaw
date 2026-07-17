@@ -2,7 +2,7 @@
 import { realpathSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -117,6 +117,7 @@ const {
   getTtsProvider,
   listSpeechVoices,
   maybeApplyTtsToPayload,
+  prepareTtsRequest,
   resolveTtsConfig,
   setSummarizationEnabled,
   setTtsMaxLength,
@@ -240,6 +241,7 @@ async function expectTtsPayloadResult(params: {
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    delete (Object.prototype as Record<string, unknown>).polluted;
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
     transcodeAudioBufferMock.mockClear();
@@ -265,6 +267,84 @@ describe("speech-core native voice-note routing", () => {
     expect(hint).toContain(
       "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
     );
+  });
+
+  it("prepares deep-merged surface config and directive inputs", () => {
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          provider: "mock",
+          modelOverrides: { allowProvider: false },
+          providers: {
+            mock: {
+              model: "base-model",
+              voiceSettings: { stability: 0.4 },
+            },
+          },
+        },
+      },
+    };
+
+    const prepared = prepareTtsRequest({
+      cfg,
+      override: {
+        modelOverrides: { allowProvider: true },
+        providers: {
+          mock: {
+            voice: "surface-voice",
+            voiceSettings: { speed: 1.1 },
+          },
+        },
+      },
+      text: "Hello [[tts:text]]Speak this instead[[/tts:text]] caller",
+    });
+
+    expect(prepared.cfg).not.toBe(cfg);
+    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voice: "surface-voice",
+      voiceSettings: { stability: 0.4, speed: 1.1 },
+    });
+    expect(prepared.cfg.messages?.tts?.modelOverrides?.allowProvider).toBe(true);
+    expect(prepared.directives).toEqual({
+      cleanedText: "Hello  caller",
+      hasDirective: true,
+      overrides: {
+        ttsText: "Speak this instead",
+      },
+      ttsText: "Speak this instead",
+      warnings: [],
+    });
+    expect(cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voiceSettings: { stability: 0.4 },
+    });
+  });
+
+  it("sanitizes blocked override keys while preparing TTS config", () => {
+    const prepared = prepareTtsRequest({
+      cfg: {
+        messages: {
+          tts: {
+            provider: "mock",
+            providers: { mock: { model: "base-model" } },
+          },
+        },
+      },
+      override: JSON.parse(
+        '{"__proto__":{"polluted":"top"},"providers":{"mock":{"voice":"safe","__proto__":{"polluted":"nested"}}}}',
+      ) as TtsConfig,
+      text: "[[tts:text]]Speak this instead[[/tts:text]]",
+    });
+
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(prepared.cfg.messages?.tts).not.toHaveProperty("polluted");
+    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voice: "safe",
+    });
+    expect(prepared.directives.cleanedText).toBe("");
+    expect(prepared.directives.ttsText).toBe("Speak this instead");
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {

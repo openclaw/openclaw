@@ -24,10 +24,13 @@ import "../components/update-banner.ts";
 import { isSettingsNavigationRoute, type SidebarNavRoute } from "../app-navigation.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
+  COMMAND_PALETTE_OPEN_EVENT,
   COMMAND_PALETTE_TARGET_EVENT,
   isCommandPaletteShortcut,
+  SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type CommandPaletteElement,
   type CommandPaletteTargetDetail,
+  type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
 import { icons } from "../components/icons.ts";
 import {
@@ -68,6 +71,7 @@ import {
   TERMINAL_PANEL_ELEMENT,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
+import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 import {
@@ -184,11 +188,6 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "browser.request") === true
   );
-}
-
-function isMobileNavLayout(): boolean {
-  const maxWidth = isNativeWebChromeHost() ? 600 : 1100;
-  return globalThis.matchMedia?.(`(max-width: ${maxWidth}px)`).matches ?? false;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -552,6 +551,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     super.connectedCallback();
     this.nativeHistoryState = readNativeHistoryState();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
+    window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
@@ -568,6 +569,8 @@ class OpenClawShell extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.openPalette);
+    window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
     window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
@@ -926,6 +929,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.runWithCommandPalette((palette) => palette.openPalette());
   };
 
+  private readonly handleShellNavDrawerToggle = (event: Event) => {
+    const trigger = (event as CustomEvent<ShellNavDrawerToggleDetail>).detail?.trigger;
+    this.toggleNavigationSurface(trigger instanceof HTMLElement ? trigger : undefined);
+  };
+
   private readonly togglePalette = () => {
     this.runWithCommandPalette((palette) => palette.togglePalette());
   };
@@ -1195,6 +1203,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     const mobileNavLayout = isMobileNavLayout();
+    const mergedChatChrome = shouldMergeChatChrome({
+      mobileNavLayout,
+      routeId: activeRoute,
+      onboarding: this.onboarding,
+    });
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
@@ -1226,11 +1239,11 @@ class OpenClawShell extends OpenClawLightDomElement {
       <div
         class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
-          : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${navDrawerOpen
-          ? "shell--nav-drawer-open"
-          : ""} ${this.onboarding ? "shell--onboarding" : ""} ${settingsTakeover
-          ? "shell--settings"
-          : ""}"
+          : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${mergedChatChrome
+          ? "shell--merged-chat-chrome"
+          : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${this.onboarding
+          ? "shell--onboarding"
+          : ""} ${settingsTakeover ? "shell--settings" : ""}"
         style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
         @keydown=${this.handleShellKeydown}
         @theme-change=${this.handleThemeChange}

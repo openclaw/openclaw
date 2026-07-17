@@ -15,7 +15,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createBackupArchive,
@@ -203,6 +206,35 @@ describe("sanitizeOpenClawGlobalStateSnapshot", () => {
     const database = new sqlite.DatabaseSync(":memory:");
     try {
       expect(() => sanitizeOpenClawGlobalStateSnapshot(database)).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("removes leases without applying global queue or blob policy", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE state_leases (scope TEXT, lease_key TEXT);
+        INSERT INTO state_leases VALUES ('plugin:test', 'write');
+        CREATE TABLE delivery_queue_entries (id TEXT);
+        INSERT INTO delivery_queue_entries VALUES ('keep');
+        CREATE TABLE plugin_blob_entries (entry_key TEXT, expires_at INTEGER);
+        INSERT INTO plugin_blob_entries VALUES ('keep', 1);
+      `);
+
+      sanitizeOpenClawStateLeaseRows(database);
+
+      expect(database.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        database.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
+      ).toEqual({ count: 1 });
+      expect(database.prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries").get()).toEqual({
+        count: 1,
+      });
     } finally {
       database.close();
     }
@@ -636,6 +668,14 @@ describe("createBackupArchive", () => {
           10,
           null,
         );
+        db.prepare(
+          `
+            INSERT INTO state_leases (
+              scope, lease_key, owner, expires_at, heartbeat_at,
+              payload_json, created_at, updated_at
+            ) VALUES ('plugin:memory-core:qmd', 'embed', 'worker', 9999999999999, 10, NULL, 10, 10)
+          `,
+        ).run();
 
         try {
           const result = await createBackupArchive({
@@ -668,6 +708,9 @@ describe("createBackupArchive", () => {
                 )
                 .all(),
             ).toEqual([{ plugin_id: "durable-plugin", entry_key: "durable" }]);
+            expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+              count: 0,
+            });
           } finally {
             archivedDb.close();
           }
@@ -688,6 +731,9 @@ describe("createBackupArchive", () => {
             { plugin_id: "diffs", entry_key: "transient" },
             { plugin_id: "durable-plugin", entry_key: "durable" },
           ]);
+          expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
         } finally {
           closeOpenClawStateDatabase();
         }
@@ -805,6 +851,16 @@ describe("createBackupArchive", () => {
             .run(`keeper-${"y".repeat(16_384)}`);
           liveDb.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           liveDb.prepare("DELETE FROM deleted_secrets WHERE value = ?").run(deletedSecret);
+          liveDb
+            .prepare(
+              `
+                INSERT INTO state_leases (
+                  scope, lease_key, owner, expires_at, heartbeat_at,
+                  payload_json, created_at, updated_at
+                ) VALUES ('plugin:memory-core:qmd', 'write', 'worker', 9999999999999, 1, NULL, 1, 1)
+              `,
+            )
+            .run();
         } finally {
           liveDb.close();
         }
@@ -846,8 +902,19 @@ describe("createBackupArchive", () => {
             provider: "openai",
             key: "sk-backup",
           });
+          expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 0,
+          });
         } finally {
           archivedDb.close();
+        }
+        const sourceDb = new sqlite.DatabaseSync(liveDbPath, { readOnly: true });
+        try {
+          expect(sourceDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
+        } finally {
+          sourceDb.close();
         }
       },
     );
@@ -953,8 +1020,13 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
+          CREATE TABLE state_leases (
+            scope TEXT NOT NULL,
+            lease_key TEXT NOT NULL
+          );
           INSERT INTO backup_meta (id, last_seq) VALUES (1, 0);
           INSERT INTO delivery_queue_entries (id) VALUES ('must-stay');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin-owned', 'must-stay');
           PRAGMA wal_checkpoint(TRUNCATE);
           BEGIN IMMEDIATE;
           INSERT INTO backup_markers (seq, transaction_id) VALUES (1, 7), (2, 7), (3, 7);
@@ -1012,6 +1084,9 @@ describe("createBackupArchive", () => {
             expect(
               archivedDb.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
             ).toEqual({ count: 1 });
+            expect(archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+              count: 1,
+            });
           } finally {
             archivedDb.close();
           }
@@ -1427,6 +1502,106 @@ describe("createBackupArchive", () => {
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
           expect(verification.ok).toBe(true);
+        } finally {
+          db.close();
+        }
+      },
+    );
+  });
+
+  it("sanitizes every in-state symlink and hardlink alias of a canonical agent SQLite DB", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-sqlite-alias-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const agentDir = state.statePath("agents", "main", "agent");
+        const backingDbPath = path.join(agentDir, "backing-agent.sqlite");
+        const linkedDbPath = path.join(agentDir, "openclaw-agent.sqlite");
+        const hardlinkedDbPath = state.statePath("plugins", "dedicated", "agent-alias.sqlite");
+        await fs.mkdir(agentDir, { recursive: true });
+        await fs.mkdir(path.dirname(hardlinkedDbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(backingDbPath);
+        db.exec(`
+          PRAGMA journal_mode = WAL;
+          PRAGMA wal_autocheckpoint = 0;
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL
+          );
+          CREATE TABLE durable_state (
+            id INTEGER PRIMARY KEY,
+            value TEXT NOT NULL
+          );
+          CREATE TABLE state_leases (
+            scope TEXT NOT NULL,
+            lease_key TEXT NOT NULL
+          );
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+          PRAGMA wal_checkpoint(TRUNCATE);
+          INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
+          INSERT INTO state_leases (scope, lease_key) VALUES ('plugin:memory-core:qmd', 'write');
+        `);
+        await fs.symlink(backingDbPath, linkedDbPath);
+        await fs.link(backingDbPath, hardlinkedDbPath);
+        expect((await fs.stat(`${backingDbPath}-wal`)).size).toBeGreaterThan(0);
+        await expect(fs.stat(`${linkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.stat(`${hardlinkedDbPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 34, 40),
+          });
+          const entries = await listArchiveEntryDetails(result.archivePath);
+          const archivedDbEntries = entries.filter(
+            (entry) =>
+              entry.path.endsWith("/state/agents/main/agent/openclaw-agent.sqlite") ||
+              entry.path.endsWith("/state/agents/main/agent/backing-agent.sqlite") ||
+              entry.path.endsWith("/state/plugins/dedicated/agent-alias.sqlite"),
+          );
+          expect(archivedDbEntries).toHaveLength(3);
+          expect(archivedDbEntries.every((entry) => entry.type === "File")).toBe(true);
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          for (const archivedDbEntry of archivedDbEntries) {
+            const archivedDb = new sqlite.DatabaseSync(
+              path.join(extractDir, archivedDbEntry.path),
+              { readOnly: true },
+            );
+            try {
+              expect(
+                archivedDb.prepare("SELECT value FROM durable_state WHERE id = 1").get(),
+              ).toEqual({ value: "committed-in-wal" });
+              expect(
+                archivedDb.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
+              ).toEqual({
+                count: 0,
+              });
+            } finally {
+              archivedDb.close();
+            }
+          }
+
+          expect(db.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toEqual({
+            count: 1,
+          });
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
         } finally {
           db.close();
         }

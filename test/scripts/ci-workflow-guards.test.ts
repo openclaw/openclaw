@@ -1670,6 +1670,29 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("downloads the opengrep installer completely before execution", () => {
+    for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
+      const workflow = parse(readFileSync(workflowPath, "utf8"));
+      const run = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep")
+          ?.run,
+        `Install opengrep step in ${workflowPath}`,
+      );
+
+      expect(run, workflowPath).toContain(
+        'installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"',
+      );
+      expect(run, workflowPath).toContain("curl -fsSL --connect-timeout 10 --max-time 120 \\");
+      expect(run, workflowPath).toContain('-o "$installer"');
+      expect(run, workflowPath).toContain('bash "$installer" -v "$OPENGREP_VERSION"');
+      expect(run, workflowPath).toContain("trap 'rm -f \"$installer\"' EXIT");
+      expect(run.indexOf('-o "$installer"'), workflowPath).toBeLessThan(
+        run.indexOf('bash "$installer"'),
+      );
+      expect(run, workflowPath).not.toMatch(/\|\s*bash/u);
+    }
+  });
+
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
     const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
@@ -1863,11 +1886,73 @@ describe("ci workflow guards", () => {
       const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
       return typeof runsOn === "string" && runsOn.includes("blacksmith-");
     });
-    const setupNodeStep = workflow.jobs["checks-node-core-test-nondist-shard"].steps.find(
+    const stickyConsumers = Object.entries(workflow.jobs).flatMap(([jobName, job]) => {
+      const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
+      return steps.flatMap((step) => {
+        const stepWith = step.with;
+        if (!stepWith || stepWith["sticky-disk"] === undefined) {
+          return [];
+        }
+        return [{ jobName, stepWith }];
+      });
+    });
+    // Every Linux Blacksmith lane that installs Node dependencies consumes
+    // the snapshot; missing entries silently pay the full install again.
+    expect(stickyConsumers.map((entry) => entry.jobName).toSorted()).toEqual([
+      "build-artifacts",
+      "check-additional-shard",
+      "check-docs",
+      "check-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-fast-core",
+      "checks-fast-plugin-contracts-shard",
+      "checks-node-core-test-nondist-shard",
+      "checks-ui",
+      "control-ui-i18n",
+      "native-i18n",
+      "qa-smoke-ci-profile",
+    ]);
+    for (const { jobName, stepWith } of stickyConsumers) {
+      const stickyCondition = stepWith["sticky-disk"];
+      const cacheCondition = stepWith["use-actions-cache"];
+      expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(stickyCondition, jobName).toContain(
+        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+      expect(cacheCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(cacheCondition, jobName).toContain(
+        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+      expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
+    }
+    // Exactly one CI job may publish the shared snapshot; concurrent
+    // committers would race the disk and consumers could clone a torn tree.
+    const ciWriters = stickyConsumers.filter(
+      (entry) => entry.stepWith["save-sticky-disk"] === "true",
+    );
+    expect(ciWriters.map((entry) => entry.jobName)).toEqual(["build-artifacts"]);
+    // The disk key is partitioned by node-version and both writers rely on
+    // the action default; a consumer pinning any other version would split
+    // onto a writerless key and silently regress to permanently cold installs.
+    for (const { jobName, stepWith } of stickyConsumers) {
+      const nodeVersion = stepWith["node-version"];
+      expect(
+        nodeVersion === undefined ||
+          nodeVersion === "24.x" ||
+          nodeVersion === "${{ matrix.node_version || '24.x' }}",
+        `${jobName} must resolve to the writer's 24.x snapshot key (got ${String(nodeVersion)})`,
+      ).toBe(true);
+    }
+    const warmWorkflow = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmSetupStep = warmWorkflow.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
-    const stickyCondition = setupNodeStep.with["sticky-disk"];
-    const cacheCondition = setupNodeStep.with["use-actions-cache"];
+    // The scheduled warm run is the deadline writer: canonical main pushes
+    // cancel each other under merge traffic, so build-artifacts alone could
+    // starve the snapshot for days.
+    expect(warmSetupStep.with["save-sticky-disk"]).toBe("true");
+    expect(warmWorkflow.on).not.toHaveProperty("pull_request");
+    expect(warmWorkflow.on).not.toHaveProperty("workflow_dispatch");
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const validateLayoutStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
@@ -1897,16 +1982,10 @@ describe("ci workflow guards", () => {
         "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
       );
     }
-    expect(stickyCondition).toContain("github.event_name != 'workflow_dispatch'");
-    expect(stickyCondition).toContain(
-      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-    );
-    expect(cacheCondition).toContain("github.event_name != 'workflow_dispatch'");
-    expect(cacheCondition).toContain(
-      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-    );
-    expect(cacheCondition).toContain("&& 'false' || 'true'");
     expect(action.inputs["sticky-disk"].default).toBe("false");
+    // Writers omit node-version, so the default is the writers' key segment.
+    expect(action.inputs["node-version"].default).toBe("24.x");
+    expect(action.inputs["save-sticky-disk"].default).toBe("false");
     expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
     expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
     expect(validateLayoutStep.run).toContain('config_value="$(pnpm config get "$config_name")"');
@@ -1924,17 +2003,17 @@ describe("ci workflow guards", () => {
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
       with: {
         path: "/var/tmp/openclaw-node-deps",
-        commit: "if-missing",
       },
     });
-    expect(mountStep.with.key).toContain("node-deps-bind-v2-");
-    expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
-    expect(mountStep.with.key).toContain("inputs.frozen-lockfile");
-    expect(mountStep.with.key).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
-    expect(mountStep.with.key).toContain("'.npmrc'");
-    expect(mountStep.with.key).toContain("'.pnpmfile.cjs'");
-    expect(mountStep.with.key).toContain(".github/actions/setup-node-env/sticky-importers.sh");
-    expect(mountStep.with.key).toContain("scripts/postinstall-bundled-plugins.mjs");
+    // O(1) disks: Blacksmith caps sticky disks per installation, and the old
+    // per-PR/per-manifest-hash keys saturated that cap (mounts 429ed fleet
+    // wide). Install inputs belong in the runtime fingerprint, not the key.
+    expect(mountStep.with.key).toBe(
+      "${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}",
+    );
+    expect(mountStep.with.commit).toBe(
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
+    );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
       uses: "./.github/actions/register-bind-mount-cleanup",
@@ -1949,20 +2028,43 @@ describe("ci workflow guards", () => {
     expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
     expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
+    expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$DEPS_FINGERPRINT"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    // The fingerprint must be evaluated on this step (before its bind mount
+    // lands): any later hashFiles('**/package.json') sweep would include
+    // snapshot-internal manifests and permanently miss the warm path.
+    const fingerprintEnv = bindStep.env.DEPS_FINGERPRINT;
+    expect(fingerprintEnv).toContain("node-${{ inputs.node-version }}");
+    expect(fingerprintEnv).toContain("frozen-${{ inputs.frozen-lockfile }}");
+    expect(fingerprintEnv).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
+    expect(fingerprintEnv).toContain("'pnpm-workspace.yaml'");
+    expect(fingerprintEnv).toContain("'.npmrc'");
+    expect(fingerprintEnv).toContain("'.pnpmfile.cjs'");
+    expect(fingerprintEnv).toContain(".github/actions/setup-node-env/sticky-importers.sh");
+    expect(fingerprintEnv).toContain("scripts/postinstall-bundled-plugins.mjs");
     expect(installStep.env).toMatchObject({
       STICKY_DISK: "${{ inputs.sticky-disk }}",
       STICKY_ROOT: "/var/tmp/openclaw-node-deps",
+      STICKY_WRITER:
+        "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
     });
-    expect(installStep.run).toContain('sticky_ready_marker="$STICKY_ROOT/.install-complete-v2"');
+    expect(installStep.run).toContain('sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"');
+    expect(installStep.run).toContain(
+      '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
+    );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
-    expect(installStep.run).toContain("Sticky dependency snapshot is ready; skipping pnpm install");
+    expect(installStep.run).toContain(
+      "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
+    );
+    // Read-only consumers never capture; only the designated writer refreshes
+    // the archive and publishes the fingerprint after a successful install.
+    expect(installStep.run).toContain('[ "$STICKY_WRITER" = "true" ]');
     expect(installStep.run.indexOf('pnpm "${install_args[@]}"')).toBeLessThan(
       installStep.run.indexOf(
-        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
     const cleanupAction = parse(
@@ -1985,6 +2087,87 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("persists content-validated public full-build declarations", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const installStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Install dependencies",
+    );
+    const cacheStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore and save build-all cache",
+    );
+
+    expect(action.inputs["build-all-cache-scope"].default).toBe("");
+    expect(cacheStep).toMatchObject({
+      if: "inputs.build-all-cache-scope != ''",
+      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: { path: ".artifacts/build-all-cache" },
+    });
+    expect(cacheStep.with.key).toContain("build-all-v1-${{ inputs.build-all-cache-scope }}");
+    expect(cacheStep.with.key).toContain("${{ runner.os }}-${{ runner.arch }}");
+    expect(cacheStep.with.key).toContain("scripts/lib/optional-bundled-clusters.mjs");
+    expect(cacheStep.with.key).toContain("'src/**', 'packages/**', 'extensions/**'");
+    expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
+    expect(action.runs.steps.indexOf(installStep)).toBeLessThan(
+      action.runs.steps.indexOf(cacheStep),
+    );
+
+    const privateQaWorkflows = [
+      ".github/workflows/mantis-discord-smoke.yml",
+      ".github/workflows/mantis-discord-status-reactions.yml",
+      ".github/workflows/mantis-discord-thread-attachment.yml",
+      ".github/workflows/mantis-slack-desktop-smoke.yml",
+      ".github/workflows/mantis-telegram-live.yml",
+      ".github/workflows/qa-live-transports-convex.yml",
+    ];
+    for (const workflowPath of privateQaWorkflows) {
+      const source = readFileSync(workflowPath, "utf8");
+      expect(source, workflowPath).not.toContain("build-all-cache-scope:");
+    }
+  });
+
+  it("persists Node 22 declarations through trusted bounded artifacts", () => {
+    const workflow = parse(readFileSync(".github/workflows/node22-compat.yml", "utf8"));
+    const steps = workflow.jobs.compat.steps as WorkflowStep[];
+    const setupStep = steps.find((step) => step.name === "Setup Node environment");
+    const resolveStep = steps.find(
+      (step) => step.name === "Resolve trusted declaration cache artifact",
+    );
+    const downloadStep = steps.find(
+      (step) => step.name === "Restore trusted declaration cache artifact",
+    );
+    const uploadStep = steps.find(
+      (step) => step.name === "Publish trusted declaration cache artifact",
+    );
+
+    expect(workflow.permissions).toMatchObject({ actions: "read", contents: "read" });
+    expect(setupStep?.with).not.toHaveProperty("build-all-cache-scope");
+    expect(resolveStep?.run).toContain('.head_branch == "main"');
+    expect(resolveStep?.run).toContain('(.path | split("@")[0])');
+    expect(resolveStep?.run).toContain('.conclusion == "success"');
+    expect(resolveStep?.run).toContain("status=success&per_page=5");
+    expect(resolveStep?.run).toContain("artifacts?per_page=10");
+    expect(resolveStep?.run).not.toContain("--paginate");
+    expect(downloadStep).toMatchObject({
+      if: "steps.declaration_cache.outputs.artifact_id != ''",
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        path: ".artifacts/build-all-cache",
+        repository: "${{ github.repository }}",
+      },
+    });
+    expect(uploadStep).toMatchObject({
+      if: "success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        "if-no-files-found": "error",
+        "include-hidden-files": true,
+        overwrite: true,
+        path: ".artifacts/build-all-cache",
+        "retention-days": 14,
+      },
+    });
+  });
+
   it("restores importer-local node_modules from sticky snapshots", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
     try {
@@ -1998,7 +2181,7 @@ describe("ci workflow guards", () => {
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
       symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
 
-      execFileSync("bash", [helper, "capture", stickyRoot, workspace]);
+      execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
@@ -2007,6 +2190,10 @@ describe("ci workflow guards", () => {
         "../../../node_modules/shared",
       );
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
+      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
+        "fingerprint-a\n",
+      );
+      expect(() => execFileSync("bash", [helper, "capture", stickyRoot, workspace])).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2048,6 +2235,9 @@ describe("ci workflow guards", () => {
     );
     const buildSetupNodeStep = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
+    );
+    const buildStepCache = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Restore build-all step cache",
     );
 
     expect(setupNodeStep.with).toMatchObject({
@@ -2118,6 +2308,12 @@ describe("ci workflow guards", () => {
     expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
       setupNodeStep.with["node-compile-cache-scope"],
     );
+    expect(buildStepCache.with.key).toContain("build-all-v4-");
+    expect(buildStepCache.with.key).toContain("'src/**'");
+    expect(buildStepCache.with.key).toContain("'packages/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/dist/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/node_modules/**'");
+    expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
   });
 
   it("warms protected caches without main-run cancellation and cleans closed PR archives", () => {
@@ -2133,7 +2329,7 @@ describe("ci workflow guards", () => {
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toBe("github.repository == 'openclaw/openclaw'");
     expect(warmerSource).toContain('cron: "17 8 * * *"');
-    expect(warmerSource).toContain('candidate.shardName === "core-unit-fast"');
+    expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-node-compile-cache": "true",
@@ -2154,7 +2350,7 @@ describe("ci workflow guards", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(source).toContain("createNodeTestShardBundles");
-    expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-32vcpu-ubuntu-2404");
     expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
       "blacksmith-16vcpu-ubuntu-2404",
     );
@@ -2170,7 +2366,7 @@ describe("ci workflow guards", () => {
       check_name: "check-dependencies",
       task: "dependencies",
       // Concurrent Knip scans need cores and memory headroom.
-      runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
     });
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
     expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
@@ -2302,10 +2498,16 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      const expectedDepth = jobName === "skills-python" ? 1 : 2;
+      // preflight fetches the head at depth 1 and supplements the parents
+      // blob-less; security-fast keeps depth 2 for its diff-base needs.
+      const expectedDepth = jobName === "security-fast" ? 2 : 1;
       expect(checkoutStep.run, jobName).toContain(
         `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
       );
+      if (jobName === "preflight") {
+        expect(checkoutStep.run, jobName).toContain("--filter=blob:none");
+        expect(checkoutStep.run, jobName).toContain("fetch_parent_metadata");
+      }
       if (jobName !== "skills-python") {
         expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
         expect(checkoutStep.run, jobName).toContain("timed out");
@@ -2943,7 +3145,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
@@ -2965,7 +3169,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
     expect(

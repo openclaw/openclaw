@@ -1,4 +1,5 @@
-// Tlon plugin entrypoint registers its OpenClaw integration.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -502,7 +503,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       bodyWithAttachments = mediaLines + "\n" + messageText;
     }
 
-    const body = core.channel.reply.formatAgentEnvelope({
+    const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
       channel: "Tlon",
       from: fromLabel,
       timestamp,
@@ -559,10 +560,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       cfg,
       route.agentId,
     ).responsePrefix;
-    const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
-    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-      agentId: route.agentId,
-    });
+    const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
     const deliveryTarget = isGroup ? groupChannel : senderShip;
 
     const prepareReplyPayload = (payload: ReplyPayload): ReplyPayload => {
@@ -596,17 +594,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
-    await core.channel.inbound.dispatchReply({
+    await core.channel.inbound.dispatch({
       channel: "tlon",
       accountId: route.accountId,
       cfg,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
+      route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
       delivery: {
         preparePayload: prepareReplyPayload,
         durable: deliveryTarget

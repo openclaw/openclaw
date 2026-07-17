@@ -53,6 +53,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
+          build-all-cache-scope: full
 
       - name: Build
         run: pnpm build

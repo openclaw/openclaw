@@ -509,7 +509,7 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
-  it("persists only the non-default chat follow-up mode", () => {
+  it("persists only explicit chat follow-up overrides", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -518,12 +518,16 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
-    expect(loadSettings().chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
     saveSettings({ ...loadSettings(), chatFollowUpMode: "queue" });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("queue");
     expect(loadSettings().chatFollowUpMode).toBe("queue");
 
     saveSettings({ ...loadSettings(), chatFollowUpMode: "steer" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBe("steer");
+
+    saveSettings({ ...loadSettings(), chatFollowUpMode: undefined });
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "chatFollowUpMode",
     );
@@ -531,7 +535,7 @@ describe("loadSettings default gateway URL derivation", () => {
       scopedKey,
       JSON.stringify({ gatewayUrl: gwUrl, chatFollowUpMode: "interrupt" }),
     );
-    expect(loadSettings().chatFollowUpMode).toBe("steer");
+    expect(loadSettings().chatFollowUpMode).toBeUndefined();
   });
 
   it("persists only the non-default catalog open target", () => {

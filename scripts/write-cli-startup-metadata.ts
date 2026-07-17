@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import pMap from "p-map";
@@ -30,11 +31,13 @@ const distDir = path.join(rootDir, "dist");
 const outputPath = path.join(distDir, "cli-startup-metadata.json");
 const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
-const BROWSER_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
-const COMMAND_HELP_RENDER_CONCURRENCY = 2;
+// Each help render is an isolated CLI boot; concurrency only bounds process
+// fan-out, not output content, so scale with the host instead of serializing
+// eight boots two at a time.
+const COMMAND_HELP_RENDER_CONCURRENCY = Math.min(8, Math.max(2, availableParallelism()));
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
   "doctor",
   "gateway",
@@ -70,7 +73,7 @@ type PrecomputedSubcommandHelpCommand = (typeof PRECOMPUTED_SUBCOMMAND_HELP_COMM
 type PrecomputedSubcommandHelpText = Record<PrecomputedSubcommandHelpCommand, string>;
 type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
 type Awaitable<T> = T | Promise<T>;
-type SourceCommandHelpCommand = "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
+type SourceCommandHelpCommand = "browser" | "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
 type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
 type SpawnTextParentSignalState = {
   done: boolean;
@@ -589,23 +592,13 @@ export async function renderBundledRootHelpText(
     `await mod.outputRootHelp(${JSON.stringify(renderOptions)});`,
     "process.exit(0);",
   ].join("\n");
-  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", inlineModule], {
+  return await spawnText(["--input-type=module", "--eval", inlineModule], {
     cwd: _distDirOverride,
-    encoding: "utf8",
-    env: renderContext.env,
-    timeout: ROOT_HELP_RENDER_TIMEOUT_MS,
+    // RootHelpRenderOptions marks env optional; spawnText requires one.
+    env: renderContext.env ?? process.env,
+    failureMessage: `Failed to render bundled root help from ${bundleIdentity.bundleName}`,
+    timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      `Failed to render bundled root help from ${bundleIdentity.bundleName}` +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
 }
 
 function renderSourceRootHelpText(
@@ -633,6 +626,7 @@ function renderSourceRootHelpText(
       cwd: rootDir,
       encoding: "utf8",
       env: renderContext.env,
+      killSignal: "SIGKILL",
       timeout: ROOT_HELP_RENDER_TIMEOUT_MS,
     },
   );
@@ -652,33 +646,11 @@ function renderSourceRootHelpText(
 async function renderSourceBrowserHelpText(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
 ): Promise<string> {
-  const browserCliUrl = pathToFileURL(
-    path.join(rootDir, "extensions/browser/src/cli/browser-cli.ts"),
-  ).href;
-  const helpUrl = pathToFileURL(path.join(rootDir, "src/cli/program/help.ts")).href;
-  const contextUrl = pathToFileURL(path.join(rootDir, "src/cli/program/context.ts")).href;
-  const inlineModule = [
-    `const { Command } = await import("commander");`,
-    `const { registerBrowserCli } = await import(${JSON.stringify(browserCliUrl)});`,
-    `const { configureProgramHelp } = await import(${JSON.stringify(helpUrl)});`,
-    `const { createProgramContext } = await import(${JSON.stringify(contextUrl)});`,
-    `const program = new Command();`,
-    `configureProgramHelp(program, createProgramContext());`,
-    `registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);`,
-    `const browser = program.commands.find((cmd) => cmd.name() === "browser");`,
-    `if (!browser) throw new Error("Browser command was not registered.");`,
-    `browser.outputHelp();`,
-    "process.exit(0);",
-  ].join("\n");
-  return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
-    cwd: rootDir,
-    env: {
-      ...renderContext.env,
-      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-    },
-    failureMessage: "Failed to render source browser help",
-    timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
-  });
+  // The launcher CLI boot renders byte-identical browser help to a direct
+  // tsx source render (registerBrowserCli + configureProgramHelp) while
+  // avoiding a tsx evaluation of the whole browser CLI import graph, which
+  // dominated this script's wall time.
+  return await renderSourceCommandHelpText("browser", renderContext);
 }
 
 async function renderSourceCommandHelpText(
@@ -807,27 +779,34 @@ export async function writeCliStartupMetadata(options?: {
     // Missing or malformed existing metadata means we should regenerate it.
   }
 
-  let rootHelpText: string;
-  try {
-    rootHelpText = await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
-      resolvedDistDir,
-      renderContext,
-    );
-  } catch {
-    rootHelpText = (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
-  }
-  const browserHelpTextPromise = Promise.resolve(
-    (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
-  );
+  const rootHelpTextPromise = (async () => {
+    try {
+      return await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
+        resolvedDistDir,
+        renderContext,
+      );
+    } catch {
+      // The spawnSync source fallback blocks the event loop; that is fine for
+      // this rare recovery path (missing/broken bundle) and only delays
+      // draining sibling render output, not its correctness.
+      return (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
+    }
+  })();
   const hasCustomCommandRenderer =
+    options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
     options?.renderSourceNodesHelpText ||
     options?.renderSourceSubcommandHelpTextRecord;
   const commandHelpTextPromise = hasCustomCommandRenderer
     ? null
     : renderSourceCommandHelpTextRecord(
-        ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
+        ["browser", "secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
         renderContext,
+      );
+  const browserHelpTextPromise = commandHelpTextPromise
+    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
+    : Promise.resolve(
+        (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
       );
   const secretsHelpTextPromise = commandHelpTextPromise
     ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
@@ -854,12 +833,14 @@ export async function writeCliStartupMetadata(options?: {
           renderContext,
         ),
       );
-  const [browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] = await Promise.all([
-    browserHelpTextPromise,
-    secretsHelpTextPromise,
-    nodesHelpTextPromise,
-    subcommandHelpTextPromise,
-  ]);
+  const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
+    await Promise.all([
+      rootHelpTextPromise,
+      browserHelpTextPromise,
+      secretsHelpTextPromise,
+      nodesHelpTextPromise,
+      subcommandHelpTextPromise,
+    ]);
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -899,6 +880,7 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 }
 
 export const testing = {
+  renderSourceRootHelpText,
   signalCliStartupMetadataProcessTree,
   spawnText,
 };

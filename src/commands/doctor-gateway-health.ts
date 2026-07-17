@@ -86,6 +86,17 @@ export async function checkGatewayHealth(params: {
     });
     healthOk = true;
     noteCliGatewayVersionSkew(status);
+    if (status.degradedSecretOwners && status.degradedSecretOwners.length > 0) {
+      note(
+        status.degradedSecretOwners
+          .map(
+            (owner) =>
+              `- ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${owner.reason}`,
+          )
+          .join("\n"),
+        "Secret owners unavailable",
+      );
+    }
     try {
       const statusLocal = await callGateway({
         method: "channels.status",

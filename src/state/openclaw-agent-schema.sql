@@ -8,6 +8,25 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, lease_key)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
+  ON state_leases(expires_at, scope, lease_key)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
+  ON state_leases(owner, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
   session_key TEXT NOT NULL,
@@ -62,6 +81,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   account_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('direct', 'group', 'channel')),
   peer_id TEXT NOT NULL,
+  delivery_target TEXT NOT NULL,
   parent_conversation_id TEXT,
   thread_id TEXT,
   native_channel_id TEXT,
@@ -87,6 +107,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_conversations_identity
 
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
   ON conversations(updated_at DESC, conversation_id);
+
+CREATE TABLE IF NOT EXISTS conversation_deliveries (
+  operation_id TEXT NOT NULL PRIMARY KEY,
+  operation_kind TEXT NOT NULL CHECK (operation_kind IN ('send', 'turn')),
+  conversation_id TEXT NOT NULL,
+  source_session_key TEXT,
+  message_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('created', 'queued', 'sent', 'suppressed', 'rejected', 'unknown', 'replied')),
+  prepared_message_id TEXT,
+  platform_message_id TEXT,
+  queue_id TEXT,
+  rejection_error TEXT,
+  reply_message_id TEXT,
+  reply_to_id TEXT,
+  reply_thread_id TEXT,
+  reply_text TEXT,
+  reply_timestamp INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (
+    (status = 'rejected' AND rejection_error IS NOT NULL) OR
+    (status != 'rejected' AND rejection_error IS NULL)
+  ),
+  FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_reply
+  ON conversation_deliveries(conversation_id, platform_message_id, prepared_message_id)
+  WHERE status IN ('queued', 'sent', 'replied');
+
+CREATE INDEX IF NOT EXISTS idx_agent_conversation_deliveries_updated
+  ON conversation_deliveries(updated_at DESC, operation_id);
 
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,

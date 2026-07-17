@@ -56,6 +56,10 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
+import {
+  listRecommendedToolInstalls,
+  type SetupRecommendedInstall,
+} from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -120,6 +124,8 @@ export type SetupInferenceCandidate = {
   /** @deprecated Gateway wire compatibility for older macOS clients. Always false. */
   recommended: false;
   credentials?: boolean;
+  icon?: string;
+  website?: string;
 };
 
 export type SetupInferenceUnavailableCandidate = {
@@ -137,6 +143,7 @@ export type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
 } from "./setup-inference-auth-options.js";
+export type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
@@ -146,6 +153,8 @@ export type SetupInferenceDetection = {
   manualProviders: SetupInferenceManualProvider[];
   /** Interactive provider-owned browser and device-code sign-in methods. */
   authOptions: SetupInferenceAuthOption[];
+  /** Curated tools clients can offer when no existing AI access is detected. */
+  recommendedInstalls: SetupRecommendedInstall[];
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -329,6 +338,20 @@ function invalidSetupConfigError(snapshot: {
   return `OpenClaw config ${snapshot.path} is invalid${detail}. Fix it before running setup.`;
 }
 
+function resolveCandidatePresentation(
+  kind: SetupInferenceKind,
+  authChoices: readonly ProviderAuthChoiceMetadata[],
+): Pick<SetupInferenceCandidate, "icon" | "website"> {
+  const choice = authChoices.find(
+    (candidate) =>
+      candidate.choiceId === kind || candidate.deprecatedChoiceIds?.includes(kind) === true,
+  );
+  return {
+    ...(choice?.icon ? { icon: choice.icon } : {}),
+    ...(choice?.website ? { website: choice.website } : {}),
+  };
+}
+
 async function resolveSetupInferenceWorkspace(params: {
   configExists: boolean;
   configValid: boolean;
@@ -365,7 +388,12 @@ export async function detectSetupInference(
       reason:
         "Can't be auto-tested safely here. Use 'Gemini CLI OAuth' or a Gemini API key instead.",
     }));
-  const antigravity = await (deps.probeLocalCommand ?? probeLocalCommand)("agy");
+  const probe = deps.probeLocalCommand ?? probeLocalCommand;
+  const [antigravity, pi, opencode] = await Promise.all([
+    probe("agy"),
+    probe("pi"),
+    probe("opencode"),
+  ]);
   if (antigravity.found) {
     unavailableCandidates.push({
       id: "antigravity-cli",
@@ -375,19 +403,29 @@ export async function detectSetupInference(
         "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
     });
   }
+  if (pi.found) {
+    unavailableCandidates.push({
+      id: "pi-cli",
+      label: "Pi CLI",
+      detail: "installed",
+      reason:
+        "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
+    });
+  }
+  if (opencode.found) {
+    unavailableCandidates.push({
+      id: "opencode-cli",
+      label: "OpenCode CLI",
+      detail: "installed",
+      reason:
+        "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
+    });
+  }
   const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
-  const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
-    // Released macOS clients require this field. Keep it false so the wire
-    // contract remains decodable without expressing a provider preference.
-    Object.assign(candidate, { recommended: false as const }),
-  );
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
   });
-  const configuredModel = candidates.find(
-    (candidate) => candidate.kind === "existing-model",
-  )?.modelRef;
   const authChoices = (
     deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
   )({
@@ -398,6 +436,18 @@ export async function detectSetupInference(
   }).filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
+  const candidates: SetupInferenceCandidate[] = raw.map((candidate) =>
+    // Released macOS clients require this field. Keep it false so the wire
+    // contract remains decodable without expressing a provider preference.
+    Object.assign(
+      candidate,
+      { recommended: false as const },
+      resolveCandidatePresentation(candidate.kind, authChoices),
+    ),
+  );
+  const configuredModel = candidates.find(
+    (candidate) => candidate.kind === "existing-model",
+  )?.modelRef;
   const discoveryChoices = authChoices.filter(
     (choice) =>
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
@@ -453,14 +503,18 @@ export async function detectSetupInference(
             );
             return null;
           }
-          return {
-            kind: toProviderAutoSetupKind(choice.choiceId),
-            label: choice.choiceLabel,
-            detail: candidate.detail?.trim() || "available locally",
-            modelRef: candidate.modelRef,
-            recommended: false,
-            credentials: true,
-          };
+          return Object.assign(
+            {
+              kind: toProviderAutoSetupKind(choice.choiceId),
+              label: choice.choiceLabel,
+              detail: candidate.detail?.trim() || "available locally",
+              modelRef: candidate.modelRef,
+              recommended: false as const,
+              credentials: true,
+            },
+            choice.icon ? { icon: choice.icon } : {},
+            choice.website ? { website: choice.website } : {},
+          );
         } catch (error) {
           log.debug(
             `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
@@ -476,6 +530,7 @@ export async function detectSetupInference(
     unavailableCandidates,
     manualProviders: listSetupInferenceManualProviders(authChoices),
     authOptions: listSetupInferenceAuthOptions(authChoices),
+    recommendedInstalls: listRecommendedToolInstalls(),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: Boolean(configuredModel),

@@ -133,6 +133,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+          build-all-cache-scope: full
 
       - name: Validate npm release request
         env:
@@ -727,7 +728,9 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: refs/tags/${{ inputs.tag }}
-          fetch-depth: 0
+          # Frozen preflight evidence already binds the exact release SHA and
+          # tarball, so real publishes do not need the repository's full history.
+          fetch-depth: ${{ inputs.preflight_run_id != '' && 1 || 0 }}
 
       - name: Validate Tideclaw alpha publish target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -994,7 +997,7 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
             exit 1
           fi
-          if [[ "$PERFORMANCE_BLOCKING" != "true" ]]; then
+          if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi

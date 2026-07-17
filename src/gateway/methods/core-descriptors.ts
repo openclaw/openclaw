@@ -73,6 +73,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // without the shared three-write budget so the automatic ladder can finish.
   { name: "openclaw.setup.activate", scope: "operator.admin" },
   { name: "openclaw.setup.auth.start", scope: "operator.admin" },
+  { name: "openclaw.setup.prepare.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },
@@ -253,6 +254,9 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "system-presence", scope: "operator.read" },
   { name: "system-event", scope: "operator.admin" },
   { name: "message.action", scope: "operator.write" },
+  { name: "conversations.send", scope: "operator.admin" },
+  { name: "conversations.turn", scope: "operator.admin" },
+  { name: "conversations.turn.cancel", scope: "operator.admin" },
   { name: "send", scope: "operator.write" },
   { name: "agent", scope: "operator.write" },
   { name: "agent.identity.get", scope: "operator.read" },
@@ -308,6 +312,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.refresh", scope: "operator.admin", controlPlaneWrite: true },
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "controlUi.sessionPullRequests", scope: "operator.read" },
