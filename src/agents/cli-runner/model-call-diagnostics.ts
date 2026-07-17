@@ -37,7 +37,18 @@ const FALLBACK_RESPONSE_RESERVE_BYTES = 16 * 1024;
 const MAX_CAPTURED_OUTPUT_MESSAGES = 200;
 const MAX_CAPTURED_OUTPUT_BLOCKS = 200;
 const TRUNCATED_CONTENT_SUFFIX = "...(truncated)";
-const TRUNCATED_CONTENT_SUFFIX_BYTES = Buffer.byteLength(TRUNCATED_CONTENT_SUFFIX, "utf8");
+// One maximal tool-call block per envelope plus stopReason is the largest
+// structure possible under the shared 200-envelope/item caps.
+const MAX_CAPTURED_OUTPUT_STRUCTURE_BYTES = Buffer.byteLength(
+  JSON.stringify(
+    Array.from({ length: MAX_CAPTURED_OUTPUT_MESSAGES }, () => ({
+      role: "assistant",
+      content: [{ type: "tool_call", name: "", id: "" }],
+      stopReason: "",
+    })),
+  ),
+  "utf8",
+);
 
 type DiagnosticContentBudget = {
   remainingBytes: number;
@@ -47,11 +58,17 @@ type DiagnosticContentBudget = {
   truncated: boolean;
 };
 
-function truncateUtf8Safe(value: string, maxBytes: number): string {
+function serializedStringContentBytes(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8") - 2;
+}
+
+const TRUNCATED_CONTENT_SUFFIX_BYTES = serializedStringContentBytes(TRUNCATED_CONTENT_SUFFIX);
+
+function truncateSerializedStringSafe(value: string, maxBytes: number): string {
   if (maxBytes <= 0) {
     return "";
   }
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+  if (serializedStringContentBytes(value) <= maxBytes) {
     return value;
   }
   let low = 0;
@@ -60,7 +77,7 @@ function truncateUtf8Safe(value: string, maxBytes: number): string {
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const candidate = truncateUtf16Safe(value, middle);
-    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
+    if (serializedStringContentBytes(candidate) <= maxBytes) {
       captured = candidate;
       low = middle + 1;
     } else {
@@ -85,15 +102,15 @@ function captureTextWithinBudget(
     budget.truncated = true;
     return undefined;
   }
-  const valueBytes = Buffer.byteLength(value, "utf8");
+  const valueBytes = serializedStringContentBytes(value);
   if (valueBytes <= budget.remainingBytes) {
     budget.remainingBytes -= valueBytes;
     return value;
   }
-  const suffix = truncateUtf8Safe(TRUNCATED_CONTENT_SUFFIX, budget.remainingBytes);
-  const prefixBudget = Math.max(0, budget.remainingBytes - Buffer.byteLength(suffix, "utf8"));
-  const captured = `${truncateUtf8Safe(value, prefixBudget)}${suffix}`;
-  budget.remainingBytes -= Buffer.byteLength(captured, "utf8");
+  const suffix = truncateSerializedStringSafe(TRUNCATED_CONTENT_SUFFIX, budget.remainingBytes);
+  const prefixBudget = Math.max(0, budget.remainingBytes - serializedStringContentBytes(suffix));
+  const captured = `${truncateSerializedStringSafe(value, prefixBudget)}${suffix}`;
+  budget.remainingBytes -= serializedStringContentBytes(captured);
   budget.truncated = true;
   return captured;
 }
@@ -365,7 +382,10 @@ export function createClaudeCliModelCallDiagnostics(params: {
   const capturedAssistantMessages: Record<string, unknown>[] = [];
   const outputContentBudget: DiagnosticContentBudget = {
     remainingBytes:
-      MAX_CAPTURED_CONTENT_BYTES - TRUNCATED_CONTENT_SUFFIX_BYTES - FALLBACK_RESPONSE_RESERVE_BYTES,
+      MAX_CAPTURED_CONTENT_BYTES -
+      MAX_CAPTURED_OUTPUT_STRUCTURE_BYTES -
+      TRUNCATED_CONTENT_SUFFIX_BYTES -
+      FALLBACK_RESPONSE_RESERVE_BYTES,
     // One item stays available for the truncation marker; one more is held
     // separately for the final visible fallback until normal text arrives.
     remainingItems: MAX_CAPTURED_OUTPUT_BLOCKS - 2,

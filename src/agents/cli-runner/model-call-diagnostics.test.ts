@@ -90,8 +90,37 @@ describe("Claude CLI model-call diagnostics", () => {
     expect(Buffer.byteLength(modelContent.systemPrompt ?? "", "utf8")).toBeLessThanOrEqual(
       CONTENT_LIMIT_BYTES,
     );
-    expect(Buffer.byteLength(outputJson, "utf8")).toBeLessThanOrEqual(CONTENT_LIMIT_BYTES + 512);
+    expect(Buffer.byteLength(outputJson, "utf8")).toBeLessThanOrEqual(CONTENT_LIMIT_BYTES);
     expect(outputJson).toContain("...(truncated)");
+  });
+
+  it("bounds serialized escaped content across many envelopes", async () => {
+    let outputMessages: unknown;
+    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type === "model.call.completed") {
+        outputMessages = privateData.modelContent?.outputMessages;
+      }
+    });
+    const diagnostics = expectDefined(
+      createClaudeCliModelCallDiagnostics({
+        context: createContext(),
+        prompt: "hello",
+        transport: "stdio",
+      }),
+      "Claude CLI diagnostics",
+    );
+
+    diagnostics.emitStarted();
+    for (let index = 0; index < 199; index += 1) {
+      diagnostics.observeAssistantMessage({ content: `part-${index}:\u0000`.repeat(100) });
+    }
+    diagnostics.emitCompleted({ text: "done" } as CliOutput);
+    await waitForDiagnosticEventsDrained();
+    stop();
+
+    expect(Buffer.byteLength(JSON.stringify(outputMessages), "utf8")).toBeLessThanOrEqual(
+      CONTENT_LIMIT_BYTES,
+    );
   });
 
   it("caps assistant envelope count and records truncation", async () => {
