@@ -1651,8 +1651,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "keep this draft"
@@ -1677,8 +1679,10 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
+        // Wait for outbox restore too: until it completes, sends deliberately
+        // route behind the outbox (FIFO gate), which is not the path under test.
         try await waitUntil("bootstrap healthy") {
-            await MainActor.run { vm.healthOK }
+            await MainActor.run { vm.healthOK && vm.hasRestoredOutboxMessages }
         }
         await MainActor.run {
             vm.input = "stale health send"
