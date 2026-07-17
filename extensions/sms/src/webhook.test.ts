@@ -105,18 +105,21 @@ function createRequest(
 type TestResponse = ServerResponse & {
   body?: string;
   setHeaderMock: ReturnType<typeof vi.fn>;
+  endMock: ReturnType<typeof vi.fn>;
 };
 
 function createResponse(): TestResponse {
   const setHeaderMock = vi.fn();
+  const endMock = vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
+    this.body = body;
+    return this;
+  });
   return {
     statusCode: 200,
     setHeader: setHeaderMock,
     setHeaderMock,
-    end: vi.fn(function (this: ServerResponse & { body?: string }, body?: string) {
-      this.body = body;
-      return this;
-    }),
+    end: endMock,
+    endMock,
   } as unknown as TestResponse;
 }
 
@@ -186,7 +189,7 @@ describe("createSmsWebhookHandler", () => {
       "sqlite unavailable",
     );
 
-    expect(res.end).not.toHaveBeenCalled();
+    expect(res.endMock).not.toHaveBeenCalled();
     expect(runDetachedWebhookWork).not.toHaveBeenCalled();
   });
 

@@ -161,7 +161,6 @@ describe("dispatchSmsInboundEvent", () => {
       messageSid: "SM-inbound",
       accountSid: "AC123",
     });
-    expect(ingested.timestamp).toBe(1_700_000_000_123);
     const turn = await runParams.adapter.resolveTurn(ingested);
 
     expect(resolveAgentRoute).toHaveBeenCalledWith(
@@ -171,6 +170,7 @@ describe("dispatchSmsInboundEvent", () => {
     );
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
+        timestamp: 1_700_000_000_123,
         from: "sms:+15551234567",
         sender: expect.objectContaining({ id: "+15551234567" }),
         conversation: expect.objectContaining({ id: "+15551234567" }),
