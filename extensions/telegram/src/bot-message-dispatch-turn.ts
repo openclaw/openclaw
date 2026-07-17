@@ -112,13 +112,12 @@ export async function runTelegramDispatchTurn(params: {
               (await params.reply.deliver(payload, info)) as Awaited<
                 ReturnType<ChannelInboundTurnPlan["delivery"]["deliver"]>
               >,
-            onError: (err, info) => {
-              void Promise.resolve(
+            onError: (err, info) =>
+              Promise.resolve(
                 params.reply.onError(err, info as Parameters<typeof params.reply.onError>[1]),
               ).catch((callbackError) => {
                 logVerbose(`telegram reply error callback failed: ${String(callbackError)}`);
-              });
-            },
+              }),
           },
           dispatcherOptions: {
             ...replyPipeline,
