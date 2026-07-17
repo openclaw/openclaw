@@ -375,11 +375,7 @@ describe("value predicates — numeric operators (v1.1)", () => {
   it("accepts finite decimal predicate values", () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow>199999.5]/id`));
     const ids = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
-    expect(ids.toSorted()).toEqual([
-      "claude-opus-4-7",
-      "claude-sonnet-4-6",
-      "claude-sonnet-4-7",
-    ]);
+    expect(ids.toSorted()).toEqual(["claude-opus-4-7", "claude-sonnet-4-6", "claude-sonnet-4-7"]);
   });
 
   it("numeric operator rejects non-numeric leaves silently", () => {
