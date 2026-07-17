@@ -54,7 +54,6 @@ import {
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
 import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
-import { createCodexQuestionCardProps } from "./chat-question-card.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -92,7 +91,6 @@ type ChatComposerProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
-  questionStatus?: import("../tool-stream.ts").QuestionStatus | null;
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
@@ -130,11 +128,6 @@ type ChatComposerProps = {
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onGoalCommand?: (command: string) => void;
-  onQuestionSubmit?: (
-    actionToken: string,
-    answers: Record<string, string>,
-    onRejected: () => void,
-  ) => void;
 };
 
 type PendingClearedSubmittedDraft = {
@@ -2231,19 +2224,6 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
-          ${props.questionStatus
-            ? html`<openclaw-chat-question
-                .props=${createCodexQuestionCardProps(props.questionStatus, {
-                  disabled: !props.connected || !props.onQuestionSubmit,
-                  onSubmit: (answers, onRejected) =>
-                    props.onQuestionSubmit?.(
-                      props.questionStatus!.actionToken,
-                      answers,
-                      onRejected,
-                    ),
-                })}
-              ></openclaw-chat-question>`
-            : nothing}
           ${renderChatPlanChecklist(props.planStatus, {
             active: showAbortableUi,
             variant: "bar",

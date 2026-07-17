@@ -3,7 +3,6 @@ import { LitElement, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
-import type { QuestionStatus } from "../tool-stream.ts";
 
 type QuestionCardQuestion = {
   id: string;
@@ -33,11 +32,6 @@ type QuestionCardProps = {
   onSubmit: (answersById: Record<string, string[]>) => void | Promise<void>;
   onAnswersChange?: (answersById: Record<string, string[]>) => void;
   onDismissError?: () => void;
-};
-
-type CodexQuestionCardOptions = {
-  disabled: boolean;
-  onSubmit: (answers: Record<string, string>, onRejected: () => void) => void;
 };
 
 type GatewayQuestionCardOptions = {
@@ -88,27 +82,6 @@ function updatePromptDrafts(prompt: QuestionPrompt, answersById: Record<string, 
       freeText: values.find((value) => !optionLabels.has(value)) ?? "",
     });
   }
-}
-
-export function createCodexQuestionCardProps(
-  status: QuestionStatus,
-  options: CodexQuestionCardOptions,
-): QuestionCardProps {
-  return {
-    model: {
-      requestKey: `${status.itemId}:${status.actionToken}`,
-      title: t("chat.questions.title"),
-      questions: status.questions,
-      disabled: options.disabled,
-    },
-    onSubmit: (answersById) =>
-      new Promise<void>((_resolve, reject) => {
-        const answers = Object.fromEntries(
-          Object.entries(answersById).map(([id, values]) => [id, values[0] ?? ""]),
-        );
-        options.onSubmit(answers, () => reject(new Error("question submission rejected")));
-      }),
-  };
 }
 
 export function renderChatQuestionCard(

@@ -28,6 +28,13 @@ export type AgentHarnessUserInputPromptOptions = {
   presentation?: MessagePresentation;
 };
 
+export type AgentHarnessQuestionPromptPayload = {
+  text: string;
+  presentation?: MessagePresentation;
+  presentationTextMode?: "fallback";
+  channelData: { askUser: { questionId: string } };
+};
+
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
 
 export function emptyAgentHarnessUserInputAnswers(): AgentHarnessUserInputAnswers {
@@ -76,6 +83,101 @@ export async function deliverAgentHarnessUserInputPrompt(
     return;
   }
   await params.onPartialReply?.({ text });
+}
+
+/** Builds the portable one-question presentation shared by tools and harnesses. */
+export function buildAgentHarnessQuestionPresentation(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  formatText?: (text: string) => string;
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  const options = question?.options ?? [];
+  const formatText = params.formatText ?? ((text: string) => text);
+  if (!question || question.multiSelect || question.isSecret || options.length === 0) {
+    return undefined;
+  }
+  const presentationText = [
+    formatText(question.question),
+    "",
+    ...options.map(
+      (option) =>
+        `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
+    ),
+    "",
+    question.isOther
+      ? "Tap an option, or reply with the option text or your own answer."
+      : "Tap an option, or reply with the option number or text.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: presentationText },
+      {
+        type: "buttons",
+        buttons: options.map((option) => ({
+          label: formatText(option.label),
+          action: {
+            type: "question",
+            questionId: params.questionId,
+            optionValue: option.label,
+          },
+        })),
+      },
+    ],
+  };
+}
+
+/** Builds the exact question payload consumed by web chat and native channels. */
+export function buildAgentHarnessQuestionPromptPayload(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  options?: AgentHarnessUserInputPromptOptions;
+}): AgentHarnessQuestionPromptPayload {
+  const prompt = formatAgentHarnessUserInputPrompt(params.questions, params.options);
+  const presentation = buildAgentHarnessQuestionPresentation({
+    ...params,
+    formatText: params.options?.formatText,
+  });
+  return {
+    text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
+    ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
+    channelData: { askUser: { questionId: params.questionId } },
+  };
+}
+
+function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
+  if (questions.length !== 1) {
+    return "Reply by number or question id. Use a declared option where choices are fixed.";
+  }
+  const [question] = questions;
+  if (!question || (question.options?.length ?? 0) === 0) {
+    return "Reply with your answer.";
+  }
+  return question.isOther
+    ? "Reply with the number, the option text, or your own answer."
+    : "Reply with the number or option text.";
+}
+
+/** Delivers a gateway-backed question through the harness block-reply surface. */
+export async function deliverAgentHarnessQuestionPrompt(
+  params: PromptDeliveryParams,
+  questionId: string,
+  questions: readonly AgentHarnessUserInputQuestion[],
+  options?: AgentHarnessUserInputPromptOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
+  if (params.onBlockReply) {
+    await params.onBlockReply(payload, signal ? { abortSignal: signal } : undefined);
+    return;
+  }
+  signal?.throwIfAborted();
+  await params.onPartialReply?.({ text: payload.text });
 }
 
 export function buildAgentHarnessUserInputAnswers(

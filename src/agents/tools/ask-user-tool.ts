@@ -7,10 +7,7 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  buildAgentHarnessUserInputAnswers,
-  type AgentHarnessUserInputQuestion,
-} from "../harness/user-input-bridge.js";
+import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -86,6 +83,7 @@ type AskUserQuestionState = {
   phase: AskUserQuestionPhase;
   gatewayCall?: AskUserGatewayCall;
   answer?: Promise<QuestionWaitAnswerResult>;
+  claim?: ReturnType<typeof registerPendingAgentQuestion>;
   waiters: Set<() => void>;
 };
 
@@ -226,6 +224,7 @@ function releaseAskUserQuestion(questionId: string): void {
     return;
   }
   askUserQuestions.delete(questionId);
+  state.claim?.dispose();
   for (const wake of state.waiters) {
     wake();
   }
@@ -384,117 +383,6 @@ function isTerminalQuestionResolveError(error: unknown): boolean {
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
-async function observeCommittedAnswer(
-  answer: Promise<QuestionWaitAnswerResult> | undefined,
-): Promise<boolean> {
-  if (!answer) {
-    return false;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const result = await Promise.race([
-      answer,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), 1_000);
-        timer.unref?.();
-      }),
-    ]);
-    return result?.status === "answered";
-  } catch {
-    return false;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-/** Claims the next queued plain-text message for this session's active question. */
-export async function claimPendingAskUserAnswer(params: {
-  sessionKey?: string;
-  text: string;
-  persist?: () => Promise<void>;
-}): Promise<boolean> {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return false;
-  }
-  const state = findAskUserQuestionForSession(sessionKey);
-  if (!state || state.phase.kind !== "answerable" || !state.gatewayCall) {
-    return false;
-  }
-  transitionAskUserQuestion(state, { kind: "resolving" });
-  try {
-    await params.persist?.();
-  } catch (error) {
-    transitionAskUserQuestion(state, { kind: "answerable" });
-    throw error;
-  }
-  const answers = buildAgentHarnessUserInputAnswers(
-    state.questions as AgentHarnessUserInputQuestion[],
-    params.text,
-  );
-  try {
-    await state.gatewayCall(
-      "question.resolve",
-      {},
-      { id: state.questionId, answers, resolvedBy: "plain-text" },
-    );
-    return true;
-  } catch (error) {
-    if (isTerminalQuestionResolveError(error)) {
-      return false;
-    }
-    // The long-lived wait observes a resolve that committed even when its response was lost.
-    // Reusing it avoids a second gateway read and answer-shape comparison.
-    if (await observeCommittedAnswer(state.answer)) {
-      return true;
-    }
-    transitionAskUserQuestion(state, { kind: "answerable" });
-    throw error;
-  }
-}
-
-/** Cancels the blocking question before an inbound turn takes another route. */
-export async function cancelPendingAskUserForSession(params: {
-  sessionKey?: string;
-  resolvedBy: string;
-}): Promise<boolean> {
-  const sessionKey = params.sessionKey?.trim();
-  if (!sessionKey) {
-    return false;
-  }
-  const state = findAskUserQuestionForSession(sessionKey);
-  if (!state || state.phase.kind === "reserved" || !state.gatewayCall) {
-    return false;
-  }
-  while (state.phase.kind === "registering") {
-    await waitForQuestionChange(state);
-    if (askUserQuestions.get(state.questionId) !== state) {
-      return false;
-    }
-  }
-  if (state.phase.kind === "resolving" || state.phase.kind === "prompt-failed") {
-    return false;
-  }
-  const previousPhase = state.phase;
-  transitionAskUserQuestion(state, { kind: "resolving" });
-  try {
-    await state.gatewayCall(
-      "question.resolve",
-      { timeoutMs: ASK_USER_RPC_GRACE_MS },
-      { id: state.questionId, cancel: true, resolvedBy: params.resolvedBy },
-    );
-    return true;
-  } catch (error) {
-    if (isTerminalQuestionResolveError(error)) {
-      return true;
-    }
-    transitionAskUserQuestion(state, previousPhase);
-    throw error;
-  }
-}
-
 function resetPendingAskUserQuestionsForTest(): void {
   for (const questionId of askUserQuestions.keys()) {
     releaseAskUserQuestion(questionId);
@@ -615,6 +503,22 @@ export function createAskUserTool(params: {
       };
 
       try {
+        state.claim = registerPendingAgentQuestion({
+          questionId,
+          sessionKey,
+          questions: normalized.questions,
+          gatewayCall,
+          onCancel: () => {
+            if (
+              askUserQuestions.get(questionId) === state &&
+              state.phase.kind !== "reserved" &&
+              state.phase.kind !== "resolving" &&
+              state.phase.kind !== "prompt-failed"
+            ) {
+              transitionAskUserQuestion(state, { kind: "resolving" });
+            }
+          },
+        });
         const requestResult = (await gatewayCall(
           "question.request",
           {},
@@ -631,6 +535,12 @@ export function createAskUserTool(params: {
         if (requestResult.id !== questionId) {
           throw new Error("question.request returned an unexpected question id");
         }
+        if (state.claim.isCancellationRequested()) {
+          const answered = await cancelPendingQuestion("superseded-input");
+          return answered
+            ? answeredResult(normalized.questions, answered.answers)
+            : noAnswerResult("cancelled");
+        }
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
         if (signal?.aborted) {
           cancelOnAbort();
@@ -643,6 +553,10 @@ export function createAskUserTool(params: {
           signal ? { signal } : undefined,
         ) as Promise<QuestionWaitAnswerResult>;
         state.answer = answerPromise;
+        const bufferedAnswer = await state.claim.setAnswer(answerPromise);
+        if (bufferedAnswer) {
+          return await finishWait(await answerPromise);
+        }
         if (deliverPrompt) {
           // Tool-start reserves the prompt, but only a committed Gateway record opens delivery.
           // This prevents channels from exposing a question ID that cannot accept an answer.
@@ -667,7 +581,7 @@ export function createAskUserTool(params: {
             }
             throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
           }
-        } else {
+        } else if (!state.claim.isResolving()) {
           transitionAskUserQuestion(state, { kind: "answerable" });
         }
         const result = await state.answer;
