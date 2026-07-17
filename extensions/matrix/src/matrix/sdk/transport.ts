@@ -45,6 +45,14 @@ function normalizeEndpoint(endpoint: string): string {
   return endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
 }
 
+function parseMatrixUrl(input: string, base?: string | URL): URL {
+  try {
+    return base !== undefined ? new URL(input, base) : new URL(input);
+  } catch (cause) {
+    throw new Error("Invalid URL", { cause });
+  }
+}
+
 function applyQuery(url: URL, qs: QueryParams): void {
   if (!qs) {
     return;
@@ -164,7 +172,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
-  let currentUrl = new URL(params.url);
+  let currentUrl = parseMatrixUrl(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
   let body = params.init?.body;
   let headers = new Headers(params.init?.headers ?? {});
@@ -215,7 +223,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
         throw new Error(`Matrix redirect missing location header (${currentUrl.toString()})`);
       }
 
-      const nextUrl = new URL(location, currentUrl);
+      const nextUrl = parseMatrixUrl(location, currentUrl);
       if (nextUrl.protocol !== currentUrl.protocol) {
         cleanup();
         await closeDispatcher(dispatcher);
@@ -327,8 +335,8 @@ export async function performMatrixRequest(params: {
   }
 
   const baseUrl = isAbsoluteEndpoint
-    ? new URL(params.endpoint)
-    : new URL(normalizeEndpoint(params.endpoint), params.homeserver);
+    ? parseMatrixUrl(params.endpoint)
+    : parseMatrixUrl(normalizeEndpoint(params.endpoint), params.homeserver);
   applyQuery(baseUrl, params.qs);
 
   const headers = new Headers();

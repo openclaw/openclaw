@@ -465,6 +465,68 @@ describe("performMatrixRequest", () => {
     expect(result.text).toBe(payload);
     expect(result.buffer.toString("utf8")).toBe(payload);
   });
+
+  it("rejects malformed homeserver URLs with a stable error", async () => {
+    await expect(
+      performMatrixRequest({
+        homeserver: "http://matrix-user:matrix-fixture@invalid host",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow(new Error("Invalid URL"));
+  });
+
+  it("rejects malformed redirect Location headers with a stable error", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(302, { location: "http://invalid host/path" });
+      res.end();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+
+    try {
+      await expect(
+        performMatrixRequest({
+          homeserver: `http://127.0.0.1:${port}`,
+          accessToken: "token",
+          method: "GET",
+          endpoint: "/_matrix/client/v3/account/whoami",
+          timeoutMs: 5000,
+          ssrfPolicy: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toThrow(new Error("Invalid URL"));
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not reflect credential-bearing malformed homeserver URLs in errors", async () => {
+    const secretPass = "matrix-fixture";
+    const malformed = `http://matrix-user:${secretPass}@${["invalid", "host"].join(" ")}`;
+
+    try {
+      await performMatrixRequest({
+        homeserver: malformed,
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/client/v3/account/whoami",
+        timeoutMs: 5000,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+      throw new Error("expected performMatrixRequest to reject malformed homeserver URL");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toBe("Invalid URL");
+      expect(message).not.toContain(secretPass);
+    }
+  });
 });
 
 describe("createMatrixGuardedFetch", () => {
@@ -549,6 +611,14 @@ describe("createMatrixGuardedFetch", () => {
 
     expect(runtimeFetch).toHaveBeenCalledTimes(1);
     expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(url);
+  });
+
+  it("rejects malformed request URLs with a stable error", async () => {
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await expect(guardedFetch("not-a-url")).rejects.toThrow(new Error("Invalid URL"));
   });
 });
 
