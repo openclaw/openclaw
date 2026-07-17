@@ -87,6 +87,15 @@ describe("subagent registry sqlite store", () => {
         outcome: { status: "error", error: "restart interrupted run", endedAt: 250 },
         terminalOwner: "interrupted-recovery",
         completion: { required: true, resultText: null, capturedAt: 250 },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          replayCount: 1,
+          nextAttemptAt: 30_000,
+          batchRunIds: ["run-one", "run-two"],
+          lastError: "provider timeout",
+          retireAfterSettle: true,
+        },
       });
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
@@ -102,6 +111,7 @@ describe("subagent registry sqlite store", () => {
         terminalOwner: "interrupted-recovery",
         completion: run.completion,
         delivery: run.delivery,
+        requesterSettleWake: run.requesterSettleWake,
       });
       expect(await fs.stat(path.join(tempStateDir!, "state", "openclaw.sqlite"))).toBeTruthy();
       await expect(fs.stat(path.join(tempStateDir!, "subagents", "runs.json"))).rejects.toThrow();

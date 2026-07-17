@@ -2490,6 +2490,19 @@ export const ar: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "لا تحتوي هذه المعاينة على عنوان URL حتى الآن.",
+        blockedExternal: "المعاينات الخارجية معطّلة بموجب سياسة Gateway الخاصة بك.",
+        blockedScheme: "يستخدم عنوان URL لهذه المعاينة نظامًا غير مدعوم.",
+        toolbar: "عناصر التحكم في المعاينة",
+        reload: "إعادة تحميل المعاينة",
+        viewport: {
+          label: "إطار عرض المعاينة",
+          desktop: "سطح المكتب",
+          tablet: "جهاز لوحي",
+          mobile: "هاتف محمول",
+        },
+      },
     },
   },
   workboard: {

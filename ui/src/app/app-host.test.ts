@@ -4,6 +4,10 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  SHELL_NAV_DRAWER_TOGGLE_EVENT,
+} from "../components/command-palette-contract.ts";
+import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
@@ -14,6 +18,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 
 type AppLifecycleState = {
@@ -90,6 +95,15 @@ type ShellNavigationState = {
   updated: () => void;
 };
 
+type ShellChromeEventState = {
+  runtime: { context: ApplicationContext };
+  navDrawerOpen: boolean;
+  handleShellNavDrawerToggle: (event: Event) => void;
+  openPalette: () => void;
+  connectedCallback: () => void;
+  disconnectedCallback: () => void;
+};
+
 type ShellSettingsSearchLoadState = {
   runtime: {
     context: ApplicationContext;
@@ -107,6 +121,12 @@ type TestWebKitWindow = Window & {
 
 afterEach(() => {
   Reflect.deleteProperty(window, "webkit");
+  document.documentElement.classList.remove(
+    "openclaw-native-macos",
+    "openclaw-native-nav",
+    "openclaw-native-web-chrome",
+  );
+  vi.unstubAllGlobals();
 });
 
 type ShellEpochState = {
@@ -329,6 +349,68 @@ describe("OpenClaw shell settings search", () => {
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {
+  it("merges shell chrome only for plain-browser mobile chat", () => {
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
+    ).toBe(true);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: false, routeId: "chat", onboarding: false }),
+    ).toBe(false);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "sessions", onboarding: false }),
+    ).toBe(false);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: true }),
+    ).toBe(false);
+
+    document.documentElement.classList.add("openclaw-native-nav");
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
+    ).toBe(false);
+  });
+
+  it("wires merged header window events for the shell lifecycle", () => {
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+
+    shell.connectedCallback();
+
+    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith(
+      SHELL_NAV_DRAWER_TOGGLE_EVENT,
+      expect.any(Function),
+    );
+    shell.disconnectedCallback();
+    addEventListener.mockRestore();
+  });
+
+  it("handles merged header drawer and palette requests", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const openPalette = vi.fn();
+    const trigger = document.createElement("button");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    shell.runtime = {
+      context: {
+        navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
+      } as unknown as ApplicationContext,
+    };
+    Object.defineProperty(shell, "commandPalette", {
+      configurable: true,
+      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+    });
+
+    shell.handleShellNavDrawerToggle(
+      new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
+    );
+    shell.openPalette();
+
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(openPalette).toHaveBeenCalledOnce();
+  });
+
   it("loads and toggles the command palette on its first shortcut", async () => {
     const element = createLazyElementSpec("command palette");
     const togglePalette = vi.fn();

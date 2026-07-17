@@ -794,6 +794,35 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(packageRequests).toBe(4);
   });
 
+  it.each([
+    {
+      caseName: "drops a split surrogate pair",
+      responseBody: `${"x".repeat(399)}\u{1f600}tail`,
+      expectedDetail: `${"x".repeat(399)}...`,
+    },
+    {
+      caseName: "preserves a complete surrogate pair",
+      responseBody: `${"x".repeat(398)}\u{1f600}tail`,
+      expectedDetail: `${"x".repeat(398)}\u{1f600}...`,
+    },
+  ])(
+    "keeps ClawHub error truncation UTF-16 safe: $caseName",
+    async ({ responseBody, expectedDetail }) => {
+      const repoDir = createTempPluginRepo();
+      await expect(
+        collectPluginClawHubReleasePlan({
+          rootDir: repoDir,
+          selection: ["@openclaw/demo-plugin"],
+          registryBaseUrl: "https://clawhub.ai",
+          fetchImpl: async () => new Response(responseBody, { status: 503 }),
+          sleep: async () => {},
+        }),
+      ).rejects.toThrow(
+        `Failed to query ClawHub package @openclaw/demo-plugin: 503 ${expectedDetail}`,
+      );
+    },
+  );
+
   it("honors an HTTP-date Retry-After header", async () => {
     const repoDir = createTempPluginRepo();
     const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";

@@ -18,6 +18,12 @@ describe("Workspaces document schema", () => {
     expect(validateWorkspaceDoc(validDoc())).toEqual(validDoc());
   });
 
+  it.each(["builtin:agent-status", "builtin:custom-widget-approvals"])("accepts %s", (kind) => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = kind;
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe(kind);
+  });
+
   it("rejects invalid tab slugs", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.slug = "Bad Slug";
@@ -46,6 +52,12 @@ describe("Workspaces document schema", () => {
     const doc = validDoc();
     doc.tabs[0]!.widgets[0]!.kind = "builtin:chart";
     expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:chart");
+  });
+
+  it("accepts the trusted builtin preview kind", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = "builtin:preview";
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:preview");
   });
 
   it("rejects a prototype-setter custom widget kind", () => {

@@ -86,7 +86,7 @@ type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield" | "namespace";
+type CodeModeBridgeMethod = "search" | "describe" | "call" | "callValue" | "yield" | "namespace";
 
 type PendingBridgeRequest = {
   id: string;
@@ -586,14 +586,26 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id, {
+        value = await params.runtime.call(id, values[1] ?? {}, {
           includeMcp: false,
-          recoverySurface: "tools",
-        });
-        value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
+          recoverySurface: "tools",
+        });
+        break;
+      }
+      case "callValue": {
+        const id = values[0];
+        if (typeof id !== "string") {
+          throw new ToolInputError("callValue id must be a string.");
+        }
+        value = await params.runtime.callValue(id, values[1] ?? {}, {
+          includeMcp: false,
+          parentToolCallId: params.parentToolCallId,
+          signal: params.signal,
+          onUpdate: params.onUpdate,
+          recoverySurface: "tools",
         });
         break;
       }
@@ -1052,7 +1064,10 @@ export async function runCodeModeScriptHeadless(params: {
 
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
       const requestedToolCalls = result.pendingRequests.filter(
-        (request) => request.method === "call" || request.method === "namespace",
+        (request) =>
+          request.method === "call" ||
+          request.method === "callValue" ||
+          request.method === "namespace",
       ).length;
       toolCallCount += requestedToolCalls;
       if (toolCallCount > maxToolCalls) {
@@ -1140,7 +1155,7 @@ function pendingBridgeRequestsReplaySafe(
     ) {
       return true;
     }
-    if (request.method !== "call") {
+    if (request.method !== "call" && request.method !== "callValue") {
       return false;
     }
     const id = Array.isArray(request.args) ? request.args[0] : undefined;
@@ -1274,7 +1289,7 @@ function createCodeModeExecDescription(
       ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
       : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`." +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Prefer one exec invocation for a complete dependent workflow: select tools, call them, and process their results in the same program. Await prerequisites before later calls; parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids and input hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
     mcpGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
@@ -1727,7 +1742,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       code: Type.Optional(
         Type.String({
           description:
-            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call), `ALL_TOOLS`, `API` virtual declaration files, and registered namespace globals are available in scope; Node built-in modules are not.",
+            "JavaScript or TypeScript source for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent operations in this program, never put dependent calls in Promise.all, and return the final value. `API` virtual declaration files and registered namespace globals are also available in scope; Node built-in modules are not.",
         }),
       ),
       command: Type.Optional(
@@ -1742,7 +1757,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       restartSafe: Type.Optional(
         Type.Boolean({
           description:
-            "Set true for read-only work that OpenClaw may reconstruct after a gateway restart. This rejects side-effecting catalog tools and plugin namespaces.",
+            "Set true only when every catalog call is explicitly replay-safe and OpenClaw may reconstruct the work after a gateway restart. Leave unset for ordinary calls; true rejects unmarked or side-effecting tools and plugin namespaces.",
         }),
       ),
     }),

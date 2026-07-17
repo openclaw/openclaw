@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 
@@ -2838,10 +2839,94 @@ describe("talk.client.create handler", () => {
     expect(createInput.instructions).toContain("Additional realtime instructions:\nSpeak warmly.");
     expect(createInput.instructions).toContain("tool-backed actions");
     expect(createInput.instructions).toContain("Let me check that for you");
+    expect(createInput.tools).not.toContainEqual(
+      expect.objectContaining({ name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }),
+    );
     expect(createInput).not.toHaveProperty("provider");
     expect(createInput).not.toHaveProperty("providers");
     expect(createInput).not.toHaveProperty("transport");
     expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+  });
+
+  it("adds describe_view only to an OpenAI WebRTC client with camera frames", async () => {
+    const createBrowserSession = vi.fn(async (_input: unknown) => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "test-client-secret",
+    }));
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "test-api-key" },
+    });
+
+    const respond = vi.fn();
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
+      req: { type: "req", id: "1", method: "talk.client.create" },
+      params: {
+        sessionKey: "main",
+        transport: "webrtc",
+        capabilities: ["camera-frame"],
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
+    });
+
+    const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
+    expect(createInput.tools).toContainEqual(
+      expect.objectContaining({ name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }),
+    );
+    expectRespondOk(respond, { provider: "openai", transport: "webrtc" });
+
+    createBrowserSession.mockClear();
+    respond.mockClear();
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
+      req: { type: "req", id: "audio", method: "talk.client.create" },
+      params: { sessionKey: "main", transport: "webrtc" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
+    });
+    expect((mockCallArg(createBrowserSession) as Record<string, unknown>).tools).not.toContainEqual(
+      expect.objectContaining({ name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }),
+    );
+
+    provider.id = "google";
+    createBrowserSession.mockClear();
+    respond.mockClear();
+    await expectDefined(
+      talkHandlers["talk.client.create"],
+      'talkHandlers["talk.client.create"] test invariant',
+    )({
+      req: { type: "req", id: "2", method: "talk.client.create" },
+      params: {
+        sessionKey: "main",
+        transport: "webrtc",
+        capabilities: ["camera-frame"],
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig } as never,
+    });
+    expect((mockCallArg(createBrowserSession) as Record<string, unknown>).tools).not.toContainEqual(
+      expect.objectContaining({ name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME }),
+    );
   });
 
   it("uses agents.defaults.voiceModel as the realtime default model", async () => {

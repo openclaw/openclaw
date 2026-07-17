@@ -111,6 +111,40 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("lists every degraded SecretRef owner reported by Gateway status", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        degradedSecretOwners: [
+          {
+            ownerKind: "provider",
+            ownerId: "openai",
+            state: "unavailable",
+            paths: ["models.providers.openai.apiKey"],
+            reason: "secret reference was not found",
+          },
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            paths: ["messages.tts.providers.elevenlabs.apiKey"],
+            reason: "secret provider failed",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "- provider:openai (models.providers.openai.apiKey): secret reference was not found",
+        "- capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider failed",
+      ].join("\n"),
+      "Secret owners unavailable",
+    );
+  });
+
   it("does not run follow-up channel probes when liveness fails", async () => {
     callGateway.mockRejectedValueOnce(new Error("gateway timeout after 3000ms"));
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };

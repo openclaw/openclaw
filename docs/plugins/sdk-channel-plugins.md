@@ -466,6 +466,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
 const wasMentioned = matchesMentionWithExplicit({
   text,
@@ -487,12 +488,18 @@ const facts = {
   ],
 };
 
+const implicitMentions = resolveChannelImplicitMentions({
+  cfg,
+  channel: channelId,
+  accountId,
+});
+
 const decision = resolveInboundMentionDecision({
   facts,
   policy: {
     isGroup,
     requireMention,
-    allowedImplicitMentionKinds: requireExplicitMention ? [] : ["reply_to_bot", "quoted_bot"],
+    implicitMentions,
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,

@@ -1663,6 +1663,7 @@
                       "gateway/security/secure-file-operations",
                       "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
+                      "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
@@ -1959,6 +1960,12 @@
                 "group": "Project",
                 "pages": [
                   "reference/credits"
+                ]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "reference/pull-request-review-flow"
                 ]
               },
               {

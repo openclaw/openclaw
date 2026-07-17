@@ -558,17 +558,6 @@ export function createDirectSessionPayload(): TelegramMessageContext["ctxPayload
   } as TelegramMessageContext["ctxPayload"];
 }
 
-export function observeDeliveredReply(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
-      if (params.replies?.some((reply) => reply.text === text)) {
-        resolve();
-      }
-      return { delivered: true };
-    });
-  });
-}
-
 export function createBot(): Bot {
   return {
     api: {
@@ -603,10 +592,7 @@ export async function dispatchWithContext(params: {
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   textLimit?: number;
-  onTurnAdopted?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAdopted"];
-  onTurnDeferred?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnDeferred"];
-  onTurnAbandoned?: Parameters<typeof dispatchTelegramMessage>[0]["onTurnAbandoned"];
-  turnAbortSignal?: Parameters<typeof dispatchTelegramMessage>[0]["turnAbortSignal"];
+  turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
 }) {
   const bot = params.bot ?? createBot();
@@ -623,10 +609,7 @@ export async function dispatchWithContext(params: {
     opts: { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
-    onTurnAdopted: params.onTurnAdopted,
-    onTurnDeferred: params.onTurnDeferred,
-    onTurnAbandoned: params.onTurnAbandoned,
-    turnAbortSignal: params.turnAbortSignal,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   });
 }
 

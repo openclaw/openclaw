@@ -1419,6 +1419,24 @@ export function createNodeTestShardBundles(options = {}) {
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
 }
 
+/**
+ * Mark one semantic cache producer without coupling persistence to matrix order.
+ * The broad core unit graph is shared by most shards; precise changed plans
+ * fall back to their first (normally only) job.
+ */
+export function assignVitestFsCacheWriter(shards) {
+  const preferredIndex = shards.findIndex(
+    (shard) =>
+      shard.shardName === "core-unit-fast" ||
+      shard.groups?.some((group) => group.shard_name === "core-unit-fast"),
+  );
+  const writerIndex = preferredIndex >= 0 ? preferredIndex : shards.length > 0 ? 0 : -1;
+  return shards.map((shard, index) => ({
+    ...shard,
+    saveVitestFsCache: index === writerIndex,
+  }));
+}
+
 function createCompactNodeTestShardBundles(options = {}) {
   const shards = createNodeTestShards(options);
   const groupsByRunner = new Map();

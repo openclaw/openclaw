@@ -375,6 +375,7 @@
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Spracherkennung auf dem Gerät ist nicht verfügbar."</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Die Anhänge sind zu groß, um sie für eine einzelne Nachricht in die Warteschlange zu stellen. Entfernen Sie einige und versuchen Sie es erneut."</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 Modell konfiguriert. Aktualisieren Sie, um die Verfügbarkeit erneut zu prüfen."</string>
+    <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Widget nicht verfügbar"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Für diesen Host ist eine sichere Verbindung erforderlich."</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Keine passenden Automatisierungen."</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Smartphone kann die Gateway erreichen"</string>

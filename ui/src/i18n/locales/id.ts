@@ -2511,6 +2511,19 @@ export const id: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Pratinjau ini belum memiliki URL.",
+        blockedExternal: "Pratinjau eksternal dinonaktifkan oleh kebijakan gateway Anda.",
+        blockedScheme: "URL pratinjau ini menggunakan skema yang tidak didukung.",
+        toolbar: "Kontrol pratinjau",
+        reload: "Muat ulang pratinjau",
+        viewport: {
+          label: "Area tampilan pratinjau",
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Seluler",
+        },
+      },
     },
   },
   workboard: {

@@ -499,7 +499,7 @@ jobs:
             echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
             exit 1
           fi
-          if [[ "$performance_blocking" != "true" ]]; then
+          if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]; then
             echo "Full release validation manifest does not record blocking product performance evidence." >&2
             exit 1
           fi

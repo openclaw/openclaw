@@ -199,22 +199,51 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     const slot = path.join(persistentRoot, "vitest-cache-0");
     mkdirSync(slot, { recursive: true });
     const metadata = path.join(slot, "_metadata.json");
+    const generation = path.join(persistentRoot, ".openclaw-transform-generation");
     const oldest = path.join(slot, "oldest");
     const newest = path.join(slot, "newest");
     writeFileSync(metadata, "{}", "utf8");
+    writeFileSync(generation, "g", "utf8");
     writeFileSync(oldest, "aaaaaaaa", "utf8");
     writeFileSync(newest, "bbbbbbbb", "utf8");
     utimesSync(oldest, new Date(1_000), new Date(1_000));
     utimesSync(newest, new Date(2_000), new Date(2_000));
 
     expect(pruneFsModuleCache(persistentRoot, 16)).toEqual({
-      beforeBytes: 18,
-      afterBytes: 10,
+      beforeBytes: 19,
+      afterBytes: 11,
       removedFiles: 1,
     });
     expect(existsSync(metadata)).toBe(true);
+    expect(existsSync(generation)).toBe(true);
     expect(existsSync(oldest)).toBe(false);
     expect(existsSync(newest)).toBe(true);
+  });
+
+  it("prunes persistent caches only in the designated writer job", async () => {
+    const persistentRoot = makeScratchDir();
+    const transform = path.join(persistentRoot, "vitest-cache-0", "entry");
+    mkdirSync(path.dirname(transform), { recursive: true });
+    writeFileSync(transform, "cached", "utf8");
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.unit.config.ts"]),
+    });
+    const run = (writer: string) =>
+      runShardPlans(plans, {
+        concurrency: 1,
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot,
+          OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: writer,
+        },
+        fsModuleCacheMaxBytes: 0,
+        runChild: async () => 0,
+        scratchDir: makeScratchDir(),
+      });
+
+    await run("0");
+    expect(existsSync(transform)).toBe(true);
+    await run("1");
+    expect(existsSync(transform)).toBe(false);
   });
 
   it("stops scheduling new plans after a failure and reports the first failing code", async () => {

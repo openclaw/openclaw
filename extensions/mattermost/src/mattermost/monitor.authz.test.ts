@@ -1,5 +1,4 @@
 // Mattermost tests cover monitor.authz plugin behavior.
-import "./monitor-gating.test-support.js";
 import "./monitor-helpers.test-support.js";
 import "./monitor-onchar.test-support.js";
 import "./monitor.channel-kind.test-support.js";

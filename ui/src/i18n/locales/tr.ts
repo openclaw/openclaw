@@ -2530,6 +2530,19 @@ export const tr: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Bu önizlemenin henüz bir URL'si yok.",
+        blockedExternal: "Harici önizlemeler Gateway politikanız tarafından devre dışı bırakıldı.",
+        blockedScheme: "Bu önizleme URL'si desteklenmeyen bir şema kullanıyor.",
+        toolbar: "Önizleme denetimleri",
+        reload: "Önizlemeyi yeniden yükle",
+        viewport: {
+          label: "Önizleme görüntü alanı",
+          desktop: "Masaüstü",
+          tablet: "Tablet",
+          mobile: "Mobil",
+        },
+      },
     },
   },
   workboard: {

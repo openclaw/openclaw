@@ -4554,6 +4554,46 @@ public struct SessionsFilesGetResult: Codable, Sendable {
     }
 }
 
+public struct SessionsFilesRevealParams: Codable, Sendable {
+    public let key: String
+    public let agentid: String?
+
+    public init(
+        key: String,
+        agentid: String? = nil)
+    {
+        self.key = key
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsFilesRevealResult: Codable, Sendable {
+    public let ok: Bool
+    public let path: String?
+    public let error: String?
+
+    public init(
+        ok: Bool,
+        path: String? = nil,
+        error: String? = nil)
+    {
+        self.ok = ok
+        self.path = path
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case path
+        case error
+    }
+}
+
 public struct SessionsFilesSetParams: Codable, Sendable {
     public let sessionkey: String
     public let path: String
@@ -7158,6 +7198,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
+    public let capabilities: [String]?
 
     public init(
         sessionkey: String? = nil,
@@ -7170,7 +7211,8 @@ public struct TalkClientCreateParams: Codable, Sendable {
         reasoningeffort: String? = nil,
         mode: AnyCodable? = nil,
         transport: AnyCodable? = nil,
-        brain: AnyCodable? = nil)
+        brain: AnyCodable? = nil,
+        capabilities: [String]? = nil)
     {
         self.sessionkey = sessionkey
         self.provider = provider
@@ -7183,6 +7225,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         self.mode = mode
         self.transport = transport
         self.brain = brain
+        self.capabilities = capabilities
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7197,6 +7240,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case mode
         case transport
         case brain
+        case capabilities
     }
 }
 
@@ -12433,6 +12477,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let state: AnyCodable
     public let featured: Bool?
     public let order: Double?
+    public let hasicon: Bool?
     public let install: PluginCatalogInstallAction?
     public let error: String?
     public let category: String?
@@ -12451,6 +12496,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         state: AnyCodable,
         featured: Bool? = nil,
         order: Double? = nil,
+        hasicon: Bool? = nil,
         install: PluginCatalogInstallAction? = nil,
         error: String? = nil,
         category: String? = nil,
@@ -12468,6 +12514,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.state = state
         self.featured = featured
         self.order = order
+        self.hasicon = hasicon
         self.install = install
         self.error = error
         self.category = category
@@ -12487,6 +12534,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case state
         case featured
         case order
+        case hasicon = "hasIcon"
         case install
         case error
         case category
@@ -12673,6 +12721,22 @@ public struct PluginsListResult: Codable, Sendable {
         case plugins
         case diagnostics
         case mutationallowed = "mutationAllowed"
+    }
+}
+
+public struct PluginsRefreshParams: Codable, Sendable {}
+
+public struct PluginsRefreshResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
     }
 }
 

@@ -187,6 +187,8 @@ import {
   PluginsInstallResultSchema,
   PluginsListParamsSchema,
   PluginsListResultSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
   PluginsSearchParamsSchema,
   PluginsSearchResultSchema,
   PluginsSessionActionParamsSchema,
@@ -341,6 +343,7 @@ import {
   SessionFileRelevanceSchema,
   SessionPlacementSchema,
   SessionPlacementStateSchema,
+  isCloudWorkerPlacementState,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -367,6 +370,8 @@ import {
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionsFilesRevealParamsSchema,
+  SessionsFilesRevealResultSchema,
   SessionsListParamsSchema,
   SessionCatalogSchema,
   SessionCatalogCapabilitiesSchema,
@@ -645,6 +650,7 @@ export const validateSessionsResolveParams = lazyCompile(SessionsResolveParamsSc
 export const validateSessionsFilesListParams = lazyCompile(SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParamsSchema);
 export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
+export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
@@ -813,6 +819,8 @@ export const validatePluginApprovalRequestParams = lazyCompile(PluginApprovalReq
 export const validatePluginApprovalResolveParams = lazyCompile(PluginApprovalResolveParamsSchema);
 export const validatePluginsListParams = lazyCompile(PluginsListParamsSchema);
 export const validatePluginsListResult = lazyCompile(PluginsListResultSchema);
+export const validatePluginsRefreshParams = lazyCompile(PluginsRefreshParamsSchema);
+export const validatePluginsRefreshResult = lazyCompile(PluginsRefreshResultSchema);
 export const validatePluginsSearchParams = lazyCompile(PluginsSearchParamsSchema);
 export const validatePluginsSearchResult = lazyCompile(PluginsSearchResultSchema);
 export const validatePluginsInstallParams = lazyCompile(PluginsInstallParamsSchema);
@@ -847,6 +855,7 @@ export const validateWebLoginWaitParams = lazyCompile(WebLoginWaitParamsSchema);
 
 // Explicit schema exports keep public protocol changes reviewable.
 export {
+  isCloudWorkerPlacementState,
   ConnectParamsSchema,
   GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
@@ -991,6 +1000,8 @@ export {
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionsFilesRevealParamsSchema,
+  SessionsFilesRevealResultSchema,
   SessionDiffFileSchema,
   SessionDiffFileStatusSchema,
   SessionsDiffParamsSchema,
@@ -1150,6 +1161,8 @@ export {
   PluginsInstallResultSchema,
   PluginsListParamsSchema,
   PluginsListResultSchema,
+  PluginsRefreshParamsSchema,
+  PluginsRefreshResultSchema,
   PluginsSearchParamsSchema,
   PluginsSearchResultSchema,
   PluginsSessionActionParamsSchema,
@@ -1442,6 +1455,8 @@ export type {
   SessionsFilesGetResult,
   SessionsFilesSetParams,
   SessionsFilesSetResult,
+  SessionsFilesRevealParams,
+  SessionsFilesRevealResult,
   SessionDiffFile,
   SessionDiffFileStatus,
   SessionsDiffParams,
@@ -1466,6 +1481,8 @@ export type {
   PluginsInstallResult,
   PluginsListParams,
   PluginsListResult,
+  PluginsRefreshParams,
+  PluginsRefreshResult,
   PluginsSearchParams,
   PluginsSearchResult,
   PluginsSessionActionParams,
