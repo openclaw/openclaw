@@ -33,10 +33,7 @@ function installAcpRuntimeBackendWithFreshSession() {
   return prepareFreshSession;
 }
 
-function resolvedAcpMeta(params: {
-  recordId: string;
-  backendSessionId: string;
-}): SessionAcpMeta {
+function resolvedAcpMeta(params: { recordId: string; backendSessionId: string }): SessionAcpMeta {
   return {
     backend: "acpx",
     agent: "codex",

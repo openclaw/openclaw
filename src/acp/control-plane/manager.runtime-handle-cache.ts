@@ -23,7 +23,9 @@ export class ManagerRuntimeHandleCache {
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
 
-  constructor(private readonly isActorOperationCurrent: (actorKey: string) => boolean = () => true) {}
+  constructor(
+    private readonly isActorOperationCurrent: (actorKey: string) => boolean = () => true,
+  ) {}
 
   size(): number {
     return this.runtimeCache.size();

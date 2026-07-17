@@ -720,9 +720,6 @@ export class AcpSessionManager {
   }
 
   private createStaleActorOperationError(): AcpRuntimeError {
-    return new AcpRuntimeError(
-      "ACP_TURN_FAILED",
-      "ACP operation was superseded by session reset.",
-    );
+    return new AcpRuntimeError("ACP_TURN_FAILED", "ACP operation was superseded by session reset.");
   }
 }
