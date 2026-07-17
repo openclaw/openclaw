@@ -1,4 +1,5 @@
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { mergeRestartRecoveryTerminalRunIds } from "../config/sessions/restart-recovery-state.js";
 import {
   buildMainSessionRecoveryClearPatch,
   type MainRecoveryStateFields,
@@ -61,14 +62,27 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
 }
 
 export function projectMainSessionRecoveryLifecycle(params: {
-  entry?: Partial<MainRecoveryStateFields> | null;
+  currentLifecycleGeneration: string;
+  entry?:
+    | (Partial<MainRecoveryStateFields> &
+        Pick<Partial<SessionEntry>, "restartRecoveryTerminalRunIds">)
+    | null;
   event: MainRecoveryLifecycleEvent;
   snapshotPatch: Partial<SessionEntry>;
 }): { action: "suppress" } | { action: "apply"; patch: Partial<SessionEntry> } {
   if (params.entry?.mainRestartRecovery?.tombstone) {
-    // Exhaustion is committed only after current owners are absent. Any later
-    // lifecycle event is stale and must not erase the durable operator boundary.
-    return { action: "suppress" };
+    // Keep the operator boundary while allowing unrelated lifecycle status to settle.
+    return isMainSessionRecoveryLifecycleEvent(params)
+      ? { action: "suppress" }
+      : {
+          action: "apply",
+          patch: {
+            ...params.snapshotPatch,
+            abortedLastRun: params.entry.abortedLastRun,
+            restartRecoveryRuns: params.entry.restartRecoveryRuns,
+            mainRestartRecovery: params.entry.mainRestartRecovery,
+          },
+        };
   }
   if (isMainSessionRecoveryLifecycleEvent(params)) {
     return { action: "suppress" };
@@ -77,28 +91,71 @@ export function projectMainSessionRecoveryLifecycle(params: {
   const settlesRecovery =
     (phase === "end" || phase === "error") && params.event.data?.stopReason !== "restart";
   const patch = { ...params.snapshotPatch };
-  if (settlesRecovery) {
-    Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
-  }
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const runs = params.entry?.restartRecoveryRuns;
-  if (
-    phase === "start" ||
-    !runId ||
-    !lifecycleGeneration ||
-    !runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration)
-  ) {
+  const matchesFence = Boolean(
+    runId &&
+    lifecycleGeneration &&
+    runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration),
+  );
+  const remaining = matchesFence
+    ? runs?.filter((run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration)
+    : runs;
+  if (settlesRecovery) {
+    const foregroundClaims = params.entry?.mainRestartRecovery?.foregroundClaims;
+    const hasForegroundOwners = Boolean(
+      foregroundClaims?.lifecycleGeneration === params.currentLifecycleGeneration &&
+      foregroundClaims.tokens.length,
+    );
+    const reservation = params.entry?.mainRestartRecovery?.reservation;
+    const hasCurrentReservation =
+      reservation?.lifecycleGeneration === params.currentLifecycleGeneration;
+    const hasCurrentOwner = hasForegroundOwners || hasCurrentReservation;
+    if (!matchesFence) {
+      // No terminal snapshot may settle a recovery row it cannot identify.
+      return params.entry?.mainRestartRecovery || runs?.length
+        ? { action: "suppress" }
+        : { action: "apply", patch };
+    }
+    if (hasCurrentOwner) {
+      // Consume this fence without applying a non-authoritative snapshot. The
+      // terminal-id record makes the one-shot completion durable and idempotent.
+      return {
+        action: "apply",
+        patch: {
+          restartRecoveryRuns: remaining?.length ? remaining : undefined,
+          restartRecoveryTerminalRunIds: mergeRestartRecoveryTerminalRunIds(
+            params.entry?.restartRecoveryTerminalRunIds,
+            [runId],
+          ),
+        },
+      };
+    }
+    if (
+      !hasForegroundOwners &&
+      !hasCurrentReservation &&
+      params.entry?.abortedLastRun === true &&
+      (remaining?.length ?? 0) > 0
+    ) {
+      return { action: "apply", patch: { restartRecoveryRuns: remaining } };
+    }
+    if ((remaining?.length ?? 0) > 0 || hasCurrentOwner) {
+      // Mark this completion healthy, but retain every other durable owner.
+      patch.abortedLastRun = false;
+      patch.restartRecoveryRuns = remaining?.length ? remaining : undefined;
+      patch.mainRestartRecovery = params.entry?.mainRestartRecovery;
+    } else {
+      Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
+    }
     return { action: "apply", patch };
   }
-  const remaining = runs.filter(
-    (run) => run.runId !== runId || run.lifecycleGeneration !== lifecycleGeneration,
-  );
+  if (phase === "start" || !matchesFence || !remaining) {
+    return { action: "apply", patch };
+  }
   if (params.entry?.abortedLastRun === true && remaining.length > 0) {
     return { action: "apply", patch: { restartRecoveryRuns: remaining } };
   }
-  if (!settlesRecovery) {
-    patch.restartRecoveryRuns = remaining.length > 0 ? remaining : undefined;
-  }
+  patch.restartRecoveryRuns = remaining.length > 0 ? remaining : undefined;
   return { action: "apply", patch };
 }

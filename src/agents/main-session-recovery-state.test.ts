@@ -229,7 +229,6 @@ describe("main session recovery state", () => {
         },
       }),
     });
-
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "validate_recovery",
@@ -346,6 +345,7 @@ describe("main session recovery state", () => {
         },
       }),
     });
+    expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -508,6 +508,7 @@ describe("main session recovery state", () => {
     });
     expect(
       projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
         entry,
         event: {
           runId: "interrupted",
@@ -520,6 +521,7 @@ describe("main session recovery state", () => {
 
     expect(
       projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
         entry,
         event: {
           runId: "recovery",
@@ -533,13 +535,14 @@ describe("main session recovery state", () => {
       patch: {
         status: "done",
         abortedLastRun: false,
-        restartRecoveryRuns: undefined,
-        mainRestartRecovery: undefined,
+        restartRecoveryRuns: [{ runId: "interrupted", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: entry.mainRestartRecovery,
       },
     });
 
     expect(
       projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
         entry,
         event: {
           runId: "recovery",
@@ -552,6 +555,216 @@ describe("main session recovery state", () => {
       action: "apply",
       patch: {
         status: "failed",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "interrupted", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: entry.mainRestartRecovery,
+      },
+    });
+  });
+
+  it("does not let a delayed lifecycle event clear current-generation owners", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "generation-1" }],
+      restartRecoveryTerminalRunIds: ["prior-run"],
+      mainRestartRecovery: recoveryState({
+        foregroundClaims: {
+          lifecycleGeneration: "generation-2",
+          tokens: ["current-owner"],
+        },
+      }),
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-2",
+        entry,
+        event: {
+          runId: "old-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        restartRecoveryRuns: undefined,
+        restartRecoveryTerminalRunIds: ["prior-run", "old-run"],
+      },
+    });
+    expect(entry.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["current-owner"]);
+  });
+
+  it("does not let a delayed lifecycle event clear a current reservation", () => {
+    const entry = interruptedEntry({
+      restartRecoveryRuns: [{ runId: "old-run", lifecycleGeneration: "generation-1" }],
+      mainRestartRecovery: recoveryState({
+        chargedAttempts: 1,
+        reservation: {
+          runId: "current-run",
+          attempt: 1,
+          lifecycleGeneration: "generation-2",
+        },
+      }),
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-2",
+        entry,
+        event: {
+          runId: "old-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        restartRecoveryRuns: undefined,
+        restartRecoveryTerminalRunIds: ["old-run"],
+      },
+    });
+    expect(entry.mainRestartRecovery?.reservation?.runId).toBe("current-run");
+  });
+
+  it("preserves concurrent owners and fences when one lifecycle run completes", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-2", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: recoveryState({
+        revision: 4,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1", "owner-2"],
+        },
+      }),
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
+        entry,
+        event: {
+          runId: "recovery-1",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: {
+          status: "done",
+          abortedLastRun: false,
+          restartRecoveryRuns: undefined,
+          mainRestartRecovery: undefined,
+        },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        restartRecoveryRuns: [{ runId: "recovery-2", lifecycleGeneration: "generation-1" }],
+        restartRecoveryTerminalRunIds: ["recovery-1"],
+      },
+    });
+  });
+
+  it("does not let an unrelated lifecycle completion clear pending recovery", () => {
+    const entry = interruptedEntry({
+      restartRecoveryRuns: [{ runId: "recovery", lifecycleGeneration: "generation-1" }],
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
+        entry,
+        event: {
+          runId: "ordinary-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: {
+          status: "done",
+          abortedLastRun: false,
+          restartRecoveryRuns: undefined,
+          mainRestartRecovery: undefined,
+        },
+      }),
+    ).toEqual({ action: "suppress" });
+  });
+
+  it("suppresses an unmatched completion while a current foreground owner is active", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      mainRestartRecovery: recoveryState({
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["current-owner"],
+        },
+      }),
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
+        entry,
+        event: {
+          runId: "unrelated-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({ action: "suppress" });
+  });
+
+  it("applies ordinary lifecycle completion without recovery metadata", () => {
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
+        entry: { abortedLastRun: false },
+        event: {
+          runId: "ordinary-run",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: { status: "done", abortedLastRun: false },
+    });
+  });
+
+  it("does not preserve foreground claims from an older lifecycle generation", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "recovery", lifecycleGeneration: "generation-2" }],
+      mainRestartRecovery: recoveryState({
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["stale-owner"],
+        },
+      }),
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-2",
+        entry,
+        event: {
+          runId: "recovery",
+          lifecycleGeneration: "generation-2",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        status: "done",
         abortedLastRun: false,
         restartRecoveryRuns: undefined,
         mainRestartRecovery: undefined,
@@ -573,6 +786,7 @@ describe("main session recovery state", () => {
 
     expect(
       projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
         entry,
         event: {
           runId: "old-run",
@@ -581,7 +795,15 @@ describe("main session recovery state", () => {
         },
         snapshotPatch: { status: "done", abortedLastRun: false },
       }),
-    ).toEqual({ action: "suppress" });
+    ).toEqual({
+      action: "apply",
+      patch: {
+        status: "done",
+        abortedLastRun: false,
+        restartRecoveryRuns: entry.restartRecoveryRuns,
+        mainRestartRecovery: entry.mainRestartRecovery,
+      },
+    });
   });
 
   it("builds an empty clear patch when no main recovery state exists", () => {

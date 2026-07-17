@@ -289,7 +289,7 @@ describe("session lifecycle state", () => {
     });
   });
 
-  it("clears main recovery state after normal lifecycle completion", async () => {
+  it("ignores an unidentified completion while recovery remains pending", async () => {
     const persisted = await persistLifecycle(
       {
         sessionId: "session-id",
@@ -312,11 +312,13 @@ describe("session lifecycle state", () => {
     );
 
     expect(persisted).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
+      status: "running",
+      abortedLastRun: true,
     });
-    expect(persisted.restartRecoveryRuns).toBeUndefined();
-    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.restartRecoveryRuns).toEqual([
+      { runId: "restart-run", lifecycleGeneration: "pre-restart" },
+    ]);
+    expect(persisted.mainRestartRecovery).toMatchObject({ cycleId: "cycle-1" });
   });
 
   it("clears only the completed recovery marker", async () => {

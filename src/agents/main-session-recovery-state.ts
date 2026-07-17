@@ -156,6 +156,9 @@ function inspectMainSessionRecovery(params: {
   if (state?.tombstone) {
     return { status: "tombstoned" };
   }
+  if (state && hasCurrentForegroundClaim(state, params.lifecycleGeneration)) {
+    return { status: "blocked" };
+  }
   if (
     entry.status === "running" &&
     entry.abortedLastRun !== true &&
@@ -176,9 +179,6 @@ function inspectMainSessionRecovery(params: {
   const observation = observationFor(entry);
   if (!state || !observation) {
     return { status: "inactive" };
-  }
-  if (hasCurrentForegroundClaim(state, params.lifecycleGeneration)) {
-    return { status: "blocked" };
   }
   if (state.reservation) {
     return { status: "blocked" };
