@@ -8854,11 +8854,10 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
-  - H1: BOOTSTRAP.md - Hello, World
-  - H2: The Conversation
-  - H2: After You Know Who You Are
-  - H2: Connect (Optional)
-  - H2: When You Are Done
+  - H1: BOOTSTRAP.md - Birth Sequence
+  - H2: 1. Name Yourself
+  - H2: 2. Choose Your Vibe
+  - H2: 3. Finish With Recommendations
   - H2: Related
 
 ## reference/templates/HEARTBEAT.md
