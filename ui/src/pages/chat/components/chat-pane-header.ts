@@ -16,7 +16,6 @@ export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
 type ChatPaneHeaderProps = {
   paneId: string;
-  active: boolean;
   narrow: boolean;
   mergedChrome: boolean;
   title: string;
@@ -123,10 +122,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
 
   return html`
-    <div
-      class="chat-pane__header ${props.active ? "chat-pane__header--active" : ""}"
-      @mousedown=${beginNativeWindowDrag}
-    >
+    <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
       ${props.mergedChrome
         ? html`<openclaw-tooltip .content=${t("nav.expand")}>
             <button
