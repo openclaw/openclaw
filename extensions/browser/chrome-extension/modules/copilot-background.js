@@ -1,4 +1,8 @@
-import { CopilotGatewayClient, isDefinitiveGatewayRejection } from "./copilot-gateway.js";
+import {
+  CopilotGatewayClient,
+  isDefinitiveGatewayRejection,
+  waitForCopilotGatewayReady,
+} from "./copilot-gateway.js";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
 import {
   buildCopilotChatSendParams,
@@ -139,7 +143,6 @@ export function createCopilotController({
   isTabShared,
   addTabToOpenClawGroup,
   attachDebugger,
-  detachDebugger,
   revokeDebugger,
   restoreDebugger,
   scheduleTabsSync,
@@ -936,34 +939,6 @@ export function createCopilotController({
     broadcastStatus(hasPendingAborts ? undefined : { ensureSetup: true, hydrateHistory: true });
   }
 
-  async function waitForRecoveryGateway(client, gatewayScope) {
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = (error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        unsubscribe();
-        error ? reject(error) : resolve();
-      };
-      const unsubscribe = client.onStatus((status) => {
-        if (status.state === "ready") {
-          finish();
-        } else if (
-          status.state === "approval" ||
-          status.state === "denied" ||
-          status.state === "error"
-        ) {
-          finish(new Error(status.label || "Gateway recovery failed"));
-        }
-      });
-      const timer = setTimeout(() => finish(new Error("Gateway recovery timed out")), 30_000);
-      client.start(gatewayScope);
-    });
-  }
-
   function scheduleStaleRecovery() {
     if (staleRecoveryRetryTimer) {
       return;
@@ -1024,7 +999,7 @@ export function createCopilotController({
     }
     const recoveryGateway = recoveryGatewayFactory();
     try {
-      await waitForRecoveryGateway(recoveryGateway, gatewayScope);
+      await waitForCopilotGatewayReady(recoveryGateway, gatewayScope);
       await registry.queueActiveAborts(gatewayScope);
       for (const entry of registry.pendingAborts(gatewayScope)) {
         await recoveryGateway.request("sessions.abort", {
@@ -1081,14 +1056,15 @@ export function createCopilotController({
     await drainArchives(currentGatewayScope());
   }
 
-  async function onConsentChanged(changedTabId) {
+  async function onConsentChanged(changedTabId, { revoked = false } = {}) {
     await initialize();
     const tabIds =
       typeof changedTabId === "number"
-        ? portsByTab.has(changedTabId)
+        ? portsByTab.has(changedTabId) ||
+          registry.list().some((entry) => entry.tabId === changedTabId)
           ? [changedTabId]
           : []
-        : [...portsByTab.keys()];
+        : [...new Set([...portsByTab.keys(), ...registry.list().map((entry) => entry.tabId)])];
     await Promise.all(
       tabIds.map((tabId) => {
         const revision = (consentRevisions.get(tabId) ?? 0) + 1;
@@ -1097,6 +1073,11 @@ export function createCopilotController({
         const pending = previous
           .catch(() => undefined)
           .then(async () => {
+            // Event-time revocation is sticky even if a later update observes
+            // the tab re-shared. CDP must detach for the revoked interval.
+            if (revoked) {
+              await suspendTab(tabId, { detachInactive: true });
+            }
             if (consentRevisions.get(tabId) !== revision) {
               return;
             }
@@ -1179,9 +1160,9 @@ export function createCopilotController({
       ports.delete(port);
       if (ports.size === 0) {
         portsByTab.delete(tabId);
-        const portRevision = (portRevisions.get(tabId) ?? 0) + 1;
-        portRevisions.set(tabId, portRevision);
-        void scheduleSuspend(tabId, portRevision);
+        const disconnectedRevision = (portRevisions.get(tabId) ?? 0) + 1;
+        portRevisions.set(tabId, disconnectedRevision);
+        void scheduleSuspend(tabId, disconnectedRevision);
       }
     });
     await suspendByTab.get(tabId);

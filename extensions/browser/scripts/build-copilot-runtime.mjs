@@ -19,6 +19,7 @@ await build({
   minify: true,
   platform: "browser",
   target: "chrome125",
+  banner: { js: "/* oxlint-disable -- generated bundle; lint the TypeScript source instead. */" },
 });
 await execFileAsync(process.execPath, [
   path.join(rootDir, "node_modules", "oxfmt", "bin", "oxfmt"),
