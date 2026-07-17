@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
+import { resolveAgentMaxToolCallingRounds } from "./agent-scope-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -1355,6 +1356,43 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
+  });
+});
+describe("maxToolCallingRounds config resolution", () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        maxToolCallingRounds: 90,
+        subagents: { maxToolCallingRounds: 50 },
+      },
+      list: [{ id: "main" }, { id: "research", maxToolCallingRounds: 120 }],
+    },
+  };
+
+  it("uses the global limit for ordinary agent runs", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "main", false)).toBe(90);
+  });
+
+  it("uses the subagent default for spawned runs", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "main", true)).toBe(50);
+  });
+
+  it("lets an agent-specific limit override both defaults", () => {
+    expect(resolveAgentMaxToolCallingRounds(cfg, "research", false)).toBe(120);
+    expect(resolveAgentMaxToolCallingRounds(cfg, "research", true)).toBe(120);
+  });
+
+  it("falls back to the global limit when no subagent override is configured", () => {
+    const withoutSubagentOverride: OpenClawConfig = {
+      agents: { defaults: { maxToolCallingRounds: 90 }, list: [{ id: "main" }] },
+    };
+    expect(resolveAgentMaxToolCallingRounds(withoutSubagentOverride, "main", true)).toBe(90);
+  });
+
+  it("returns undefined when no limit is configured", () => {
+    expect(
+      resolveAgentMaxToolCallingRounds({ agents: { list: [{ id: "main" }] } }, "main", false),
+    ).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

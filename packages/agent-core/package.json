@@ -21,6 +21,10 @@
       "types": "./dist/agent-loop.d.ts",
       "default": "./dist/agent-loop.js"
     },
+    "./tool-round-limit-hook": {
+      "types": "./dist/tool-round-limit-hook.d.ts",
+      "default": "./dist/tool-round-limit-hook.js"
+    },
     "./llm": {
       "types": "./dist/llm.d.ts",
       "default": "./dist/llm.js"

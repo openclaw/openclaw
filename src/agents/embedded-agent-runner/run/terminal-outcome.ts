@@ -101,3 +101,20 @@ export function isEmbeddedRunTerminalAbort(outcome: AgentRunTerminalOutcome): bo
 export function isEmbeddedRunTerminalInterrupted(outcome: AgentRunTerminalOutcome): boolean {
   return isEmbeddedRunTerminalTimeout(outcome) || isEmbeddedRunTerminalAbort(outcome);
 }
+
+export function createEmbeddedRunTerminalMetaSetter(
+  attempt: Pick<EmbeddedRunAttemptResult, "setTerminalLifecycleMeta">,
+  outcome: AgentRunTerminalOutcome,
+): NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]> {
+  const aborted = isEmbeddedRunTerminalAbort(outcome);
+  const interrupted = isEmbeddedRunTerminalInterrupted(outcome);
+  return (meta) => {
+    const { stopReason, ...remainingMeta } = meta;
+    const terminalStopReason = interrupted ? outcome.stopReason : stopReason;
+    attempt.setTerminalLifecycleMeta?.({
+      ...remainingMeta,
+      ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
+      aborted,
+    });
+  };
+}

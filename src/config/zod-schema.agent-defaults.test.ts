@@ -496,3 +496,30 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });
+
+describe("maxToolCallingRounds schema", () => {
+  it("accepts default, subagent, and per-agent limits", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        maxToolCallingRounds: 90,
+        subagents: { maxToolCallingRounds: 50 },
+      }),
+    );
+    expectSchemaSuccess(AgentEntrySchema.safeParse({ id: "main", maxToolCallingRounds: 120 }));
+  });
+
+  it("rejects non-positive and fractional limits", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ maxToolCallingRounds: 0 }),
+      "maxToolCallingRounds",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ subagents: { maxToolCallingRounds: -1 } }),
+      "subagents.maxToolCallingRounds",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "main", maxToolCallingRounds: 1.5 }),
+      "maxToolCallingRounds",
+    );
+  });
+});

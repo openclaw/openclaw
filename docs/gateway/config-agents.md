@@ -696,6 +696,37 @@ Outer run loop retry iteration boundaries for the embedded agent runtime to prev
 - `min`: minimum absolute limit for run retry iterations. Default: `32`.
 - `max`: maximum absolute limit for run retry iterations to prevent runaway execution. Default: `160`.
 
+### `agents.defaults.maxToolCallingRounds`
+
+Optional hard limit on LLM tool-calling rounds in a single agent run. It stops heterogeneous runaway tool use that pattern-based loop detection may not recognize. The limit is independent of `runRetries`, which bounds outer recovery attempts.
+
+```json5
+{
+  agents: {
+    defaults: {
+      maxToolCallingRounds: 90,
+      subagents: {
+        maxToolCallingRounds: 50,
+      },
+    },
+    list: [
+      {
+        id: "research",
+        maxToolCallingRounds: 120,
+      },
+    ],
+  },
+}
+```
+
+The limit is opt-in: when no value is configured, agent runs are unchanged. `agents.defaults.subagents.maxToolCallingRounds` overrides the default for spawned runs. `agents.list[].maxToolCallingRounds` has highest precedence and applies to that agent whether it runs directly or as a sub-agent.
+
+**Runtime support:** Tool-calling round limits are enforced only by the built-in OpenClaw runtime. If a plugin harness is selected, the run fails before the model call instead of silently ignoring the limit.
+
+**Exhaustion behavior:** The model receives one final text-only instruction to summarize completed work, remaining work, and important findings. Any tool calls attempted during that final turn are blocked, and the run returns the structured `budget_exhausted` outcome.
+
+**What counts as a round:** Only LLM tool-calling rounds count toward the limit. Non-productive retries (compaction, auth failures, timeouts) have their own independent limits and do not consume it.
+
 ### `agents.defaults.contextPruning`
 
 Prunes **old tool results** from in-memory context before sending to the LLM. Does **not** modify session history on disk. Disabled by default; set `mode: "cache-ttl"` to enable.

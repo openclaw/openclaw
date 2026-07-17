@@ -12,6 +12,7 @@ import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { withAgentToolRoundLimit } from "./tool-round-limit-hook.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -211,7 +212,6 @@ export class Agent {
   >();
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
-
   public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   public transformContext?: (
     messages: AgentMessage[],
@@ -249,7 +249,6 @@ export class Agent {
   public maxRetryDelayMs?: number;
   /** Tool execution strategy for assistant messages that contain multiple tool calls. */
   public toolExecution: ToolExecutionMode;
-
   constructor(options: AgentOptions = {}) {
     this.mutableState = createMutableAgentState(options.initialState);
     this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
@@ -483,7 +482,7 @@ export class Agent {
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
-    return {
+    const config: AgentLoopConfig = {
       model: this.mutableState.model,
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
@@ -521,6 +520,7 @@ export class Agent {
       },
       getFollowUpMessages: async () => this.followUpQueue.drain(),
     };
+    return withAgentToolRoundLimit(config, this);
   }
 
   private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {

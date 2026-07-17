@@ -1080,6 +1080,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
+    maxToolCallingRounds: z.number().int().positive().optional(),
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
@@ -1087,7 +1088,6 @@ export const AgentEntrySchema = z
     runtime: AgentRuntimeSchema,
   })
   .strict();
-
 export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,

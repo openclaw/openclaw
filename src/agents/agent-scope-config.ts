@@ -41,6 +41,7 @@ export type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   runRetries?: AgentEntry["runRetries"];
+  maxToolCallingRounds?: AgentEntry["maxToolCallingRounds"];
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
@@ -160,6 +161,7 @@ export function resolveAgentConfig(
       typeof entry.runRetries === "object" && entry.runRetries
         ? { ...agentDefaults?.runRetries, ...entry.runRetries }
         : agentDefaults?.runRetries,
+    maxToolCallingRounds: entry.maxToolCallingRounds ?? agentDefaults?.maxToolCallingRounds,
     embeddedAgent:
       typeof entry.embeddedAgent === "object" && entry.embeddedAgent
         ? entry.embeddedAgent
@@ -167,6 +169,23 @@ export function resolveAgentConfig(
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
+}
+
+/** Resolve the hard tool-round limit, with agent-specific policy taking precedence. */
+export function resolveAgentMaxToolCallingRounds(
+  cfg: OpenClawConfig,
+  agentId: string,
+  isSubagent: boolean,
+): number | undefined {
+  const entryLimit = resolveAgentEntry(cfg, agentId)?.maxToolCallingRounds;
+  if (entryLimit !== undefined) {
+    return entryLimit;
+  }
+  const defaults = cfg.agents?.defaults;
+  return (
+    (isSubagent ? defaults?.subagents?.maxToolCallingRounds : undefined) ??
+    defaults?.maxToolCallingRounds
+  );
 }
 
 export function resolveAgentContextLimits(

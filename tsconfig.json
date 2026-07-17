@@ -36,6 +36,9 @@
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/*": ["./packages/ai/src/internal/*.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
+      "@openclaw/agent-core/tool-round-limit-hook": [
+        "./packages/agent-core/src/tool-round-limit-hook.ts"
+      ],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
       "@openclaw/llm-core/diagnostics": ["./packages/llm-core/src/utils/diagnostics.ts"],

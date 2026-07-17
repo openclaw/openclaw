@@ -1,6 +1,7 @@
 /**
  * Prepares embedded-agent resources, tools, and active sessions.
  */
+import { setAgentToolRoundLimit } from "@openclaw/agent-core/tool-round-limit-hook";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
@@ -185,6 +186,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
   input.markStage("agent-session");
+  setAgentToolRoundLimit(activeSession.agent, attempt.onBeforeToolCallingRound);
 
   return {
     activeSession,

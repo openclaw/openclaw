@@ -12,6 +12,9 @@ import type { EventStream as SourceEventStream } from "../../llm-core/src/index.
 import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import type { ExecutedToolCallBatch, ResolvedToolCallOutcome } from "./tool-execution.types.js";
+import { continueToolRound } from "./tool-round-limit-hook.js";
+import { stopAtToolRoundLimit } from "./tool-round-limit.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -297,6 +300,7 @@ async function runLoop(
   };
 
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
+  let toolCallingRound = 0;
   while (true) {
     let hasMoreToolCalls = true;
 
@@ -353,6 +357,12 @@ async function runLoop(
       const toolResults: ToolResultMessage[] = [];
       hasMoreToolCalls = false;
       if (message.stopReason === "toolUse" && toolCalls.length > 0) {
+        toolCallingRound += 1;
+        if (!(await continueToolRound(config, toolCallingRound))) {
+          await stopAtToolRoundLimit(toolCalls, currentContext, newMessages, message, emit);
+          turnOpen = false;
+          return;
+        }
         const executedToolBatch = await executeToolCalls(
           currentContext,
           message,
@@ -540,9 +550,6 @@ async function streamAssistantResponse(
   return finalMessage;
 }
 
-/**
- * Execute tool calls from an assistant message.
- */
 async function executeToolCalls(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -593,15 +600,6 @@ async function executeToolCalls(
     emit,
   );
 }
-
-type ExecutedToolCallBatch = {
-  messages: ToolResultMessage[];
-  terminate: boolean;
-};
-
-type ResolvedToolCallOutcome =
-  | { kind: "resolved"; tool?: AgentTool }
-  | { kind: "error"; error: unknown };
 
 function hidesToolCallFromChannelProgress(
   context: AgentContext,

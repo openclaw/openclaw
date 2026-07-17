@@ -12,6 +12,7 @@ import {
   type Message,
   type Model,
 } from "./llm.js";
+import { setAgentToolRoundLimit, withAgentToolRoundLimit } from "./tool-round-limit-hook.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -1842,6 +1843,222 @@ describe("agentLoop thinking state", () => {
     await collectEvents(stream);
 
     expect(observedReasoning).toEqual(expected);
+  });
+});
+describe("onBeforeToolCallingRound", () => {
+  function createToolUseStreamFn(
+    callCount: number,
+    wideRound?: number,
+  ): { streamFn: StreamFn; calls: number[] } {
+    const tracker = { calls: [] as number[] };
+    let callIndex = 0;
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        callIndex += 1;
+        tracker.calls.push(callIndex);
+        const isToolRound = callIndex <= callCount;
+        const message: AssistantMessage = isToolRound
+          ? {
+              role: "assistant",
+              content: Array.from({ length: callIndex === wideRound ? 2 : 1 }, (_, index) => ({
+                type: "toolCall",
+                id: `call-${callIndex}${index === 0 ? "" : `-${index + 1}`}`,
+                name: "test_tool",
+                arguments: { x: callIndex },
+              })),
+              api: "faux",
+              provider: "faux",
+              model: "faux-1",
+              usage: TEST_USAGE,
+              stopReason: "toolUse",
+              timestamp: Date.now(),
+            }
+          : {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              api: "faux",
+              provider: "faux",
+              model: "faux-1",
+              usage: TEST_USAGE,
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+        stream.push({
+          type: "done",
+          reason: isToolRound ? "toolUse" : "stop",
+          message,
+        });
+      });
+      return stream;
+    };
+    return { streamFn, calls: tracker.calls };
+  }
+
+  const testTool: AgentTool = {
+    name: "test_tool",
+    label: "Test Tool",
+    description: "A test tool",
+    parameters: Type.Object({ x: Type.Number() }),
+    execute: async () => ({
+      content: [{ type: "text" as const, text: "ok" }],
+      details: {},
+    }),
+  };
+
+  function withTestToolRoundLimit<T extends object>(
+    loopConfig: T,
+    hook: (round: number) => boolean | Promise<boolean>,
+  ): T {
+    const carrier = {};
+    setAgentToolRoundLimit(carrier, hook);
+    return withAgentToolRoundLimit(loopConfig, carrier);
+  }
+
+  it("carries an agent-scoped internal limit into the loop", async () => {
+    const { streamFn } = createToolUseStreamFn(2);
+    const hook = vi.fn(() => false);
+    const agent = new Agent({
+      initialState: { model, tools: [testTool] },
+      convertToLlm: (messages) => messages as Message[],
+      streamFn,
+    });
+    setAgentToolRoundLimit(agent, hook);
+
+    await agent.prompt("go");
+
+    expect(hook).toHaveBeenCalledOnce();
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      toolName: "test_tool",
+      isError: true,
+    });
+  });
+
+  it("is called before each tool-calling round with incrementing round number", async () => {
+    const roundNumbers: number[] = [];
+    const { streamFn } = createToolUseStreamFn(3);
+    const onBeforeToolCallingRound = vi.fn((round: number) => {
+      roundNumbers.push(round);
+      return true;
+    });
+
+    await runAgentLoop(
+      [{ role: "user", content: "go", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [testTool] },
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(onBeforeToolCallingRound).toHaveBeenCalledTimes(3);
+    expect(roundNumbers).toEqual([1, 2, 3]);
+  });
+
+  it("blocks the whole requested batch before any tool in the exhausted round executes", async () => {
+    const { streamFn } = createToolUseStreamFn(5, 3);
+    const onBeforeToolCallingRound = vi.fn((round: number) => {
+      return round < 3; // Allow rounds 1 and 2, block round 3
+    });
+
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
+      [{ role: "user", content: "go", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [testTool] },
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      streamFn,
+    );
+
+    expect(onBeforeToolCallingRound).toHaveBeenCalledTimes(3);
+    expect(
+      events
+        .filter((event) => event.type === "tool_execution_start")
+        .map((event) => event.toolCallId),
+    ).toEqual(["call-1", "call-2"]);
+    const finalEvent = events.at(-1);
+    expect(finalEvent?.type).toBe("agent_end");
+    if (finalEvent?.type !== "agent_end") {
+      throw new Error("Expected agent_end");
+    }
+    expect(finalEvent.messages.slice(-2)).toEqual([
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "call-3",
+        content: [{ type: "text", text: "Tool-calling round limit reached." }],
+        isError: true,
+      }),
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "call-3-2",
+        content: [{ type: "text", text: "Tool-calling round limit reached." }],
+        isError: true,
+      }),
+    ]);
+  });
+
+  it("does not interfere when no callback is configured", async () => {
+    const { streamFn, calls } = createToolUseStreamFn(2);
+
+    await runAgentLoop(
+      [{ role: "user", content: "go", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [testTool] },
+      { model, convertToLlm: (m) => m as Message[] },
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    // Should complete normally with 2 tool rounds + 1 text response = 3 calls
+    expect(calls).toHaveLength(3);
+  });
+
+  it("is not called for text-only responses (no tool calls)", async () => {
+    const streamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "just text" }],
+            api: "faux",
+            provider: "faux",
+            model: "faux-1",
+            usage: TEST_USAGE,
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        });
+      });
+      return stream;
+    };
+    const onBeforeToolCallingRound = vi.fn(() => true);
+
+    await runAgentLoop(
+      [{ role: "user", content: "go", timestamp: Date.now() }],
+      { systemPrompt: "test", messages: [], tools: [testTool] },
+      withTestToolRoundLimit(
+        { model, convertToLlm: (m) => m as Message[] },
+        onBeforeToolCallingRound,
+      ),
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    expect(onBeforeToolCallingRound).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

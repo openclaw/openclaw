@@ -39,6 +39,9 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   allocateToolOutcomeOrdinal: Parameters<
     typeof dispatchEmbeddedRunAttempt
   >[0]["control"]["allocateToolOutcomeOrdinal"];
+  onBeforeToolCallingRound?: Parameters<
+    typeof dispatchEmbeddedRunAttempt
+  >[0]["control"]["onBeforeToolCallingRound"];
   getPostCompactionAbortError: () => Error | undefined;
   setPostCompactionAbortController: (controller: AbortController | undefined) => void;
   clearPostCompactionAbortController: (controller: AbortController) => void;
@@ -223,6 +226,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
       onRunProgress: notifyRunProgress,
       onToolResult: notifyToolResult,
+      onBeforeToolCallingRound: input.onBeforeToolCallingRound,
       onAgentEvent: notifyAgentEvent,
       onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
       onUserMessagePersistenceInvalidated: () => {

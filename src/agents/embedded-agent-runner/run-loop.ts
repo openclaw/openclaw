@@ -29,13 +29,18 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import { createToolLimit, resolveToolLimitSummaryAttempt } from "./run/budget-exhaustion.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { createEmbeddedRunFailoverRetryController } from "./run/failover-retry-controller.js";
-import { buildErrorAgentMeta, resolveMaxRunRetryIterations } from "./run/helpers.js";
+import {
+  buildAttemptAgentMeta,
+  buildErrorAgentMeta,
+  resolveMaxRunRetryIterations,
+} from "./run/helpers.js";
 import { createIdleTimeoutBreakerState } from "./run/idle-timeout-breaker.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
@@ -161,6 +166,7 @@ export async function runPreparedEmbeddedLoop(
     modelId,
   });
   const executionContract = strictAgenticActive ? "strict-agentic" : "default";
+  const roundLimit = createToolLimit(params, sessionAgentId, started);
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
@@ -274,7 +280,7 @@ export async function runPreparedEmbeddedLoop(
     let lastTurnTotal: number | undefined;
     while (true) {
       refreshPreparedRuntimeSnapshot();
-      if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+      if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS && !roundLimit?.summaryPending) {
         const message =
           `Exceeded retry limit after ${runLoopIterations} attempts ` +
           `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
@@ -309,7 +315,7 @@ export async function runPreparedEmbeddedLoop(
           livenessState: "blocked",
         });
       }
-      runLoopIterations += 1;
+      runLoopIterations += roundLimit?.summaryPending ? 0 : 1;
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);
@@ -341,6 +347,7 @@ export async function runPreparedEmbeddedLoop(
             postCompactionAbortController = undefined;
           }
         },
+        onBeforeToolCallingRound: roundLimit?.beforeRound,
       });
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
@@ -359,6 +366,7 @@ export async function runPreparedEmbeddedLoop(
         contextRecoveryState,
         replayState: accumulatedReplayState,
         lastRetryFailoverReason,
+        deferHandledPreflightRecovery: roundLimit?.summaryPending,
       });
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
@@ -400,7 +408,50 @@ export async function runPreparedEmbeddedLoop(
         activeErrorContext,
         resolveReplayInvalidForAttempt,
         canRestartForLiveSwitch,
+        preflightRecovery,
       } = normalizedAttempt;
+      const budgetSummaryResolution = await resolveToolLimitSummaryAttempt({
+        limit: roundLimit,
+        attempt,
+        assistant: attemptAssistant,
+        nativeModelOwned: preparedRuntime.nativeModelOwned,
+        preflightRecovery,
+        maxRecoveryAttempts: MAX_RUN_LOOP_ITERATIONS,
+        interrupted: terminalAborted || signalOwnedInterruption,
+        hasPromptError: Boolean(promptError),
+        terminalInterrupted,
+        provider: activeErrorContext.provider,
+        policy: params.authProfileFailurePolicy,
+        agentMeta: buildAttemptAgentMeta({
+          attempt,
+          assistant: attemptAssistant,
+          provider,
+          model: model.id,
+          ...outerContextTokenMeta,
+          contextBudgetStatus: contextRecoveryState.lastContextBudgetStatus,
+          compactionCount: contextRecoveryState.autoCompactionCount,
+          compactionTokensAfter: contextRecoveryState.lastCompactionTokensAfter,
+          usageAccumulator,
+          lastRunPromptUsage,
+          lastTurnTotal,
+        }),
+        aborted: terminalAborted,
+        markTerminal: setTerminalLifecycleMeta,
+        maybeMarkProfileFailure: async (reason) => {
+          await failoverRetryController
+            .maybeMarkAuthProfileFailure({ profileId: lastProfileId, reason, modelId })
+            .catch((error: unknown) => log.warn(`summary: ${formatErrorMessage(error)}`));
+        },
+      });
+      if (budgetSummaryResolution.action === "retry") {
+        if (budgetSummaryResolution.continueFromCurrentTranscript) {
+          sessionPromptState.continueFromCurrentTranscript();
+        }
+        continue;
+      }
+      if (budgetSummaryResolution.action === "complete") {
+        return budgetSummaryResolution.result;
+      }
       const recovery = await recoverEmbeddedRunAttempt({
         runInput: input,
         preparedRuntime,
@@ -560,6 +611,12 @@ export async function runPreparedEmbeddedLoop(
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
+      }
+
+      if (roundLimit?.request(attempt, terminalAborted, Boolean(promptError), terminalTimedOut)) {
+        sessionPromptState.activateInternalPrompt(roundLimit.summaryInstruction, false);
+        terminalRetryState.compactionContinuationInstruction = null;
+        continue;
       }
 
       const terminalResolution = await resolveEmbeddedRunTerminal({
