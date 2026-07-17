@@ -9,6 +9,7 @@ import { hashConfigIncludeRaw } from "../config/includes.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import {
   loadConfig,
+  notifyGatewayPluginMetadataChanged,
   readConfigFileSnapshotForWrite,
   refreshPluginRegistry,
   registerPluginsCli,
@@ -555,6 +556,8 @@ describe("plugins cli update", () => {
         },
       },
     } as OpenClawConfig;
+    const sourceCfg = structuredClone(cfg);
+    delete sourceCfg.gateway;
     const previousRecords = {
       brave: {
         source: "npm",
@@ -572,7 +575,12 @@ describe("plugins cli update", () => {
         resolvedVersion: "2026.6.11",
       },
     } as const;
-    primeUpdateConfigSnapshot({ config: cfg });
+    primeUpdateConfigSnapshot({
+      config: cfg,
+      parsed: sourceCfg as Record<string, unknown>,
+      runtimeConfig: cfg,
+      sourceConfig: sourceCfg,
+    });
     setInstalledPluginIndexInstallRecords(previousRecords);
     updateNpmInstalledPlugins.mockResolvedValue({
       config: {
@@ -593,10 +601,11 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
-      config: cfg,
+      config: sourceCfg,
       installRecords: nextRecords,
       reason: "source-changed",
     });
+    expect(notifyGatewayPluginMetadataChanged).toHaveBeenCalledWith(cfg);
     expectRestartNoticeLogged();
   });
 
@@ -681,6 +690,7 @@ describe("plugins cli update", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
   });
 
   it("rolls back persisted install records when included config changes during a records-only update", async () => {

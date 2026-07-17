@@ -44,6 +44,7 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { notifyGatewayPluginMetadataChanged } from "./plugins-update-gateway-signal.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
@@ -415,6 +416,7 @@ export async function runPluginUpdateCommand(params: {
         sourceConfig: sourceSnapshot?.snapshot.sourceConfig ?? {},
       }),
     });
+    let recordsOnlyPluginUpdate = false;
     if (shouldPersistPluginInstallIndex) {
       if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
         await commitPluginInstallRecordsOnly({
@@ -427,6 +429,7 @@ export async function runPluginUpdateCommand(params: {
             });
           },
         });
+        recordsOnlyPluginUpdate = pluginResult.changed;
       } else {
         await commitPluginInstallRecordsWithConfig({
           previousInstallRecords: persistedPluginInstallRecords,
@@ -454,6 +457,9 @@ export async function runPluginUpdateCommand(params: {
         invalidateRuntimeCache: false,
         logger,
       });
+      if (recordsOnlyPluginUpdate) {
+        await notifyGatewayPluginMetadataChanged(cfg);
+      }
     }
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }
