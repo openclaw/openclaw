@@ -71,6 +71,7 @@ async function runAdaptiveCardInvoke(
     run: NonNullable<MSTeamsActivityHandler["run"]>;
   },
   value: unknown,
+  sendActivity = vi.fn(async () => ({ id: "activity-id" })),
 ) {
   await registered.run({
     activity: {
@@ -96,7 +97,7 @@ async function runAdaptiveCardInvoke(
       attachments: [],
       value,
     },
-    sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+    sendActivity,
     sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext);
 }
@@ -208,12 +209,18 @@ describe("msteams adaptive card action invoke", () => {
     runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockRejectedValueOnce(
       new Error("temporary dispatch failure"),
     );
+    const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
 
     await expect(
-      runAdaptiveCardInvoke(registered, {
-        action: { type: "Action.Submit", data: { intent: "retry-me" } },
-      }),
+      runAdaptiveCardInvoke(
+        registered,
+        {
+          action: { type: "Action.Submit", data: { intent: "retry-me" } },
+        },
+        sendActivity,
+      ),
     ).rejects.toThrow("temporary dispatch failure");
+    expect(sendActivity).not.toHaveBeenCalled();
   });
 
   it("routes Teams imBack actions as the submitted message text", async () => {
