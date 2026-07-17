@@ -1079,11 +1079,6 @@
       "translated": "Không xác định được kết quả cho $slug. Hãy kết nối lại, làm mới Skills rồi thử lại; Gateway sẽ tham gia an toàn vào một quá trình cài đặt tương ứng vẫn đang chạy."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Không thể đưa tin nhắn vào hàng đợi để gửi sau."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Hãy đợi phản hồi hiện tại hoàn tất trước khi bắt đầu cuộc trò chuyện mới."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Trạng thái Gateway không ổn định; không thể gửi"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Không thể đưa tin nhắn vào hàng đợi để gửi sau."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

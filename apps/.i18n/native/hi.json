@@ -1079,11 +1079,6 @@
       "translated": "$slug का परिणाम अज्ञात है। फिर से कनेक्ट करें, Skills को रीफ़्रेश करें, फिर दोबारा कोशिश करें; Gateway अब भी चल रहे समान इंस्टॉलेशन से सुरक्षित रूप से जुड़ जाता है।"
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "बाद में डिलीवरी के लिए संदेश को कतार में नहीं लगाया जा सका।"
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "नई चैट शुरू करने से पहले मौजूदा जवाब पूरा होने की प्रतीक्षा करें।"
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway की स्थिति ठीक नहीं है; भेजा नहीं जा सकता"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "बाद में डिलीवरी के लिए संदेश को कतार में नहीं लगाया जा सका।"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

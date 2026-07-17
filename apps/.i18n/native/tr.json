@@ -1079,11 +1079,6 @@
       "translated": "$slug için sonuç bilinmiyor. Yeniden bağlanın, Skills'i yenileyin ve tekrar deneyin; Gateway, hâlâ devam eden eşleşen bir yüklemeye güvenli bir şekilde katılır."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Mesaj daha sonra teslim edilmek üzere kuyruğa alınamadı."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Yeni bir sohbet başlatmadan önce mevcut yanıtın tamamlanmasını bekleyin."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway durumu iyi değil; gönderilemiyor"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Mesaj daha sonra teslim edilmek üzere kuyruğa alınamadı."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

@@ -1079,11 +1079,6 @@
       "translated": "$slugの結果は不明です。再接続してSkillsを更新してから、再試行してください。Gatewayは、まだ実行中の一致するインストールに安全に合流します。"
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "後で配信するメッセージをキューに追加できませんでした。"
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "新しいチャットを開始する前に、現在の応答が完了するまでお待ちください。"
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gatewayの状態が正常ではないため、送信できません"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "後で配信するメッセージをキューに追加できませんでした。"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

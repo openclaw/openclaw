@@ -1079,11 +1079,6 @@
       "translated": "$slug에 대한 결과를 알 수 없습니다. 다시 연결하고 Skills를 새로 고친 다음 다시 시도하세요. Gateway는 아직 실행 중인 일치하는 설치에 안전하게 참여합니다."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "나중에 전송하도록 메시지를 대기열에 추가할 수 없습니다."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "새 채팅을 시작하기 전에 현재 응답이 완료될 때까지 기다리세요."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway 상태가 정상이 아니므로 전송할 수 없습니다."
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "나중에 전송하도록 메시지를 대기열에 추가할 수 없습니다."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

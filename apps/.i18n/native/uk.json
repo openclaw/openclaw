@@ -1079,11 +1079,6 @@
       "translated": "Результат для $slug невідомий. Повторно підключіться, оновіть Skills і спробуйте ще раз; Gateway безпечно приєднається до відповідного встановлення, якщо воно ще триває."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Не вдалося додати повідомлення до черги для подальшого доставлення."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Перш ніж починати новий чат, дочекайтеся завершення поточної відповіді."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Стан Gateway незадовільний; неможливо надіслати"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Не вдалося додати повідомлення до черги для подальшого доставлення."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

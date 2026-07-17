@@ -1079,11 +1079,6 @@
       "translated": "Das Ergebnis für $slug ist unbekannt. Stellen Sie die Verbindung wieder her, aktualisieren Sie Skills und versuchen Sie es erneut; das Gateway führt eine passende, noch laufende Installation sicher zusammen."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Die Nachricht konnte nicht für die spätere Zustellung in die Warteschlange gestellt werden."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Warten Sie, bis die aktuelle Antwort abgeschlossen ist, bevor Sie einen neuen Chat starten."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway-Status nicht OK; Senden nicht möglich"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Die Nachricht konnte nicht für die spätere Zustellung in die Warteschlange gestellt werden."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

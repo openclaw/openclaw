@@ -1723,14 +1723,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 47,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
-      "source": "Could not queue message for later delivery.",
-      "surface": "android",
-      "id": "native.android.0b29275eefad9863"
-    },
-    {
-      "kind": "ui-call",
       "line": 1016,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Wait for the current response to finish before starting a new chat.",
@@ -1803,7 +1795,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 3500,
+      "line": 2794,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
+      "source": "Could not queue message for later delivery.",
+      "surface": "android",
+      "id": "native.android.0b29275eefad9863"
+    },
+    {
+      "kind": "ui-call",
+      "line": 3504,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Chat failed",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3638,
+      "line": 3642,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Event stream interrupted; try refreshing.",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3750,
+      "line": 3754,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out waiting for a reply; try again or refresh.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3960,
+      "line": 3964,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/chat/ChatController.kt",
       "source": "Timed out confirming the sent message; refresh to check delivery.",
       "surface": "android",

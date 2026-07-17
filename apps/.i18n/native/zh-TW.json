@@ -1079,11 +1079,6 @@
       "translated": "$slug 的結果不明。請重新連線、重新整理 Skills，然後重試；Gateway 會安全地加入仍在執行且相符的安裝作業。"
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "無法將訊息加入佇列以供稍後傳送。"
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "請等待目前的回應完成，再開始新的聊天。"
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway 健康狀態異常；無法傳送"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "無法將訊息加入佇列以供稍後傳送。"
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

@@ -1079,11 +1079,6 @@
       "translated": "Het resultaat voor $slug is onbekend. Maak opnieuw verbinding, vernieuw Skills en probeer het opnieuw; de Gateway sluit veilig aan bij een overeenkomende installatie die nog wordt uitgevoerd."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Kan het bericht niet in de wachtrij plaatsen voor latere bezorging."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Wacht tot het huidige antwoord is voltooid voordat je een nieuwe chat start."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Gateway-status is niet OK; verzenden is niet mogelijk"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Kan het bericht niet in de wachtrij plaatsen voor latere bezorging."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

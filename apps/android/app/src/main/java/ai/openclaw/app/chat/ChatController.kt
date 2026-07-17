@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicLong
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
 
-internal fun chatOutboxQueueFailureText(): NativeText = nativeText("Could not queue message for later delivery.")
+internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
 internal data class ChatCacheScope(
@@ -2788,6 +2788,10 @@ class ChatController internal constructor(
         null
       }
     }
+  }
+
+  companion object {
+    internal fun queueFailureText(): NativeText = nativeText("Could not queue message for later delivery.")
   }
 
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */

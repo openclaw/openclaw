@@ -1079,11 +1079,6 @@
       "translated": "نتیجه برای $slug نامشخص است. دوباره متصل شوید، Skills را تازه‌سازی کنید و سپس دوباره تلاش کنید؛ Gateway با رعایت ایمنی به نصب منطبقی که هنوز در حال اجراست می‌پیوندد."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "پیام برای تحویل در آینده در صف قرار نگرفت."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "پیش از شروع گفت‌وگویی جدید، منتظر بمانید تا پاسخ فعلی تمام شود."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "وضعیت سلامت Gateway مطلوب نیست؛ ارسال ممکن نیست"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "پیام برای تحویل در آینده در صف قرار نگرفت."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",

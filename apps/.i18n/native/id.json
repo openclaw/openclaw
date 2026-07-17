@@ -1079,11 +1079,6 @@
       "translated": "Hasil untuk $slug tidak diketahui. Hubungkan kembali, muat ulang Skills, lalu coba lagi; Gateway akan bergabung dengan aman ke proses instalasi yang cocok dan masih berjalan."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Tidak dapat mengantrekan pesan untuk dikirim nanti."
-    },
-    {
       "id": "native.android.875e63350d705dec",
       "source": "Wait for the current response to finish before starting a new chat.",
       "translated": "Tunggu hingga respons saat ini selesai sebelum memulai obrolan baru."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Kondisi Gateway tidak baik; tidak dapat mengirim"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Tidak dapat mengantrekan pesan untuk dikirim nanti."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
