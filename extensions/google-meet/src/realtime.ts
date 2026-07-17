@@ -241,7 +241,6 @@ export async function startMeetAgentRealtimeEngine(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
-  let harness: RealtimeVoiceSessionHarness;
   params.logger.info(
     formatGoogleMeetAgentAudioModelLog({
       provider: resolved.provider,
@@ -325,7 +324,9 @@ export async function startMeetAgentRealtimeEngine(params: {
       });
   };
 
-  harness = createRealtimeVoiceSessionHarness({
+  // The closures above only run after harness creation; they capture this later `const`.
+  // Annotated because the consult closure references harness inside its own initializer.
+  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
     talk: {
       sessionId: `google-meet:${params.meetingSessionId}:agent`,
       mode: "stt-tts",
@@ -485,8 +486,9 @@ export async function startMeetRealtimeEngine(params: {
   providers?: RealtimeVoiceProviderPlugin[];
 }): Promise<MeetRealtimeAudioEngineHandle> {
   let stopped = false;
-  let bridge: RealtimeVoiceBridgeSession | undefined;
-  let harness: RealtimeVoiceSessionHarness;
+  // Not const: the synchronous onFatal replay can run stop() (and its bridge?.close())
+  // before createBridge() below executes; a later `const` would throw at that read.
+  let bridge: RealtimeVoiceBridgeSession | undefined = undefined;
   let realtimeReady = false;
   let lastClearAt: string | undefined;
   let clearCount = 0;
@@ -571,7 +573,9 @@ export async function startMeetRealtimeEngine(params: {
     : { meetingSessionId: params.meetingSessionId };
   const reasonTalkPayload = (reason: string) =>
     params.talkContext ? { bridgeId: params.talkContext.bridgeId, reason } : { reason };
-  harness = createRealtimeVoiceSessionHarness({
+  // The closures above only run after harness creation; they capture this later `const`.
+  // Annotated because the consult closure references harness inside its own initializer.
+  const harness: RealtimeVoiceSessionHarness = createRealtimeVoiceSessionHarness({
     talk: {
       sessionId: params.talkSessionId ?? `google-meet:${params.meetingSessionId}:command-realtime`,
       mode: "realtime",
