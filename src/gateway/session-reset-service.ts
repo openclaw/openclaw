@@ -392,6 +392,7 @@ async function ensureSessionRuntimeCleanup(params: {
     if (mcpRunEndWatchers.has(sessionId)) {
       return;
     }
+    const watcherRef: { current?: Promise<void> } = {};
     const watcher = (async () => {
       while (await waitForEmbeddedAgentRunEnd(sessionId, null)) {
         // A replacement can register after the wait promise settles but before
@@ -399,13 +400,14 @@ async function ensureSessionRuntimeCleanup(params: {
         if (isEmbeddedAgentRunActive(sessionId)) {
           continue;
         }
-        if (mcpRunEndWatchers.get(sessionId) === watcher) {
+        if (mcpRunEndWatchers.get(sessionId) === watcherRef.current) {
           mcpRunEndWatchers.delete(sessionId);
         }
         await retireMcpRuntime(false);
         return;
       }
     })();
+    watcherRef.current = watcher;
     mcpRunEndWatchers.set(sessionId, watcher);
     void watcher
       .catch((error: unknown) => {
