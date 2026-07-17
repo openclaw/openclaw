@@ -2125,6 +2125,49 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("persists Node 22 declarations through trusted bounded artifacts", () => {
+    const workflow = parse(readFileSync(".github/workflows/node22-compat.yml", "utf8"));
+    const steps = workflow.jobs.compat.steps as WorkflowStep[];
+    const setupStep = steps.find((step) => step.name === "Setup Node environment");
+    const resolveStep = steps.find(
+      (step) => step.name === "Resolve trusted declaration cache artifact",
+    );
+    const downloadStep = steps.find(
+      (step) => step.name === "Restore trusted declaration cache artifact",
+    );
+    const uploadStep = steps.find(
+      (step) => step.name === "Publish trusted declaration cache artifact",
+    );
+
+    expect(workflow.permissions).toMatchObject({ actions: "read", contents: "read" });
+    expect(setupStep?.with).not.toHaveProperty("build-all-cache-scope");
+    expect(resolveStep?.run).toContain('.head_branch == "main"');
+    expect(resolveStep?.run).toContain('(.path | split("@")[0])');
+    expect(resolveStep?.run).toContain('.conclusion == "success"');
+    expect(resolveStep?.run).toContain("status=success&per_page=5");
+    expect(resolveStep?.run).toContain("artifacts?per_page=10");
+    expect(resolveStep?.run).not.toContain("--paginate");
+    expect(downloadStep).toMatchObject({
+      if: "steps.declaration_cache.outputs.artifact_id != ''",
+      uses: DOWNLOAD_ARTIFACT_V8,
+      with: {
+        path: ".artifacts/build-all-cache",
+        repository: "${{ github.repository }}",
+      },
+    });
+    expect(uploadStep).toMatchObject({
+      if: "success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'",
+      uses: UPLOAD_ARTIFACT_V7,
+      with: {
+        "if-no-files-found": "error",
+        "include-hidden-files": true,
+        overwrite: true,
+        path: ".artifacts/build-all-cache",
+        "retention-days": 14,
+      },
+    });
+  });
+
   it("restores importer-local node_modules from sticky snapshots", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
     try {
