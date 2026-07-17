@@ -35,7 +35,11 @@ class WearProxyBridgeTest {
     try {
       block(backgroundScope) { bridge = it }
     } finally {
-      bridge?.stopForTests()
+      bridge?.let {
+        it.stopForTests()
+        runCurrent()
+        check(it.isStoppedForTests())
+      }
     }
   }
 

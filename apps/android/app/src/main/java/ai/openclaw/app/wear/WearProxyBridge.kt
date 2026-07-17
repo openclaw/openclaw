@@ -14,7 +14,6 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -212,9 +211,11 @@ internal class WearProxyBridge(
   }
 
   /** Test-only lifecycle boundary; production owns the bridge through its process scope. */
-  internal suspend fun stopForTests() {
-    actorJob.cancelAndJoin()
+  internal fun stopForTests() {
+    actorJob.cancel()
   }
+
+  internal fun isStoppedForTests(): Boolean = actorJob.isCompleted
 
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
   private fun publishEventLocked(
