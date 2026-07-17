@@ -10,21 +10,10 @@ import {
 
 describe("parsePairingString", () => {
   it("parses a valid pairing string the CLI emits", () => {
-    const parsed = parsePairingString("ws://127.0.0.1:18797/extension#test-token");
+    const parsed = parsePairingString("ws://127.0.0.1:18797/extension#deadbeefcafe");
     expect(parsed).toEqual({
       relayUrl: "ws://127.0.0.1:18797/extension",
-      token: "test-token",
-      gatewayUrl: undefined,
-    });
-  });
-
-  it("extracts the additive direct Gateway hint without passing it to the relay", () => {
-    const gatewayUrl = "wss://gateway.example.com/base";
-    const pairing = `ws://127.0.0.1:18797/extension?gateway=${encodeURIComponent(gatewayUrl)}#tok`;
-    expect(parsePairingString(pairing)).toEqual({
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: "tok",
-      gatewayUrl,
+      token: "deadbeefcafe",
     });
   });
 
@@ -49,6 +38,16 @@ describe("parsePairingString", () => {
     expect(parsePairingString("ws://127.0.0.1/other#tok")).toBeNull();
     expect(parsePairingString("ws://127.0.0.1/extension#")).toBeNull();
     expect(parsePairingString("ws://127.0.0.1/extension")).toBeNull();
+  });
+
+  it("extracts the additive direct Gateway hint without passing it to the relay", () => {
+    const gatewayUrl = "wss://gateway.example.com/base";
+    const pairing = `ws://127.0.0.1:18797/extension?gateway=${encodeURIComponent(gatewayUrl)}#tok`;
+    expect(parsePairingString(pairing)).toEqual({
+      relayUrl: "ws://127.0.0.1:18797/extension",
+      token: "tok",
+      gatewayUrl,
+    });
   });
 });
 
