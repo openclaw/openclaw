@@ -2784,6 +2784,102 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("accepts credential payload files at the configured byte boundary", async () => {
+    const payloadText = JSON.stringify({ a: "x".repeat(24) });
+    expect(Buffer.byteLength(payloadText, "utf8")).toBe(32);
+    const payloadPath = path.join(suiteArtifactsDir, "boundary-credential.json");
+    await fs.writeFile(payloadPath, payloadText, "utf8");
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES", "32");
+    vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "maint-secret");
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          credential: {
+            credentialId: "cred-boundary",
+            kind: "telegram",
+            status: "active",
+            createdAtMs: 100,
+            updatedAtMs: 100,
+            lastLeasedAtMs: 0,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await runQaCredentialsAddCommand({
+      kind: "telegram",
+      payloadFile: payloadPath,
+      siteUrl: "https://qa-cred.example.convex.site",
+    });
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expectWriteContains(stdoutWrite, "QA credential added: cred-boundary");
+  });
+
+  it("rejects credential payload files that grow after the initial stat", async () => {
+    const boundaryPayloadText = JSON.stringify({ a: "x".repeat(24) });
+    const oversizedPayloadText = JSON.stringify({ a: "x".repeat(25) });
+    expect(Buffer.byteLength(boundaryPayloadText, "utf8")).toBe(32);
+    expect(Buffer.byteLength(oversizedPayloadText, "utf8")).toBe(33);
+    const payloadPath = path.join(suiteArtifactsDir, "growing-credential.json");
+    await fs.writeFile(payloadPath, boundaryPayloadText, "utf8");
+    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES", "32");
+    vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "maint-secret");
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          status: "ok",
+          credential: {
+            credentialId: "cred-growing",
+            kind: "telegram",
+            status: "active",
+            createdAtMs: 100,
+            updatedAtMs: 100,
+            lastLeasedAtMs: 0,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    const originalOpen = fs.open.bind(fs);
+    let replacedPayload = false;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const [target] = args;
+      if (path.resolve(String(target)) === payloadPath) {
+        const originalHandleStat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementation(async (...statArgs) => {
+          const result = await originalHandleStat(...statArgs);
+          if (!replacedPayload) {
+            replacedPayload = true;
+            await fs.writeFile(payloadPath, oversizedPayloadText, "utf8");
+          }
+          return result;
+        });
+      }
+      return handle;
+    });
+
+    try {
+      await expect(
+        runQaCredentialsAddCommand({
+          kind: "telegram",
+          payloadFile: payloadPath,
+          siteUrl: "https://qa-cred.example.convex.site",
+        }),
+      ).rejects.toThrow(
+        "Payload file exceeds OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES (32 bytes).",
+      );
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {
     await runQaDockerScaffoldCommand({
       repoRoot: "/tmp/openclaw-repo",

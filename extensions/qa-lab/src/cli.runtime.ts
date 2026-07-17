@@ -639,16 +639,29 @@ function resolveQaCredentialPayloadFileMaxBytes(env: NodeJS.ProcessEnv = process
 
 async function readQaCredentialPayloadFile(filePath: string) {
   const maxBytes = resolveQaCredentialPayloadFileMaxBytes();
-  const stat = await fs.stat(filePath);
-  if (!stat.isFile()) {
-    throw new Error("Payload file must be a regular JSON file.");
+  const handle = await fs.open(filePath, "r");
+  let text: string;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("Payload file must be a regular JSON file.");
+    }
+    if (stat.size > maxBytes) {
+      throw new Error(
+        `Payload file exceeds ${QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV} (${maxBytes} bytes).`,
+      );
+    }
+    const bytes = Buffer.allocUnsafe(maxBytes + 1);
+    const result = await handle.read(bytes, 0, maxBytes + 1, 0);
+    if (result.bytesRead > maxBytes) {
+      throw new Error(
+        `Payload file exceeds ${QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV} (${maxBytes} bytes).`,
+      );
+    }
+    text = bytes.subarray(0, result.bytesRead).toString("utf8");
+  } finally {
+    await handle.close();
   }
-  if (stat.size > maxBytes) {
-    throw new Error(
-      `Payload file exceeds ${QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV} (${maxBytes} bytes).`,
-    );
-  }
-  const text = await fs.readFile(filePath, "utf8");
   let payload: unknown;
   try {
     payload = JSON.parse(text) as unknown;
