@@ -256,7 +256,6 @@ describe("runContextEngineMaintenance", () => {
           sessionId: "session-1",
           storePath,
         }),
-        storePath,
       },
       request: {
         replacements: [
@@ -268,6 +267,12 @@ describe("runContextEngineMaintenance", () => {
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-background-file-rewrite",
+      sessionKey: "agent:main:session-background-file-rewrite",
+      storePath: "/tmp/state/current/agents/main/sessions/sessions.json",
+    };
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
@@ -303,6 +308,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
+      sessionTarget,
       sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       reason: "turn",
       executionMode: "background",
@@ -313,6 +319,7 @@ describe("runContextEngineMaintenance", () => {
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
       scope: {
+        agentId: "main",
         sessionId: "session-background-file-rewrite",
         sessionKey: "agent:main:session-background-file-rewrite",
         sessionFile: "/tmp/session-background-file-rewrite.jsonl",
