@@ -132,7 +132,7 @@ function readMonotonicStateFromBody(
   }
 }
 
-function isMonotonicRollback(params: {
+export function isMonotonicRollback(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
   current: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
 }): boolean {
@@ -293,6 +293,3 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
     },
   };
 }
-
-const testing = { isMonotonicRollback };
-export { testing as __testing };

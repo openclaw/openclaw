@@ -718,7 +718,7 @@ async function loadHostedCatalogSnapshotResult(params: {
   };
 }
 
-function isHostedCatalogSignedFeedRollback(params: {
+export function isHostedCatalogSignedFeedRollback(params: {
   candidate: OfficialExternalPluginCatalogFeed;
   current: OfficialExternalPluginCatalogFeed;
 }): boolean {
@@ -1457,6 +1457,4 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
   );
 }
 
-const testing = { isHostedCatalogSignedFeedRollback };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

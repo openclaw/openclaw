@@ -5,8 +5,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
-import { __testing as snapshotTesting } from "./official-external-plugin-catalog-snapshot-store.js";
+import {
+  createSqliteHostedOfficialExternalPluginCatalogSnapshotStore,
+  isMonotonicRollback,
+} from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type HostedOfficialExternalPluginCatalogSnapshot,
   type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
@@ -25,7 +27,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { __testing } from "./official-external-plugin-catalog.js";
+import { isHostedCatalogSignedFeedRollback } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
   const entry = getOfficialExternalPluginCatalogEntry(id);
@@ -1229,8 +1231,6 @@ describe("official external plugin catalog", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("isHostedCatalogSignedFeedRollback", () => {
-  const { isHostedCatalogSignedFeedRollback } = __testing;
-
   function feed(
     overrides: Partial<OfficialExternalPluginCatalogFeed>,
   ): OfficialExternalPluginCatalogFeed {
@@ -1291,8 +1291,6 @@ describe("isHostedCatalogSignedFeedRollback", () => {
 });
 
 describe("isMonotonicRollback", () => {
-  const { isMonotonicRollback } = snapshotTesting;
-
   function state(
     overrides: Partial<HostedOfficialExternalPluginCatalogSnapshotMonotonicState>,
   ): HostedOfficialExternalPluginCatalogSnapshotMonotonicState {
