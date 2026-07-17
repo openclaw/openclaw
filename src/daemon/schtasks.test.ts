@@ -25,6 +25,7 @@ vi.mock("../infra/windows-encoding.js", async () => {
   );
   return {
     ...actual,
+    resolveWindowsOemCodePage: () => 437,
     resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });

@@ -29,5 +29,9 @@ vi.mock("../../infra/windows-encoding.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/windows-encoding.js")>(
     "../../infra/windows-encoding.js",
   );
-  return { ...actual, resolveWindowsOemEncoding: () => null };
+  return {
+    ...actual,
+    resolveWindowsOemCodePage: () => 437,
+    resolveWindowsOemEncoding: () => "cp437",
+  };
 });

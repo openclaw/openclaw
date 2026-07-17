@@ -41,6 +41,7 @@ vi.mock("./windows-encoding.js", async () => {
     await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
   return {
     ...actual,
+    resolveWindowsOemCodePage: () => 437,
     resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
