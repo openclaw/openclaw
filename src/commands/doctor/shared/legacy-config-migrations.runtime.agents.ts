@@ -115,9 +115,9 @@ function hasLegacyMemorySearchFlatKeys(value: unknown): boolean {
   const memorySearch = getRecord(value);
   return Boolean(
     memorySearch &&
-      LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS.some(({ legacyKey }) =>
-        Object.hasOwn(memorySearch, legacyKey),
-      ),
+    LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS.some(({ legacyKey }) =>
+      Object.hasOwn(memorySearch, legacyKey),
+    ),
   );
 }
 
@@ -476,11 +476,16 @@ function migrateLegacyMemorySearchFlatKeys(
       continue;
     }
     const legacyValue = memorySearch[legacyKey];
-    const canonicalParent = getRecord(memorySearch[parentKey]);
     if (memorySearch[parentKey] === undefined) {
       memorySearch[parentKey] = { [canonicalKey]: legacyValue };
       changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
-    } else if (canonicalParent && canonicalParent[canonicalKey] === undefined) {
+      delete memorySearch[legacyKey];
+      continue;
+    }
+    const canonicalParent = getRecord(memorySearch[parentKey]);
+    if (!canonicalParent) {
+      changes.push(`Removed ${pathLabel}.${legacyKey} (${pathLabel}.${parentKey} already set).`);
+    } else if (canonicalParent[canonicalKey] === undefined) {
       canonicalParent[canonicalKey] = legacyValue;
       changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.${parentKey}.${canonicalKey}.`);
     } else {

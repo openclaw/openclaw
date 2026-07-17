@@ -2920,6 +2920,7 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
   });
 });
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {
@@ -4066,6 +4067,7 @@ describe("legacy model compat migrate", () => {
     ]);
   });
 });
+
 describe("legacy flat memory search field migrate", () => {
   it("moves default flat fields to their canonical nested fields", () => {
     const raw = {
