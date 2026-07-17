@@ -1692,19 +1692,24 @@ type ChatRunControlsProps = {
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
-  const followUpMode = props.followUpMode ?? "steer";
-  const steersActiveRun = followUpMode === "steer";
-  const interruptsActiveRun = followUpMode === "interrupt";
-  const activeRunActionLabel = steersActiveRun
-    ? t("chat.queue.steer")
-    : interruptsActiveRun
+  const steersActiveRun = props.followUpMode === "steer";
+  const interruptsActiveRun = props.followUpMode === "interrupt";
+  const activeRunActionLabel =
+    props.followUpMode === undefined
       ? t("chat.runControls.send")
-      : t("chat.runControls.queue");
-  const activeRunActionDescription = steersActiveRun
-    ? t("chat.followUpModeSteer")
-    : interruptsActiveRun
+      : steersActiveRun
+        ? t("chat.queue.steer")
+        : interruptsActiveRun
+          ? t("chat.runControls.send")
+          : t("chat.runControls.queue");
+  const activeRunActionDescription =
+    props.followUpMode === undefined
       ? t("chat.runControls.sendMessage")
-      : t("chat.runControls.queueMessage");
+      : steersActiveRun
+        ? t("chat.followUpModeSteer")
+        : interruptsActiveRun
+          ? t("chat.runControls.sendMessage")
+          : t("chat.runControls.queueMessage");
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);
