@@ -51,6 +51,15 @@ export const BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES = [
     modulePath: "src/plugin-sdk/inbound-reply-dispatch",
     canonical: "openclaw/plugin-sdk/channel-inbound",
   },
+  {
+    modulePath: "src/plugin-sdk/inbound-envelope",
+    canonical: "openclaw/plugin-sdk/channel-inbound",
+    allowedImporters: [
+      "extensions/googlechat/runtime-api.ts",
+      "extensions/zalo/src/runtime-support.ts",
+      "src/channels/direct-dm.ts",
+    ],
+  },
   // Shared dispatch bridge backing the facades above; only the SDK seams may
   // consume it directly so channel code stays on channel-inbound/channel-outbound.
   {

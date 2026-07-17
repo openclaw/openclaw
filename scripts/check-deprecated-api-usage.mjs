@@ -33,8 +33,9 @@ function toRepoPath(filePath) {
 
 function shouldSkipFile(filePath, rule) {
   const repoPath = toRepoPath(filePath);
-  return (rule.skippedFilePatterns ?? skippedFilePatterns).some((pattern) =>
-    pattern.test(repoPath),
+  return (
+    (rule.skippedFilePatterns ?? skippedFilePatterns).some((pattern) => pattern.test(repoPath)) ||
+    (rule.allowedFilePatterns ?? []).some((pattern) => pattern.test(repoPath))
   );
 }
 
@@ -217,6 +218,21 @@ const rules = [
       "src/plugin-sdk/outbound-runtime.ts",
     ],
     message: "use sendDurableMessageBatch or deliverInboundReplyWithMessageSendContext",
+  },
+  {
+    id: "internal-deprecated-symbols",
+    roots: ["src", "extensions", "packages"],
+    names:
+      "buildInboundHistoryFromMap buildPendingHistoryContextFromMap clearHistoryEntries clearHistoryEntriesIfEnabled deferTerminalLifecycleEnd fetchRemoteMedia finalizeChannelInboundContext hasInteractiveReplyBlocks interactiveReplyToPresentation isVoiceCompatibleAudio normalizeInteractiveReply recordPendingHistoryEntry recordPendingHistoryEntryIfEnabled recordPendingHistoryEntryWithMedia reduceInteractiveReply registerCoreHealthChecks resolveInteractiveTextFallback resolveMemoryCorePluginConfig sourceVisibleReplies".split(
+        " ",
+      ),
+    allowedFilePatterns: [
+      /^extensions\/(?:mattermost\/(?:runtime-api|src\/runtime-api)|matrix\/src\/test-runtime|qqbot\/src\/(?:bridge\/sdk-adapter|engine\/adapter\/history\.port|engine\/gateway\/stages\/group-gate-stage)|whatsapp\/src\/test-helpers)\.ts$/u,
+      /^src\/(?:agents\/(?:embedded-agent-runner\/run\/(?:params|run-attempt-dispatch)|harness\/types)|auto-reply\/reply\/(?:dispatch-from-config\.harness-defaults|history)|channels\/(?:inbound-event\/context|plugins\/outbound\/interactive)|flows\/doctor-core-checks|interactive\/payload|media\/(?:audio|fetch)|memory-host-sdk\/dreaming)\.ts$/u,
+      /^src\/plugin-sdk\/(?:channel-inbound|health|interactive-runtime|mattermost|media-runtime|memory-core-host-status|reply-history)\.ts$/u,
+      /^src\/plugins\/(?:capability-runtime-vitest-shims\/media-runtime|runtime\/(?:runtime-channel|runtime-media|types-channel|types-core))\.ts$/u,
+    ],
+    message: "use the current internal API; deprecated names stay at compatibility boundaries",
   },
 ];
 
