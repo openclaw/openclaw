@@ -237,6 +237,8 @@ export async function launchChromeMeet(params: {
   await checkRealtimeAudioPrerequisites();
 
   if (!params.config.chrome.launch) {
+    // An external owner supplies the already-open call, so no browser health exists to gate on.
+    // Configuring this mode explicitly authorizes its realtime bridge to start immediately.
     return { launched: false, audioBridge: await startRealtimeAudioBridge() };
   }
 
