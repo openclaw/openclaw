@@ -48,14 +48,15 @@ export function buildCodexUserInputPresentation(
     blocks: [
       {
         type: "buttons",
-        buttons: question.options.map((option, index) => ({
-          label: option.label,
-          action: {
+        buttons: question.options.map((option, index) => {
+          const action = {
             type: "command",
             command: `/codex answer ${token} choice:${index}`,
-          },
-          ...(index === 0 ? { style: "primary" as const } : {}),
-        })),
+          } as const;
+          return index === 0
+            ? { label: option.label, action, style: "primary" as const }
+            : { label: option.label, action };
+        }),
       },
     ],
   };

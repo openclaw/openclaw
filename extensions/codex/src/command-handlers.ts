@@ -917,7 +917,7 @@ async function handleNativeGoal(
     authProfileId: binding.authProfileId,
     pluginConfig,
   });
-  const requestOptions: CodexControlRequestOptions = {
+  const goalRequestOptions: CodexControlRequestOptions = {
     agentDir: target.agentDir,
     authProfileId: connection.clientAuthProfileId,
     config: ctx.config,
@@ -931,7 +931,7 @@ async function handleNativeGoal(
       pluginConfig,
       CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: binding.threadId },
-      requestOptions,
+      goalRequestOptions,
     );
     return formatNativeGoal(response);
   }
@@ -943,7 +943,7 @@ async function handleNativeGoal(
       pluginConfig,
       CODEX_CONTROL_METHODS.clearThreadGoal,
       { threadId: binding.threadId },
-      requestOptions,
+      goalRequestOptions,
     );
     return isJsonObject(response) && response.cleared === true
       ? "Cleared the Codex goal."
@@ -973,7 +973,7 @@ async function handleNativeGoal(
       pluginConfig,
       CODEX_CONTROL_METHODS.clearThreadGoal,
       { threadId: binding.threadId },
-      requestOptions,
+      goalRequestOptions,
     );
   }
   const response = await deps.codexControlRequest(
@@ -990,7 +990,7 @@ async function handleNativeGoal(
           ? { status: "active" }
           : {}),
     },
-    requestOptions,
+    goalRequestOptions,
   );
   return formatNativeGoal(response);
 }
