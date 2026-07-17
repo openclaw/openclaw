@@ -1096,6 +1096,15 @@ describe("web auto-reply connection", () => {
     expect(resolveDebounceMs?.(direct)).toBe(0);
     expect(resolveDebounceMs?.(otherDirect)).toBe(1_000);
     expect(resolveDebounceMs?.(group)).toBe(30_000);
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(direct)),
+    ).resolves.toEqual({ action: "bypass" });
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(otherDirect)),
+    ).resolves.toEqual({ action: "debounce", debounceMs: 1_000 });
+    await expect(
+      Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(group)),
+    ).resolves.toEqual({ action: "debounce", debounceMs: 30_000 });
   });
 
   it("normalizes legacy flat listener messages and rejects partial nested input", async () => {
@@ -1116,7 +1125,7 @@ describe("web auto-reply connection", () => {
 
     await expect(
       Promise.resolve(capture.getLastOptions()?.resolveDebounceDecision?.(msg)),
-    ).resolves.toEqual({ action: "debounce" });
+    ).resolves.toEqual({ action: "bypass" });
     expect(
       capture
         .getLastOptions()
@@ -1129,14 +1138,14 @@ describe("web auto-reply connection", () => {
           quote: { id: "quoted-agent-message", body: "previous agent reply" },
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       capture.getLastOptions()?.shouldDebounce?.(
         createTestWebInboundMessage({
           payload: { body: "<media:image>", media: { path: "/tmp/image.jpg", type: "image/jpeg" } },
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       capture.getLastOptions()?.shouldDebounce?.(
         createTestWebInboundMessage({
@@ -1146,7 +1155,7 @@ describe("web auto-reply connection", () => {
           },
         }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     await expect(
       Promise.resolve(
         capture.getLastOptions()?.resolveDebounceDecision?.(
@@ -1157,7 +1166,7 @@ describe("web auto-reply connection", () => {
           }),
         ),
       ),
-    ).resolves.toEqual({ action: "debounce" });
+    ).resolves.toEqual({ action: "bypass" });
     expect(
       await capture.getLastOptions()?.resolveDebounceDecision?.(
         createTestWebInboundMessage({
@@ -1242,7 +1251,7 @@ describe("web auto-reply connection", () => {
     expect(inboundDebounceHookMocks.runInboundDebounce).toHaveBeenCalledWith(
       expect.objectContaining({
         debounceKey: "default:120363@g.us:15550001111@s.whatsapp.net",
-        defaultAction: "debounce",
+        defaultAction: "bypass",
         conversationKind: "group",
         message: { hasMedia: true, hasLocation: false, hasQuote: false },
       }),

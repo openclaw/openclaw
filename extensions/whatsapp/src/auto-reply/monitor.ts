@@ -321,9 +321,17 @@ export async function monitorWebChannel(
         return shouldDebounceTextInbound({
           text: normalized.payload.commandBody ?? normalized.payload.body,
           cfg,
-          // WhatsApp's rich inbound debounce preserves media, location, and quoted
-          // context, so only command detection should bypass the configured window.
-          hasMedia: false,
+          hasMedia: Boolean(
+            normalized.payload.media?.path ||
+            normalized.payload.media?.type ||
+            normalized.payload.media?.url ||
+            normalized.payload.mediaItems?.length,
+          ),
+          allowDebounce: !(
+            normalized.payload.location ||
+            normalized.quote?.id ||
+            normalized.quote?.body
+          ),
         });
       };
       const resolveDebounceDecision = (
@@ -344,7 +352,17 @@ export async function monitorWebChannel(
               normalized.platform.senderName ??
               admission.sender.id)
             : admission.conversation.id;
-        const defaultAction = shouldDebounceByDefault(normalized) ? "debounce" : "bypass";
+        const effectiveDebounceMs = resolveWhatsAppConversationDebounceMs({
+          cfg: loadCurrentMonitorConfig(),
+          msg: normalized,
+          defaultMs: inboundDebounceMs,
+        });
+        const defaultAction =
+          effectiveDebounceMs > 0 && shouldDebounceByDefault(normalized) ? "debounce" : "bypass";
+        const defaultDecision =
+          defaultAction === "debounce"
+            ? ({ action: "debounce", debounceMs: effectiveDebounceMs } as const)
+            : ({ action: "bypass" } as const);
         const hookRunner = getGlobalHookRunner();
         if (hookRunner?.hasHooks("inbound_debounce")) {
           return hookRunner
@@ -352,7 +370,7 @@ export async function monitorWebChannel(
               {
                 debounceKey: `${admission.accountId}:${admission.conversation.id}:${senderKey}`,
                 defaultAction,
-                defaultDebounceMs: inboundDebounceMs,
+                defaultDebounceMs: effectiveDebounceMs,
                 conversationKind: admission.conversation.kind,
                 message: {
                   hasMedia: Boolean(
@@ -373,9 +391,9 @@ export async function monitorWebChannel(
                 senderId: admission.sender.id,
               },
             )
-            .then((pluginDecision) => pluginDecision ?? { action: defaultAction });
+            .then((pluginDecision) => pluginDecision ?? defaultDecision);
         }
-        return { action: defaultAction };
+        return defaultDecision;
       };
 
       let connection;
@@ -420,7 +438,7 @@ export async function monitorWebChannel(
               debounceMs: inboundDebounceMs,
               resolveDebounceMs: (msg) =>
                 resolveWhatsAppConversationDebounceMs({
-                  cfg,
+                  cfg: loadCurrentMonitorConfig(),
                   msg,
                   defaultMs: inboundDebounceMs,
                 }),
