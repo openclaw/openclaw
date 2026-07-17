@@ -340,6 +340,10 @@ describe("sqlite WAL maintenance", () => {
         databasePath: path.join(tempDir, "openclaw.sqlite"),
       });
 
+      expect(childProcess.execFileSync).toHaveBeenCalledWith("mount", [], {
+        encoding: "utf8",
+        timeout: 5_000,
+      });
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });

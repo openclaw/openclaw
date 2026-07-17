@@ -7,6 +7,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
+// The `mount` command reads kernel filesystem tables synchronously. If a
+// remote/NFS mount point is unresponsive, the command can block indefinitely
+// while the kernel waits on the filesystem server. Bound it so WAL checks
+// fail closed instead of hanging gateway startup.
+const MOUNT_PROBE_TIMEOUT_MS = 5_000;
+
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
 const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
@@ -172,7 +178,14 @@ function readMountEntries(): MountEntry[] {
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
+    return parseMountCommandEntries(
+      String(
+        childProcess.execFileSync("mount", [], {
+          encoding: "utf8",
+          timeout: MOUNT_PROBE_TIMEOUT_MS,
+        }),
+      ),
+    );
   } catch {
     return [];
   }
