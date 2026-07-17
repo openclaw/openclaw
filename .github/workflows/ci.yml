@@ -3018,9 +3018,12 @@ jobs:
           # and dependency-file changes mint a fresh key/snapshot.
           key: ${{ github.repository }}-gradle-v1-${{ matrix.task }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
           path: /var/tmp/openclaw-gradle
-          # v1.4.0 skips commit after failed/cancelled steps, so an incomplete
-          # first hydration cannot seed this key.
-          commit: if-missing
+          # on-change keeps the snapshot learning: Gradle's build cache
+          # accumulates across runs (if-missing would freeze the first
+          # hydration forever). Entries are content-addressed, task-scoped
+          # keys give one semantic writer, and v1.4.0 still skips commit
+          # after failed/cancelled steps.
+          commit: on-change
 
       - name: Point Gradle at the sticky disk
         if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
