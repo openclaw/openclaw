@@ -722,14 +722,13 @@ function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFi
       }
       seenScopeIds.add(entry.id);
 
-      const isDefaultAgent = entry.id === defaultAgentId;
       const execDefaults = resolveExecDefaults({
         cfg,
-        agentId: isDefaultAgent ? undefined : entry.id,
+        agentId: entry.id,
       });
       const resolvedApprovals = resolveExecApprovalsFromFile({
         file: approvals,
-        agentId: isDefaultAgent ? undefined : entry.id,
+        agentId: entry.id,
         overrides: {
           security: execDefaults.security,
           ask: execDefaults.ask,

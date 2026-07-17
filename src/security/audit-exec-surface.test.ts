@@ -142,6 +142,61 @@ describe("security audit exec surface findings", () => {
     expect(finding?.detail).not.toContain("nova, utility, nova");
   });
 
+  it("preserves the configured default agent exec policy in YOLO audits", async () => {
+    const findings = await collectSecurityAuditFindings({
+      tools: { exec: { security: "full", ask: "off" } },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+          },
+        },
+        list: [
+          {
+            id: "nova",
+            default: true,
+            tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
+  });
+
+  it("preserves the configured default agent approval policy in YOLO audits", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: {
+        nova: { security: "allowlist", ask: "on-miss" },
+      },
+    });
+
+    const findings = await collectSecurityAuditFindings({
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+          },
+        },
+        list: [{ id: "nova", default: true }],
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
+  });
+
   it("warns for normalized Claude backend keys", async () => {
     const findings = await collectSecurityAuditFindings({
       agents: {
