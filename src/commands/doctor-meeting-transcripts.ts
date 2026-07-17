@@ -111,6 +111,7 @@ export async function runDoctorMeetingTranscripts(
 
   const sqliteStore = new TranscriptsStore(options.transcriptsDir, stateDb);
 
+  let importedCount = 0;
   for (const sessionDir of sessionDirs) {
     const session = readMetadataFile(sessionDir);
     if (!session) {
@@ -120,6 +121,7 @@ export async function runDoctorMeetingTranscripts(
 
     try {
       await sqliteStore.writeSession(session);
+      importedCount++;
       report.importedSessions++;
 
       const utterances = readUtterances(sessionDir);
@@ -132,6 +134,10 @@ export async function runDoctorMeetingTranscripts(
         `Failed to import session ${session.sessionId}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  if (report.issues.length === 0) {
+    sqliteStore.markSqliteReadReady();
   }
 
   report.repaired = options.shouldRepair && report.issues.length === 0;

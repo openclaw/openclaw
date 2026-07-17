@@ -75,8 +75,10 @@ function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   try {
     stateDb = openOpenClawStateDatabase({ env: process.env }) as OpenClawStateDatabase;
   } catch {
-    // SQLite runtime may be unavailable (e.g. Node <24.15.0 with SQLite 3.51.2).
-    // Fall back to file-backed store when the shared state DB cannot open.
+    // Shared state database may be unavailable (e.g. Node <24.15.0 embeds
+    // SQLite 3.51.2 which fails the WAL-safety assertion). Fall back to
+    // file-backed store; the Doctor migration is not available on this
+    // runtime, so SQLite reads remain gated until a future upgrade.
   }
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), stateDb);
 }
