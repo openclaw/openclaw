@@ -20,7 +20,7 @@ type BrowserActionContext = {
 };
 
 const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
-export const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
+const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
 
 /** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
 export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
@@ -91,12 +91,7 @@ async function readFile(path: string): Promise<string> {
     const buffer = Buffer.alloc(BROWSER_FIELDS_FILE_MAX_BYTES + 1);
     let totalBytes = 0;
     while (totalBytes < buffer.length) {
-      const { bytesRead } = await handle.read(
-        buffer,
-        totalBytes,
-        buffer.length - totalBytes,
-        null,
-      );
+      const { bytesRead } = await handle.read(buffer, totalBytes, buffer.length - totalBytes, null);
       if (bytesRead === 0) {
         break;
       }

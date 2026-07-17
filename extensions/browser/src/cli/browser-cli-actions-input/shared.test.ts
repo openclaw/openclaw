@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { BROWSER_FIELDS_FILE_MAX_BYTES, readFields } from "./shared.js";
+import { readFields } from "./shared.js";
+
+const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
 
 describe("readFields", () => {
   it.each([
