@@ -25,11 +25,6 @@ export function parseArgs(argv: unknown): {
 };
 export function releaseBranchForTag(tag: string): string;
 export function run(command: unknown, args: unknown, options?: Record<string, unknown>): string;
-export const isDirectReleaseCandidateExecution: (
-  directPath: string | undefined,
-  modulePath: string,
-  resolveRealPath?: (path: string) => string,
-) => boolean;
 export function buildReleaseCandidateState(
   options: unknown,
   {
