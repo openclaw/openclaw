@@ -1027,6 +1027,10 @@ printf 'status=%s\\n' "$status"
     expect(runner).toContain("run_installer_for_package_spec");
     expect(runner).toContain('bash -c "curl -fsSL \\"\\$1\\" | bash -s --');
     expect(runner).not.toContain('npm_install_global "install latest release tarball"');
+    // Direct installer one-liner (non-function) is bounded by connect and transfer timeouts.
+    expect(runner).toContain(
+      'curl -fsSL --connect-timeout 30 --max-time 300 "$INSTALL_URL" | bash -s -- --no-prompt',
+    );
   });
 
   it("uses public npm latest as the non-root installer expectation", () => {
