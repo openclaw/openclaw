@@ -15,9 +15,13 @@ import {
 } from "../config/sessions/conversation-registry.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+
+const log = createSubsystemLogger("gateway/conversations");
 
 type ConversationListDeps = {
   listConversations: typeof listConversations;
@@ -60,6 +64,25 @@ function presentConversation(conversation: ConversationRecord): ConversationList
   };
 }
 
+async function listLiveDirectoryEntries(params: {
+  channel: string;
+  accountId: string;
+  kind: "peers" | "groups";
+  run: () => Promise<ChannelDirectoryEntry[]>;
+}): Promise<ChannelDirectoryEntry[]> {
+  try {
+    return await params.run();
+  } catch (error) {
+    log.warn("live directory discovery failed; using configured entries", {
+      channel: params.channel,
+      accountId: params.accountId,
+      kind: params.kind,
+      error: formatErrorMessage(error),
+    });
+    return [];
+  }
+}
+
 async function listDirectoryEntries(params: {
   config: OpenClawConfig;
   accountId: string;
@@ -74,11 +97,36 @@ async function listDirectoryEntries(params: {
     limit: params.limit,
     runtime: defaultRuntime,
   };
-  const [peers, groups] = await Promise.all([
-    params.plugin.directory?.listPeers?.(input) ?? [],
-    params.plugin.directory?.listGroups?.(input) ?? [],
+  const directory = params.plugin.directory;
+  const listPeersLive = directory?.listPeersLive;
+  const listGroupsLive = directory?.listGroupsLive;
+  const [configuredPeers, livePeers, configuredGroups, liveGroups] = await Promise.all([
+    directory?.listPeers?.(input) ?? [],
+    listPeersLive
+      ? listLiveDirectoryEntries({
+          channel: params.plugin.id,
+          accountId: params.accountId,
+          kind: "peers",
+          run: () => listPeersLive(input),
+        })
+      : [],
+    directory?.listGroups?.(input) ?? [],
+    listGroupsLive
+      ? listLiveDirectoryEntries({
+          channel: params.plugin.id,
+          accountId: params.accountId,
+          kind: "groups",
+          run: () => listGroupsLive(input),
+        })
+      : [],
   ]);
-  return [...peers, ...groups];
+  const entries = new Map<string, ChannelDirectoryEntry>();
+  for (const entry of [...configuredPeers, ...livePeers, ...configuredGroups, ...liveGroups]) {
+    // Live results replace config-only metadata without dropping configured addresses when a
+    // transport's live adapter is search-only and returns nothing for an unfiltered listing.
+    entries.set(`${entry.kind}\u0000${entry.id.trim()}`, entry);
+  }
+  return [...entries.values()];
 }
 
 async function discoverChannelAddresses(params: {

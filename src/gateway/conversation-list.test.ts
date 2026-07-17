@@ -81,4 +81,124 @@ describe("runGatewayConversationList", () => {
     ]);
     expect(result.conversations[0]).not.toHaveProperty("sessionId");
   });
+
+  it("merges live directory adapters with config-backed entries", async () => {
+    const listPeers = vi.fn(async () => [
+      { kind: "user" as const, id: "stale-peer", name: "Stale Peer" },
+      { kind: "user" as const, id: "shared-peer", name: "Configured Shared Peer" },
+    ]);
+    const listPeersLive = vi.fn(async () => [
+      { kind: "user" as const, id: "live-peer", name: "Live Peer" },
+      { kind: "user" as const, id: "shared-peer", name: "Live Shared Peer" },
+    ]);
+    const listGroups = vi.fn(async () => [
+      { kind: "group" as const, id: "stale-group", name: "Stale Group" },
+    ]);
+    const listGroupsLive = vi.fn(async () => [
+      { kind: "group" as const, id: "live-group", name: "Live Group" },
+    ]);
+    const resolvedTargets: string[] = [];
+    const deps = {
+      resolveOutboundChannelPlugin: vi.fn(() => ({
+        id: "discord",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true, configured: true }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        directory: { listPeers, listPeersLive, listGroups, listGroupsLive },
+      })),
+      resolveOutboundSessionRoute: vi.fn(async ({ target }: { target: string }) => {
+        resolvedTargets.push(target);
+        const direct = target.endsWith("-peer");
+        return {
+          sessionKey: `agent:main:discord:${direct ? "direct" : "channel"}:${target}`,
+          baseSessionKey: `agent:main:discord:${direct ? "direct" : "channel"}:${target}`,
+          peer: { kind: direct ? ("direct" as const) : ("channel" as const), id: target },
+          chatType: direct ? ("direct" as const) : ("channel" as const),
+          from: `discord:${target}`,
+          to: target,
+        };
+      }),
+      registerConversationAddresses: vi.fn(),
+      listConversations: vi.fn(() => []),
+    };
+
+    await runGatewayConversationList(
+      { config: {}, agentId: "main", channel: "discord", limit: 50 },
+      deps as never,
+    );
+
+    expect(listPeersLive).toHaveBeenCalledOnce();
+    expect(listGroupsLive).toHaveBeenCalledOnce();
+    expect(listPeers).toHaveBeenCalledOnce();
+    expect(listGroups).toHaveBeenCalledOnce();
+    expect(resolvedTargets).toEqual([
+      "stale-peer",
+      "shared-peer",
+      "live-peer",
+      "stale-group",
+      "live-group",
+    ]);
+    expect(deps.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "shared-peer",
+        resolvedTarget: expect.objectContaining({ display: "Live Shared Peer" }),
+      }),
+    );
+  });
+
+  it("retains configured peers when live discovery is empty or fails", async () => {
+    const listPeers = vi.fn(async () => [
+      { kind: "user" as const, id: "configured-peer", name: "Configured Peer" },
+    ]);
+    const listPeersLive = vi.fn(async ({ query }: { query?: string }) =>
+      query ? [{ kind: "user" as const, id: "live-peer", name: "Live Peer" }] : [],
+    );
+    listPeersLive.mockRejectedValueOnce(new Error("directory unavailable"));
+    const resolvedTargets: string[] = [];
+    const deps = {
+      resolveOutboundChannelPlugin: vi.fn(() => ({
+        id: "discord",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true, configured: true }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        directory: { listPeers, listPeersLive },
+      })),
+      resolveOutboundSessionRoute: vi.fn(async ({ target }: { target: string }) => {
+        resolvedTargets.push(target);
+        return {
+          sessionKey: `agent:main:discord:direct:${target}`,
+          baseSessionKey: `agent:main:discord:direct:${target}`,
+          peer: { kind: "direct" as const, id: target },
+          chatType: "direct" as const,
+          from: `discord:${target}`,
+          to: target,
+        };
+      }),
+      registerConversationAddresses: vi.fn(),
+      listConversations: vi.fn(() => []),
+    };
+
+    await runGatewayConversationList(
+      { config: {}, agentId: "main", channel: "discord", limit: 50 },
+      deps as never,
+    );
+    await runGatewayConversationList(
+      { config: {}, agentId: "main", channel: "discord", limit: 50 },
+      deps as never,
+    );
+
+    expect(listPeers).toHaveBeenCalledTimes(2);
+    expect(listPeersLive).toHaveBeenCalledTimes(2);
+    expect(listPeersLive.mock.calls.map(([input]) => input)).toEqual([
+      expect.not.objectContaining({ query: expect.anything() }),
+      expect.not.objectContaining({ query: expect.anything() }),
+    ]);
+    expect(resolvedTargets).toEqual(["configured-peer", "configured-peer"]);
+  });
 });
