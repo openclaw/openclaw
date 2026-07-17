@@ -22399,6 +22399,71 @@
       "translated": "음성 깨우기가 감지되었습니다!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "대화 모드 꺼짐"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "대화 모드 일시 정지됨"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "대화 모드 준비됨"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "듣는 중"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "생각하는 중"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "말하는 중"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "무엇을 도와드릴까요?"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "OpenClaw 상태 확인"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "현재 OpenClaw 상태를 요약하고 주의가 필요한 사항을 알려 주세요."
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "무엇을 할 수 있나요?"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "지금 이 Mac에서 어떤 도움을 줄 수 있는지 보여 주세요."
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "최근 상황 알려주기"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "어제 이후 내 세션에서 있었던 일을 요약해 주세요."
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (로컬 필터링됨)"
@@ -22729,6 +22794,11 @@
       "translated": "계획 펼치기"
     },
     {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "사용자"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "고정됨"
@@ -22864,6 +22934,21 @@
       "translated": "메시지 복사"
     },
     {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "답장"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "나"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "어시스턴트"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "최신 항목으로 이동"
@@ -22969,6 +23054,11 @@
       "translated": "기록 내보내기"
     },
     {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "세션"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "사고 중"
@@ -23004,9 +23094,19 @@
       "translated": "새로 고침"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "세션…"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "기록 내보내기…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "추론 및 도구 활동 표시"
     },
     {
       "id": "native.apple.4b24d792545e5086",

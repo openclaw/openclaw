@@ -9138,6 +9138,14 @@
       ]
     },
     {
+      "locale": "nl",
+      "source": "You",
+      "translations": [
+        "Jij",
+        "U"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "active",
       "translations": [

@@ -22399,6 +22399,71 @@
       "translated": "检测到语音唤醒！"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "对话模式已关闭"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "对话模式已暂停"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "对话模式已就绪"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "正在聆听"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "正在思考"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "正在说话"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "你想处理什么？"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "检查 OpenClaw 状态"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "总结 OpenClaw 的当前状态，并告诉我哪些方面需要关注。"
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "你能做什么？"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "告诉我你现在能在这台 Mac 上提供哪些帮助。"
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "帮我了解最新情况"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "总结从昨天起我的会话中发生的事情。"
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": "（本地已过滤）"
@@ -22729,6 +22794,11 @@
       "translated": "展开计划"
     },
     {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "用户"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "已置顶"
@@ -22864,6 +22934,21 @@
       "translated": "复制消息"
     },
     {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "回复"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "你"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "助手"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "跳转到最新"
@@ -22969,6 +23054,11 @@
       "translated": "导出对话记录"
     },
     {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "会话"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "思考中"
@@ -23004,9 +23094,19 @@
       "translated": "刷新"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "会话…"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "导出对话记录…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "显示推理和工具活动"
     },
     {
       "id": "native.apple.4b24d792545e5086",

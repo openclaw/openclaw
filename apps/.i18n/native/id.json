@@ -22399,6 +22399,71 @@
       "translated": "Bangun suara terdeteksi!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "Mode bicara nonaktif"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "Mode bicara dijeda"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "Mode bicara siap"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "Mendengarkan"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "Berpikir"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "Berbicara"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "Apa yang ingin Anda kerjakan?"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "Periksa status OpenClaw"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "Rangkum status OpenClaw saat ini dan beri tahu saya hal yang perlu diperhatikan."
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "Apa yang dapat Anda lakukan?"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "Tunjukkan hal yang dapat Anda bantu di Mac ini sekarang."
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "Beri saya kabar terbaru"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "Rangkum apa yang terjadi dalam sesi saya sejak kemarin."
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (lokal difilter)"
@@ -22729,6 +22794,11 @@
       "translated": "Luaskan rencana"
     },
     {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "Pengguna"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Disematkan"
@@ -22864,6 +22934,21 @@
       "translated": "Salin Pesan"
     },
     {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "Balas"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "Anda"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "Asisten"
+    },
+    {
       "id": "native.apple.f84b674ad395b694",
       "source": "Jump to latest",
       "translated": "Lompat ke terbaru"
@@ -22969,6 +23054,11 @@
       "translated": "Ekspor Transkrip"
     },
     {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "Sesi"
+    },
+    {
       "id": "native.apple.b1f10b5e9113881d",
       "source": "Thinking",
       "translated": "Berpikir"
@@ -23004,9 +23094,19 @@
       "translated": "Segarkan"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "Sesi…"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "Ekspor Transkrip…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "Tampilkan penalaran & aktivitas alat"
     },
     {
       "id": "native.apple.4b24d792545e5086",

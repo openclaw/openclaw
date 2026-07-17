@@ -9,7 +9,7 @@ struct ChatReplyPreview: View {
         HStack(spacing: 6) {
             Image(systemName: "message")
                 .foregroundStyle(.secondary)
-            Text(String(localized: "Replying to \(self.target.senderLabel)"))
+            Text(String(format: String(localized: "Replying to %@"), self.target.senderLabel))
                 .font(OpenClawChatTypography.captionSemiBold)
                 .lineLimit(1)
             Text(preview.text + (preview.isTruncated ? "..." : ""))
