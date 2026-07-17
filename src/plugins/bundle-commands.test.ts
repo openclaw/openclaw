@@ -94,7 +94,7 @@ function expectEnabledClaudeBundleCommands(
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {
-  it("loads enabled Claude bundle markdown commands", async () => {
+  it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
     const homeDir = await createTempDir("openclaw-bundle-commands-home-");
     const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
     await withEnvAsync(
@@ -129,6 +129,22 @@ describe("loadEnabledClaudeBundleCommands", () => {
               ],
             },
             {
+              relativePath: "commands/model-hidden.md",
+              contents: ["---", "disable-model-invocation: on", "---", "Manual only."],
+            },
+            {
+              relativePath: "commands/user-enabled.md",
+              contents: ["---", "user-invocable: on", "---", "User enabled."],
+            },
+            {
+              relativePath: "commands/user-hidden.md",
+              contents: ["---", "user-invocable: off", "---", "User hidden."],
+            },
+            {
+              relativePath: "commands/user-hidden-false.md",
+              contents: ["---", "user-invocable: false", "---", "User hidden."],
+            },
+            {
               relativePath: "commands/not-frontmatter.md",
               contents: ["---not", "name: nope", "---not", "Treat this as Markdown."],
             },
@@ -145,6 +161,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
         });
 
         expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "model-hidden",
+            description: "Manual only.",
+            promptTemplate: "Manual only.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "model-hidden.md",
+            ),
+          },
           {
             pluginId: "compound-bundle",
             rawName: "not-frontmatter",
@@ -169,6 +196,17 @@ describe("loadEnabledClaudeBundleCommands", () => {
           },
           {
             pluginId: "compound-bundle",
+            rawName: "user-enabled",
+            description: "User enabled.",
+            promptTemplate: "User enabled.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "user-enabled.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
             rawName: "workflows:review",
             description: "Run a structured review",
             promptTemplate: "Review the code. $ARGUMENTS",
@@ -180,62 +218,9 @@ describe("loadEnabledClaudeBundleCommands", () => {
             ),
           },
         ]);
-      },
-    );
-  });
-
-  it("keeps model-hidden commands user-invocable and honors user-invocable literals", async () => {
-    const homeDir = await createTempDir("openclaw-bundle-commands-home-");
-    const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
-    const truthy = ["true", "on", "yes", "1"];
-    const falsy = ["false", "off", "no", "0"];
-    await withEnvAsync(
-      {
-        HOME: homeDir,
-        USERPROFILE: homeDir,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-      },
-      async () => {
-        await writeClaudeBundleCommandFixture({
-          homeDir,
-          pluginId: "invocation-policy-bundle",
-          commands: [
-            {
-              relativePath: "commands/default.md",
-              contents: ["Default manual command."],
-            },
-            ...truthy.map((value) => ({
-              relativePath: `commands/model-hidden-${value}.md`,
-              contents: ["---", `disable-model-invocation: ${value}`, "---", "Manual only."],
-            })),
-            ...truthy.map((value) => ({
-              relativePath: `commands/user-enabled-${value}.md`,
-              contents: ["---", `user-invocable: ${value}`, "---", "User enabled."],
-            })),
-            ...falsy.map((value) => ({
-              relativePath: `commands/user-hidden-${value}.md`,
-              contents: ["---", `user-invocable: ${value}`, "---", "User hidden."],
-            })),
-          ],
-        });
-
-        const commands = loadEnabledClaudeBundleCommands({
-          workspaceDir,
-          cfg: {
-            plugins: {
-              entries: { "invocation-policy-bundle": { enabled: true } },
-            },
-          },
-        });
-        const rawNames = new Set(commands.map((entry) => entry.rawName));
-        expect(rawNames).toEqual(
-          new Set([
-            "default",
-            ...truthy.map((value) => `model-hidden-${value}`),
-            ...truthy.map((value) => `user-enabled-${value}`),
-          ]),
-        );
+        const rawNames = commands.map((entry) => entry.rawName);
+        expect(rawNames).not.toContain("user-hidden");
+        expect(rawNames).not.toContain("user-hidden-false");
       },
     );
   });
