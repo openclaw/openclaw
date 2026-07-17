@@ -519,6 +519,23 @@ describe("uploadToConsentUrl", () => {
     ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden");
   });
 
+  it("cancels a non-OK consent upload response body before throwing", async () => {
+    const response = new Response("upload rejected", { status: 403, statusText: "Forbidden" });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const fetchFn = vi.fn<typeof fetch>(async () => response);
+
+    await expect(
+      uploadToConsentUrl({
+        url: "https://contoso.sharepoint.com/sites/uploads/file.pdf",
+        buffer: Buffer.from("data"),
+        fetchFn,
+        validationOpts: { resolveFn: publicResolve },
+      }),
+    ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden");
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("blocks HTTP (non-HTTPS) upload before fetch is called", async () => {
     const mockFetch = vi.fn();
     await expect(

@@ -226,6 +226,7 @@ export async function uploadToConsentUrl(params: {
   );
 
   if (!res.ok) {
+    await res.body?.cancel().catch(() => undefined);
     throw new Error(`File upload to consent URL failed: ${res.status} ${res.statusText}`);
   }
 }
