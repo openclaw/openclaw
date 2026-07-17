@@ -152,6 +152,14 @@ internal fun OpenClawWearApp(
     viewModel.startRealtimeTalk()
   }
 
+  fun leaveConversationContext() {
+    awaitingReply = false
+    awaitingReplySessionId = null
+    expectedAssistantKey = null
+    interaction = WearInteractionState.READY
+    speaker.stop()
+  }
+
   val audioPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       if (granted) {
@@ -342,9 +350,15 @@ internal fun OpenClawWearApp(
           speaker.stop()
           viewModel.abort()
         },
-        onSelectAgent = viewModel::selectAgent,
+        onSelectAgent = { agentId ->
+          leaveConversationContext()
+          viewModel.selectAgent(agentId)
+        },
         onSelectSession = { sessionKey ->
-          state.sessions.firstOrNull { it.key == sessionKey }?.let(viewModel::openSession)
+          state.sessions.firstOrNull { it.key == sessionKey }?.let { session ->
+            leaveConversationContext()
+            viewModel.openSession(session)
+          }
         },
         onRefresh = viewModel::refresh,
         onGatewayEnabledChange = { enabled ->

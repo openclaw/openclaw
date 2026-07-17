@@ -141,6 +141,7 @@ internal class WearViewModel(
         messages = emptyList(),
         streamText = null,
         activeRunId = null,
+        selectedModelRef = null,
         realtimeTalk = WearRealtimeTalkSnapshot(),
         talkBusy = false,
         error = null,
@@ -157,6 +158,7 @@ internal class WearViewModel(
         messages = emptyList(),
         streamText = null,
         activeRunId = null,
+        selectedModelRef = null,
         realtimeTalk = WearRealtimeTalkSnapshot(),
         talkBusy = false,
         error = null,
@@ -286,10 +288,12 @@ internal class WearViewModel(
         mutableState.update {
           it.copy(
             activeAgentId = agentId,
+            sessions = emptyList(),
             selectedSession = null,
             messages = emptyList(),
             streamText = null,
             activeRunId = null,
+            selectedModelRef = null,
           )
         }
         refresh()
@@ -329,7 +333,12 @@ internal class WearViewModel(
             status = status.detail,
             phoneNodeId = status.phoneNodeId,
             activeAgentId = status.activeAgentId ?: it.activeAgentId,
-            selectedModelRef = status.selectedModelRef ?: it.selectedModelRef,
+            selectedModelRef =
+              wearSelectedModelRef(
+                it.selectedSession?.key,
+                status.activeSessionKey,
+                status.selectedModelRef ?: it.selectedModelRef,
+              ),
             proxyCapabilities = status.capabilities,
             realtimeTalk = if (enabled) it.realtimeTalk else WearRealtimeTalkSnapshot(),
           )
@@ -431,7 +440,7 @@ internal class WearViewModel(
                 sessionList.activeAgentId
                   ?: status.activeAgentId
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
-              selectedModelRef = status.selectedModelRef,
+              selectedModelRef = wearSelectedModelRef(selectedSession?.key, activeSessionKey, status.selectedModelRef),
               proxyCapabilities = status.capabilities,
               sessions = projectedSessions,
               selectedSession = selectedSession,
@@ -773,6 +782,12 @@ internal fun coherentWearActiveSessionKey(
   // later list owns session selection; never attach its agent to a stale key.
   return statusSessionKey.takeIf { sessionListAgentId == null || sessionListAgentId == statusAgentId }
 }
+
+internal fun wearSelectedModelRef(
+  selectedSessionKey: String?,
+  activeSessionKey: String?,
+  selectedModelRef: String?,
+): String? = selectedModelRef.takeIf { selectedSessionKey != null && selectedSessionKey == activeSessionKey }
 
 internal fun mergeEventMessage(
   messages: List<WearChatMessage>,

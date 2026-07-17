@@ -23,4 +23,11 @@ class WearSessionScopeTest {
     assertEquals(sessionKey, coherentWearActiveSessionKey("agent-a", sessionKey, "agent-a"))
     assertEquals(sessionKey, coherentWearActiveSessionKey("agent-a", sessionKey, null))
   }
+
+  @Test
+  fun exposesModelOnlyForPhoneActiveSession() {
+    assertEquals("openai/model", wearSelectedModelRef("agent:main", "agent:main", "openai/model"))
+    assertNull(wearSelectedModelRef("agent:other", "agent:main", "openai/model"))
+    assertNull(wearSelectedModelRef(null, "agent:main", "openai/model"))
+  }
 }
