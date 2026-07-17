@@ -36,6 +36,7 @@ function cacheUserProfile(
   userId: string,
   profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
 ): void {
+  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
   userProfileCache.delete(userId);
   userProfileCache.set(userId, profile);
   if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
