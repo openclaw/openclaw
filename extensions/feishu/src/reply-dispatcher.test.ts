@@ -81,6 +81,10 @@ vi.mock("./accounts.js", () => ({
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
 }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+}));
 vi.mock("./send.js", () => ({
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
@@ -144,6 +148,7 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 afterAll(() => {
   vi.doUnmock("./accounts.js");
   vi.doUnmock("./runtime.js");
+  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.doUnmock("./send.js");
   vi.doUnmock("./media.js");
   vi.doUnmock("./client.js");
@@ -2122,6 +2127,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("does not send no-visible-reply fallback after an intentional silent block", async () => {
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    await expect(result.ensureNoVisibleReplyFallback("empty-complete")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
   it("sends no-visible-reply fallback when a final fails after an earlier silent skip", async () => {
     useNonStreamingAutoAccount();
     const runtime = createRuntimeLogger();
@@ -2138,6 +2157,32 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
     expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toBe(
       "Later visible final",
+    );
+    expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
+      "without visible content",
+    );
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: true,
+      skippedFinalReason: null,
+    });
+  });
+
+  it("sends no-visible-reply fallback when a block fails after an earlier silent skip", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(
+      options.deliver({ text: "Later visible block" }, { kind: "block" }),
+    ).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(String(firstMockArg(sendMessageFeishuMock, "send message params").text)).toBe(
+      "Later visible block",
     );
     expect(String(sendMessageFeishuMock.mock.calls[1]?.[0]?.text)).toContain(
       "without visible content",

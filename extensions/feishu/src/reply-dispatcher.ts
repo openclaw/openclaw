@@ -670,7 +670,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       conversationType: chatId.startsWith("oc_") ? "group" : "direct",
     },
     onSkip: (_payload, info) => {
-      if (info.kind === "final") {
+      if (info.kind === "final" || (info.kind === "block" && info.reason === "silent")) {
         skippedFinalReason = info.reason;
       }
     },
@@ -690,9 +690,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
     deliver: async (payload: ReplyPayload, info) => {
-      if (info?.kind === "final") {
-        skippedFinalReason = null;
-      }
+      skippedFinalReason = null;
       const payloadText =
         payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
       const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
