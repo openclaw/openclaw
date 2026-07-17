@@ -20,6 +20,7 @@ export type NormalizedAllowFrom = {
 };
 
 const warnedInvalidEntries = new Set<string>();
+const MAX_WARNED_INVALID_ENTRIES = 256;
 const log = createSubsystemLogger("telegram/bot-access");
 
 function warnInvalidAllowFromEntries(entries: string[]) {
@@ -27,7 +28,10 @@ function warnInvalidAllowFromEntries(entries: string[]) {
     return;
   }
   for (const entry of entries) {
-    if (warnedInvalidEntries.has(entry)) {
+    if (
+      warnedInvalidEntries.has(entry) ||
+      warnedInvalidEntries.size >= MAX_WARNED_INVALID_ENTRIES
+    ) {
       continue;
     }
     warnedInvalidEntries.add(entry);
