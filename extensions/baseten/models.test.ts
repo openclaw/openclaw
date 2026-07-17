@@ -121,6 +121,29 @@ describe("Baseten model catalog", () => {
     });
   });
 
+  it("rejects malformed live numeric strings before applying model metadata", () => {
+    const model = projectBasetenLiveModels([
+      {
+        id: "thinkingmachines/inkling",
+        object: "model",
+        context_length: "0x100000",
+        max_completion_tokens: "3.2e4",
+        pricing: {
+          prompt: "0x1",
+          completion: "4.2e-6",
+          input_cache_read: " 0.00000018 ",
+        },
+      },
+    ])[0];
+
+    expect(model).toMatchObject({
+      id: "thinkingmachines/inkling",
+      contextWindow: 1_048_000,
+      maxTokens: 32_000,
+      cost: { input: 1, output: 4.05, cacheRead: 0.17, cacheWrite: 0 },
+    });
+  });
+
   it("keeps discovery offline without resolved auth", async () => {
     await expect(discoverBasetenModels()).resolves.toHaveLength(12);
   });
