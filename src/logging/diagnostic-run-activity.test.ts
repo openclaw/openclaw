@@ -9,6 +9,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  clearDiagnosticEmbeddedRunActivityForSession,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
@@ -17,6 +18,7 @@ import {
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
+import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
 
 afterEach(() => {
   stopDiagnosticRunActivityTracking();
@@ -105,6 +107,76 @@ describe("resolveRunStaleThresholdMs", () => {
 });
 
 describe("diagnostic run activity retention", () => {
+  it("evicts run ownership retired by stuck-session recovery", () => {
+    startDiagnosticRunActivityTracking();
+    const recovered = {
+      sessionId: "recovered-session",
+      sessionKey: "agent:main:recovered",
+    };
+    markDiagnosticModelStartedForTest({
+      ...recovered,
+      runId: "recovered-run",
+      provider: "openai",
+      model: "gpt-5.5",
+      seq: 1,
+    });
+    clearDiagnosticEmbeddedRunActivityForSession({
+      ...recovered,
+      activeSessionId: recovered.sessionId,
+      recoveryStartedAfterDiagnosticEventSequence: 1,
+    });
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `post-recovery-run-${index}`;
+      const sessionId = `post-recovery-session-${index}`;
+      const sessionKey = `agent:main:post-recovery-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(recovered)).toEqual({});
+  });
+
+  it("keeps completion guards until a saturated async queue drains", async () => {
+    startDiagnosticRunActivityTracking();
+    const queuedRunCount = 10_000;
+    for (let index = 0; index < queuedRunCount; index += 1) {
+      emitTrustedDiagnosticEvent({
+        type: "run.progress",
+        runId: `queued-run-${index}`,
+        sessionId: `queued-session-${index}`,
+        sessionKey: `agent:main:queued-${index}`,
+        reason: "proof:queued",
+      });
+    }
+    for (let index = 0; index < queuedRunCount * 2; index += 1) {
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId: index < queuedRunCount ? `queued-run-${index}` : `later-run-${index}`,
+        sessionId: index < queuedRunCount ? `queued-session-${index}` : `later-session-${index}`,
+        sessionKey:
+          index < queuedRunCount ? `agent:main:queued-${index}` : `agent:main:later-${index}`,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "queued-session-0",
+        sessionKey: "agent:main:queued-0",
+      }),
+    ).toEqual({});
+  });
+
   it("does not reactivate completed runs from queued diagnostic events", async () => {
     startDiagnosticRunActivityTracking();
     const completed = {

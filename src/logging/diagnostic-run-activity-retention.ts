@@ -11,6 +11,7 @@ type CompletedRunEvent = {
 type DiagnosticRunActivityRetentionOptions<Activity> = {
   activities: Set<Activity>;
   deleteActivity: (activity: Activity) => void;
+  hasPendingRunEvent: (event: CompletedRunEvent) => boolean;
   isIdle: (activity: Activity) => boolean;
   lastProgressAt: (activity: Activity) => number;
 };
@@ -27,10 +28,17 @@ export function createDiagnosticRunActivityRetention<Activity>(
   const completedRunTombstones = new Map<string, { completedAt: number; sequence: number }>();
   let lastPruneAt = 0;
 
+  function canEvictCompletedRunTombstone(runId: string, sequence: number): boolean {
+    return !options.hasPendingRunEvent({ runId, seq: sequence });
+  }
+
   function pruneCompletedRunTombstones(now: number, pruneExpired: boolean): void {
     if (pruneExpired) {
       for (const [runId, tombstone] of completedRunTombstones) {
-        if (now - tombstone.completedAt > RUN_COMPLETION_TOMBSTONE_TTL_MS) {
+        if (
+          now - tombstone.completedAt > RUN_COMPLETION_TOMBSTONE_TTL_MS &&
+          canEvictCompletedRunTombstone(runId, tombstone.sequence)
+        ) {
           completedRunTombstones.delete(runId);
         }
       }
@@ -40,7 +48,10 @@ export function createDiagnosticRunActivityRetention<Activity>(
       return;
     }
     let removed = 0;
-    for (const runId of completedRunTombstones.keys()) {
+    for (const [runId, tombstone] of completedRunTombstones) {
+      if (!canEvictCompletedRunTombstone(runId, tombstone.sequence)) {
+        continue;
+      }
       completedRunTombstones.delete(runId);
       removed += 1;
       if (removed >= excess) {
@@ -96,6 +107,9 @@ export function createDiagnosticRunActivityRetention<Activity>(
     prune,
     recordRunCompleted(event: CompletedRunEvent, now = Date.now()): void {
       completedRunTombstones.delete(event.runId);
+      if (!options.hasPendingRunEvent(event)) {
+        return;
+      }
       completedRunTombstones.set(event.runId, { completedAt: now, sequence: event.seq });
     },
     reset(): void {

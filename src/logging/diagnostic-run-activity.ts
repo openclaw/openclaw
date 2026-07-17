@@ -1,16 +1,24 @@
 // Diagnostic run activity helpers summarize run lifecycle activity for diagnostics.
 import {
   getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticRunEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
 import { createDiagnosticRunActivityRetention } from "./diagnostic-run-activity-retention.js";
+import {
+  deleteDiagnosticActiveRunsStartedBefore,
+  deleteRecoveredDiagnosticActiveRuns,
+  type DiagnosticActiveRun,
+  mergeDiagnosticActiveRuns,
+  registerDiagnosticActiveRun,
+} from "./diagnostic-run-activity-runs.js";
 
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
-  runIds: Set<string>;
+  activeRuns: Map<string, DiagnosticActiveRun>;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Map<string, ActiveModelCall>;
@@ -117,9 +125,14 @@ function registerSessionActivityRefs(
   }
 }
 
-function registerActiveRun(activity: SessionActivity, runId: string): void {
-  activity.runIds.add(runId);
-  activityByRunId.set(runId, activity);
+function registerActiveRun(
+  activity: SessionActivity,
+  event: { runId?: string; sessionId?: string; seq?: number },
+): void {
+  const runId = registerDiagnosticActiveRun(activity.activeRuns, event, activity.sessionId);
+  if (runId) {
+    activityByRunId.set(runId, activity);
+  }
 }
 
 function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
@@ -138,9 +151,7 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
-  for (const runId of source.runIds) {
-    target.runIds.add(runId);
-  }
+  mergeDiagnosticActiveRuns(target.activeRuns, source.activeRuns);
   for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
     target.activeEmbeddedRuns.set(key, embeddedRun);
   }
@@ -202,7 +213,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    runIds: new Set(),
+    activeRuns: new Map(),
     activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Map(),
@@ -215,7 +226,7 @@ function resolveSessionActivity(params: {
 
 function isIdleSessionActivity(activity: SessionActivity): boolean {
   return (
-    activity.runIds.size === 0 &&
+    activity.activeRuns.size === 0 &&
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
@@ -234,6 +245,7 @@ function deleteSessionActivity(activity: SessionActivity): void {
 const activityRetention = createDiagnosticRunActivityRetention({
   activities: sessionActivities,
   deleteActivity: deleteSessionActivity,
+  hasPendingRunEvent: (event) => hasPendingInternalDiagnosticRunEvent(event.runId, event.seq),
   isIdle: isIdleSessionActivity,
   lastProgressAt: (activity) => activity.lastProgressAt,
 });
@@ -271,9 +283,7 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
-  if (event.runId) {
-    registerActiveRun(activity, event.runId);
-  }
+  registerActiveRun(activity, event);
   const now = Date.now();
   activity.activeTools.set(toolKey(event), {
     runId: event.runId,
@@ -316,9 +326,7 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
   }
-  if (event.runId) {
-    registerActiveRun(activity, event.runId);
-  }
+  registerActiveRun(activity, event);
   activity.activeModelCalls.set(modelCallKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
@@ -354,9 +362,7 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
   if (!activity) {
     return;
   }
-  if (params.runId) {
-    registerActiveRun(activity, params.runId);
-  }
+  registerActiveRun(activity, params);
   touchSessionActivity(activity, params.reason);
 }
 
@@ -371,7 +377,7 @@ function recordRunCompleted(
     return;
   }
   activityByRunId.delete(event.runId);
-  activity.runIds.delete(event.runId);
+  activity.activeRuns.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeEmbeddedRuns.clear();
@@ -517,6 +523,26 @@ function clearRecoveredOwnerMarkers(
   }
 }
 
+function clearRecoveredOwnerRuns(
+  activity: SessionActivity,
+  ownerRefs: Set<string>,
+  recoveryStartedAfterSequence: number | undefined,
+): void {
+  if (ownerRefs.size === 0) {
+    return;
+  }
+  deleteRecoveredDiagnosticActiveRuns(
+    activity.activeRuns,
+    ownerRefs,
+    recoveryStartedAfterSequence,
+    (runId) => {
+      if (activityByRunId.get(runId) === activity) {
+        activityByRunId.delete(runId);
+      }
+    },
+  );
+}
+
 function pruneActivityStartedBeforeRecoveryCutoff(
   activity: SessionActivity,
   recoveryStartedAfterEmbeddedRunSequence: number | undefined,
@@ -543,6 +569,15 @@ function pruneActivityStartedBeforeRecoveryCutoff(
       activity.activeModelCalls.delete(key);
     }
   }
+  deleteDiagnosticActiveRunsStartedBefore(
+    activity.activeRuns,
+    recoveryStartedAfterDiagnosticEventSequence,
+    (runId) => {
+      if (activityByRunId.get(runId) === activity) {
+        activityByRunId.delete(runId);
+      }
+    },
+  );
 }
 
 function rememberRecoveredOwnerStartEventCutoffs(
@@ -621,7 +656,8 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
   if (
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
-    activity.activeModelCalls.size === 0
+    activity.activeModelCalls.size === 0 &&
+    activity.activeRuns.size === 0
   ) {
     return { cleared: false, blockedByActiveEmbeddedRun: false };
   }
@@ -635,6 +671,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     ownerRefs,
     params.recoveryStartedAfterDiagnosticEventSequence,
   );
+  clearRecoveredOwnerRuns(activity, ownerRefs, params.recoveryStartedAfterDiagnosticEventSequence);
   if (activity.activeEmbeddedRuns.size > 0) {
     if (hasEmbeddedRunStartedAfter(activity, params.recoveryStartedAfterEmbeddedRunSequence)) {
       pruneActivityStartedBeforeRecoveryCutoff(
