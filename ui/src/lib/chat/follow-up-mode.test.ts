@@ -12,6 +12,13 @@ describe("Control UI follow-up mode", () => {
         messages: { queue: { byChannel: { webchat: "collect" }, mode: "interrupt" } },
       }),
     ).toBe("collect");
+    expect(
+      resolveControlUiServerQueueMode(
+        { messages: { queue: { byChannel: { webchat: "collect" }, mode: "interrupt" } } },
+        "followup",
+      ),
+    ).toBe("followup");
+    expect(resolveControlUiServerQueueMode(undefined, "followup")).toBe("followup");
   });
 
   it("inherits the server behavior until the browser has an explicit override", () => {

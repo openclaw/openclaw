@@ -2186,10 +2186,14 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
     const configSnapshot = this.context.runtimeConfig.state.configSnapshot;
-    const serverQueueMode = configSnapshot
-      ? resolveControlUiServerQueueMode(configSnapshot.runtimeConfig)
-      : undefined;
+    const serverQueueMode = resolveControlUiServerQueueMode(
+      configSnapshot?.runtimeConfig,
+      selectedSession?.effectiveQueueMode,
+    );
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
       serverQueueMode,
@@ -2209,9 +2213,6 @@ class ChatPane extends OpenClawLightDomElement {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(

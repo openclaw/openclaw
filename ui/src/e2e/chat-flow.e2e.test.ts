@@ -2156,6 +2156,57 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("honors a session queue override ahead of the webchat config default", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-session-override-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+        "sessions.list": chatSessionListResponse([
+          {
+            effectiveQueueMode: "followup",
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            updatedAt: Date.now(),
+          },
+        ]),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "queue this session override";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      await page.locator(".chat-queue").getByText(followUp).waitFor({ timeout: 10_000 });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("steers a restored queued message when only the session row reports the active run", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

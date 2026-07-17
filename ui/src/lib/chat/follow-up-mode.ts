@@ -13,12 +13,16 @@ function normalizedQueueMode(value: unknown): QueueMode | undefined {
   return typeof value === "string" ? normalizeQueueMode(value) : undefined;
 }
 
-/** Matches resolveQueueSettings precedence for the Control UI's webchat channel. */
-export function resolveControlUiServerQueueMode(runtimeConfig: unknown): QueueMode {
+/** Matches resolveQueueSettings precedence for the current Control UI session. */
+export function resolveControlUiServerQueueMode(
+  runtimeConfig: unknown,
+  sessionMode?: unknown,
+): QueueMode {
   const messages = record(record(runtimeConfig)?.messages);
   const queue = record(messages?.queue);
   const byChannel = record(queue?.byChannel);
   return (
+    normalizedQueueMode(sessionMode) ??
     normalizedQueueMode(byChannel?.[INTERNAL_MESSAGE_CHANNEL]) ??
     normalizedQueueMode(queue?.mode) ??
     "steer"
