@@ -433,20 +433,22 @@ export function resolveSession(opts: {
   const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
+  const lifecycleFreshness =
+    sessionEntry && !skipImplicitExpiry
+      ? evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: sessionAgentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        })
+      : undefined;
+  const freshUnderResetPolicy = skipImplicitExpiry || lifecycleFreshness?.fresh === true;
   const fresh = sessionEntry
-    ? lockedModelSelection ||
-      (!terminalMainTranscriptNewerThanRegistry &&
-        (skipImplicitExpiry ||
-          evaluateSessionFreshness({
-            updatedAt: sessionEntry.updatedAt,
-            ...resolveSessionLifecycleTimestamps({
-              entry: sessionEntry,
-              agentId: sessionAgentId,
-              storePath,
-            }),
-            now,
-            policy: resetPolicy,
-          }).fresh))
+    ? lockedModelSelection || (!terminalMainTranscriptNewerThanRegistry && freshUnderResetPolicy)
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
@@ -459,12 +461,17 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
+  // Terminal transcript recovery may rotate the session id without crossing a
+  // configured reset boundary; carry prefs only for that recovery case.
+  const carryPersistedPreferences =
+    Boolean(sessionEntry) &&
+    (fresh || (terminalMainTranscriptNewerThanRegistry && freshUnderResetPolicy));
   const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
+    carryPersistedPreferences && sessionEntry?.thinkingLevel
       ? normalizeThinkLevel(sessionEntry.thinkingLevel)
       : undefined;
   const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
+    carryPersistedPreferences && sessionEntry?.verboseLevel
       ? normalizeVerboseLevel(sessionEntry.verboseLevel)
       : undefined;
 
