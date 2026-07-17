@@ -205,6 +205,32 @@ describe("pw-tools-core", () => {
     });
   });
 
+  it("keeps the download timeout active while saving the file", async () => {
+    await withTempDir(async (tempDir) => {
+      const harness = createDownloadEventHarness();
+      const saveAs = vi.fn(() => new Promise<void>(() => {}));
+
+      const p = mod.waitForDownloadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        path: path.join(tempDir, "file.bin"),
+        timeoutMs: 500,
+      });
+
+      await Promise.resolve();
+      harness.expectArmed();
+      harness.trigger({
+        url: () => "https://example.com/file.bin",
+        suggestedFilename: () => "file.bin",
+        saveAs,
+      });
+
+      await vi.waitFor(() => expect(saveAs).toHaveBeenCalledOnce());
+      await expect(p).rejects.toThrow("Timeout waiting for download");
+      expect(harness.activeHandlerCount()).toBe(0);
+    });
+  });
+
   it("creates missing explicit download output parents through the safe output directory path", async () => {
     await withTempDir(async (tempDir) => {
       const harness = createDownloadEventHarness();

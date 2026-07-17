@@ -82,6 +82,7 @@ export function createDownloadCaptureForPage(
 
   state.downloadWaiterDepth += 1;
   let done = false;
+  let settled = false;
   let depthReleased = false;
   let timer: NodeJS.Timeout | undefined;
   let handler: ((download: unknown) => void) | undefined;
@@ -91,13 +92,16 @@ export function createDownloadCaptureForPage(
       depthReleased = true;
       state.downloadWaiterDepth = Math.max(0, state.downloadWaiterDepth - 1);
     }
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
     if (handler) {
       page.off("download", handler as never);
       handler = undefined;
+    }
+  };
+
+  const finish = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
     }
   };
 
@@ -108,14 +112,32 @@ export function createDownloadCaptureForPage(
       }
       done = true;
       cleanup();
-      void saveBrowserDownload(download as PlaywrightDownload, opts).then(resolve, reject);
+      void saveBrowserDownload(download as PlaywrightDownload, opts).then(
+        (result) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          finish();
+          resolve(result);
+        },
+        (error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          finish();
+          reject(error);
+        },
+      );
     };
     page.on("download", handler as never);
     timer = setTimeout(
       () => {
-        if (done) {
+        if (settled) {
           return;
         }
+        settled = true;
         done = true;
         cleanup();
         reject(new Error(opts.timeoutMessage ?? "Timeout waiting for download"));
@@ -129,11 +151,13 @@ export function createDownloadCaptureForPage(
     armed: true,
     promise,
     cancel: () => {
-      if (done) {
+      if (done || settled) {
         return;
       }
+      settled = true;
       done = true;
       cleanup();
+      finish();
     },
   };
 }
