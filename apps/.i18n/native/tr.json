@@ -13109,6 +13109,11 @@
       "translated": "Paylaşım Öz Sınamasını Çalıştır"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple Sağlık"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "Keşif Hata Ayıklama Günlükleri"
@@ -14299,6 +14304,36 @@
       "translated": "Bir daha gösterme"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Apple Sağlık Özetleri"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "Apple Sağlık verileri bu cihazda kullanılamıyor."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "Yalnızca bir özet istendiğinde Apple Health'ten adım, uyku, dinlenme kalp atış hızı ve antrenman verilerini okur. Bu cihazdan, Gateway'iniz üzerinden yapılandırılmış AI sağlayıcınıza yalnızca toplu veriler gönderilir; ham örnekler bu cihazda kalır ve sonuçlar sohbet geçmişinde tutulabilir."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Apple Sağlık uygulamasındaki adım, uyku, dinlenme kalp atış hızı ve antrenman verilerinden salt okunur özetler oluşturur. Bu cihazdan yalnızca istenen özetler Gateway üzerinden yapılandırılmış AI sağlayıcınıza gönderilir; ham örnekler bu cihazda kalır."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "Özetleri Kapat"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Apple Sağlık Özetlerini Etkinleştir"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw, takvim erişimini etkinleştirdiğinizde etkinlikleri ve planlama bağlamını göstermek için takvimlerinizi kullanır."
@@ -14344,14 +14379,14 @@
       "translated": "OpenClaw, cihaza duyarlı etkileşimleri ve otomasyonları desteklemek için hareket verilerini kullanabilir."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "Sağlık Özetleri'ni etkinleştirdikten sonra OpenClaw, istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşmak için adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okur."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw, istediğiniz özetleri oluşturmak ve bunları Gateway üzerinden yapılandırılmış AI sağlayıcınıza göndermek için Apple Sağlık uygulamasındaki adım, uyku, dinlenme kalp atış hızı ve antrenman verilerinizi okur."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw, Sağlık verilerini yazmaz veya değiştirmez. Sağlık Özetleri; adımları, uykuyu, dinlenme kalp atış hızını ve antrenmanları okuyarak istenen toplu verileri yapılandırdığınız yapay zeka sağlayıcısıyla paylaşır."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw, Apple Sağlık uygulamasına veri yazmaz. İstediğiniz özetleri oluşturmak ve bunları Gateway üzerinden yapılandırılmış AI sağlayıcınıza göndermek için salt okunur verileri kullanır."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "Yalnızca Ekleme"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "Sağlık Özetleri"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "İzin Ver"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Ayarları Aç"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "Sağlık verileri bu aygıtta kullanılamıyor."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "Yalnızca istenen adım, uyku, dinlenme kalp atış hızı ve antrenman toplu verilerini Gateway üzerinden yapılandırdığınız yapay zeka sağlayıcısıyla paylaşır. Sonuçlar sohbet geçmişinde kalabilir."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "Varsayılan olarak kapalıdır. Etkinleştirme, istenen toplu verilerin Gateway ve yapılandırdığınız yapay zeka sağlayıcısı üzerinden bu iPhone'dan çıkmasına izin verir."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "Devre dışı bırak"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "Özetleri etkinleştir ve paylaş"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

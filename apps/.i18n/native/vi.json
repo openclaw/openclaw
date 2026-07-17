@@ -13109,6 +13109,11 @@
       "translated": "Chạy tự kiểm tra chia sẻ"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple Health"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "Nhật ký gỡ lỗi khám phá"
@@ -14299,6 +14304,36 @@
       "translated": "Đừng hiển thị lại"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Bản tóm tắt Apple Health"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "Dữ liệu Apple Health không khả dụng trên thiết bị này."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "Chỉ đọc số bước chân, giấc ngủ, nhịp tim khi nghỉ và các buổi tập từ Apple Health khi có yêu cầu tóm tắt. Chỉ dữ liệu tổng hợp rời khỏi thiết bị này thông qua Gateway để gửi đến nhà cung cấp AI mà bạn đã cấu hình; các mẫu dữ liệu thô vẫn lưu trên thiết bị này và kết quả có thể được lưu trong lịch sử trò chuyện."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Tạo các bản tóm tắt chỉ đọc từ ứng dụng Apple Health về số bước chân, giấc ngủ, nhịp tim khi nghỉ và hoạt động tập luyện. Chỉ những bản tóm tắt được yêu cầu mới được gửi khỏi thiết bị này thông qua Gateway đến nhà cung cấp AI mà bạn đã cấu hình; các mẫu dữ liệu thô vẫn được lưu trên thiết bị này."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "Tắt bản tóm tắt"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Bật bản tóm tắt Apple Health"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw sử dụng lịch của bạn để hiển thị sự kiện và ngữ cảnh lên lịch khi bạn bật quyền truy cập lịch."
@@ -14344,14 +14379,14 @@
       "translated": "OpenClaw có thể sử dụng dữ liệu chuyển động để hỗ trợ các tương tác và tự động hóa nhận biết thiết bị."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "Sau khi bạn bật Tóm tắt sức khỏe, OpenClaw sẽ đọc số bước chân, giấc ngủ, nhịp tim lúc nghỉ và bài tập để chia sẻ dữ liệu tổng hợp được yêu cầu với nhà cung cấp AI mà bạn đã cấu hình."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw đọc dữ liệu về số bước chân, giấc ngủ, nhịp tim khi nghỉ và hoạt động tập luyện của bạn từ ứng dụng Apple Health để tạo các bản tóm tắt mà bạn yêu cầu và gửi chúng thông qua Gateway đến nhà cung cấp AI mà bạn đã cấu hình."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw không ghi hoặc thay đổi dữ liệu Sức khỏe. Tóm tắt Sức khỏe đọc số bước, giấc ngủ, nhịp tim khi nghỉ và các bài tập để chia sẻ các số liệu tổng hợp được yêu cầu với nhà cung cấp AI mà bạn đã cấu hình."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw không ghi dữ liệu vào ứng dụng Apple Health. OpenClaw sử dụng dữ liệu chỉ đọc để tạo các bản tóm tắt mà bạn yêu cầu và gửi chúng thông qua Gateway đến nhà cung cấp AI mà bạn đã cấu hình."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "Chỉ thêm"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "Tóm tắt sức khỏe"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "Cho phép"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Mở Cài đặt"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "Dữ liệu sức khỏe không khả dụng trên thiết bị này."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "Chỉ chia sẻ dữ liệu tổng hợp được yêu cầu về số bước chân, giấc ngủ, nhịp tim lúc nghỉ và bài tập qua Gateway của bạn với nhà cung cấp AI đã cấu hình. Kết quả có thể được lưu trong lịch sử trò chuyện."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "Tắt theo mặc định. Khi bật, dữ liệu tổng hợp được yêu cầu có thể rời khỏi iPhone này qua Gateway và nhà cung cấp AI mà bạn đã cấu hình."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "Tắt"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "Bật và chia sẻ tóm tắt"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

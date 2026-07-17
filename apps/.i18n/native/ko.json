@@ -13109,6 +13109,11 @@
       "translated": "공유 자체 테스트 실행"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Apple 건강"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "검색 디버그 로그"
@@ -14299,6 +14304,36 @@
       "translated": "다시 표시하지 않기"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Apple 건강 요약"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "이 기기에서는 Apple 건강 데이터를 사용할 수 없습니다."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "요약을 요청한 경우에만 Apple Health에서 걸음 수, 수면, 안정 시 심박수 및 운동 데이터를 읽습니다. 집계된 데이터만 Gateway를 통해 설정된 AI 제공업체로 이 기기 외부에 전송되며, 원시 샘플은 이 기기에 보관되고 결과는 채팅 기록에 남을 수 있습니다."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Apple 건강 앱의 걸음 수, 수면, 안정 시 심박수 및 운동 데이터를 바탕으로 읽기 전용 요약을 생성합니다. 요청된 요약만 Gateway를 통해 구성된 AI 제공업체로 전송되며, 원시 샘플은 이 기기에 남아 있습니다."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "요약 끄기"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Apple 건강 요약 활성화"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "캘린더 접근을 활성화하면 OpenClaw가 캘린더를 사용하여 이벤트와 일정 컨텍스트를 표시합니다."
@@ -14344,14 +14379,14 @@
       "translated": "OpenClaw는 기기 인식 상호작용 및 자동화를 지원하기 위해 동작 데이터를 사용할 수 있습니다."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "건강 요약을 활성화하면 OpenClaw가 요청된 집계 데이터를 구성된 AI 제공업체와 공유하기 위해 걸음 수, 수면, 안정 시 심박수 및 운동을 읽습니다."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw는 Apple 건강 앱에서 걸음 수, 수면, 안정 시 심박수 및 운동 데이터를 읽어 요청한 요약을 생성하고, Gateway를 통해 구성된 AI 제공업체로 전송합니다."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw는 건강 데이터를 작성하거나 변경하지 않습니다. 건강 요약은 걸음 수, 수면, 안정 시 심박수, 운동을 읽어 요청된 집계 정보를 구성된 AI 제공업체와 공유합니다."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw는 Apple 건강 앱에 데이터를 기록하지 않습니다. 읽기 전용 데이터를 사용하여 요청한 요약을 생성하고, Gateway를 통해 구성된 AI 제공업체로 전송합니다."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "추가 전용"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "건강 요약"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "허용"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "설정 열기"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "이 기기에서는 건강 데이터를 사용할 수 없습니다."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "요청된 걸음 수, 수면, 안정 시 심박수 및 운동 집계 데이터만 Gateway를 통해 구성된 AI 제공업체와 공유합니다. 결과는 채팅 기록에 남을 수 있습니다."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "기본적으로 꺼져 있습니다. 활성화하면 요청된 집계 데이터가 Gateway 및 구성된 AI 제공업체를 통해 이 iPhone 외부로 전송될 수 있습니다."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "비활성화"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "요약 활성화 및 공유"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

@@ -13109,6 +13109,11 @@
       "translated": "Ejecutar autoprueba de compartir"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "Salud de Apple"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "Registros de depuración de descubrimiento"
@@ -14299,6 +14304,36 @@
       "translated": "No volver a mostrar"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "Resúmenes de Salud de Apple"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "Los datos de Salud de Apple no están disponibles en este dispositivo."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "Lee los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos de Apple Health solo cuando se solicita un resumen. Únicamente los datos agregados salen de este dispositivo a través de tu Gateway hacia el proveedor de IA configurado; las muestras sin procesar permanecen en este dispositivo y los resultados pueden conservarse en el historial del chat."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "Crea resúmenes de solo lectura a partir de la app Salud de Apple sobre pasos, sueño, frecuencia cardíaca en reposo y entrenamientos. Solo los resúmenes solicitados salen de este dispositivo a través de tu Gateway hacia el proveedor de IA configurado; las muestras sin procesar permanecen en este dispositivo."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "Desactivar resúmenes"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "Activar resúmenes de Salud de Apple"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw usa tus calendarios para mostrar eventos y contexto de programación cuando activas el acceso al calendario."
@@ -14344,14 +14379,14 @@
       "translated": "OpenClaw puede usar datos de movimiento para admitir interacciones y automatizaciones conscientes del dispositivo."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "Después de activar Resúmenes de salud, OpenClaw lee los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos para compartir los datos agregados solicitados con el proveedor de IA que hayas configurado."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw lee tus pasos, sueño, frecuencia cardíaca en reposo y entrenamientos desde la app Salud de Apple para crear los resúmenes que solicites y enviarlos a través de tu Gateway al proveedor de IA configurado."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw no escribe ni modifica los datos de Salud. Los Resúmenes de Salud leen los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos para compartir los agregados solicitados con tu proveedor de IA configurado."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw no escribe en la app Salud de Apple. Utiliza datos de solo lectura para crear los resúmenes que solicites y enviarlos a través de tu Gateway al proveedor de IA configurado."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "Solo añadir"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "Resúmenes de salud"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "Permitir"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "Abrir Ajustes"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "Los datos de salud no están disponibles en este dispositivo."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "Solo comparte los datos agregados solicitados de pasos, sueño, frecuencia cardíaca en reposo y entrenamientos mediante tu Gateway con el proveedor de IA que hayas configurado. Los resultados pueden permanecer en el historial del chat."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "Desactivado de forma predeterminada. Al activarlo, los datos agregados solicitados pueden salir de este iPhone mediante tu Gateway y el proveedor de IA configurado."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "Desactivar"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "Activar y compartir resúmenes"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

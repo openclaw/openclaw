@@ -13109,6 +13109,11 @@
       "translated": "اجرای خودآزمایی اشتراک‌گذاری"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "سلامت اپل"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "گزارش‌های اشکال‌زدایی کشف"
@@ -14299,6 +14304,36 @@
       "translated": "دیگر نشان نده"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "خلاصه‌های سلامت اپل"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "داده‌های سلامت اپل در این دستگاه در دسترس نیست."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "فقط زمانی که خلاصه‌ای درخواست شود، داده‌های مربوط به تعداد قدم‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را از Apple Health می‌خواند. فقط داده‌های تجمیعی از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال می‌شوند؛ نمونه‌های خام روی این دستگاه باقی می‌مانند و نتایج ممکن است در تاریخچه چت حفظ شوند."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "خلاصه‌های فقط‌خواندنی از برنامه سلامت اپل برای گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها ایجاد می‌کند. فقط خلاصه‌های درخواست‌شده از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال می‌شوند؛ نمونه‌های خام در این دستگاه باقی می‌مانند."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "خاموش کردن خلاصه‌ها"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "فعال کردن خلاصه‌های سلامت اپل"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "OpenClaw از تقویم‌های شما استفاده می‌کند تا وقتی دسترسی به تقویم را فعال می‌کنید، رویدادها و زمینهٔ زمان‌بندی را نشان دهد."
@@ -14344,14 +14379,14 @@
       "translated": "OpenClaw ممکن است از داده‌های حرکت برای پشتیبانی از تعاملات و خودکارسازی‌های آگاه از دستگاه استفاده کند."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "پس از فعال‌کردن خلاصه‌های سلامت، OpenClaw گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را می‌خواند تا داده‌های تجمیعی درخواستی را با ارائه‌دهنده هوش مصنوعی پیکربندی‌شده شما به اشتراک بگذارد."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw اطلاعات گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌های شما را از برنامه سلامت اپل می‌خواند تا خلاصه‌های درخواستی شما را ایجاد کند و آن‌ها را از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده ارسال کند."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "OpenClaw داده‌های Health را نمی‌نویسد یا تغییر نمی‌دهد. Health Summaries گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را می‌خواند تا مجموعه‌های درخواستی را با ارائه‌دهنده AI پیکربندی‌شده‌تان به اشتراک بگذارد."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "OpenClaw چیزی در برنامه سلامت اپل نمی‌نویسد. این برنامه از داده‌های فقط‌خواندنی برای ایجاد خلاصه‌های درخواستی شما و ارسال آن‌ها از طریق Gateway شما به ارائه‌دهنده هوش مصنوعی پیکربندی‌شده استفاده می‌کند."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "فقط افزودن"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "خلاصه‌های سلامت"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "اجازه دادن"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "باز کردن تنظیمات"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "داده‌های سلامت در این دستگاه در دسترس نیست."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "فقط داده‌های تجمیعی درخواستی مربوط به گام‌ها، خواب، ضربان قلب در حالت استراحت و تمرین‌ها را از طریق Gateway شما با ارائه‌دهنده هوش مصنوعی پیکربندی‌شده به اشتراک می‌گذارد. نتایج ممکن است در تاریخچه گفتگو باقی بمانند."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "به‌طور پیش‌فرض خاموش است. با فعال‌کردن، داده‌های تجمیعی درخواستی می‌توانند از طریق Gateway و ارائه‌دهنده هوش مصنوعی پیکربندی‌شده شما از این iPhone خارج شوند."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "غیرفعال کردن"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "فعال‌سازی و اشتراک‌گذاری خلاصه‌ها"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

@@ -13109,6 +13109,11 @@
       "translated": "تشغيل الاختبار الذاتي للمشاركة"
     },
     {
+      "id": "native.apple.c2cab769e36ad25d",
+      "source": "Apple Health",
+      "translated": "صحّة Apple"
+    },
+    {
       "id": "native.apple.dfbbe0f7c038894a",
       "source": "Discovery Debug Logs",
       "translated": "سجلات تصحيح أخطاء الاكتشاف"
@@ -14299,6 +14304,36 @@
       "translated": "عدم الإظهار مرة أخرى"
     },
     {
+      "id": "native.apple.e80408b30ca670f4",
+      "source": "Apple Health Summaries",
+      "translated": "ملخصات صحّة Apple"
+    },
+    {
+      "id": "native.apple.1d9253b4d79e1a6b",
+      "source": "Apple Health data is unavailable on this device.",
+      "translated": "بيانات صحّة Apple غير متاحة على هذا الجهاز."
+    },
+    {
+      "id": "native.apple.f332b4fb6215a12a",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "translated": "يقرأ الخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين من Apple Health فقط عند طلب ملخص. لا يغادر هذا الجهاز عبر Gateway إلى مزود الذكاء الاصطناعي الذي أعددته سوى البيانات المجمعة؛ وتبقى العينات الأولية على هذا الجهاز، وقد تظل النتائج في سجل الدردشة."
+    },
+    {
+      "id": "native.apple.279758eb7531d811",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "translated": "ينشئ ملخصات للقراءة فقط من تطبيق صحّة Apple حول الخطوات والنوم ومعدل نبض القلب أثناء الراحة والتمارين. ولا تغادر هذا الجهاز سوى الملخصات المطلوبة عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته؛ وتبقى العينات الأولية على هذا الجهاز."
+    },
+    {
+      "id": "native.apple.9e29919ede21527e",
+      "source": "Turn Off Summaries",
+      "translated": "إيقاف الملخصات"
+    },
+    {
+      "id": "native.apple.c229e9c6fa7bac3b",
+      "source": "Enable Apple Health Summaries",
+      "translated": "تمكين ملخصات صحّة Apple"
+    },
+    {
       "id": "native.apple.cf820096080f7031",
       "source": "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.",
       "translated": "يستخدم OpenClaw تقويماتك لعرض الأحداث وسياق الجدولة عند تفعيل الوصول إلى التقويم."
@@ -14344,14 +14379,14 @@
       "translated": "قد يستخدم OpenClaw بيانات الحركة لدعم التفاعلات والأتمتة الواعية بالجهاز."
     },
     {
-      "id": "native.apple.c86f7ba5b3762eb7",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "بعد تمكين ملخصات الصحة، يقرأ OpenClaw الخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين لمشاركة البيانات المجمعة المطلوبة مع موفر الذكاء الاصطناعي الذي أعددته."
+      "id": "native.apple.1d3a6099d7e11895",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "يقرأ OpenClaw بيانات خطواتك ونومك ومعدل نبض قلبك أثناء الراحة وتمارينك من تطبيق صحّة Apple لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
     },
     {
-      "id": "native.apple.89de9bad79f17038",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
-      "translated": "لا يقوم OpenClaw بكتابة بيانات Health أو تغييرها. تقرأ ملخصات Health الخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين لمشاركة الإجماليات المطلوبة مع مزوّد الذكاء الاصطناعي المُهيّأ لديك."
+      "id": "native.apple.c90a204b3232c401",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
+      "translated": "لا يكتب OpenClaw أي بيانات إلى تطبيق صحّة Apple. بل يستخدم البيانات المتاحة للقراءة فقط لإنشاء الملخصات التي تطلبها وإرسالها عبر Gateway إلى مزوّد الذكاء الاصطناعي الذي أعددته."
     },
     {
       "id": "native.apple.40ed4259ec869f1b",
@@ -15519,11 +15554,6 @@
       "translated": "إضافة فقط"
     },
     {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "ملخصات الصحة"
-    },
-    {
       "id": "native.apple.0b10201d7e452dc4",
       "source": "Allow",
       "translated": "سماح"
@@ -15532,31 +15562,6 @@
       "id": "native.apple.3cb9ed2ae352f95c",
       "source": "Open Settings",
       "translated": "فتح الإعدادات"
-    },
-    {
-      "id": "native.apple.3f902cdb4d4e9176",
-      "source": "Health data is unavailable on this device.",
-      "translated": "بيانات الصحة غير متاحة على هذا الجهاز."
-    },
-    {
-      "id": "native.apple.33316ec020810816",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "translated": "تتم مشاركة البيانات المجمعة المطلوبة فقط للخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين عبر Gateway مع موفر الذكاء الاصطناعي الذي أعددته. قد تبقى النتائج في سجل الدردشة."
-    },
-    {
-      "id": "native.apple.53fb25cb6e6aae6e",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "translated": "متوقف افتراضيًا. يتيح التمكين للبيانات المجمعة المطلوبة مغادرة هذا الـ iPhone عبر Gateway وموفر الذكاء الاصطناعي الذي أعددته."
-    },
-    {
-      "id": "native.apple.6c2be9b001fb95b0",
-      "source": "Disable",
-      "translated": "تعطيل"
-    },
-    {
-      "id": "native.apple.9eab20fbad55a0a9",
-      "source": "Enable & Share Summaries",
-      "translated": "تمكين الملخصات ومشاركتها"
     },
     {
       "id": "native.apple.d9f9a74e25431256",

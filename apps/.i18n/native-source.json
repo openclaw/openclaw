@@ -20395,7 +20395,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 675,
+      "line": 676,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice & Talk",
       "surface": "apple",
@@ -20403,7 +20403,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 690,
+      "line": 691,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Health Check",
       "surface": "apple",
@@ -20411,7 +20411,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 691,
+      "line": 692,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run app, permission, and gateway-adjacent checks without editing setup.",
       "surface": "apple",
@@ -20419,7 +20419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 699,
+      "line": 700,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Diagnostics",
       "surface": "apple",
@@ -20427,7 +20427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 709,
+      "line": 710,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Platform",
       "surface": "apple",
@@ -20435,7 +20435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 712,
+      "line": 713,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "App",
       "surface": "apple",
@@ -20443,7 +20443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 715,
+      "line": 716,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Model",
       "surface": "apple",
@@ -20451,7 +20451,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 727,
+      "line": 728,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Camera Access",
       "surface": "apple",
@@ -20459,7 +20459,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 733,
+      "line": 734,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Background Listening",
       "surface": "apple",
@@ -20467,7 +20467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 758,
+      "line": 760,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Notifications",
       "surface": "apple",
@@ -20475,7 +20475,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 767,
+      "line": 769,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Turns OpenClaw notification delivery on or off",
       "surface": "apple",
@@ -20483,7 +20483,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 787,
+      "line": 789,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reconnect",
       "surface": "apple",
@@ -20491,7 +20491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 797,
+      "line": 799,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Diagnose",
       "surface": "apple",
@@ -20499,7 +20499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 813,
+      "line": 815,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "License files are not available in this build.",
       "surface": "apple",
@@ -20507,7 +20507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 830,
+      "line": 832,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "surface": "apple",
@@ -20515,7 +20515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 870,
+      "line": 872,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -20523,7 +20523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 872,
+      "line": 874,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Personal AI on your devices",
       "surface": "apple",
@@ -20531,7 +20531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 889,
+      "line": 891,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "iOS",
       "surface": "apple",
@@ -20539,7 +20539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 896,
+      "line": 898,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Website",
       "surface": "apple",
@@ -20547,7 +20547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 901,
+      "line": 903,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Docs",
       "surface": "apple",
@@ -20555,7 +20555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 906,
+      "line": 908,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "GitHub",
       "surface": "apple",
@@ -20563,7 +20563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 911,
+      "line": 913,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discord",
       "surface": "apple",
@@ -20571,7 +20571,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 916,
+      "line": 918,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
       "surface": "apple",
@@ -20579,7 +20579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 922,
+      "line": 924,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Title",
       "surface": "apple",
@@ -20587,7 +20587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 962,
+      "line": 964,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location",
       "surface": "apple",
@@ -20595,7 +20595,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 980,
+      "line": 982,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location Sharing",
       "surface": "apple",
@@ -20603,7 +20603,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 993,
+      "line": 995,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Access Level",
       "surface": "apple",
@@ -20611,7 +20611,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1015,
+      "line": 1017,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Chooses While Using the App or Always",
       "surface": "apple",
@@ -20619,7 +20619,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1035,
+      "line": 1037,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -20627,7 +20627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1036,
+      "line": 1038,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default",
       "surface": "apple",
@@ -20635,7 +20635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1046,
+      "line": 1048,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Used for new Chat and Talk sessions.",
       "surface": "apple",
@@ -20643,7 +20643,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1056,
+      "line": 1058,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -20651,7 +20651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1064,
+      "line": 1066,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paste setup code",
       "surface": "apple",
@@ -20659,7 +20659,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1070,
+      "line": 1072,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect",
       "surface": "apple",
@@ -20667,7 +20667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1079,
+      "line": 1081,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "surface": "apple",
@@ -20675,7 +20675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1088,
+      "line": 1090,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Add Gateway",
       "surface": "apple",
@@ -20683,7 +20683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1103,
+      "line": 1105,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Pair a gateway to make it available here.",
       "surface": "apple",
@@ -20691,7 +20691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1112,
+      "line": 1114,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paired Gateways",
       "surface": "apple",
@@ -20699,7 +20699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1115,
+      "line": 1117,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Switch gateways without pairing again.",
       "surface": "apple",
@@ -20707,7 +20707,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1145,
+      "line": 1147,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Gateway",
       "surface": "apple",
@@ -20715,7 +20715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1157,
+      "line": 1159,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget",
       "surface": "apple",
@@ -20723,7 +20723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1169,
+      "line": 1171,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -20731,7 +20731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1222,
+      "line": 1224,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Manual Gateway",
       "surface": "apple",
@@ -20739,7 +20739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1223,
+      "line": 1225,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use Manual Gateway",
       "surface": "apple",
@@ -20747,7 +20747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1224,
+      "line": 1226,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Host",
       "surface": "apple",
@@ -20755,7 +20755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1228,
+      "line": 1230,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Port",
       "surface": "apple",
@@ -20763,7 +20763,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1232,
+      "line": 1234,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Unencrypted",
       "surface": "apple",
@@ -20771,7 +20771,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1235,
+      "line": 1237,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Secure (TLS)",
       "surface": "apple",
@@ -20779,7 +20779,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1239,
+      "line": 1241,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connection security",
       "surface": "apple",
@@ -20787,7 +20787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1250,
+      "line": 1252,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect Manual",
       "surface": "apple",
@@ -20795,7 +20795,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1280,
+      "line": 1282,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Auto-connect on launch",
       "surface": "apple",
@@ -20803,7 +20803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1281,
+      "line": 1283,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -20811,7 +20811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1282,
+      "line": 1284,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -20819,7 +20819,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1287,
+      "line": 1289,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Custom Headers",
       "surface": "apple",
@@ -20827,7 +20827,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1294,
+      "line": 1296,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reset Onboarding",
       "surface": "apple",
@@ -20835,7 +20835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1324,
+      "line": 1326,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -20843,7 +20843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1327,
+      "line": 1329,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -20851,7 +20851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1335,
+      "line": 1337,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speech Language",
       "surface": "apple",
@@ -20859,7 +20859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1342,
+      "line": 1344,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -20867,7 +20867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1346,
+      "line": 1348,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
@@ -20875,7 +20875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1368,
+      "line": 1370,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice",
       "surface": "apple",
@@ -20883,7 +20883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1369,
+      "line": 1371,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Provider",
       "surface": "apple",
@@ -20891,7 +20891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1376,
+      "line": 1378,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -20899,7 +20899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1377,
+      "line": 1379,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -20907,7 +20907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1384,
+      "line": 1386,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Mode",
       "surface": "apple",
@@ -20915,7 +20915,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1387,
+      "line": 1389,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Voice",
       "surface": "apple",
@@ -20923,7 +20923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1391,
+      "line": 1393,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Last Voice Issue",
       "surface": "apple",
@@ -20931,7 +20931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1393,
+      "line": 1395,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Transport",
       "surface": "apple",
@@ -20939,7 +20939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1396,
+      "line": 1398,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "API Key",
       "surface": "apple",
@@ -20947,7 +20947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1403,
+      "line": 1405,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Show Talk Control",
       "surface": "apple",
@@ -20955,7 +20955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1404,
+      "line": 1406,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Share Instruction",
       "surface": "apple",
@@ -20963,7 +20963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1411,
+      "line": 1413,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Share Self-Test",
       "surface": "apple",
@@ -20971,7 +20971,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 1428,
+      "line": 1432,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "Apple Health",
+      "surface": "apple",
+      "id": "native.apple.c2cab769e36ad25d"
+    },
+    {
+      "kind": "ui-call",
+      "line": 1440,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Debug Logs",
       "surface": "apple",
@@ -20979,7 +20987,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1431,
+      "line": 1443,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Debug Screen Status",
       "surface": "apple",
@@ -20987,7 +20995,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1435,
+      "line": 1447,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
@@ -20995,7 +21003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1443,
+      "line": 1455,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device",
       "surface": "apple",
@@ -21003,7 +21011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1444,
+      "line": 1456,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device Name",
       "surface": "apple",
@@ -21011,7 +21019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1446,
+      "line": 1458,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Instance ID",
       "surface": "apple",
@@ -21019,7 +21027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1470,
+      "line": 1482,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "On",
       "surface": "apple",
@@ -21027,7 +21035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1471,
+      "line": 1483,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Off",
       "surface": "apple",
@@ -22874,6 +22882,54 @@
       "id": "native.apple.d180e6d9a4963c2b"
     },
     {
+      "kind": "ui-localized-call",
+      "line": 18,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Apple Health Summaries",
+      "surface": "apple",
+      "id": "native.apple.e80408b30ca670f4"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 46,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Apple Health data is unavailable on this device.",
+      "surface": "apple",
+      "id": "native.apple.1d9253b4d79e1a6b"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 50,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Reads steps, sleep, resting heart rate, and workouts from Apple Health only when a summary is requested. Only the aggregate leaves this device through your Gateway to your configured AI provider; raw samples stay on this device and results may remain in chat history.",
+      "surface": "apple",
+      "id": "native.apple.f332b4fb6215a12a"
+    },
+    {
+      "kind": "ui-localized-call-multiline",
+      "line": 57,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Creates read-only summaries from the Apple Health app for steps, sleep, resting heart rate, and workouts. Only requested summaries leave this device through your Gateway to your configured AI provider; raw samples stay on this device.",
+      "surface": "apple",
+      "id": "native.apple.279758eb7531d811"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 67,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Turn Off Summaries",
+      "surface": "apple",
+      "id": "native.apple.9e29919ede21527e"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 68,
+      "path": "apps/ios/Sources/Health/AppleHealthAccessSectionView.swift",
+      "source": "Enable Apple Health Summaries",
+      "surface": "apple",
+      "id": "native.apple.c229e9c6fa7bac3b"
+    },
+    {
       "kind": "plist-string",
       "line": 56,
       "path": "apps/ios/Sources/Info.plist",
@@ -22949,17 +23005,17 @@
       "kind": "plist-string",
       "line": 74,
       "path": "apps/ios/Sources/Info.plist",
-      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "source": "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider.",
       "surface": "apple",
-      "id": "native.apple.c86f7ba5b3762eb7"
+      "id": "native.apple.1d3a6099d7e11895"
     },
     {
       "kind": "plist-string",
       "line": 76,
       "path": "apps/ios/Sources/Info.plist",
-      "source": "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "source": "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider.",
       "surface": "apple",
-      "id": "native.apple.89de9bad79f17038"
+      "id": "native.apple.c90a204b3232c401"
     },
     {
       "kind": "plist-string",
@@ -24747,7 +24803,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 57,
+      "line": 48,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Privacy & Access",
       "surface": "apple",
@@ -24755,7 +24811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 74,
+      "line": 65,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Search and add contacts from the assistant.",
       "surface": "apple",
@@ -24763,7 +24819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 89,
+      "line": 80,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read photos you select for the assistant.",
       "surface": "apple",
@@ -24771,7 +24827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 90,
+      "line": 81,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Read recent photos for the assistant.",
       "surface": "apple",
@@ -24779,7 +24835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 92,
+      "line": 83,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Limited",
       "surface": "apple",
@@ -24787,7 +24843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 105,
+      "line": 96,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Calendar (Add Events)",
       "surface": "apple",
@@ -24795,7 +24851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 106,
+      "line": 97,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add events with least privilege.",
       "surface": "apple",
@@ -24803,7 +24859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 120,
+      "line": 111,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List and read calendar events.",
       "surface": "apple",
@@ -24811,7 +24867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 135,
+      "line": 126,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "List, add, and complete reminders.",
       "surface": "apple",
@@ -24819,7 +24875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 137,
+      "line": 128,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Add-Only",
       "surface": "apple",
@@ -24827,15 +24883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 152,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Health Summaries",
-      "surface": "apple",
-      "id": "native.apple.33df187e4402065a"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 191,
+      "line": 168,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Allow",
       "surface": "apple",
@@ -24843,51 +24891,11 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 193,
+      "line": 170,
       "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
       "source": "Open Settings",
       "surface": "apple",
       "id": "native.apple.3cb9ed2ae352f95c"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 255,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Health data is unavailable on this device.",
-      "surface": "apple",
-      "id": "native.apple.3f902cdb4d4e9176"
-    },
-    {
-      "kind": "ui-localized-call-multiline",
-      "line": 259,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
-      "surface": "apple",
-      "id": "native.apple.33316ec020810816"
-    },
-    {
-      "kind": "ui-localized-call-multiline",
-      "line": 265,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
-      "surface": "apple",
-      "id": "native.apple.53fb25cb6e6aae6e"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 274,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Disable",
-      "surface": "apple",
-      "id": "native.apple.6c2be9b001fb95b0"
-    },
-    {
-      "kind": "ui-localized-call",
-      "line": 275,
-      "path": "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift",
-      "source": "Enable & Share Summaries",
-      "surface": "apple",
-      "id": "native.apple.9eab20fbad55a0a9"
     },
     {
       "kind": "ui-call",
