@@ -203,6 +203,9 @@ extension OpenClawChatViewModel {
         }
         // Acceptance is durable even if the user switched sessions during the
         // await. The caller must still retire that session's draft/history.
+        // Bubble render and flush scheduling stay with the displayed session
+        // (shipped behavior predating this path); the stored command delivers
+        // on the next flush trigger, e.g. returning here or a health event.
         guard self.isCurrentSession(session) else { return true }
         if self.input == draftInput, self.composerRevision(for: session.key) == draftRevision {
             self.input = ""
