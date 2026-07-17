@@ -223,10 +223,10 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
-    process.env.SYNOLOGY_CHAT_INCOMING_URL = "https://nas/incoming";
-    process.env.SYNOLOGY_NAS_HOST = "192.0.2.1";
-    process.env.OPENCLAW_BOT_NAME = "TestBot";
+    process.env.SYNOLOGY_CHAT_TOKEN = " env-tok ";
+    process.env.SYNOLOGY_CHAT_INCOMING_URL = " https://nas/incoming ";
+    process.env.SYNOLOGY_NAS_HOST = " 192.0.2.1 ";
+    process.env.OPENCLAW_BOT_NAME = " TestBot ";
 
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);
@@ -234,6 +234,22 @@ describe("synology-chat account resolution", () => {
     expect(account.incomingUrl).toBe("https://nas/incoming");
     expect(account.nasHost).toBe("192.0.2.1");
     expect(account.botName).toBe("TestBot");
+  });
+
+  it("ignores blank env var fallbacks when resolving the default account", () => {
+    process.env.SYNOLOGY_CHAT_TOKEN = "   ";
+    process.env.SYNOLOGY_CHAT_INCOMING_URL = "   ";
+    process.env.SYNOLOGY_NAS_HOST = "   ";
+    process.env.SYNOLOGY_ALLOWED_USER_IDS = "   ";
+    process.env.OPENCLAW_BOT_NAME = "   ";
+
+    const account = resolveAccount({ channels: { "synology-chat": {} } });
+
+    expect(account.token).toBe("");
+    expect(account.incomingUrl).toBe("");
+    expect(account.nasHost).toBe("localhost");
+    expect(account.allowedUserIds).toEqual([]);
+    expect(account.botName).toBe("OpenClaw");
   });
 
   it("lets config and account overrides win over env/base config", () => {
