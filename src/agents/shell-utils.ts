@@ -101,6 +101,64 @@ function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | 
   return resolveShellFromPath("bash.exe", env) ?? resolveShellFromPath("bash", env);
 }
 
+const WINDOWS_GIT_BASH_CACHE_LIMIT = 16;
+const windowsGitBashUsrBinCache = new Map<string, string | undefined>();
+let defaultWindowsGitBashUsrBinResolved = false;
+let defaultWindowsGitBashUsrBin: string | undefined;
+
+function resolveWindowsGitBashUsrBin(shellPath: string): string | undefined {
+  const cacheKey = path.resolve(shellPath).toLowerCase();
+  if (windowsGitBashUsrBinCache.has(cacheKey)) {
+    return windowsGitBashUsrBinCache.get(cacheKey);
+  }
+
+  const normalized = path.normalize(shellPath);
+  const shellName = path.basename(normalized).toLowerCase();
+  const binDir = path.dirname(normalized);
+  let gitRoot: string | undefined;
+  if (
+    (shellName === "bash.exe" || shellName === "bash") &&
+    path.basename(binDir).toLowerCase() === "bin"
+  ) {
+    const parent = path.dirname(binDir);
+    gitRoot = path.basename(parent).toLowerCase() === "usr" ? path.dirname(parent) : parent;
+  }
+
+  const usrBin = gitRoot ? path.join(gitRoot, "usr", "bin") : undefined;
+  const resolved =
+    gitRoot &&
+    fs.existsSync(path.join(gitRoot, "cmd", "git.exe")) &&
+    usrBin &&
+    fs.existsSync(usrBin)
+      ? usrBin
+      : undefined;
+  if (windowsGitBashUsrBinCache.size >= WINDOWS_GIT_BASH_CACHE_LIMIT) {
+    const oldestKey = windowsGitBashUsrBinCache.keys().next().value;
+    if (oldestKey) {
+      windowsGitBashUsrBinCache.delete(oldestKey);
+    }
+  }
+  windowsGitBashUsrBinCache.set(cacheKey, resolved);
+  return resolved;
+}
+
+function getWindowsGitBashUsrBin(shellPath?: string): string | undefined {
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+  if (shellPath) {
+    return resolveWindowsGitBashUsrBin(shellPath);
+  }
+  if (!defaultWindowsGitBashUsrBinResolved) {
+    defaultWindowsGitBashUsrBinResolved = true;
+    const resolvedShell = resolveWindowsBashPath();
+    defaultWindowsGitBashUsrBin = resolvedShell
+      ? resolveWindowsGitBashUsrBin(resolvedShell)
+      : undefined;
+  }
+  return defaultWindowsGitBashUsrBin;
+}
+
 function isLegacyWslBashPath(shellPath: string): boolean {
   const normalized = shellPath.replace(/\//g, "\\").toLowerCase();
   return /(?:^|\\)windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
@@ -328,19 +386,46 @@ export function sanitizeBinaryOutput(
   return chunks.join("");
 }
 
-export function getShellEnv(): NodeJS.ProcessEnv {
+function getShellEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const binDir = getBinDir();
-  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-  const currentPath = process.env[pathKey] ?? "";
+  const pathKeys = Object.keys(sourceEnv).filter((key) => key.toLowerCase() === "path");
+  // Node sorts Windows environment keys and passes only the first case-insensitive match.
+  // Collapse duplicates before spawning so callers and child processes see the same PATH.
+  const sourcePathKey = process.platform === "win32" ? pathKeys.toSorted()[0] : pathKeys[0];
+  const pathKey = process.platform === "win32" ? "PATH" : (sourcePathKey ?? "PATH");
+  const currentPath = sourcePathKey ? (sourceEnv[sourcePathKey] ?? "") : "";
   const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
   const updatedPath = pathEntries.includes(binDir)
     ? currentPath
     : [binDir, currentPath].filter(Boolean).join(path.delimiter);
+  const env = { ...sourceEnv };
+  if (process.platform === "win32") {
+    for (const key of pathKeys) {
+      delete env[key];
+    }
+  }
+  env[pathKey] = updatedPath;
+  return env;
+}
 
-  return {
-    ...process.env,
-    [pathKey]: updatedPath,
-  };
+export function getBashShellEnv(
+  shellPath?: string,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = getShellEnv(sourceEnv);
+  const usrBin = getWindowsGitBashUsrBin(shellPath);
+  if (!usrBin) {
+    return env;
+  }
+
+  const currentPath = env.PATH ?? "";
+  const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
+  const normalizedUsrBin = usrBin.toLowerCase();
+  env.PATH = [
+    usrBin,
+    ...pathEntries.filter((entry) => entry.toLowerCase() !== normalizedUsrBin),
+  ].join(path.delimiter);
+  return env;
 }
 
 export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {

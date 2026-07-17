@@ -5,6 +5,10 @@ on:
     types: [vitest-cache-warm]
   schedule:
     - cron: "17 8 * * *"
+  workflow_run: # zizmor: ignore[dangerous-triggers] successful main-push CI only; read-only default-branch checkout, no artifacts or untrusted ref
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
 
 permissions:
   contents: read
@@ -15,7 +19,7 @@ concurrency:
 
 jobs:
   warm:
-    if: github.repository == 'openclaw/openclaw'
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'))
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
@@ -26,21 +30,21 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          node-compile-cache: "true"
+          node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
           node-compile-cache-scope: "test"
-          runtime-cache-sticky-disk: "true"
-          save-node-compile-cache: "true"
-          # Daily deadline writer for the protected dependency snapshot:
-          # canonical main pushes cancel each other under merge traffic, so
-          # build-artifacts commits can starve; this scheduled run cannot be
-          # superseded and keeps the snapshot within a day of main.
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+          save-node-compile-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
+          # This disposable, non-cancelled workflow is the sole dependency
+          # snapshot writer. Main CI completion coalesces refreshes without
+          # putting required build jobs in a cancel-on-pending mutex.
           save-sticky-disk: "true"
-          save-vitest-fs-cache: "true"
+          save-vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
           sticky-disk: "true"
           use-actions-cache: "false"
-          vitest-fs-cache: "true"
+          vitest-fs-cache: ${{ github.event_name != 'workflow_run' && 'true' || 'false' }}
 
       - name: Select broad cache seed
+        if: github.event_name != 'workflow_run'
         shell: bash
         run: |
           set -euo pipefail
@@ -68,4 +72,5 @@ jobs:
           EOF
 
       - name: Warm transform and compile caches
+        if: github.event_name != 'workflow_run'
         run: node scripts/ci-run-node-test-shard.mjs

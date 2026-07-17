@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import android.Manifest
 import android.app.Activity
 import android.app.RemoteInput
@@ -67,6 +68,8 @@ class MainActivity : ComponentActivity() {
         onBack = viewModel::closeSession,
         onReply = viewModel::sendReply,
         onAbort = viewModel::abort,
+        onStartTalk = viewModel::startRealtimeTalk,
+        onStopTalk = viewModel::stopRealtimeTalk,
       )
     }
   }
@@ -90,6 +93,8 @@ internal fun OpenClawWearApp(
   onBack: () -> Unit,
   onReply: (String) -> Unit,
   onAbort: () -> Unit,
+  onStartTalk: () -> Unit,
+  onStopTalk: () -> Unit,
 ) {
   BackHandler(enabled = state.selectedSession != null, onBack = onBack)
   MaterialTheme {
@@ -97,7 +102,7 @@ internal fun OpenClawWearApp(
       if (state.selectedSession == null) {
         SessionListScreen(state, onRefresh, onOpenSession)
       } else {
-        TranscriptScreen(state, onBack, onRefresh, onReply, onAbort)
+        TranscriptScreen(state, onBack, onRefresh, onReply, onAbort, onStartTalk, onStopTalk)
       }
     }
   }
@@ -160,6 +165,8 @@ private fun TranscriptScreen(
   onRefresh: () -> Unit,
   onReply: (String) -> Unit,
   onAbort: () -> Unit,
+  onStartTalk: () -> Unit,
+  onStopTalk: () -> Unit,
 ) {
   val session = state.selectedSession ?: return
   val context = LocalContext.current
@@ -167,6 +174,16 @@ private fun TranscriptScreen(
   var voiceAvailable by remember(context) {
     mutableStateOf(voiceIntent.resolveActivity(context.packageManager) != null)
   }
+  var microphoneGranted by remember(context) {
+    mutableStateOf(
+      ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+    )
+  }
+  val microphonePermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      microphoneGranted = granted
+      if (granted) onStartTalk()
+    }
   val textInputLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
       if (result.resultCode != Activity.RESULT_OK) return@rememberLauncherForActivityResult
@@ -214,6 +231,15 @@ private fun TranscriptScreen(
       for (message in state.messages) {
         item { MessagePanel(message) }
       }
+      for (entry in state.realtimeTalk.conversation) {
+        item {
+          RealtimeTalkPanel(
+            assistant = entry.role == WearRealtimeTalkRole.ASSISTANT,
+            text = entry.text,
+            streaming = entry.streaming,
+          )
+        }
+      }
       state.streamText?.takeIf { it.isNotBlank() }?.let { text ->
         item { StreamingPanel(text) }
       }
@@ -246,6 +272,39 @@ private fun TranscriptScreen(
           modifier = Modifier.fillMaxWidth(),
           enabled = state.connected && !state.sending && voiceAvailable,
         )
+      }
+      item {
+        ActionButton(
+          label =
+            when {
+              state.talkBusy -> "REAL-TIME TALK…"
+              state.realtimeTalk.active -> "STOP REAL-TIME TALK"
+              else -> "REAL-TIME TALK"
+            },
+          onClick = {
+            if (state.realtimeTalk.active) {
+              onStopTalk()
+            } else if (microphoneGranted) {
+              onStartTalk()
+            } else {
+              microphonePermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+          },
+          enabled = state.connected && !state.talkBusy,
+          accent = if (state.realtimeTalk.active) OpenClawWarning else OpenClawCyan,
+        )
+      }
+      if (state.realtimeTalk.active || state.talkBusy) {
+        item {
+          Text(
+            text = state.realtimeTalk.statusText.uppercase(),
+            color = if (state.realtimeTalk.active) OpenClawGreen else OpenClawMuted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
       }
       if (state.activeRunId != null || !state.streamText.isNullOrBlank()) {
         item {
@@ -414,6 +473,37 @@ private fun StreamingPanel(text: String) {
     )
     Text(
       text = text,
+      color = Color.White,
+      fontSize = 12.sp,
+      lineHeight = 16.sp,
+      maxLines = 8,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
+}
+
+@Composable
+private fun RealtimeTalkPanel(
+  assistant: Boolean,
+  text: String,
+  streaming: Boolean,
+) {
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .background(if (assistant) OpenClawPanel else OpenClawAccentPanel, RoundedCornerShape(18.dp))
+        .padding(horizontal = 13.dp, vertical = 10.dp),
+  ) {
+    Text(
+      text = if (assistant) "REAL-TIME OPENCLAW" else "REAL-TIME YOU",
+      color = if (assistant) OpenClawCyan else OpenClawRed,
+      fontSize = 9.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 1.sp,
+    )
+    Text(
+      text = text + if (streaming) " …" else "",
       color = Color.White,
       fontSize = 12.sp,
       lineHeight = 16.sp,

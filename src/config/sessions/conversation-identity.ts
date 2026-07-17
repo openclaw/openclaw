@@ -56,7 +56,8 @@ function normalizeKind(value: unknown): ConversationKind {
   return "direct";
 }
 
-function finalizeConversationIdentity(params: {
+/** Builds one stable transport address from authoritative channel route facts. */
+export function buildConversationIdentity(params: {
   channel?: string;
   accountId?: string;
   kind: ConversationKind;
@@ -142,7 +143,7 @@ export function conversationIdentityFromSessionEntry(
   const channel = routeOwnsTarget
     ? deliveryContext?.channel
     : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
-  return finalizeConversationIdentity({
+  return buildConversationIdentity({
     channel,
     accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
     kind,
@@ -192,7 +193,7 @@ export function conversationIdentityFromMsgContext(params: {
       normalizeText(route?.provider) ??
       normalizeText(params.ctx.OriginatingChannel) ??
       normalizeText(params.ctx.Provider));
-  return finalizeConversationIdentity({
+  return buildConversationIdentity({
     channel,
     accountId: useDirectIngressTarget
       ? (route?.accountId ?? params.ctx.AccountId)

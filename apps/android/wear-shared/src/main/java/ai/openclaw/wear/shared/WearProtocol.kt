@@ -18,12 +18,16 @@ object WearProtocol {
   const val REQUEST_PATH = "/openclaw/wear/v1/request"
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
+  const val REALTIME_AUDIO_CHANNEL_PATH = "/openclaw/wear/v1/realtime/audio"
   const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
   const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
 
   // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
   // force transcript pagination instead of depending on an edge-sized message.
   const val MAX_MESSAGE_BYTES = 64 * 1024
+  const val MAX_REALTIME_AUDIO_FRAME_BYTES = 8 * 1024
+  const val REALTIME_AUDIO_SAMPLE_RATE_HZ = 24_000
+  const val REALTIME_AUDIO_FRAME_MILLIS = 20
 
   // Bound recursive JSON parsing at the untrusted Data Layer boundary.
   const val MAX_JSON_DEPTH = 32
@@ -45,6 +49,12 @@ enum class WearRpcMethod {
 
   @SerialName("chat.abort")
   ChatAbort,
+
+  @SerialName("talk.start")
+  TalkStart,
+
+  @SerialName("talk.stop")
+  TalkStop,
 }
 
 @Serializable
@@ -57,6 +67,9 @@ enum class WearEventType {
 
   @SerialName("resync")
   Resync,
+
+  @SerialName("talk")
+  Talk,
 }
 
 @Serializable

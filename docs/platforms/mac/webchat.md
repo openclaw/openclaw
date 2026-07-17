@@ -10,10 +10,11 @@ The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connec
 The full chat window is a native split view:
 
 - **Sessions sidebar**: searchable session list with pinned and recent sections, unread indicators, and context menus for pin/unpin, copy session key, and delete. A toolbar button (or Cmd-N) creates a real new session via `sessions.create`.
-- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu (new session, refresh, copy session key, export transcript, compact, clear history).
-- **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it.
+- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu. **Sessions…** (Shift-Cmd-S) opens the Active/Archived manager for gateway search, rename, pin, archive, and restore. The same menu can show or hide assistant reasoning and tool activity; this is on by default and remembered across launches.
+- **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Empty chats offer desktop starter prompts. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it, or use **Listen** for gateway TTS with a local speech fallback.
+- **Voice controls**: the composer can start or stop the existing macOS Talk Mode without replacing its menu-bar overlay. A separate microphone action records a voice note when Talk Mode does not own audio capture.
 
-The anchored compact chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+The anchored compact chat panel from the menu bar keeps the compact single-column layout with inline pickers, starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
 
 ## Quick Chat bar
 

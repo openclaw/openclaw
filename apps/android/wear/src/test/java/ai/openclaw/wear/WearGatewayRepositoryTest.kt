@@ -1,18 +1,31 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WearGatewayRepositoryTest {
   private val json = Json
+
+  @Test
+  fun talkEventsMatchOnlyTheirCurrentAttempt() {
+    val current = WearRealtimeTalkSnapshot(attemptId = "attempt-current", active = true)
+    val stale = WearRealtimeTalkSnapshot(attemptId = "attempt-stale")
+
+    assertTrue(shouldAcceptWearTalkSnapshot(current, "attempt-current"))
+    assertFalse(shouldAcceptWearTalkSnapshot(stale, "attempt-current"))
+    assertFalse(shouldAcceptWearTalkSnapshot(WearRealtimeTalkSnapshot(), "attempt-current"))
+  }
 
   @Test
   fun sessionsAndHistoryParseOnlyProjectedContract() =
@@ -121,6 +134,35 @@ class WearGatewayRepositoryTest {
   }
 
   @Test
+  fun realtimeTalkStartCarriesTheSelectedSessionAndPhone() =
+    runTest {
+      val requester =
+        RecordingRequester { method, _ ->
+          assertEquals(WearRpcMethod.TalkStart, method)
+          json.parseToJsonElement("""{"active":true}""")
+        }
+
+      val snapshot =
+        WearGatewayRepository(requester).startRealtimeTalk(
+          sessionKey = "agent:main:thread-7",
+          attemptId = "attempt-7",
+          language = "de",
+          phoneNodeId = "phone-a",
+        )
+
+      assertTrue(snapshot.active)
+      assertEquals(
+        json
+          .parseToJsonElement(
+            """{"sessionKey":"agent:main:thread-7","attemptId":"attempt-7","language":"de"}""",
+          ).jsonObject,
+        requester.calls.single().second,
+      )
+      assertEquals("phone-a", requester.expectedNodeIds.single())
+      assertTrue(requester.requirePreferredNodes.single())
+    }
+
+  @Test
   fun observedFinalMessageSurvivesAnOlderSnapshotWithoutDuplication() {
     val older = WearChatMessage(id = "m1", role = "assistant", text = "older", timestamp = 1)
     val final = WearChatMessage(id = "m2", role = "assistant", text = "done", timestamp = 2)
@@ -210,6 +252,8 @@ private class RecordingRequester(
   private val handler: suspend (WearRpcMethod, JsonObject) -> JsonElement,
 ) : WearRpcRequester {
   val calls = mutableListOf<Pair<WearRpcMethod, JsonObject>>()
+  val expectedNodeIds = mutableListOf<String?>()
+  val requirePreferredNodes = mutableListOf<Boolean>()
 
   override suspend fun request(
     method: WearRpcMethod,
@@ -218,6 +262,8 @@ private class RecordingRequester(
     requirePreferredNode: Boolean,
   ): WearRpcResult {
     calls += method to params
+    expectedNodeIds += expectedNodeId
+    requirePreferredNodes += requirePreferredNode
     return WearRpcResult(payload = handler(method, params), eventSequence = 7, sourceNodeId = expectedNodeId ?: "phone")
   }
 }

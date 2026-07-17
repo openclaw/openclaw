@@ -55,10 +55,16 @@ public struct OpenClawChatSessionSettingsPatch: Sendable, Equatable {
     /// Outer optional means unchanged; inner optional clears the override.
     public let model: String??
     public let thinkingLevel: String??
+    public let verboseLevel: String??
 
-    public init(model: String?? = nil, thinkingLevel: String?? = nil) {
+    public init(
+        model: String?? = nil,
+        thinkingLevel: String?? = nil,
+        verboseLevel: String?? = nil)
+    {
         self.model = model
         self.thinkingLevel = thinkingLevel
+        self.verboseLevel = verboseLevel
     }
 }
 

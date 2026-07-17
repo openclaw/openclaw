@@ -177,6 +177,23 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_entries_status
   ON session_entries(status, session_key)
   WHERE status IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS heartbeat_outcomes (
+  session_key TEXT NOT NULL PRIMARY KEY,
+  run_session_key TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('progress', 'done', 'blocked', 'needs_attention')),
+  summary TEXT NOT NULL,
+  response_reason TEXT,
+  priority TEXT CHECK (priority IS NULL OR priority IN ('low', 'normal', 'high')),
+  next_check TEXT,
+  task_names_json TEXT,
+  wake_source TEXT,
+  wake_reason TEXT,
+  occurred_at INTEGER NOT NULL,
+  context_run_id TEXT,
+  context_claimed_at INTEGER,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,

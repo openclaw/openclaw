@@ -626,6 +626,7 @@ describe("write-cli-startup-metadata", () => {
     const extensionsDir = path.join(tempRoot, "extensions");
     const outputPath = path.join(distDir, "cli-startup-metadata.json");
     let renderCount = 0;
+    let commandRenderCount = 0;
 
     writeStartupMetadataSourceSignatureFixture(tempRoot);
     writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
@@ -640,17 +641,29 @@ describe("write-cli-startup-metadata", () => {
           renderCount += 1;
           return `Usage: openclaw ${renderCount}\n`;
         },
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
+        renderSourceBrowserHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw browser\n";
+        },
+        renderSourceSecretsHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw secrets\n";
+        },
+        renderSourceNodesHelpText: () => {
+          commandRenderCount += 1;
+          return "Usage: openclaw nodes\n";
+        },
+        renderSourceSubcommandHelpTextRecord: () => {
+          commandRenderCount += 1;
+          return {
+            doctor: "Usage: openclaw doctor\n",
+            gateway: "Usage: openclaw gateway\n",
+            models: "Usage: openclaw models\n",
+            plugins: "Usage: openclaw plugins\n",
+            sessions: "Usage: openclaw sessions\n",
+            tasks: "Usage: openclaw tasks\n",
+          };
+        },
       });
     };
 
@@ -662,6 +675,7 @@ describe("write-cli-startup-metadata", () => {
     await writeMetadata();
     await writeMetadata();
     expect(renderCount).toBe(1);
+    expect(commandRenderCount).toBe(4);
 
     writeFixtureFile(
       distDir,
@@ -670,6 +684,7 @@ describe("write-cli-startup-metadata", () => {
     );
     await writeMetadata();
     expect(renderCount).toBe(2);
+    expect(commandRenderCount).toBe(4);
 
     writeFixtureFile(
       distDir,
@@ -678,5 +693,6 @@ describe("write-cli-startup-metadata", () => {
     );
     await writeMetadata();
     expect(renderCount).toBe(3);
+    expect(commandRenderCount).toBe(4);
   });
 });

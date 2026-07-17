@@ -3,6 +3,7 @@ package ai.openclaw.app.wear
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -51,6 +52,93 @@ class WearProxyControllerTest {
           .toBoolean(),
       )
       assertEquals("Offline", result.getValue("status").jsonPrimitive.content)
+    }
+
+  @Test
+  fun talkStartBindsTheWatchNodeAndSelectedSession() =
+    runTest {
+      var startArgs: List<String?>? = null
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
+            startArgs = listOf(nodeId, sessionKey, attemptId, language)
+            WearRealtimeTalkSnapshot(attemptId = attemptId, active = true)
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(
+            WearRpcMethod.TalkStart,
+            buildJsonObject {
+              put("sessionKey", "agent:main:thread-7")
+              put("attemptId", "attempt-7")
+              put("language", "DE")
+            },
+          ),
+          sourceNodeId = "watch-a",
+        )
+
+      assertTrue(response.ok)
+      assertEquals(listOf("watch-a", "agent:main:thread-7", "attempt-7", "de"), startArgs)
+      assertTrue(
+        checkNotNull(response.result)
+          .jsonObject
+          .getValue("active")
+          .jsonPrimitive
+          .content
+          .toBoolean(),
+      )
+    }
+
+  @Test
+  fun talkStartRejectsAMissingSessionBeforeStarting() =
+    runTest {
+      var starts = 0
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          startRealtimeTalk = { _, _, _, _ ->
+            starts += 1
+            WearRealtimeTalkSnapshot(active = true)
+          },
+        )
+
+      val response = controller.handle(request(WearRpcMethod.TalkStart), sourceNodeId = "watch-a")
+
+      assertFalse(response.ok)
+      assertEquals("invalid_request", response.error?.code)
+      assertEquals(0, starts)
+    }
+
+  @Test
+  fun talkStopBindsTheWatchNodeAndAttempt() =
+    runTest {
+      var stopArgs: List<String>? = null
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          stopRealtimeTalk = { nodeId, attemptId ->
+            stopArgs = listOf(nodeId, attemptId)
+            WearRealtimeTalkSnapshot(attemptId = attemptId)
+          },
+        )
+
+      val response =
+        controller.handle(
+          request(WearRpcMethod.TalkStop, buildJsonObject { put("attemptId", "attempt-7") }),
+          sourceNodeId = "watch-a",
+        )
+
+      assertTrue(response.ok)
+      assertEquals(listOf("watch-a", "attempt-7"), stopArgs)
     }
 
   @Test
