@@ -3,6 +3,7 @@
  * screenshots, batch actions, and SSRF-aware post-interaction navigation checks.
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FileChooser, Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -751,9 +752,10 @@ export async function clickViaPlaywright(
           if (delayMs > 0) {
             await locator.hover({ timeout });
             throwIfInteractionAborted(signal);
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            // Abortable hold: a bare setTimeout would keep the orphaned action
+            // chain (and its navigation-guard teardown) alive for the full
+            // delayMs after the caller already lost the abort race.
+            await sleepWithAbort(delayMs, signal);
             throwIfInteractionAborted(signal);
           }
           if (opts.doubleClick) {
