@@ -27,10 +27,13 @@ export function attachChannelToResult<T extends object>(
   /** Delivery-shaped result without channel metadata. */
   result: T,
 ) {
-  return {
+  const attached = {
     channel,
     ...result,
   };
+  // Keep the existing inferred return shape while making the explicit owner authoritative.
+  attached.channel = channel;
+  return attached;
 }
 
 /** Attaches the channel id to each outbound send result in order. */
