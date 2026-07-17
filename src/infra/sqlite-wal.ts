@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
@@ -147,20 +146,22 @@ function parseMountCommandEntries(contents: string): MountEntry[] {
   for (const line of contents.split("\n")) {
     const linuxMatch = /^(.+) on (.+) type ([^,\s)]+) \(/.exec(line);
     if (linuxMatch) {
-      entries.push({
-        source: linuxMatch[1],
-        mountPoint: expectDefined(linuxMatch[2], "linux match capture group 2"),
-        fsType: expectDefined(linuxMatch[3], "linux match capture group 3"),
-      });
+      const source = linuxMatch[1];
+      const mountPoint = linuxMatch[2];
+      const fsType = linuxMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
       continue;
     }
     const bsdMatch = /^(.+) on (.+) \(([^,\s)]+)/.exec(line);
     if (bsdMatch) {
-      entries.push({
-        source: bsdMatch[1],
-        mountPoint: expectDefined(bsdMatch[2], "bsd match capture group 2"),
-        fsType: expectDefined(bsdMatch[3], "bsd match capture group 3"),
-      });
+      const source = bsdMatch[1];
+      const mountPoint = bsdMatch[2];
+      const fsType = bsdMatch[3];
+      if (source && mountPoint && fsType) {
+        entries.push({ source, mountPoint, fsType });
+      }
     }
   }
   return entries;
