@@ -531,8 +531,7 @@ function loadPullRequestCommitShas(repo, { baseSha, headSha }) {
 }
 
 function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
-  // Only an in-progress exact-head CI run can benefit from gate proof; fetch
-  // its latest-attempt jobs (filter=latest is attempt-scoped) on demand.
+  // Only an in-progress exact-head CI run can benefit from gate proof.
   const candidates = workflowRuns.filter(
     (run) =>
       run?.name === "CI" &&
@@ -548,7 +547,22 @@ function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );
-    return Array.isArray(payload?.jobs) ? payload.jobs : [];
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    // Re-read the run after fetching its attempt jobs and drop the evidence if
+    // the attempt advanced or the run completed in between: otherwise a rerun
+    // starting in that window would let the just-fetched prior-attempt gate
+    // vouch for an attempt that has not reached its own gate.
+    const current = JSON.parse(
+      execGhApiRead(`repos/${repo}/actions/runs/${run.id}`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    );
+    const stillPending = current?.status === "in_progress" || current?.status === "queued";
+    if (!stillPending || (current?.run_attempt ?? attempt) !== attempt) {
+      return [];
+    }
+    return jobs;
   });
 }
 
