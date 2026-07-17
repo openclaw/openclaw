@@ -13,6 +13,7 @@ type PluginPayloadSmokeFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
   | "missing-package-json"
+  | "unreadable-package-json"
   | "invalid-package-json"
   | "missing-bundle-manifest"
   | "invalid-bundle-manifest"
@@ -121,6 +122,7 @@ type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unkn
 
 type PackagePayloadManifestReadResult =
   | { status: "missing" }
+  | { status: "unreadable"; error: string }
   | { status: "invalid"; error: string }
   | { status: "present"; manifest: PackagePayloadManifest };
 
@@ -132,10 +134,16 @@ async function readPackagePayloadManifest(
   if (!packageJsonStat?.isFile()) {
     return { status: "missing" };
   }
+  let packageJson: string;
+  try {
+    packageJson = await fs.readFile(packageJsonPath, "utf8");
+  } catch (err) {
+    return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
+  }
   try {
     return {
       status: "present",
-      manifest: JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackagePayloadManifest,
+      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };
@@ -147,6 +155,15 @@ function formatPackagePayloadReadFailure(params: {
   installPath: string;
   packagePayload: Exclude<PackagePayloadManifestReadResult, { status: "present" }>;
 }): PluginPayloadSmokeFailure {
+  if (params.packagePayload.status === "unreadable") {
+    const packageJsonPath = path.join(params.installPath, "package.json");
+    return {
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "unreadable-package-json",
+      detail: `Could not read package.json at ${packageJsonPath}: ${params.packagePayload.error}`,
+    };
+  }
   if (params.packagePayload.status === "invalid") {
     return {
       pluginId: params.pluginId,

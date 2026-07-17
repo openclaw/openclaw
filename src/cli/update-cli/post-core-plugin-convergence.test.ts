@@ -502,6 +502,53 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
+  it("uses ownership guidance and a coherent update outcome for unreadable package.json", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath: "/p/brave" } },
+    });
+    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
+      checked: ["brave"],
+      failures: [
+        {
+          pluginId: "brave",
+          installPath: "/p/brave",
+          reason: "unreadable-package-json",
+          detail: "Could not read package.json at /p/brave/package.json: EACCES: permission denied",
+        },
+      ],
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+
+    const message =
+      'Plugin "brave" failed post-core payload smoke check (unreadable-package-json): Could not read package.json at /p/brave/package.json: EACCES: permission denied';
+    const guidance = [
+      "Fix file access for /p/brave/package.json so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.",
+      "Run `openclaw plugins inspect brave --runtime --json` for details.",
+    ];
+    expect(result.warnings).toStrictEqual([
+      {
+        pluginId: "brave",
+        reason:
+          "unreadable-package-json: Could not read package.json at /p/brave/package.json: EACCES: permission denied",
+        message,
+        guidance,
+      },
+    ]);
+    expect(convergenceWarningsToOutcomes(result)).toStrictEqual({
+      warnings: result.warnings,
+      outcomes: [{ pluginId: "brave", status: "error", message }],
+      errored: true,
+    });
+  });
+
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
     const records = { brave: { source: "npm" as const, installPath: "/p/brave" } };
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
