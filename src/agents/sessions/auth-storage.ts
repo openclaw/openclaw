@@ -7,6 +7,7 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import lockfile from "proper-lockfile";
@@ -18,7 +19,7 @@ import type {
 } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { resolveConfigValue } from "./resolve-config-value.js";
+import { resolveConfigValue, resolveConfigValueAsync } from "./resolve-config-value.js";
 import { acquireLockSyncWithRetry } from "./storage-lock.js";
 
 export type ApiKeyCredential = {
@@ -124,7 +125,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       },
     });
     try {
-      const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
+      const current = existsSync(this.authPath) ? await fs.readFile(this.authPath, "utf-8") : undefined;
       const { result, next } = await fn(current);
       if (lockCompromisedError) {
         throw lockCompromisedError;
@@ -456,7 +457,7 @@ export class AuthStorage {
     const cred = this.data[providerId];
 
     if (cred?.type === "api_key") {
-      return resolveConfigValue(cred.key);
+      return resolveConfigValueAsync(cred.key);
     }
 
     if (cred?.type === "oauth") {
