@@ -15,8 +15,8 @@ import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
   inspectMainSessionRecoveryRequired,
+  readMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
-  validateMainSessionRecoveryOwner,
 } from "./main-session-recovery-store.js";
 
 const sessionKey = "agent:main:main";
@@ -544,9 +544,9 @@ describe("main session recovery store", () => {
       throw new Error("expected foreground owner claim");
     }
 
-    await expect(validateMainSessionRecoveryOwner(claim.lease)).resolves.toBe(true);
+    await expect(readMainSessionRecoveryOwner(claim.lease)).resolves.toBeDefined();
     await releaseMainSessionRecoveryOwner(claim.lease);
-    await expect(validateMainSessionRecoveryOwner(claim.lease)).resolves.toBe(false);
+    await expect(readMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
   });
 
   it("returns a retry target only when the final foreground owner releases", async () => {
@@ -763,6 +763,6 @@ describe("main session recovery store", () => {
     }
     rotateAgentEventLifecycleGeneration();
 
-    await expect(validateMainSessionRecoveryOwner(claim.lease)).resolves.toBe(false);
+    await expect(readMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
   });
 });

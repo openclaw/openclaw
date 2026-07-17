@@ -208,12 +208,6 @@ export async function commitMainSessionRecovery(params: {
   });
 }
 
-export async function validateMainSessionRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease,
-): Promise<boolean> {
-  return (await readMainSessionRecoveryOwner(lease)) !== undefined;
-}
-
 export async function readMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease,
 ): Promise<{ entry: SessionEntry; sessionKey: string } | undefined> {
