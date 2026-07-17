@@ -265,10 +265,7 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
 
   for (const [index, event] of session.events.entries()) {
     const expectedBytes = expectedEventBytes[index];
-    if (
-      expectedBytes !== undefined &&
-      storedEvents[index]?.estimated_bytes !== expectedBytes
-    ) {
+    if (expectedBytes !== undefined && storedEvents[index]?.estimated_bytes !== expectedBytes) {
       executeSqliteQuerySync(
         db,
         replayDb
