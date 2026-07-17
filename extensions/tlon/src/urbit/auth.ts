@@ -3,6 +3,8 @@ import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
+const AUTH_RESPONSE_DRAIN_MAX_BYTES = 64 * 1024;
+
 type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
@@ -37,7 +39,7 @@ export async function authenticate(
     }
 
     // Some Urbit setups require the response body to be read before cookie headers finalize.
-    await response.text().catch(() => {});
+    await drainAuthResponseBody(response);
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
       throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
@@ -45,5 +47,31 @@ export async function authenticate(
     return cookie;
   } finally {
     await release();
+  }
+}
+
+async function drainAuthResponseBody(response: Response): Promise<void> {
+  try {
+    if (!response.body) {
+      await response.text().catch(() => {});
+      return;
+    }
+
+    const reader = response.body.getReader();
+    let remaining = AUTH_RESPONSE_DRAIN_MAX_BYTES;
+    try {
+      while (remaining > 0) {
+        const { done, value } = await reader.read();
+        if (done || !value?.byteLength) {
+          return;
+        }
+        remaining -= value.byteLength;
+      }
+      await reader.cancel().catch(() => {});
+    } finally {
+      reader.releaseLock();
+    }
+  } catch {
+    // Body drain is compatibility-only; cookie handling below owns auth success/failure.
   }
 }
