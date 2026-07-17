@@ -547,4 +547,53 @@ describe("secrets runtime provider and media surfaces", () => {
       "agents.defaults.memorySearch.remote.apiKey",
     );
   });
+
+  it("isolates an inherited memory ref to its exact agent owner", async () => {
+    const missingRef = envTokenRef("MISSING_TEST_VALUE");
+    const healthyValue = "test-token-placeholder";
+    const healthyRef = envTokenRef("HEALTHY_TEST_VALUE");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            memorySearch: {
+              remote: {
+                apiKey: missingRef,
+                headers: { "X-Memory-Value": missingRef },
+              },
+            },
+          },
+          list: [
+            { id: "cold", default: true },
+            {
+              id: "healthy",
+              memorySearch: {
+                remote: { apiKey: healthyRef, headers: { "X-Memory-Value": healthyRef } },
+              },
+            },
+          ],
+        },
+      }),
+      env: { HEALTHY_TEST_VALUE: healthyValue },
+      agentDirs: ["/tmp/openclaw-agent-cold", "/tmp/openclaw-agent-healthy"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(snapshot.config.agents?.list?.[1]?.memorySearch?.remote?.apiKey).toBe(healthyValue);
+    expect(snapshot.config.agents?.list?.[1]?.memorySearch?.remote?.headers).toEqual({
+      "X-Memory-Value": healthyValue,
+    });
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "memory-provider:cold",
+        state: "unavailable",
+        paths: [
+          "agents.defaults.memorySearch.remote.apiKey",
+          "agents.defaults.memorySearch.remote.headers.X-Memory-Value",
+        ],
+      },
+    ]);
+  });
 });

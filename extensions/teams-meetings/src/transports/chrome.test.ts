@@ -1,5 +1,5 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTeamsMeetingsConfig } from "../config.js";
 
 const engineMocks = vi.hoisted(() => ({
@@ -76,7 +76,12 @@ function browserResult(params: Record<string, unknown>, state: { tabOpen: boolea
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   engineMocks.startAgent.mockRejectedValue(new Error("realtime startup failed"));
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("Microsoft Teams meeting Chrome startup cleanup", () => {

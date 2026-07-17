@@ -307,21 +307,47 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         };
       }
       const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
+      const assembled =
+        "route" in resolved
+          ? (() => {
+              if (!mergedRuntime) {
+                throw new Error("plugin runtime mock turn used before initialization");
+              }
+              const { cfg, route, ...turn } = resolved;
+              const routedTurn = {
+                ...turn,
+                routeSessionKey: route.sessionKey,
+                storePath: mergedRuntime.channel.session.resolveStorePath(cfg.session?.store, {
+                  agentId: route.agentId,
+                }),
+                recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
+              };
+              return "runDispatch" in resolved
+                ? routedTurn
+                : {
+                    ...routedTurn,
+                    cfg,
+                    agentId: route.agentId,
+                    dispatchReplyWithBufferedBlockDispatcher:
+                      mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+                  };
+            })()
+          : resolved;
       const admission =
-        resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
+        assembled.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
       const dispatchResult =
-        "runDispatch" in resolved
+        "runDispatch" in assembled
           ? await runPreparedChannelTurnMock({
-              ...resolved,
+              ...assembled,
               admission,
             } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0])
           : await dispatchAssembledChannelTurnMock({
-              ...resolved,
+              ...assembled,
               admission,
               delivery:
                 admission.kind === "observeOnly"
                   ? { deliver: async () => ({ visibleReplySent: false }) }
-                  : resolved.delivery,
+                  : assembled.delivery,
             });
       const result = {
         ...dispatchResult,

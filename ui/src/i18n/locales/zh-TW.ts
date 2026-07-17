@@ -1745,6 +1745,10 @@ export const zh_TW: TranslationMap = {
       testingButton: "測試中…",
       testing: "測試中 — 正在請 {modelRef} 快速回覆…",
     },
+    empty: {
+      title: "建議安裝項目",
+      intro: "未偵測到現有的 AI 存取權限。請安裝下列其中一項工具，然後再次檢查。",
+    },
     unavailable: {
       title: "已偵測，但未自動測試",
     },
@@ -2278,6 +2282,13 @@ export const zh_TW: TranslationMap = {
     session: "工作階段",
     outputTruncated: "預覽已遮蔽並截斷。",
     noOutputPreview: "沒有輸出預覽。",
+    answerCandidate: {
+      title: "候選答案",
+      itemId: "項目",
+      candidate: "候選答案",
+      superseded: "已取代的答案",
+      selected: "已選取的答案",
+    },
     status: {
       running: "執行中",
       done: "完成",
@@ -3654,6 +3665,11 @@ export const zh_TW: TranslationMap = {
       pause: "暫停目標",
       resume: "恢復目標",
       clear: "清除目標",
+    },
+    questions: {
+      title: "Codex 需要輸入內容",
+      other: "輸入其他答案",
+      submit: "提交答案",
     },
     messages: {
       activity: "活動",

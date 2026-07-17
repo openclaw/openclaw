@@ -492,6 +492,37 @@ describe("openclaw agent database", () => {
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
 
+  it("folds additive heartbeat storage into schema version 11", () => {
+    expect(OPENCLAW_AGENT_SCHEMA_VERSION).toBe(11);
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const existingV11 = new DatabaseSync(databasePath);
+    existingV11.exec(`
+      DROP TABLE heartbeat_outcomes;
+      PRAGMA user_version = 11;
+      UPDATE schema_meta SET schema_version = 11 WHERE meta_key = 'primary';
+    `);
+    existingV11.close();
+
+    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(
+      reopened.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("heartbeat_outcomes"),
+    ).toEqual({ name: "heartbeat_outcomes" });
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(11);
+    expect(
+      reopened.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: 11 });
+  });
+
   it("upgrades version 10 with agent state intact and adds lease storage", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

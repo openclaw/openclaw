@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { getRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
@@ -98,6 +99,51 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
       },
     );
+  });
+
+  it("reaches /readyz with a cold memory provider and rejects only that owner", async () => {
+    await withEnvAsync({ MISSING_MEMORY_KEY: undefined }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        agents: {
+          defaults: {
+            memorySearch: {
+              remote: {
+                apiKey: { source: "env", provider: "default", id: "MISSING_MEMORY_KEY" },
+              },
+            },
+          },
+        },
+      });
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      const active = getActiveSecretsRuntimeSnapshot();
+      expect(active?.degradedOwners).toMatchObject([
+        {
+          ownerKind: "capability",
+          ownerId: "memory-provider:main",
+          state: "unavailable",
+        },
+      ]);
+      if (!active) {
+        throw new Error("Expected active secrets runtime snapshot");
+      }
+      let thrown: unknown;
+      try {
+        resolveMemorySearchConfig(active.config, "main");
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({
+        code: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "capability",
+        ownerId: "memory-provider:main",
+      });
+    });
   });
 
   it("isolates TTS during a successful Gateway-auth SecretRef preflight", async () => {
