@@ -44,31 +44,23 @@ export const QuestionStatusSchema = Type.Union([
   Type.Literal("expired"),
 ]);
 
-const QuestionRecordBaseFields = {
+/**
+ * One pending or recently resolved transient question request. Flat object with
+ * optional terminal fields (exec-approval record precedent): native protocol
+ * codegen cannot emit per-status object unions, and the manager owns the
+ * status/answers invariant (answers present only when status is "answered").
+ */
+export const QuestionRecordSchema = closedObject({
   id: NonEmptyString,
   questions: Type.Array(QuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   createdAtMs: Type.Integer({ minimum: 0 }),
   expiresAtMs: Type.Integer({ minimum: 0 }),
-};
-
-/** One pending or recently resolved transient question request. */
-export const QuestionRecordSchema = Type.Union([
-  closedObject({ ...QuestionRecordBaseFields, status: Type.Literal("pending") }),
-  closedObject({
-    ...QuestionRecordBaseFields,
-    status: Type.Literal("answered"),
-    answers: QuestionAnswersSchema,
-    resolvedBy: Type.Optional(NonEmptyString),
-  }),
-  closedObject({
-    ...QuestionRecordBaseFields,
-    status: Type.Literal("cancelled"),
-    resolvedBy: Type.Optional(NonEmptyString),
-  }),
-  closedObject({ ...QuestionRecordBaseFields, status: Type.Literal("expired") }),
-]);
+  status: QuestionStatusSchema,
+  answers: Type.Optional(QuestionAnswersSchema),
+  resolvedBy: Type.Optional(NonEmptyString),
+});
 
 export const QuestionRequestParamsSchema = closedObject({
   id: Type.Optional(NonEmptyString),

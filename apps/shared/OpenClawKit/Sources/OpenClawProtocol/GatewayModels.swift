@@ -12731,6 +12731,52 @@ public struct QuestionAnswers: Codable, Sendable {
     }
 }
 
+public struct QuestionRecord: Codable, Sendable {
+    public let id: String
+    public let questions: [Question]
+    public let agentid: String?
+    public let sessionkey: String?
+    public let createdatms: Int
+    public let expiresatms: Int
+    public let status: QuestionStatus
+    public let answers: QuestionAnswers?
+    public let resolvedby: String?
+
+    public init(
+        id: String,
+        questions: [Question],
+        agentid: String? = nil,
+        sessionkey: String? = nil,
+        createdatms: Int,
+        expiresatms: Int,
+        status: QuestionStatus,
+        answers: QuestionAnswers? = nil,
+        resolvedby: String? = nil)
+    {
+        self.id = id
+        self.questions = questions
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.createdatms = createdatms
+        self.expiresatms = expiresatms
+        self.status = status
+        self.answers = answers
+        self.resolvedby = resolvedby
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case questions
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case createdatms = "createdAtMs"
+        case expiresatms = "expiresAtMs"
+        case status
+        case answers
+        case resolvedby = "resolvedBy"
+    }
+}
+
 public struct QuestionRequestParams: Codable, Sendable {
     public let id: String?
     public let questions: [QuestionRequestQuestion]
@@ -12812,10 +12858,10 @@ public struct QuestionGetParams: Codable, Sendable {
 }
 
 public struct QuestionGetResult: Codable, Sendable {
-    public let question: QuestionRequestedEvent
+    public let question: QuestionRecord
 
     public init(
-        question: QuestionRequestedEvent)
+        question: QuestionRecord)
     {
         self.question = question
     }
@@ -12828,10 +12874,10 @@ public struct QuestionGetResult: Codable, Sendable {
 public struct QuestionListParams: Codable, Sendable {}
 
 public struct QuestionListResult: Codable, Sendable {
-    public let questions: [QuestionRequestedEvent]
+    public let questions: [QuestionRecord]
 
     public init(
-        questions: [QuestionRequestedEvent])
+        questions: [QuestionRecord])
     {
         self.questions = questions
     }

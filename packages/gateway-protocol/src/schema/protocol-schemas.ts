@@ -377,7 +377,6 @@ import {
   QuestionListResultSchema,
   QuestionOptionSchema,
   QuestionRecordSchema,
-  QuestionRequestedEventSchema,
   QuestionRequestParamsSchema,
   QuestionRequestQuestionSchema,
   QuestionRequestResultSchema,
@@ -974,7 +973,8 @@ export const ProtocolSchemas = {
   QuestionGetResult: QuestionGetResultSchema,
   QuestionListParams: QuestionListParamsSchema,
   QuestionListResult: QuestionListResultSchema,
-  QuestionRequestedEvent: QuestionRequestedEventSchema,
+  // QuestionRequestedEvent is a TS-only alias of QuestionRecord; registering both
+  // names makes native codegen reference a type it never emits.
   QuestionResolvedEvent: QuestionResolvedEventSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,

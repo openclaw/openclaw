@@ -66,20 +66,22 @@ function waitResult(record: QuestionRecord): QuestionWaitAnswerResult {
     case "pending":
       return { status: "pending" };
     case "answered":
-      return { status: "answered", answers: record.answers };
+      // The manager only sets status "answered" together with validated answers.
+      return { status: "answered", answers: record.answers ?? { answers: {} } };
     case "cancelled":
       return { status: "cancelled" };
     case "expired":
       return { status: "expired" };
   }
-  return record satisfies never;
+  return record.status satisfies never;
 }
 
-function resolvedEvent(
-  record: Exclude<QuestionRecord, { status: "pending" }>,
-): QuestionResolvedEvent {
+function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
+  if (record.status === "pending") {
+    return null;
+  }
   return record.status === "answered"
-    ? { id: record.id, status: "answered", answers: record.answers }
+    ? { id: record.id, status: record.status, answers: record.answers ?? { answers: {} } }
     : { id: record.id, status: record.status };
 }
 
@@ -308,9 +310,10 @@ export class QuestionManager {
       waiter.resolve(result);
     }
     entry.waiters.clear();
-    if (entry.record.status !== "pending") {
+    const event = resolvedEvent(entry.record);
+    if (event) {
       try {
-        entry.onResolved?.(resolvedEvent(entry.record));
+        entry.onResolved?.(event);
       } catch {
         // Broadcast fanout is observational and must not change question truth.
       }
