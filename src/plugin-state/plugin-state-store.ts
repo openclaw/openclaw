@@ -474,6 +474,86 @@ export function createPluginStateSyncKeyedStore<T>(
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
 }
 
+/** Atomically allocates a workspace sequence and appends one journal entry. */
+export function registerPluginStateSyncSequencedJournalEntry(params: {
+  pluginId: string;
+  cursorOptions: OpenKeyedStoreOptions;
+  cursorKey: string;
+  journalOptions: OpenKeyedStoreOptions;
+  initialSequence: number;
+  journalKey: (sequence: number) => string;
+  journalValue: (sequence: number) => unknown;
+}): number {
+  if (params.pluginId.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  if (!Number.isSafeInteger(params.initialSequence) || params.initialSequence < 0) {
+    throw invalidInput("plugin state initial journal sequence must be a safe non-negative integer");
+  }
+  const cursorNamespace = validateNamespace(params.cursorOptions.namespace);
+  const cursorMaxEntries = validateMaxEntries(params.cursorOptions.maxEntries);
+  const cursorOverflowPolicy = validateOverflowPolicy(params.cursorOptions.overflowPolicy);
+  const cursorDefaultTtlMs = validateOptionalTtlMs(params.cursorOptions.defaultTtlMs);
+  const journalNamespace = validateNamespace(params.journalOptions.namespace);
+  const journalMaxEntries = validateMaxEntries(params.journalOptions.maxEntries);
+  const journalOverflowPolicy = validateOverflowPolicy(params.journalOptions.overflowPolicy);
+  const journalDefaultTtlMs = validateOptionalTtlMs(params.journalOptions.defaultTtlMs);
+  if (
+    cursorOverflowPolicy !== "evict-oldest" ||
+    journalOverflowPolicy !== "evict-oldest" ||
+    cursorDefaultTtlMs !== undefined ||
+    journalDefaultTtlMs !== undefined
+  ) {
+    throw invalidInput("sequenced plugin state journals require non-expiring evict-oldest stores");
+  }
+  if (params.cursorOptions.env !== params.journalOptions.env) {
+    throw invalidInput("sequenced plugin state journal stores must share one environment");
+  }
+  const cursorKey = validateKey(params.cursorKey);
+  assertConsistentOptions(params.pluginId, cursorNamespace, {
+    maxEntries: cursorMaxEntries,
+    overflowPolicy: cursorOverflowPolicy,
+    defaultTtlMs: cursorDefaultTtlMs,
+  });
+  assertConsistentOptions(params.pluginId, journalNamespace, {
+    maxEntries: journalMaxEntries,
+    overflowPolicy: journalOverflowPolicy,
+    defaultTtlMs: journalDefaultTtlMs,
+  });
+  return pluginStateRegisterSequencedJournalEntry({
+    pluginId: params.pluginId,
+    cursorNamespace,
+    cursorKey,
+    cursorMaxEntries,
+    journalNamespace,
+    journalMaxEntries,
+    initialSequence: params.initialSequence,
+    readCursorSequence(valueJson) {
+      try {
+        const value = JSON.parse(valueJson) as { kind?: unknown; lastSequence?: unknown };
+        return value.kind === "cursor" && Number.isSafeInteger(value.lastSequence)
+          ? (value.lastSequence as number)
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    prepareEntry(sequence) {
+      const cursor = prepareRegisterParams(cursorKey, { kind: "cursor", lastSequence: sequence });
+      const journal = prepareRegisterParams(
+        params.journalKey(sequence),
+        params.journalValue(sequence),
+      );
+      return {
+        cursorValueJson: cursor.valueJson,
+        journalKey: journal.key,
+        journalValueJson: journal.valueJson,
+      };
+    },
+    ...(params.cursorOptions.env ? { env: params.cursorOptions.env } : {}),
+  });
+}
+
 /** Doctor-only import that preserves source age for retention ordering. */
 export function importPluginStateEntriesForDoctor(
   pluginId: string,

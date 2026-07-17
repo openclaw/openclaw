@@ -271,7 +271,10 @@ describe("legacy core audit log migration", () => {
           chmod(mode: number): Promise<void>;
         };
         await probe.close();
-        const originalChmod = fileHandlePrototype.chmod;
+        const originalChmod = Reflect.get(fileHandlePrototype, "chmod") as (
+          this: typeof fileHandlePrototype,
+          mode: number,
+        ) => Promise<void>;
         let chmodCalls = 0;
         const chmodSpy = vi.spyOn(fileHandlePrototype, "chmod").mockImplementation(function (
           this: typeof fileHandlePrototype,
@@ -560,6 +563,67 @@ describe("legacy core audit log migration", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         }),
       ).toEqual([]);
+    });
+  });
+
+  it("restores the active source when raw archive hardening fails", async () => {
+    await withTempDir({ prefix: "openclaw-audit-migration-permissions-" }, async (stateDir) => {
+      const sourcePath = path.join(stateDir, "logs", "config-audit.jsonl");
+      const record = {
+        ts: "2026-07-01T00:00:00.000Z",
+        source: "config-io",
+        event: "config.write",
+        argv: ["openclaw", "config", "set", "token", "secret-value"],
+        execArgv: [],
+      };
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, `${JSON.stringify(record)}\n`);
+      const probe = await fs.open(path.join(stateDir, "chmod-probe"), "w");
+      const fileHandlePrototype = Object.getPrototypeOf(probe) as {
+        chmod(mode: number): Promise<void>;
+      };
+      await probe.close();
+      const originalChmod = Reflect.get(fileHandlePrototype, "chmod") as (
+        this: typeof fileHandlePrototype,
+        mode: number,
+      ) => Promise<void>;
+      let chmodCalls = 0;
+      const chmodSpy = vi.spyOn(fileHandlePrototype, "chmod").mockImplementation(function (
+        this: typeof fileHandlePrototype,
+        mode: number,
+      ) {
+        chmodCalls += 1;
+        if (chmodCalls === 3) {
+          return Promise.reject(new Error("simulated chmod failure"));
+        }
+        return originalChmod.call(this, mode);
+      });
+
+      let failed: Awaited<ReturnType<typeof migrateLegacyAuditLogs>>;
+      try {
+        failed = await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }),
+          stateDir,
+        });
+      } finally {
+        chmodSpy.mockRestore();
+      }
+
+      expect(failed.changes).toEqual([]);
+      expect(failed.warnings.join("\n")).toContain("Failed securing raw archived config audit log");
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain("secret-value");
+      await expect(fs.access(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${sourcePath}.migrated.raw`)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      const recovered = await migrateLegacyAuditLogs({
+        detected: detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }),
+        stateDir,
+      });
+      expect(recovered.warnings).toEqual([]);
+      await expect(fs.access(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${sourcePath}.migrated.raw`)).resolves.toBeUndefined();
     });
   });
 

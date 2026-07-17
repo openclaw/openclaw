@@ -326,8 +326,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
-      // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      104,
+      // Harvest: freeze the compat config-schema barrel to explicit exports -1;
+      // retire the Memory Core facade's event-store wildcard -1.
+      103,
       env,
     ),
   };

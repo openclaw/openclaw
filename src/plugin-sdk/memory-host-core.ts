@@ -9,6 +9,10 @@ import { sha256HexPrefix } from "../infra/crypto-digest.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
 import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
+import {
+  MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES,
+  serializeMemoryHostEventExport,
+} from "../memory-host-sdk/event-export.js";
 import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -16,7 +20,6 @@ import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 
 const MEMORY_HOST_EVENTS_FILENAME = "memory-host-events.jsonl";
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS = 1_000;
-const MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES = 1024 * 1024;
 const MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS = {
   retries: { retries: 20, factor: 1.3, minTimeout: 25, maxTimeout: 250, randomize: true },
   stale: 30_000,
@@ -85,23 +88,6 @@ async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
     }
   }
   return files.toSorted((left, right) => left.localeCompare(right));
-}
-
-function serializeMemoryHostEventExport(
-  storedEvents: ReturnType<typeof listStoredMemoryHostEvents>,
-): string {
-  const lines: string[] = [];
-  let sizeBytes = 0;
-  for (const entry of storedEvents.toReversed()) {
-    const line = JSON.stringify(entry.value.event);
-    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
-    if (sizeBytes + lineBytes > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
-      break;
-    }
-    lines.push(line);
-    sizeBytes += lineBytes;
-  }
-  return lines.toReversed().join("\n") + "\n";
 }
 
 async function materializeMemoryHostEventExport(params: {

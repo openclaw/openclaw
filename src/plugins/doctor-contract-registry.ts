@@ -225,7 +225,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
   return value.filter(isPluginDoctorStateMigration).map((migration) => ({
     id: migration.id.trim(),
     label: migration.label.trim(),
-    ...(migration.doctorOnly === true ? { doctorOnly: true } : {}),
+    doctorOnly: migration.doctorOnly === true ? true : undefined,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));
