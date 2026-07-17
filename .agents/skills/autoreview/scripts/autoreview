@@ -6351,10 +6351,11 @@ def tolerant_pem_line_spans(text: str, depth: int) -> tuple[list[tuple[int, int]
     return spans, depth
 
 
-def redact_unbalanced_private_key_hunks(section: str) -> str:
+def redact_unbalanced_private_key_hunks(section: str) -> tuple[str, set[str]]:
     """Redact inherited truncated PEM material while retaining changed code."""
     lines = literal_lf_lines(section)
     redacted = list(lines)
+    secret_fragments: set[str] = set()
     index = 0
     while index < len(lines):
         header = lines[index]
@@ -6412,11 +6413,23 @@ def redact_unbalanced_private_key_hunks(section: str) -> str:
             if set(prefix) == {" "} or "+" in prefix:
                 new_spans, new_depth = tolerant_pem_line_spans(content, new_depth)
                 spans.extend(new_spans)
+            marker_spans = {
+                match.span()
+                for pattern in (PRIVATE_KEY_BEGIN_PATTERN, PRIVATE_KEY_END_PATTERN)
+                for match in pattern.finditer(content)
+            }
+            secret_fragments.update(
+                fragment
+                for start, end in spans
+                if (start, end) not in marker_spans
+                and (fragment := normalized_private_key_fragment(content, start, end))
+                and fragment.casefold() not in SECRET_PLACEHOLDER_VALUES
+            )
             redacted[line_index] = (
                 f"{prefix}{redact_review_spans(content, spans)}{ending}"
             )
         index = hunk_end
-    return "".join(redacted)
+    return "".join(redacted), secret_fragments
 
 
 def redact_secret_like_hunk_headers(
@@ -6861,14 +6874,15 @@ def validate_review_patch(
         )
     expected_paths = set(paths)
     units = review_bundle_units(patch)
-    units = [
-        redact_unbalanced_private_key_hunks(unit)
-        if unit.startswith("diff --git ")
-        else unit
-        for unit in units
-    ]
-    patch = "".join(units)
+    redacted_units: list[str] = []
     known_secret_fragments: set[str] = set()
+    for unit in units:
+        if unit.startswith("diff --git "):
+            unit, fragments = redact_unbalanced_private_key_hunks(unit)
+            known_secret_fragments.update(fragments)
+        redacted_units.append(unit)
+    units = redacted_units
+    patch = "".join(units)
     for unit in units:
         if not unit.startswith("diff --git "):
             continue

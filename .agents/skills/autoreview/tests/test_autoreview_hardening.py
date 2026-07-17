@@ -3300,6 +3300,31 @@ class AutoreviewHardeningTests(unittest.TestCase):
         self.assertIn("+runDangerousOperation();", redacted)
         self.assertIn("+const timeout = 30_000;", redacted)
 
+    def test_review_patch_reuses_fragments_from_truncated_private_key_context(self) -> None:
+        repeated = "AB12cd34EF56"
+        patch = (
+            "diff --git a/fixture.test.ts b/fixture.test.ts\n"
+            "--- a/fixture.test.ts\n"
+            "+++ b/fixture.test.ts\n"
+            "@@ -1,3 +1,3 @@\n"
+            ' const key = ["-----BEGIN '
+            + 'PRIVATE KEY-----",\n'
+            f'   "{repeated}",\n'
+            '   "GH78ij90KL12",\n'
+            "@@ -20 +20,2 @@\n"
+            " const timeout = 30_000;\n"
+            f'+const duplicate = "{repeated}";\n'
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["fixture.test.ts"],
+            patch,
+        )
+
+        self.assertNotIn(repeated, redacted)
+        self.assertIn('+const duplicate = "redacted";', redacted)
+
     def test_review_patch_redacts_interleaved_balanced_private_key_marker_edit(self) -> None:
         patch = (
             "diff --git a/fixture.test.ts b/fixture.test.ts\n"
