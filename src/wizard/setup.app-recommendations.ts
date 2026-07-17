@@ -14,6 +14,11 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
+  readOnboardingRecommendations,
+  writeOnboardingRecommendationsOffer,
+  type OnboardingRecommendationsRecord,
+} from "../state/onboarding-recommendations.js";
+import {
   getSetupAppRecommendations,
   type SetupAppRecommendationMatch,
   type SetupAppRecommendationsResult,
@@ -28,6 +33,9 @@ type SetupAppRecommendationDeps = {
   ensurePlugin?: typeof ensureOnboardingPluginInstalled;
   installSkill?: typeof installSkillFromClawHub;
   resolveOfficialEntry?: (pluginId: string) => OnboardingPluginInstallEntry | undefined;
+  readStored?: () => OnboardingRecommendationsRecord | null;
+  writeOffer?: typeof writeOnboardingRecommendationsOffer;
+  deferOfferToBootstrap?: () => boolean;
 };
 
 function resolveOfficialEntry(pluginId: string): OnboardingPluginInstallEntry | undefined {
@@ -87,6 +95,11 @@ export async function setupAppRecommendations(params: {
   ) {
     return params.config;
   }
+  const readStored = params.deps?.readStored ?? readOnboardingRecommendations;
+  const stored = readStored();
+  if (typeof stored?.acceptedAt === "number") {
+    return params.config;
+  }
 
   const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
   let result: SetupAppRecommendationsResult;
@@ -107,6 +120,15 @@ export async function setupAppRecommendations(params: {
   progress.stop();
   if (result.status !== "ok") {
     params.runtime.log(t("wizard.appRecommendations.noneFound"));
+    return params.config;
+  }
+
+  const writeOffer = params.deps?.writeOffer ?? writeOnboardingRecommendationsOffer;
+  const deferOfferToBootstrap =
+    params.deps?.deferOfferToBootstrap ??
+    (() => existsSync(path.join(params.workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)));
+  if (deferOfferToBootstrap()) {
+    writeOffer({ inventory: result.apps, matches: result.matches, answered: false });
     return params.config;
   }
 
@@ -148,6 +170,13 @@ export async function setupAppRecommendations(params: {
         ? [selectionValue(index)]
         : [],
     ),
+  });
+  writeOffer({
+    inventory: result.apps,
+    matches: result.matches,
+    // Returning from the prompt means the user answered even when every option
+    // was deselected. Cancellation throws before this point.
+    answered: true,
   });
   if (selected.includes(SKIP_VALUE)) {
     return params.config;
@@ -204,3 +233,6 @@ export async function setupAppRecommendations(params: {
   }
   return next;
 }
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
