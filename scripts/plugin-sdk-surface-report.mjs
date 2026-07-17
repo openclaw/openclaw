@@ -259,7 +259,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
       // Harvest: retired dual-field plan payload builder -1.
-      8045,
+      // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
+      8068,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -291,7 +292,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // WhatsApp-split harvest (#108656).
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
       // Harvest: retired dual-field plan payload builder -1.
-      4488,
+      // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
+      4501,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -317,7 +319,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
       // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      105,
+      104,
       env,
     ),
   };

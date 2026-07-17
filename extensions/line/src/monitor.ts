@@ -191,13 +191,8 @@ export async function monitorLineProvider(
               cfg: config,
               channel: "line",
               accountId: route.accountId,
-              agentId: route.agentId,
-              routeSessionKey: route.sessionKey,
-              storePath: ctx.turn.storePath,
+              route: { agentId: route.agentId, sessionKey: route.sessionKey },
               ctxPayload,
-              recordInboundSession: core.channel.session.recordInboundSession,
-              dispatchReplyWithBufferedBlockDispatcher:
-                core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
               record: ctx.turn.record,
               replyPipeline: {},
               ...(deliveryControl.abortSignal

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
@@ -247,20 +248,22 @@ function parseLegacySubscriptions(raw: string): Map<string, WebPushSubscription>
   return subscriptions;
 }
 
-function parseLegacyVapidKeys(raw: string): VapidKeyPair {
+function parseLegacyVapidKeys(raw: string, env: NodeJS.ProcessEnv): VapidKeyPair {
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
     throw new Error("legacy Web Push VAPID keys must be an object");
   }
   assertOnlyKeys(parsed, VAPID_KEYS, "legacy Web Push VAPID keys");
+  if (parsed.subject !== undefined && typeof parsed.subject !== "string") {
+    throw new Error("legacy Web Push VAPID keys are invalid");
+  }
   const subject =
-    parsed.subject === undefined || parsed.subject === ""
-      ? process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_WEB_PUSH_VAPID_SUBJECT
-      : parsed.subject;
+    normalizeOptionalString(parsed.subject) ??
+    normalizeOptionalString(env.OPENCLAW_VAPID_SUBJECT) ??
+    DEFAULT_WEB_PUSH_VAPID_SUBJECT;
   if (
     !isValidWebPushKey(parsed.publicKey) ||
     !isValidWebPushKey(parsed.privateKey) ||
-    typeof subject !== "string" ||
     subject.length > 512
   ) {
     throw new Error("legacy Web Push VAPID keys are invalid");
@@ -272,6 +275,7 @@ async function readLegacyState(
   stateRoot: Root,
   stateDir: string,
   detected: LegacyStateDetection["webPush"],
+  env: NodeJS.ProcessEnv,
 ): Promise<ParsedLegacyState> {
   await recoverInterruptedClaim(
     stateRoot,
@@ -305,7 +309,7 @@ async function readLegacyState(
       detected.vapidKeysPath,
       LEGACY_VAPID_KEYS_MAX_BYTES,
     );
-    vapidKeys = parseLegacyVapidKeys(snapshot.raw);
+    vapidKeys = parseLegacyVapidKeys(snapshot.raw, env);
     snapshots.push(snapshot);
   }
   return { subscriptions, vapidKeys, snapshots };
@@ -582,6 +586,7 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
   stateRoot: Root;
   detected: LegacyStateDetection["webPush"];
   stateDir: string;
+  env: NodeJS.ProcessEnv;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
@@ -595,7 +600,12 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
 
   let legacy: ParsedLegacyState;
   try {
-    legacy = await readLegacyState(params.stateRoot, params.stateDir, params.detected);
+    legacy = await readLegacyState(
+      params.stateRoot,
+      params.stateDir,
+      params.detected,
+      params.env,
+    );
   } catch (error) {
     warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
     return { changes, warnings };
@@ -720,6 +730,7 @@ export async function migrateLegacyWebPush(params: {
       });
       result = await migrateLegacyWebPushWithExclusiveStateOwnership({
         ...params,
+        env,
         stateRoot,
       });
     } catch (error) {

@@ -2279,6 +2279,7 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
+      questionStatus: state.questionStatus,
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder
@@ -2435,6 +2436,11 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onQuestionSubmit: (actionToken, answers, onRejected) =>
+        void state.handleSendChat(
+          `/codex answer ${actionToken} answers:${encodeURIComponent(JSON.stringify(answers))}`,
+          { onLocalCommandSendRejected: onRejected },
+        ),
       onSideQuestion: (command, displayQuestion, onSendRejected) =>
         void state.handleSendChat(command, {
           ...(displayQuestion ? { sideQuestionDisplayText: displayQuestion } : {}),

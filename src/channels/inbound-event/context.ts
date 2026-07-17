@@ -377,17 +377,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   };
 }
 
-/**
- * @deprecated Public compatibility for callers that already prepared legacy
- * prompt fields. New channel code should use `buildChannelInboundEventContext`.
- */
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextAsyncParams<T>,
-): Promise<FinalizeChannelInboundContextResult<T>>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
-  params: FinalizeChannelInboundContextParams<T>,
-): FinalizeChannelInboundContextResult<T>;
-export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+function finalizeChannelInboundContextValue<T extends Record<string, unknown>>(
   params: FinalizeChannelInboundContextParams<T> &
     Partial<ChannelInboundSupplementalResolutionOptions>,
 ): MaybePromise<FinalizeChannelInboundContextResult<T>> {
@@ -412,6 +402,23 @@ export function finalizeChannelInboundContext<T extends Record<string, unknown>>
     return Promise.resolve(prepared).then(finish);
   }
   return isPromiseLike(prepared) ? prepared.then(finish) : finish(prepared);
+}
+
+/**
+ * @deprecated Public compatibility for callers that already prepared legacy
+ * prompt fields. New channel code should use `buildChannelInboundEventContext`.
+ */
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextAsyncParams<T>,
+): Promise<FinalizeChannelInboundContextResult<T>>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextParams<T>,
+): FinalizeChannelInboundContextResult<T>;
+export function finalizeChannelInboundContext<T extends Record<string, unknown>>(
+  params: FinalizeChannelInboundContextParams<T> &
+    Partial<ChannelInboundSupplementalResolutionOptions>,
+): MaybePromise<FinalizeChannelInboundContextResult<T>> {
+  return finalizeChannelInboundContextValue(params);
 }
 
 function resolveIngressCommandAuthorized(
@@ -560,13 +567,13 @@ export function buildChannelInboundEventContext(
     context,
   };
   const result = params.resolveSupplementalMedia
-    ? finalizeChannelInboundContext({
+    ? finalizeChannelInboundContextValue({
         ...finalizeParams,
         resolveSupplementalMedia: true,
         suppressSelfQuoteBody: params.suppressSelfQuoteBody,
         suppressSelfQuoteMedia: params.suppressSelfQuoteMedia,
       })
-    : finalizeChannelInboundContext(finalizeParams);
+    : finalizeChannelInboundContextValue(finalizeParams);
   return isPromiseLike(result)
     ? result.then((finalized) => finalized.context as BuiltChannelInboundEventContext)
     : (result.context as BuiltChannelInboundEventContext);

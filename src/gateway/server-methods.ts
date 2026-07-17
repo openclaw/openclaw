@@ -536,6 +536,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "openclaw.setup.verify",
       "openclaw.setup.activate",
       "openclaw.setup.auth.start",
+      "openclaw.setup.prepare.start",
     ],
     loadHandlers: loadSystemAgentHandlers,
   }),

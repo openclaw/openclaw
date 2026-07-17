@@ -449,6 +449,10 @@ const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
   "src/plugins/official-external-plugin-catalog.test.ts",
   "test/release-check.test.ts",
 ];
+const RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS = [
+  "src/plugins/recommended-tool-installs.test.ts",
+  "test/release-check.test.ts",
+];
 const DOCKERFILE_CACHE_AND_DIGEST_TEST_TARGETS = [
   "src/docker-build-cache.test.ts",
   "src/docker-image-digests.test.ts",
@@ -1192,6 +1196,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/official-external-plugin-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
   ["scripts/lib/official-external-provider-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
+  ["scripts/lib/recommended-tool-installs.json", RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS],
   ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/prompt-snapshot-files.ts", ["test/scripts/prompt-snapshots.test.ts"]],
   [

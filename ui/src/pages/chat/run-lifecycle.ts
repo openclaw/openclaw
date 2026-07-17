@@ -18,6 +18,7 @@ import {
   type CompactionStatus,
   type FallbackStatus,
   type PlanStatus,
+  type QuestionStatus,
 } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -56,6 +57,7 @@ type RunLifecycleHost = Omit<
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
   planStatus?: PlanStatus | null;
+  questionStatus?: QuestionStatus | null;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
@@ -234,6 +236,10 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   const planOwner = host.planStatus?.runId;
   if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
     host.planStatus = null;
+  }
+  const questionOwner = host.questionStatus?.runId;
+  if (host.questionStatus && (!runId || !questionOwner || questionOwner === runId)) {
+    host.questionStatus = null;
   }
 }
 

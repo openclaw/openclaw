@@ -577,8 +577,16 @@ export function ensureOpenClawAgentDatabasePermissions(
     chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
   for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
-    if (existsSync(candidate)) {
+    try {
       chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+    } catch (error) {
+      // WAL/SHM/journal sidecars are transient: SQLite removes them at
+      // checkpoint/close, so a concurrent worker can race this sweep. A
+      // vanished sidecar needs no tightening; an existsSync guard would just
+      // reintroduce the TOCTOU window.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
     }
   }
 }

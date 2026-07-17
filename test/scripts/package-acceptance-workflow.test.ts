@@ -570,6 +570,9 @@ describe("package acceptance workflow", () => {
 
     expect(publishOrchestration.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
     expect(publishOrchestration.env?.CHILD_WORKFLOW_REF).toBe("${{ github.ref_name }}");
+    expect(readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8")).toContain(
+      "otherwise approve and monitor the detached runs separately",
+    );
     expectTextToIncludeAll(publishOrchestration.run, [
       'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
@@ -580,8 +583,8 @@ describe("package acceptance workflow", () => {
       'wait_for_run android-release.yml "${android_release_run_id}" "${TARGET_SHA}"',
       'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
-      'approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"',
-      'approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"',
+      "plugin-clawhub-release.yml: detached; approval and publish not awaited",
+      "plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited",
     ]);
   });
 
@@ -3927,6 +3930,11 @@ describe("package artifact reuse", () => {
       releasePublishJob,
       "Checkout trusted release tooling",
     );
+    const releaseNodeSetup = workflowStep(releasePublishJob, "Setup Node environment");
+    const trustedReleaseToolingInstall = workflowStep(
+      releasePublishJob,
+      "Install trusted release tooling dependencies",
+    );
     const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
@@ -3940,6 +3948,12 @@ describe("package artifact reuse", () => {
     );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(releaseNodeSetup.with?.["install-deps"]).toBe("false");
+    expect(trustedReleaseToolingInstall.run).toContain("--dir .release-harness");
+    expect(trustedReleaseToolingInstall.run).toContain("--frozen-lockfile");
+    expect(trustedReleaseToolingInstall.run).toContain(
+      "ln -s .release-harness/node_modules node_modules",
     );
     expect(fastPretagScript).toContain(
       "node --import tsx scripts/plugin-release-pretag-pack-check.ts",

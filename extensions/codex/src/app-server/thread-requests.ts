@@ -38,6 +38,10 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.apply_patch_streaming_events": true,
 };
 
+const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
+  "features.goals": false,
+};
+
 const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode": false,
   "features.code_mode_only": false,
@@ -265,6 +269,8 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
+  // Native goal RPCs remain available through app-server, but the Codex goals
+  // feature also starts autonomous turns. Keep it disabled until a run owner exists.
   const codeModeConfig: JsonObject = {
     ...CODEX_CODE_MODE_THREAD_CONFIG,
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
@@ -273,6 +279,7 @@ export function buildCodexRuntimeThreadConfig(
     const disabledConfig = mergeCodexThreadConfigs(
       config,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
     ) ?? {
       ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
     };
@@ -282,16 +289,27 @@ export function buildCodexRuntimeThreadConfig(
     return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
-    const merged = mergeCodexThreadConfigs(codeModeConfig, config, {
-      "features.code_mode_only": true,
-    }) ?? {
+    const merged = mergeCodexThreadConfigs(
+      codeModeConfig,
+      config,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+      {
+        "features.code_mode_only": true,
+      },
+    ) ?? {
       ...codeModeConfig,
+      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       "features.code_mode_only": true,
     };
     return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
   }
-  const merged = mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+  const merged = mergeCodexThreadConfigs(
+    codeModeConfig,
+    config,
+    CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
+  ) ?? {
     ...codeModeConfig,
+    ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
   };
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }

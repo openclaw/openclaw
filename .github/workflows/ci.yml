@@ -644,7 +644,7 @@ jobs:
                 save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
-                  shard.shardName === "core-tooling" ||
+                  shard.shardName.startsWith("core-tooling") ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -1016,6 +1016,15 @@ jobs:
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Designated dependency-snapshot writer: exactly one trusted-push job
+          # per node-version key refreshes the protected disk; every other
+          # sticky consumer mounts read-only.
+          save-sticky-disk: "true"
           runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
@@ -1227,6 +1236,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check native app i18n inventory
         run: pnpm native:i18n:check
@@ -1254,6 +1268,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Install Playwright Chromium
         run: |
@@ -1298,6 +1317,11 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check Control UI locale parity
         run: pnpm ui:i18n:check
@@ -1371,6 +1395,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1500,6 +1529,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Set up Blacksmith Docker layer cache
         if: ${{ matrix.docker_cache == true && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
@@ -1671,6 +1705,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run plugin contract shard
         env:
@@ -1709,6 +1748,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run channel contract shard
         env:
@@ -1925,6 +1969,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
@@ -2113,8 +2162,9 @@ jobs:
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
             runner: blacksmith-8vcpu-ubuntu-2404
-          # Prompt snapshot regeneration runs real embedded-agent turns (~2min)
-          # and used to own the boundaries-a wall clock; keep it in its own lane.
+          # Prompt snapshot regeneration evaluates the full agent tool/prompt
+          # import graph and used to own the boundaries-a wall clock; keep it
+          # in its own lane.
           - check_name: check-prompt-snapshots
             group: prompt-snapshots
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -2142,6 +2192,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
       # the GitHub cache below is evicted so quickly under the repo quota that
@@ -2381,6 +2436,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          # Blacksmith same-repo runs clone dependencies from a sticky disk.
+          # Fork PRs must keep actions/cache: sticky snapshots are writable,
+          # repository-global state and must never be produced by fork code.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
