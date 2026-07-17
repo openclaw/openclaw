@@ -28,7 +28,8 @@ export function renderPreview(
 ): TemplateResult {
   // A declared primary binding owns the preview URL, including malformed
   // values. Falling back to props would hide broken or hostile binding data.
-  const rawUrl = value === undefined ? widgetProps(widget).url : value;
+  const hasBinding = Object.hasOwn(widget.bindings ?? {}, "value");
+  const rawUrl = hasBinding ? value : widgetProps(widget).url;
   const decision = evaluateEmbedUrl(rawUrl, {
     allowExternalEmbedUrls: ctx.embed.allowExternalEmbedUrls,
   });

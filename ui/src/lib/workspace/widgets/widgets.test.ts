@@ -405,31 +405,85 @@ describe("preview widget", () => {
 
   it("uses a bound URL instead of props and does not hide malformed binding data", () => {
     const bound = renderToContainer(
-      renderPreview(widget({ props: { url: "/stale" } }), "/bound", STRICT_EMBED),
+      renderPreview(
+        widget({
+          props: { url: "/stale" },
+          bindings: { value: { source: "static", value: "/bound" } },
+        }),
+        "/bound",
+        STRICT_EMBED,
+      ),
     );
     expect(
       bound.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
     ).toBe("/bound");
 
     const malformed = renderToContainer(
-      renderPreview(widget({ props: { url: "/fallback" } }), 42, STRICT_EMBED),
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static", value: 42 } },
+        }),
+        42,
+        STRICT_EMBED,
+      ),
     );
     expect(malformed.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const missing = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static" } },
+        }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+    expect(missing.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const unrelated = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/configured" },
+          bindings: { other: { source: "static", value: "/ignored" } },
+        }),
+        "/ignored",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      unrelated.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/configured");
   });
 
   it("allows policy-approved external URLs and blocks external or unsafe URLs by default", () => {
     const allowed = renderToContainer(
-      renderPreview(widget(), "https://preview.example", {
-        ...STRICT_EMBED,
-        embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
-      }),
+      renderPreview(
+        widget({
+          bindings: {
+            value: { source: "static", value: "https://preview.example" },
+          },
+        }),
+        "https://preview.example",
+        {
+          ...STRICT_EMBED,
+          embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
+        },
+      ),
     );
     expect(
       allowed.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
     ).toBe("https://preview.example");
 
     for (const value of [undefined, 42, "https://evil.example", "javascript:alert(1)"]) {
-      const container = renderToContainer(renderPreview(widget(), value, STRICT_EMBED));
+      const container = renderToContainer(
+        renderPreview(
+          widget({ bindings: { value: { source: "static", value } } }),
+          value,
+          STRICT_EMBED,
+        ),
+      );
       expect(container.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
       expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
     }
