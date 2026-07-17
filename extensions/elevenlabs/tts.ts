@@ -51,16 +51,31 @@ function normalizeElevenLabsLatencyTier(latencyTier: number | undefined): number
 
 // Mirror the buffered cap without buffering. Own the reader because Node can leak
 // transform writer rejections when playback cancellation races an overflow.
-function limitElevenLabsAudioStream(
+function createBoundedElevenLabsAudioStream(
   stream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
-  const reader = stream.getReader();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let totalBytes = 0;
+
+  const releaseReader = () => {
+    reader?.releaseLock();
+    reader = undefined;
+  };
+
   return new ReadableStream<Uint8Array>({
+    start() {
+      reader = stream.getReader();
+    },
     async pull(controller) {
+      const activeReader = reader;
+      if (!activeReader) {
+        controller.close();
+        return;
+      }
       try {
-        const chunk = await reader.read();
+        const chunk = await activeReader.read();
         if (chunk.done) {
+          releaseReader();
           controller.close();
           return;
         }
@@ -72,19 +87,28 @@ function limitElevenLabsAudioStream(
           const error = new Error(
             `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
           );
+          await activeReader.cancel(error).catch(() => undefined);
+          releaseReader();
           controller.error(error);
-          void reader.cancel(error).catch(() => undefined);
           return;
         }
         totalBytes += chunk.value.byteLength;
         controller.enqueue(chunk.value);
       } catch (error) {
+        releaseReader();
         controller.error(error);
-        void reader.cancel(error).catch(() => undefined);
       }
     },
     async cancel(reason) {
-      await reader.cancel(reason).catch(() => undefined);
+      const activeReader = reader;
+      if (!activeReader) {
+        return;
+      }
+      try {
+        await activeReader.cancel(reason).catch(() => undefined);
+      } finally {
+        releaseReader();
+      }
     },
   });
 }
@@ -234,7 +258,7 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     }
     handedOff = true;
     return {
-      audioStream: limitElevenLabsAudioStream(response.body),
+      audioStream: createBoundedElevenLabsAudioStream(response.body),
       release,
     };
   } finally {

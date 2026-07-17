@@ -204,17 +204,20 @@ describe("elevenlabs tts diagnostics", () => {
       ...createDefaultTtsRequest(),
       latencyTier: 2,
     });
-
-    const url = getUrlFromFirstFetchCall(fetchMock);
-    expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
-    expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
-    const reader = result.audioStream.getReader();
-    await expect(reader.read()).resolves.toEqual({
-      done: false,
-      value: new Uint8Array([1, 2, 3]),
-    });
-    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
-    await result.release();
+    try {
+      const url = getUrlFromFirstFetchCall(fetchMock);
+      expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/stream");
+      expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
+      const reader = result.audioStream.getReader();
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: new Uint8Array([1, 2, 3]),
+      });
+      await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.release();
+    }
   });
 
   it("cancels streamed audio before delivering bytes beyond the audio limit", async () => {
@@ -232,16 +235,20 @@ describe("elevenlabs tts diagnostics", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     const result = await elevenLabsTTSStream(createDefaultTtsRequest());
-    const reader = result.audioStream.getReader();
+    try {
+      const reader = result.audioStream.getReader();
 
-    const first = await reader.read();
-    expect(first.done).toBe(false);
-    expect(first.value).toHaveLength(MAX_AUDIO_BYTES);
-    await expect(reader.read()).rejects.toThrow(
-      `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
-    );
-    expect(cancel).toHaveBeenCalledOnce();
-    await result.release();
+      const first = await reader.read();
+      expect(first.done).toBe(false);
+      expect(first.value).toHaveLength(MAX_AUDIO_BYTES);
+      await expect(reader.read()).rejects.toThrow(
+        `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.release();
+    }
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {
