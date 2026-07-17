@@ -8,6 +8,7 @@ import {
   MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsRequestTimeoutMs,
   type MSTeamsRequestDeadline,
+  withMSTeamsRequestDeadline,
 } from "./request-timeout.js";
 import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
@@ -230,10 +231,11 @@ export async function resolveGraphToken(
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
+    const { appPassword, appId: clientId, tenantId } = creds;
     const delegated = await resolveDelegatedAccessToken({
-      tenantId: creds.tenantId,
-      clientId: creds.appId,
-      clientSecret: creds.appPassword,
+      tenantId,
+      clientId,
+      clientSecret: appPassword,
     });
     if (delegated) {
       return delegated;
@@ -243,7 +245,10 @@ export async function resolveGraphToken(
 
   const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(msteamsCfg));
   const tokenProvider = createMSTeamsTokenProvider(app);
-  const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+  const graphTokenValue = await withMSTeamsRequestDeadline({
+    label: "MS Teams Graph token",
+    work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+  });
   const accessToken = readAccessToken(graphTokenValue);
   if (!accessToken) {
     throw new Error("MS Teams graph token unavailable");

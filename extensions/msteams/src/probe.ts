@@ -73,12 +73,8 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
   try {
     const { app } = await loadMSTeamsSdkWithAuth(creds, resolveMSTeamsSdkCloudOptions(cfg));
     const tokenProvider = createMSTeamsTokenProvider(app);
-    // Bound the SDK token acquisition: the Bot Framework and Graph SDK calls
-    // do not carry an inherent deadline, so a stalled Azure AD token endpoint
-    // would otherwise pin the probe indefinitely. Sibling MS Teams paths
-    // (attachments/bot-framework.ts, attachments/graph.ts,
-    // monitor-handler/message-handler.ts) already use withMSTeamsRequestDeadline
-    // for the same SDK calls; the probe was the one missing site.
+    // Token-manager calls can outlive the SDK HTTP timeout, so keep both probe
+    // phases bounded by the shared Teams request deadline.
     const botTokenValue = await withMSTeamsRequestDeadline({
       label: "MS Teams Bot Framework probe token",
       work: () => tokenProvider.getAccessToken("https://api.botframework.com"),
