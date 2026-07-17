@@ -23,6 +23,7 @@ import {
 } from "./app-sidebar-child-session-data.ts";
 import {
   refreshSessionCatalogsLive,
+  SESSION_CATALOG_CHANGED_REFRESH_MS,
   SessionCatalogLiveState,
   sessionCatalogListClient,
 } from "./app-sidebar-session-catalog-live.ts";
