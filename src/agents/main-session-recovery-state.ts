@@ -204,6 +204,16 @@ function inspectMainSessionRecoveryForAdmission(params: {
 }): MainSessionRecoveryView {
   if (
     params.entry.status === "running" &&
+    params.entry.abortedLastRun !== true &&
+    params.entry.mainRestartRecovery &&
+    params.entry.restartRecoveryRuns?.length
+  ) {
+    // Standalone callers may use another process generation. Any admitted
+    // recovery fence remains authoritative until Gateway lifecycle settlement.
+    return { status: "blocked" };
+  }
+  if (
+    params.entry.status === "running" &&
     params.entry.abortedLastRun === true &&
     isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
     !params.entry.mainRestartRecovery

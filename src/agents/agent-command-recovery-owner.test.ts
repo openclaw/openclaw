@@ -191,7 +191,7 @@ describe("agent command restart recovery ownership", () => {
       updatedAt: 200,
       status: "running",
       abortedLastRun: false,
-      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
+      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "gateway-generation" }],
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 3,
