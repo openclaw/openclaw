@@ -616,7 +616,7 @@ export async function tryDispatchAcpReply(params: {
         sessionKey: canonicalSessionKey,
         promptText: transcriptPromptText,
         finalText,
-        meta: acpResolution.meta,
+        meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
         threadId: params.ctx.MessageThreadId,
       });
     } catch (error) {
