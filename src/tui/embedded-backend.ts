@@ -468,7 +468,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
       const { cfg, canonicalKey, entry } = loadSessionEntry(opts.sessionKey, loadOptions);
-      const queueSettings = resolveQueueSettings({
+      let queueSettings = resolveQueueSettings({
         cfg,
         channel: INTERNAL_MESSAGE_CHANNEL,
         sessionEntry: entry,
@@ -488,17 +488,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
             return { runId: queuedAfter.runId };
           }
         }
-        const queued = this.enqueuePendingLocalMessage({
-          runScope,
-          message: opts.message,
-          settings: { ...queueSettings, mode: "followup" },
-          fallbackRunId: queuedAfter.runId,
-        });
-        if (queued.kind === "handled") {
-          return { runId: queued.runId };
-        }
-        pendingQueue = queued.queue;
-      } else if (queueSettings.mode === "interrupt") {
+        queueSettings = { ...queueSettings, mode: "followup" };
+      }
+      if (queueSettings.mode === "interrupt") {
         this.abortSessionRuns(runScope);
       } else {
         const queued = this.enqueuePendingLocalMessage({
