@@ -224,7 +224,7 @@ jobs:
           SELECTED_SHA="$(git rev-parse HEAD)"
           git_fetch_with_checkout_auth() {
             if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              git fetch "$@"
+              timeout --signal=TERM --kill-after=10s 120s git fetch "$@"
               return
             fi
             local auth_header
@@ -285,7 +285,7 @@ jobs:
           alpha_branch="${WORKFLOW_REF#refs/heads/}"
           git_fetch_with_checkout_auth() {
             if git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              git fetch "$@"
+              timeout --signal=TERM --kill-after=10s 120s git fetch "$@"
               return
             fi
             local auth_header
