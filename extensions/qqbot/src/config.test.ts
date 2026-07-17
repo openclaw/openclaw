@@ -1,5 +1,7 @@
 // Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   type JsonSchemaObject,
@@ -239,6 +241,49 @@ describe("qqbot config", () => {
     expect(resolved.clientSecret).toBe("secret-value");
     expect(resolved.name).toBe("Bot Two");
   });
+
+  it("rejects oversized client secret files", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-"));
+    const secretFile = path.join(tempDir, "secret");
+    fs.writeFileSync(secretFile, "x".repeat(16 * 1024 + 1));
+
+    try {
+      const resolved = resolveQQBotAccount({
+        channels: { qqbot: { appId: "123456", clientSecretFile: secretFile } },
+      } as OpenClawConfig);
+
+      expect(resolved.clientSecret).toBe("");
+      expect(resolved.secretSource).toBe("none");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "continues to resolve client secret files through a %s",
+    (linkType) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-link-"));
+      const targetFile = path.join(tempDir, "secret-target");
+      const linkedFile = path.join(tempDir, "secret-link");
+      fs.writeFileSync(targetFile, " fixture-secret\n");
+      if (linkType === "symlink") {
+        fs.symlinkSync(targetFile, linkedFile);
+      } else {
+        fs.linkSync(targetFile, linkedFile);
+      }
+
+      try {
+        const resolved = resolveQQBotAccount({
+          channels: { qqbot: { appId: "123456", clientSecretFile: linkedFile } },
+        } as OpenClawConfig);
+
+        expect(resolved.clientSecret).toBe("fixture-secret");
+        expect(resolved.secretSource).toBe("file");
+      } finally {
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();
