@@ -105,6 +105,45 @@ describe("resolveRunStaleThresholdMs", () => {
 });
 
 describe("diagnostic run activity retention", () => {
+  it("does not reactivate completed runs from queued diagnostic events", async () => {
+    startDiagnosticRunActivityTracking();
+    const completed = {
+      runId: "late-progress-run",
+      sessionId: "late-progress-session",
+      sessionKey: "agent:main:late-progress",
+    };
+    markDiagnosticRunProgress({ ...completed, reason: "proof:active" });
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      ...completed,
+      reason: "proof:queued",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...completed,
+      durationMs: 1,
+      outcome: "completed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    for (let index = 0; index < 2_000; index += 1) {
+      const runId = `later-completed-run-${index}`;
+      const sessionId = `later-completed-session-${index}`;
+      const sessionKey = `agent:main:later-completed-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(completed)).toEqual({});
+  });
+
   it("bounds completed session activity while preserving active runs", () => {
     startDiagnosticRunActivityTracking();
     const active = {

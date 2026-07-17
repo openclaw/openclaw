@@ -5,6 +5,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
+import { createDiagnosticRunActivityRetention } from "./diagnostic-run-activity-retention.js";
 
 type SessionActivity = {
   sessionId?: string;
@@ -55,7 +56,7 @@ type DiagnosticModelStartedActivityEvent = Pick<
 type DiagnosticRunProgressActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
   "runId" | "sessionId" | "sessionKey" | "reason"
->;
+> & { seq?: number };
 
 // Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
 // truly silent children within its own deadline. This floor bounds every
@@ -89,10 +90,6 @@ export function resolveRunStaleThresholdMs(
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
 const sessionActivities = new Set<SessionActivity>();
-const SESSION_ACTIVITY_TTL_MS = 30 * 60 * 1000;
-const SESSION_ACTIVITY_PRUNE_INTERVAL_MS = 60 * 1000;
-const SESSION_ACTIVITY_MAX_ENTRIES = 2000;
-let lastSessionActivityPruneAt = 0;
 let embeddedRunSequence = 0;
 
 function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
@@ -110,7 +107,7 @@ function sessionRefs(params: { sessionId?: string; sessionKey?: string }): strin
 
 function registerSessionActivityRefs(
   activity: SessionActivity,
-  params: { sessionId?: string; sessionKey?: string; runId?: string },
+  params: { sessionId?: string; sessionKey?: string },
 ): void {
   sessionActivities.add(activity);
   activity.sessionId ??= params.sessionId;
@@ -118,10 +115,11 @@ function registerSessionActivityRefs(
   for (const ref of sessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
-  if (params.runId) {
-    activity.runIds.add(params.runId);
-    activityByRunId.set(params.runId, activity);
-  }
+}
+
+function registerActiveRun(activity: SessionActivity, runId: string): void {
+  activity.runIds.add(runId);
+  activityByRunId.set(runId, activity);
 }
 
 function replaceSessionActivityReferences(source: SessionActivity, target: SessionActivity): void {
@@ -233,46 +231,17 @@ function deleteSessionActivity(activity: SessionActivity): void {
   sessionActivities.delete(activity);
 }
 
-function pruneDiagnosticSessionActivities(now = Date.now(), force = false): void {
-  const shouldPruneForSize = sessionActivities.size > SESSION_ACTIVITY_MAX_ENTRIES;
-  if (
-    !force &&
-    !shouldPruneForSize &&
-    now - lastSessionActivityPruneAt < SESSION_ACTIVITY_PRUNE_INTERVAL_MS
-  ) {
-    return;
-  }
-  lastSessionActivityPruneAt = now;
-
-  for (const activity of sessionActivities) {
-    if (
-      isIdleSessionActivity(activity) &&
-      now - activity.lastProgressAt > SESSION_ACTIVITY_TTL_MS
-    ) {
-      deleteSessionActivity(activity);
-    }
-  }
-
-  const excess = sessionActivities.size - SESSION_ACTIVITY_MAX_ENTRIES;
-  if (excess <= 0) {
-    return;
-  }
-  const idleActivities = Array.from(sessionActivities)
-    .filter(isIdleSessionActivity)
-    .toSorted((a, b) => a.lastProgressAt - b.lastProgressAt);
-  for (let index = 0; index < excess; index += 1) {
-    const activity = idleActivities[index];
-    if (!activity) {
-      break;
-    }
-    deleteSessionActivity(activity);
-  }
-}
+const activityRetention = createDiagnosticRunActivityRetention({
+  activities: sessionActivities,
+  deleteActivity: deleteSessionActivity,
+  isIdle: isIdleSessionActivity,
+  lastProgressAt: (activity) => activity.lastProgressAt,
+});
 
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
-  pruneDiagnosticSessionActivities(now);
+  activityRetention.prune(now);
 }
 
 function toolKey(event: {
@@ -292,12 +261,18 @@ function modelCallKey(event: { runId?: string; provider?: string; model?: string
 }
 
 function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
+  if (activityRetention.isCompletedRunEvent(event)) {
+    return;
+  }
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
   }
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
+  }
+  if (event.runId) {
+    registerActiveRun(activity, event.runId);
   }
   const now = Date.now();
   activity.activeTools.set(toolKey(event), {
@@ -319,6 +294,9 @@ function recordToolEnded(
     { type: "tool.execution.completed" | "tool.execution.error" | "tool.execution.blocked" }
   >,
 ): void {
+  if (activityRetention.isCompletedRunEvent(event)) {
+    return;
+  }
   const activity = resolveSessionActivity(event);
   if (!activity) {
     return;
@@ -328,12 +306,18 @@ function recordToolEnded(
 }
 
 function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
+  if (activityRetention.isCompletedRunEvent(event)) {
+    return;
+  }
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
   }
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
     return;
+  }
+  if (event.runId) {
+    registerActiveRun(activity, event.runId);
   }
   activity.activeModelCalls.set(modelCallKey(event), {
     runId: event.runId,
@@ -347,6 +331,9 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
 function recordModelEnded(
   event: Extract<DiagnosticEventPayload, { type: "model.call.completed" | "model.call.error" }>,
 ): void {
+  if (activityRetention.isCompletedRunEvent(event)) {
+    return;
+  }
   const activity = resolveSessionActivity(event);
   if (!activity) {
     return;
@@ -360,9 +347,15 @@ function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
 }
 
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
+  if (activityRetention.isCompletedRunEvent(params)) {
+    return;
+  }
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
+  }
+  if (params.runId) {
+    registerActiveRun(activity, params.runId);
   }
   touchSessionActivity(activity, params.reason);
 }
@@ -370,8 +363,11 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
 function recordRunCompleted(
   event: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
 ): void {
+  const now = Date.now();
+  activityRetention.recordRunCompleted(event, now);
   const activity = resolveSessionActivity(event);
   if (!activity) {
+    activityRetention.prune(now);
     return;
   }
   activityByRunId.delete(event.runId);
@@ -379,7 +375,7 @@ function recordRunCompleted(
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeEmbeddedRuns.clear();
-  touchSessionActivity(activity, "run:completed");
+  touchSessionActivity(activity, "run:completed", now);
 }
 
 export function markDiagnosticEmbeddedRunStarted(params: {
@@ -614,7 +610,6 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
     registerSessionActivityRefs(activity, {
       sessionId: params.activeSessionId,
       sessionKey: params.sessionKey,
-      runId: params.activeSessionId,
     });
   }
   const ownerRefs = ownerRefsForRecovery(params);
@@ -765,7 +760,7 @@ export function stopDiagnosticRunActivityTracking(): void {
   activityByRef.clear();
   activityByRunId.clear();
   sessionActivities.clear();
-  lastSessionActivityPruneAt = 0;
+  activityRetention.reset();
   embeddedRunSequence = 0;
 }
 
