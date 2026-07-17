@@ -157,20 +157,27 @@ function ensureSlackTestRuntime(): {
         },
       },
       reactions: {
-        add: (...args: unknown[]) => {
-          slackTestState.reactionAddMock(...args);
-          return slackTestState.reactMock(...args);
-        },
-        remove: (...args: unknown[]) => {
-          slackTestState.reactionRemoveMock(...args);
-          return slackTestState.reactMock(...args);
-        },
+        add: () => undefined,
+        remove: () => undefined,
       },
     };
   }
+  const client = globalState["__slackClient"];
+  // The non-isolated Slack lane keeps this global client across file-level module resets.
+  // Rebind delegates so reaction assertions always target the current file's hoisted mocks.
+  client.reactions = {
+    add: (...args: unknown[]) => {
+      slackTestState.reactionAddMock(...args);
+      return slackTestState.reactMock(...args);
+    },
+    remove: (...args: unknown[]) => {
+      slackTestState.reactionRemoveMock(...args);
+      return slackTestState.reactMock(...args);
+    },
+  };
   return {
     handlers: globalState["__slackHandlers"],
-    client: globalState["__slackClient"],
+    client,
   };
 }
 
