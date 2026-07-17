@@ -420,6 +420,7 @@ function requireResolveSecretRefCall(index: number): [unknown, unknown] {
 }
 
 let registerConfigCli: typeof import("./config-cli.js").registerConfigCli;
+let parseConfigSetPath: typeof import("./config-cli.js").parseConfigSetPath;
 let sharedProgram: Command;
 
 async function runConfigCommand(args: string[]) {
@@ -428,7 +429,7 @@ async function runConfigCommand(args: string[]) {
 
 describe("config cli", () => {
   beforeAll(async () => {
-    ({ registerConfigCli } = await import("./config-cli.js"));
+    ({ parseConfigSetPath, registerConfigCli } = await import("./config-cli.js"));
     const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
     resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
     sharedProgram = new Command();
@@ -3209,22 +3210,46 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] .id",
+    it.each([
+      "agents.list[0]id",
+      "agents.list[0] id",
+      "agents.list[0]\\id",
+      "agents.list[0] .id",
+      "agents.list[0] [1]",
+    ])("rejects malformed post-bracket path %s", (configPath) => {
+      expect(() => parseConfigSetPath(configPath)).toThrow(
+        `Invalid path (missing separator after bracket): ${configPath}`,
+      );
+    });
+
+    it.each([
+      ["get", ["config", "get", "agents.list[0]id"]],
+      ["set", ["config", "set", "agents.list[0]id", '"renamed"']],
+      ["unset", ["config", "unset", "agents.list[0]id"]],
+      [
+        "batch set",
+        [
+          "config",
+          "set",
+          "--batch-json",
+          JSON.stringify([{ path: "agents.list[0]id", value: "renamed" }]),
+        ],
+      ],
+    ])("rejects malformed bracket paths for config %s", async (_command, args) => {
+      await expect(runConfigCommand(args)).rejects.toThrow(
+        "Invalid path (missing separator after bracket): agents.list[0]id",
       );
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
-    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
-      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
-        "Invalid path (empty segment): agents.list[0] [1]",
-      );
-
-      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    it.each([
+      ["agents.list[0].id", ["agents", "list", "0", "id"]],
+      ["agents.list[0][1]", ["agents", "list", "0", "1"]],
+      ["[0]", ["0"]],
+    ])("preserves valid bracket path %s", (configPath, expected) => {
+      expect(parseConfigSetPath(configPath)).toEqual(expected);
     });
 
     it("preserves valid bracket path forms", async () => {

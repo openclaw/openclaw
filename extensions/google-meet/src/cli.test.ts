@@ -648,6 +648,32 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("quotes carriage returns in formula-neutralized CSV cells", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: "\r=1+1" });
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "csv",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain('conferenceRecords/rec-1,"\'\r=1+1",users/alice');
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("writes an export bundle", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();

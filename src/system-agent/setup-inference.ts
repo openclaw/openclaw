@@ -366,6 +366,46 @@ async function resolveSetupInferenceWorkspace(params: {
   };
 }
 
+/**
+ * Manual setup options only — no CLI probing, no credential discovery. Used
+ * when guarded onboarding declines the "look around" step: the option lists
+ * derive from config and plugin manifests, never from scanning the machine.
+ */
+export async function listManualSetupInferenceOptions(
+  deps: DetectSetupInferenceDeps = {},
+): Promise<
+  Pick<SetupInferenceDetection, "manualProviders" | "authOptions" | "workspace" | "setupComplete">
+> {
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(invalidSetupConfigError(snapshot));
+  }
+  const cfg = snapshot.exists && snapshot.valid ? (snapshot.runtimeConfig ?? snapshot.config) : {};
+  const { workspace } = await resolveSetupInferenceWorkspace({
+    configExists: snapshot.exists,
+    configValid: snapshot.valid,
+  });
+  const authChoices = (
+    deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
+  )({
+    config: cfg,
+    workspaceDir: workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  }).filter(
+    (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
+  );
+  return {
+    manualProviders: listSetupInferenceManualProviders(authChoices),
+    authOptions: listSetupInferenceAuthOptions(authChoices),
+    workspace,
+    // Derived from config only (no probing): a pre-existing default model must
+    // keep classifying the install as configured even when scanning declined.
+    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg))),
+  };
+}
+
 export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
 ): Promise<SetupInferenceDetection> {

@@ -1103,7 +1103,7 @@ function csvCell(value: unknown): string {
         ? String(value)
         : JSON.stringify(value);
   const safeText = neutralizeSpreadsheetFormulaCell(text);
-  return /[",\n]/.test(safeText) ? `"${safeText.replaceAll('"', '""')}"` : safeText;
+  return /[",\r\n]/.test(safeText) ? `"${safeText.replaceAll('"', '""')}"` : safeText;
 }
 
 function renderAttendanceCsv(result: GoogleMeetAttendanceResult): string {

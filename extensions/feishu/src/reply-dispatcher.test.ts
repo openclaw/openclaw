@@ -97,6 +97,13 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
   };
 });
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+  };
+});
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
 vi.mock("./typing.js", () => ({
@@ -144,6 +151,7 @@ afterAll(() => {
   vi.doUnmock("./typing.js");
   vi.doUnmock("./streaming-card.js");
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.resetModules();
 });
 
@@ -660,6 +668,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       text: 'plain text <at user_id="ou_body">Body User</at>',
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+  });
+
+  it("puts required bot mentions on every chunk and disables streaming cards", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
+    );
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first bot reply chunk", {
+      text: "First ",
+      mentions: requiredMentionTargets,
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second bot reply chunk",
+      { text: "paragraph.", mentions: requiredMentionTargets },
+      1,
+    );
+  });
+
+  it("puts required bot mentions on static card replies", async () => {
+    const requiredMentionTargets = [{ openId: "ou_peer_bot", name: "Peer Bot", key: "" }];
+    const { options } = createDispatcherHarness({ requiredMentionTargets });
+
+    await options.deliver({ text: "```md\nanswer\n```" }, { kind: "final" });
+
+    expect(streamingInstances).toHaveLength(0);
+    expectMockArgFields(sendStructuredCardFeishuMock, "bot card reply", {
+      mentions: requiredMentionTargets,
     });
   });
 

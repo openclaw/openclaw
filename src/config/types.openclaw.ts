@@ -129,6 +129,8 @@ export type OpenClawConfig = {
       | undefined;
   };
   wizard?: {
+    /** Guided-onboarding discovery consent: "full" scans silently, "guarded" asks first. */
+    accessMode?: "full" | "guarded";
     /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
     /** OpenClaw version used by the last completed wizard run. */
