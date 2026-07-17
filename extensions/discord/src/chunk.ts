@@ -57,6 +57,20 @@ function closeFenceLine(openFence: OpenFence) {
   return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
 
+// Continuation chunks reopen the fence so Discord keeps rendering the code block. Prefer the full
+// opening line (keeps the language for highlighting); degrade to a bare marker when it would not
+// leave room for the closing marker plus at least one delimiter+char of body, since a near-limit
+// opening line would otherwise starve continuation chunks and overflow maxChars. Discord only needs
+// the language on the first fence; continuation messages are separate.
+function reopenFenceLine(openFence: OpenFence, maxChars: number) {
+  const bareMarker = closeFenceLine(openFence);
+  // openLine + closing marker (bareMarker + newline) + one delimiter + one body char must all fit.
+  if (openFence.openLine.length + bareMarker.length + 3 <= maxChars) {
+    return openFence.openLine;
+  }
+  return bareMarker;
+}
+
 function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
   if (!openFence) {
     return text;
@@ -188,7 +202,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     current = "";
     currentLines = 0;
     if (openFence) {
-      current = openFence.openLine;
+      current = reopenFenceLine(openFence, maxChars);
       currentLines = 1;
     }
   };
@@ -218,8 +232,12 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     const effectiveMaxLines = maxLines - reserveLines;
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;
     const lineLimit = effectiveMaxLines > 0 ? effectiveMaxLines : maxLines;
+    const reopenPrefixLen = fenceToReserve ? reopenFenceLine(fenceToReserve, maxChars).length : 0;
     const prefixLen = current.length > 0 ? current.length + 1 : 0;
-    const segmentLimit = Math.max(1, charLimit - prefixLen);
+    // A mid-line flush swaps `current` to the reopen prefix; size segments against whichever prefix
+    // is larger so the reopened chunk (prefix + segment + closing marker) still fits maxChars.
+    const reopenBudget = reopenPrefixLen > 0 ? reopenPrefixLen + 1 : 0;
+    const segmentLimit = Math.max(1, charLimit - Math.max(prefixLen, reopenBudget));
     const segments = splitLongLine(originalLine, segmentLimit, {
       preserveWhitespace: wasInsideFence,
     });

@@ -96,6 +96,30 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("keeps chunks within maxChars when a fenced block's opening line is very long", () => {
+    // Sibling of the closing-fence test above, on the OPENING/reopen side. flush() reopened
+    // continuation chunks with the FULL opening line (info string included), so reopen prefix +
+    // body + closing marker overflowed maxChars (observed 2108 > 2000). Balance is not asserted:
+    // an opening fence line longer than maxChars must be split, orphaning its marker, so no
+    // chunking can keep that physical line both within maxChars and balanced.
+    for (let pad = 1990; pad <= 2010; pad++) {
+      const text = "```" + "a".repeat(pad) + "\nbody line one\nbody line two\n```";
+      for (const chunk of chunkDiscordText(text, { maxChars: 2000, maxLines: 100 })) {
+        expect(chunk.length).toBeLessThanOrEqual(2000);
+      }
+    }
+  });
+
+  it("keeps chunks within maxChars when a fence-open line exceeds a small maxChars", () => {
+    // Minimal repro mirroring the existing 50-char reserve test above.
+    for (let len = 44; len <= 80; len++) {
+      const text = "```" + "a".repeat(len) + "\nbody\nmore body\n```";
+      for (const chunk of chunkDiscordText(text, { maxChars: 50, maxLines: 50 })) {
+        expect(chunk.length).toBeLessThanOrEqual(50);
+      }
+    }
+  });
+
   it("preserves whitespace when splitting long lines", () => {
     const text = Array.from({ length: 40 }, () => "word").join(" ");
     const chunks = chunkDiscordText(text, { maxChars: 20, maxLines: 50 });
