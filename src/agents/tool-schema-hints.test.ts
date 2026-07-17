@@ -27,6 +27,52 @@ describe("tool schema hints", () => {
     );
   });
 
+  it("keeps deeply nested literal unions complete without increasing the depth budget", () => {
+    const outputSchema = Type.Object(
+      {
+        conversations: Type.Array(
+          Type.Object(
+            {
+              conversationRef: Type.String(),
+              kind: Type.Union([
+                Type.Literal("direct"),
+                Type.Literal("group"),
+                Type.Literal("channel"),
+              ]),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    );
+
+    expect(compactToolOutputHint(outputSchema)).toBe(
+      '{ conversations: Array<{ conversationRef: string; kind: "direct" | "group" | "channel" }> }',
+    );
+  });
+
+  it("keeps input hints small while allowing larger exact output contracts", () => {
+    const schema = Type.Object(
+      Object.fromEntries(
+        Array.from({ length: 16 }, (_unused, index) => [
+          `field_${String(index).padStart(2, "0")}_with_long_name`,
+          Type.String(),
+        ]),
+      ),
+      { additionalProperties: false },
+    );
+
+    const inputHint = compactToolInputHint(schema);
+    const outputHint = compactToolOutputHint(schema);
+
+    expect(inputHint).toBe("unknown");
+    expect(inputHint.length).toBeLessThanOrEqual(300);
+    expect(outputHint).toBeDefined();
+    expect(outputHint!.length).toBeGreaterThan(300);
+    expect(outputHint!.length).toBeLessThanOrEqual(600);
+  });
+
   it("includes null in AJV-style nullable output hints", () => {
     expect(compactToolOutputHint({ type: "string", nullable: true })).toBe("string | null");
     expect(

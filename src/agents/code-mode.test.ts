@@ -404,6 +404,8 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("`-> ?` means never guess result field names");
     expect(execTool.description).toContain("never guess result field names");
     expect(execTool.description).toContain("return the raw tool value unchanged");
+    expect(execTool.description).toContain("final dependent call after declared-output calls");
+    expect(execTool.description).toContain("do not wrap it in the requested answer shape");
     expect(execTool.description).toContain("filter or map it only in a later exec");
     expect(execTool.description).toContain("returns its JSON value directly");
     expect(execTool.description).toContain("const hit = ALL_TOOLS.find");

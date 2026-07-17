@@ -431,7 +431,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
               if (!adopted) {
                 void settle({ kind: "skipped" }, "terminal");
               }
-              drainLifecycle?.onAbandoned();
+              // Generic reply abandonment is synchronous; Telegram has no
+              // owner-local resource teardown gated on core claim release.
+              void drainLifecycle?.onAbandoned();
             },
           },
         });

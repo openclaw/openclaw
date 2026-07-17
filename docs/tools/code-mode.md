@@ -417,7 +417,9 @@ read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
 The arrow in each quick-index line describes the `tools.callValue(...)` value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
 Unknown outputs stay raw-first: return the value unchanged, observe it, then
-filter or map it in a later `exec` instead of guessing field names.
+filter or map it in a later `exec` instead of guessing field names. This also
+applies when a declared-output read feeds a final `-> ?` call: return that
+call's raw value without wrapping it in the requested answer shape.
 
 ```typescript
 type ToolCatalogEntry = {
@@ -522,6 +524,26 @@ export default defineToolPlugin({
 
 For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
+
+Built-in tools can reuse their owning protocol schema instead of duplicating a
+model-only contract. For example, the conversation tools expose the same
+Gateway result schemas used by `conversations.list`, `conversations.send`, and
+`conversations.turn`. When the quick index declares the fields, one cell can
+compose discovery and delivery without a separate inspection turn:
+
+```javascript
+const listed = await tools.conversations_list({ query: "build bot" });
+const target = listed.conversations.find((item) => item.label === "Build bot");
+if (!target) throw new Error("conversation not found");
+return await tools.conversations_send({
+  conversationRef: target.conversationRef,
+  message: "Build finished.",
+});
+```
+
+The nested calls still use normal tool policy, hooks, and approvals. If a full
+contract is exact but too large for the bounded quick index, it remains
+available through `tools.describe(...)` and the arrow stays `-> ?`.
 
 The contract rules are strict:
 
