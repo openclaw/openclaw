@@ -10,6 +10,9 @@ vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
 let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
 let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
+let resolveSignalStatusReactionTimestamp: typeof import(
+  "./event-handler.js"
+).resolveSignalStatusReactionTimestamp;
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
@@ -212,8 +215,10 @@ function nextTimerTick(): Promise<void> {
 
 describe("signal createSignalEventHandler inbound context", () => {
   beforeAll(async () => {
-    [{ createBaseSignalEventHandlerDeps, createSignalReceiveEvent }, { createSignalEventHandler }] =
-      await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+    [
+      { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
+      { createSignalEventHandler, resolveSignalStatusReactionTimestamp },
+    ] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
   });
 
   beforeEach(() => {
@@ -941,6 +946,24 @@ describe("signal createSignalEventHandler inbound context", () => {
         baseUrl: "http://localhost",
       }),
     );
+  });
+
+  it("uses canonical decimal message ids for Signal status reaction timestamp fallback", () => {
+    expect(resolveSignalStatusReactionTimestamp({ messageId: "1700000000002" })).toBe(
+      1700000000002,
+    );
+  });
+
+  it("rejects non-decimal message ids for Signal status reaction timestamp fallback", () => {
+    for (const messageId of [
+      "0x10",
+      "1e3",
+      "01700000000002",
+      "1700000000002.5",
+      "9007199254740993",
+    ]) {
+      expect(resolveSignalStatusReactionTimestamp({ messageId })).toBeNull();
+    }
   });
 
   it("does not send Signal status reactions without an inbound timestamp", async () => {
