@@ -484,6 +484,24 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).not.toHaveBeenCalled();
   });
 
+  it("requires operator.read for progressive session catalog events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
+      makeScopedBroadcastContext();
+    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
+
+    broadcastToConnIds(
+      "sessions.catalog.host",
+      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
+      targets,
+    );
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["sessions.catalog.host"]);
+    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
+    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
+  });
+
   it("requires operator.read for task ledger broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();
