@@ -42,6 +42,9 @@ export async function getSessionsHandlers() {
 type TestTranscriptMessage = Record<string, unknown> & {
   role: string;
 };
+type RetireSessionMcpRuntimeParams = Parameters<
+  (typeof import("../../agents/agent-bundle-mcp-tools.js"))["retireSessionMcpRuntime"]
+>[0];
 
 export async function seedSessionTranscript(params: {
   agentId?: string;
@@ -183,9 +186,7 @@ const browserSessionTabMocks = vi.hoisted(() => ({
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
-  retireSessionMcpRuntime: vi.fn(
-    async (_params: { sessionId?: string | null; preserveActiveLeases?: boolean }) => true,
-  ),
+  retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
 vi.mock("../../auto-reply/reply/queue.js", async () => {
