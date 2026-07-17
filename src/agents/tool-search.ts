@@ -13,7 +13,7 @@ import {
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
@@ -27,6 +27,7 @@ import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./r
 import type { ToolDefinition } from "./sessions/index.js";
 import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
+import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -53,10 +54,6 @@ const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
-const MAX_COMPACT_INPUT_HINT_CHARS = 300;
-const MAX_COMPACT_INPUT_PROPERTIES = 16;
-const MAX_COMPACT_SCHEMA_DEPTH = 4;
-const MAX_COMPACT_UNION_TYPES = 4;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
 type ToolSearchMode = "code" | "tools" | "directory";
@@ -138,6 +135,7 @@ export type ToolSearchCatalogEntry = {
   label?: string;
   description: string;
   parameters?: unknown;
+  outputSchema?: TSchema;
   tool: CatalogTool;
 };
 
@@ -583,6 +581,7 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.label ?? "",
         entry.description,
         stableJsonFingerprint(entry.parameters),
+        stableJsonFingerprint(entry.outputSchema),
         String(catalogToolIdentity(entry.tool)),
       ]
         .map((part) => JSON.stringify(part))
@@ -713,6 +712,11 @@ function toCatalogEntry(
     label: tool.label,
     description: tool.description ?? "",
     parameters: tool.parameters,
+    // Only locally loaded OpenClaw/core tools may declare model-visible output
+    // contracts. MCP and client metadata remains untrusted and deferred.
+    ...(source === "openclaw" && (tool as AnyAgentTool).outputSchema
+      ? { outputSchema: (tool as AnyAgentTool).outputSchema }
+      : {}),
     tool: catalogTool,
   };
 }
@@ -1151,117 +1155,9 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   throw new ToolInputError("Tool Search catalog is unavailable for this run.");
 }
 
-function compactSchemaType(schema: unknown, depth = 0): string {
-  if (!isRecord(schema) || depth >= MAX_COMPACT_SCHEMA_DEPTH) {
-    return "unknown";
-  }
-  const enumValues =
-    Array.isArray(schema.enum) &&
-    schema.enum.length > 0 &&
-    schema.enum.length <= 6 &&
-    schema.enum.every(
-      (value): value is string | number | boolean | null =>
-        value === null ||
-        typeof value === "string" ||
-        (typeof value === "number" && Number.isFinite(value)) ||
-        typeof value === "boolean",
-    )
-      ? schema.enum
-      : [];
-  if (enumValues.length > 0 && enumValues.length <= 6) {
-    const rendered = enumValues.map((value) => JSON.stringify(value)).join(" | ");
-    if (rendered.length <= 96) {
-      return rendered;
-    }
-  }
-  const type = schema.type;
-  if (Array.isArray(type)) {
-    if (type.length > MAX_COMPACT_UNION_TYPES) {
-      return "unknown";
-    }
-    const types = type
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => compactSchemaType({ ...schema, type: value }, depth + 1));
-    return types.length > 0 ? types.join(" | ") : "unknown";
-  }
-  if (type === "integer" || type === "number") {
-    return "number";
-  }
-  if (type === "array") {
-    return `Array<${compactSchemaType(schema.items, depth + 1)}>`;
-  }
-  if (type === "string" || type === "boolean" || type === "null" || type === "object") {
-    return type;
-  }
-  return "unknown";
-}
-
-function compactInputHint(parameters: unknown): string {
-  if (!isRecord(parameters)) {
-    return "unknown";
-  }
-  if (!isRecord(parameters.properties)) {
-    if (parameters.type !== "object") {
-      return compactSchemaType(parameters);
-    }
-    const hasRequired =
-      Array.isArray(parameters.required) &&
-      parameters.required.some((value) => typeof value === "string");
-    return hasRequired || parameters.additionalProperties !== false ? "{ ... }" : "{}";
-  }
-  const properties = parameters.properties;
-  const requiredValues = Array.isArray(parameters.required) ? parameters.required : [];
-  const required = new Set(
-    requiredValues
-      .slice(0, MAX_COMPACT_INPUT_PROPERTIES)
-      .filter((value): value is string => typeof value === "string"),
-  );
-  // Search hits cross the model/guest boundary. Required-first sorting and
-  // work/output bounds keep prompt bytes deterministic without exposing full schemas.
-  const selected = new Set<string>();
-  const keys: string[] = [];
-  for (const key of required) {
-    if (Object.hasOwn(properties, key)) {
-      selected.add(key);
-      keys.push(key);
-    }
-  }
-  let omitted =
-    requiredValues.length > MAX_COMPACT_INPUT_PROPERTIES ||
-    requiredValues
-      .slice(0, MAX_COMPACT_INPUT_PROPERTIES)
-      .some((value) => typeof value === "string" && !Object.hasOwn(properties, value)) ||
-    parameters.additionalProperties === true;
-  for (const key in properties) {
-    if (!Object.hasOwn(properties, key) || selected.has(key)) {
-      continue;
-    }
-    if (keys.length >= MAX_COMPACT_INPUT_PROPERTIES) {
-      omitted = true;
-      break;
-    }
-    selected.add(key);
-    keys.push(key);
-  }
-  keys.sort((a, b) => Number(required.has(b)) - Number(required.has(a)) || a.localeCompare(b));
-  const parts: string[] = [];
-  for (const key of keys) {
-    const name = /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) ? key : JSON.stringify(key);
-    const part = `${name}${required.has(key) ? "" : "?"}: ${compactSchemaType(properties[key])}`;
-    const next = `{ ${[...parts, part].join("; ")} }`;
-    if (next.length > MAX_COMPACT_INPUT_HINT_CHARS) {
-      omitted = true;
-      break;
-    }
-    parts.push(part);
-  }
-  if (parts.length === 0) {
-    return keys.length === 0 && !omitted ? "{}" : "{ ... }";
-  }
-  return `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`;
-}
-
 export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+  const output =
+    entry.source === "openclaw" ? compactToolOutputHint(entry.outputSchema) : undefined;
   return {
     id: entry.id,
     source: entry.source,
@@ -1272,7 +1168,8 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
     description: entry.description,
     // MCP schemas are server-provided, untrusted metadata. Keep them deferred
     // until the model explicitly describes or calls the selected tool.
-    ...(entry.source === "mcp" ? {} : { input: compactInputHint(entry.parameters) }),
+    ...(entry.source === "mcp" ? {} : { input: compactToolInputHint(entry.parameters) }),
+    ...(output ? { output } : {}),
   };
 }
 
@@ -1654,6 +1551,7 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
     ...compactToolSearchCatalogEntry(entry),
     parameters: entry.parameters ?? {},
+    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
   };
 }
 
@@ -1859,6 +1757,56 @@ function getTelemetry(catalog: ToolSearchCatalogSession) {
   };
 }
 
+let schemaValidatorModulePromise:
+  | Promise<typeof import("../plugins/schema-validator.js")>
+  | undefined;
+
+async function validateCatalogOutputValue(
+  entry: ToolSearchCatalogEntry,
+  value: unknown,
+): Promise<
+  ReturnType<typeof import("../plugins/schema-validator.js").validateJsonSchemaValue> | undefined
+> {
+  if (!entry.outputSchema) {
+    return undefined;
+  }
+  try {
+    schemaValidatorModulePromise ??= import("../plugins/schema-validator.js");
+    const { validateJsonSchemaValue } = await schemaValidatorModulePromise;
+    return validateJsonSchemaValue({
+      schema: entry.outputSchema as never,
+      // The shared validator fingerprints schema changes under the caller key,
+      // so a rebuilt same-id catalog cannot retain a stale compiled contract.
+      cacheKey: `tool-output:${entry.id}`,
+      value,
+    });
+  } catch (error) {
+    throw new Error(`Tool "${entry.id}" has an invalid outputSchema.`, { cause: error });
+  }
+}
+
+async function assertCatalogOutputSchemaIsValid(entry: ToolSearchCatalogEntry): Promise<void> {
+  // Compile before execution. A bad contract must not turn a successful side
+  // effect into a retryable post-execution schema failure.
+  await validateCatalogOutputValue(entry, undefined);
+}
+
+async function assertCatalogOutputMatchesSchema(
+  entry: ToolSearchCatalogEntry,
+  result: AgentToolResult<unknown>,
+): Promise<void> {
+  const validation = await validateCatalogOutputValue(entry, unwrapToolResultValue(result));
+  if (!validation) {
+    return;
+  }
+  if (validation.ok) {
+    return;
+  }
+  throw new Error(
+    `Tool "${entry.id}" returned details that do not match its declared outputSchema.`,
+  );
+}
+
 function sanitizeToolCallIdPart(value: string): string {
   const trimmed = value.trim();
   const safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 120);
@@ -1966,6 +1914,7 @@ export class ToolSearchRuntime {
     },
   ) => {
     catalog.callCount += 1;
+    await assertCatalogOutputSchemaIsValid(entry);
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
     const executeTool =
@@ -1989,6 +1938,9 @@ export class ToolSearchRuntime {
       signal: options?.signal ?? this.ctx.abortSignal,
       onUpdate: options?.onUpdate,
     });
+    // Hooks may replace details after execution, so validate the final catalog
+    // value at the host boundary before Code Mode trusts the declared shape.
+    await assertCatalogOutputMatchesSchema(entry, result);
     return {
       tool: compactToolSearchCatalogEntry(entry),
       result,

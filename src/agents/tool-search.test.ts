@@ -2,6 +2,7 @@
 // tools, hooks, abort wrapping, and transcript projection.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -27,6 +28,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  ToolSearchRuntime,
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -302,6 +304,122 @@ describe("Tool Search", () => {
     );
     expect(mcpResult).toContainEqual(expect.objectContaining({ name: "remote_echo" }));
     expect(mcpResult).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
+  });
+
+  it("exposes and validates trusted OpenClaw output schemas", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_shipments", "List orchard shipments");
+    target.outputSchema = Type.Array(
+      Type.Object(
+        {
+          id: Type.String(),
+          paid: Type.Boolean(),
+          tons: Type.Number(),
+        },
+        { additionalProperties: false },
+      ),
+    );
+    target.execute = vi.fn(async () => jsonResult([{ id: "H-1", paid: false, tons: 14 }]));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.search("orchard shipments")).resolves.toContainEqual(
+      expect.objectContaining({
+        name: "orchard_shipments",
+        output: "Array<{ id: string; paid: boolean; tons: number }>",
+      }),
+    );
+    await expect(runtime.describe("orchard_shipments")).resolves.toMatchObject({
+      outputSchema: { type: "array" },
+    });
+    await expect(runtime.callValue("orchard_shipments")).resolves.toEqual([
+      { id: "H-1", paid: false, tons: 14 },
+    ]);
+  });
+
+  it("rejects final catalog details that drift from a declared output schema", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_bad_output", "Return a bad orchard result");
+    target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async () => jsonResult({ id: 42 }),
+      },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_bad_output")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+  });
+
+  it("rejects invalid trusted output schemas at the catalog call boundary", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_invalid_schema", "Return an orchard result");
+    target.outputSchema = { type: "sting" } as never;
+    const execute = vi.fn(async () => jsonResult({ id: "P-2" }));
+    target.execute = execute;
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_invalid_schema")).rejects.toThrow(
+      "has an invalid outputSchema",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("recompiles validation when the same catalog id changes its output schema", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_schema_change", "Return a changing orchard result");
+    target.outputSchema = Type.String();
+    target.execute = vi.fn(async () => jsonResult("first"));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_schema_change")).resolves.toBe("first");
+    target.outputSchema = Type.Number();
+    target.execute = vi.fn(async () => jsonResult(42));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+
+    await expect(runtime.callValue("orchard_schema_change")).resolves.toBe(42);
+  });
+
+  it("ignores untrusted MCP and client output-schema claims", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const mcp = mcpPluginTool("remote_claim", "Remote schema claim");
+    mcp.outputSchema = Type.Object({ trusted: Type.Literal(true) });
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [mcp] });
+    const config = { tools: { toolSearch: { mode: "tools" } } } as never;
+    addClientToolsToToolSearchCatalog({
+      tools: [
+        {
+          name: "client_claim",
+          description: "Client schema claim",
+          parameters: Type.Object({}),
+          outputSchema: Type.Object({ trusted: Type.Literal(true) }),
+          execute: async () => jsonResult({ trusted: false }),
+        } as never,
+      ],
+      config,
+      catalogRef,
+    });
+    const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
+
+    for (const id of ["remote_claim", "client_claim"]) {
+      expect(runtime.all().find((entry) => entry.name === id)).not.toHaveProperty("output");
+      await expect(runtime.describe(id)).resolves.not.toHaveProperty("outputSchema");
+    }
   });
 
   it("compacts plugin tools behind the code surface and can search, describe, and call them", async () => {
@@ -1980,6 +2098,20 @@ describe("Tool Search", () => {
       config,
       sessionId,
     });
+    expect(second.catalogReused).toBe(false);
+  });
+
+  it("does not reuse when a same-named tool changes its output schema", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const tool = pluginTool("fake_output_schema_swap", "Stable description");
+    tool.outputSchema = Type.Object({ value: Type.String() }, { additionalProperties: false });
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-tool-output-schema-change";
+
+    applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
+    tool.outputSchema = Type.Object({ value: Type.Number() }, { additionalProperties: false });
+
+    const second = applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
     expect(second.catalogReused).toBe(false);
   });
 

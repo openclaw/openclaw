@@ -7541,6 +7541,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Write a tool
   - H2: Optional and factory tools
   - H2: Return values
+  - H2: Output contracts
   - H2: Configuration
   - H2: Generated metadata
   - H2: Package metadata
@@ -8623,48 +8624,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Skills (third-party APIs)
   - H2: Related
 
-## reference/code-mode.md
-
-- Route: /reference/code-mode
-- Headings:
-  - H2: What it does
-  - H2: Why use it
-  - H2: Enable it
-  - H2: Technical tour
-  - H2: Runtime status
-  - H2: Scope
-  - H2: Terms
-  - H2: Configuration
-  - H2: Activation
-  - H2: Model-visible tools
-  - H2: exec
-  - H2: wait
-  - H2: Guest runtime API
-  - H2: Internal namespaces
-  - H3: Registry lifecycle
-  - H3: Registration shape
-  - H3: Ownership and visibility
-  - H3: Scope serialization rules
-  - H3: Prompts
-  - H3: Cleanup
-  - H3: Test checklist
-  - H2: Output API
-  - H2: Tool catalog
-  - H2: Tool Search interaction
-  - H2: Tool names and collisions
-  - H2: Nested tool execution
-  - H2: Run and snapshot lifecycle
-  - H2: QuickJS-WASI runtime
-  - H2: TypeScript
-  - H2: Security boundary
-  - H2: Error codes
-  - H2: Telemetry
-  - H2: Debugging
-  - H2: Implementation layout
-  - H2: Validation checklist
-  - H2: E2E test plan
-  - H2: Related
-
 ## reference/credits.md
 
 - Route: /reference/credits
@@ -9672,6 +9631,52 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Setup
   - H2: How to use it
   - H2: Errors
+  - H2: Related
+
+## tools/code-mode.md
+
+- Route: /tools/code-mode
+- Headings:
+  - H2: What it does
+  - H2: Why use it
+  - H2: Quickstart
+  - H3: Enable Code Mode
+  - H3: What the model does
+  - H3: Verify the active surface
+  - H2: Technical tour
+  - H2: Runtime status
+  - H2: Scope
+  - H2: Terms
+  - H2: Configuration
+  - H2: Activation
+  - H2: Model-visible tools
+  - H2: exec
+  - H2: wait
+  - H2: Guest runtime API
+  - H2: Declared output contracts
+  - H2: Internal namespaces
+  - H3: Registry lifecycle
+  - H3: Registration shape
+  - H3: Ownership and visibility
+  - H3: Scope serialization rules
+  - H3: Prompts
+  - H3: Cleanup
+  - H3: Test checklist
+  - H2: Output API
+  - H2: Tool catalog
+  - H2: Tool Search interaction
+  - H2: Tool names and collisions
+  - H2: Nested tool execution
+  - H2: Run and snapshot lifecycle
+  - H2: QuickJS-WASI runtime
+  - H2: TypeScript
+  - H2: Security boundary
+  - H2: Error codes
+  - H2: Telemetry
+  - H2: Debugging
+  - H2: Implementation layout
+  - H2: Validation checklist
+  - H2: E2E test plan
   - H2: Related
 
 ## tools/creating-skills.md
