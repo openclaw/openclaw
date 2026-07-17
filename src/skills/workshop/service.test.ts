@@ -182,6 +182,7 @@ describe("skill workshop proposals", () => {
         workspaceDir,
         config,
         proposalId: proposal.record.id,
+        explicitApprovalGranted: true,
       });
 
       expect(applied.targetSkillFile).toBe(
@@ -354,7 +355,11 @@ describe("skill workshop proposals", () => {
       content: "# Metadata Update\n\nNew body.\n",
     });
 
-    await applySkillProposal({ workspaceDir, proposalId: updated.record.id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: updated.record.id,
+      explicitApprovalGranted: true,
+    });
 
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("user-invocable: false");
   });
@@ -458,7 +463,11 @@ describe("skill workshop proposals", () => {
       ),
     ).rejects.toThrow();
 
-    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      explicitApprovalGranted: true,
+    });
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
     ).resolves.toBe(
@@ -505,7 +514,11 @@ describe("skill workshop proposals", () => {
 
     expect(resolved.record.id).toBe(proposal.record.id);
 
-    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      explicitApprovalGranted: true,
+    });
     await expect(resolvePendingSkillProposal({ name: "named-proposal" })).rejects.toThrow(
       "No pending skill proposal matched",
     );
@@ -624,7 +637,11 @@ describe("skill workshop proposals", () => {
       ],
     });
 
-    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      explicitApprovalGranted: true,
+    });
 
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
       "New checklist.",

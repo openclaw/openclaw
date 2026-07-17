@@ -17,6 +17,7 @@ import {
   readWorkspaceSupportFile,
   writeWorkspaceSkill,
 } from "../lifecycle/workspace-skill-write.js";
+import { parseFrontmatter } from "../loading/frontmatter.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
@@ -593,6 +594,15 @@ export async function applySkillProposal(
     });
 
     const skillContent = stripProposalFrontmatterForSkill(content);
+    const bodyValidation = validateApplyBody(skillContent, {
+      kind: record.kind,
+      previousContent: targetState.previousContent,
+    });
+    if (bodyValidation.requiresExplicitApproval && !input.explicitApprovalGranted) {
+      throw new Error(
+        "Update requires explicit approval; proposal has insufficient content continuity with the current skill. Re-apply with explicit approval granted to confirm the replacement.",
+      );
+    }
     await writeWorkspaceSkill({
       workspaceDir: input.workspaceDir,
       skillDir: record.target.skillDir,
@@ -620,8 +630,117 @@ export async function applySkillProposal(
       store: proposalStoreOptions(input.env),
     });
     await refreshSkillProposalManifest(proposalStoreOptions(input.env));
-    return { record: applied, targetSkillFile: record.target.skillFile };
+    return {
+      record: applied,
+      targetSkillFile: record.target.skillFile,
+      changeSummary: computeSkillChangeSummary(skillContent, targetState.previousContent),
+      requiresExplicitApproval: bodyValidation.requiresExplicitApproval,
+    };
   });
+}
+
+type ApplyBodyValidationResult = {
+  requiresExplicitApproval: boolean;
+};
+
+function validateApplyBody(
+  skillContent: string,
+  context: { kind: SkillProposalRecord["kind"]; previousContent: string | null },
+): ApplyBodyValidationResult {
+  const bodyLines = extractBodyLines(skillContent);
+  if (bodyLines.length === 0) {
+    throw new Error(
+      "Proposal body is empty after stripping proposal-only frontmatter. The proposal must contain the complete skill content.",
+    );
+  }
+  let parsed: Record<string, string>;
+  try {
+    parsed = parseFrontmatter(skillContent);
+  } catch {
+    throw new Error(
+      "Proposal body does not contain valid SKILL.md frontmatter. The proposal must be complete skill content with valid YAML frontmatter (name, description), not a plan or change description.",
+    );
+  }
+  const name = parsed["name"];
+  const description = parsed["description"];
+  if (!name || name.trim().length === 0) {
+    throw new Error(
+      "Proposal frontmatter must include a non-empty name field. The proposal must be complete skill content, not a plan or change description.",
+    );
+  }
+  if (!description || description.trim().length === 0) {
+    throw new Error(
+      "Proposal frontmatter must include a non-empty description field. The proposal must be complete skill content, not a plan or change description.",
+    );
+  }
+  if (context.kind === "update" && context.previousContent !== null) {
+    const originalBody = extractBodyLines(context.previousContent);
+    if (originalBody.length > 0) {
+      if (!isSubstantialContinuity(bodyLines, originalBody)) {
+        return { requiresExplicitApproval: true };
+      }
+    }
+  }
+  return { requiresExplicitApproval: false };
+}
+
+function isSubstantialContinuity(proposedBody: string[], originalBody: string[]): boolean {
+  const proposedNonHeading = proposedBody.filter((line) => !/^#{1,6}\s+\S/u.test(line));
+  const originalNonHeading = originalBody.filter((line) => !/^#{1,6}\s+\S/u.test(line));
+  if (originalNonHeading.length === 0) {
+    return proposedNonHeading.length > 0;
+  }
+  const proposedSet = new Set(proposedNonHeading);
+  let overlapCount = 0;
+  for (const line of originalNonHeading) {
+    if (proposedSet.has(line)) {
+      overlapCount += 1;
+    }
+  }
+  const ratio = overlapCount / originalNonHeading.length;
+  return overlapCount >= 3 && ratio >= 0.5;
+}
+
+function extractBodyLines(content: string): string[] {
+  const frontmatterEnd = content.indexOf("---", content.indexOf("---") + 3);
+  const body = frontmatterEnd >= 0 ? content.slice(frontmatterEnd + 3) : content;
+  return body.split("\n").filter((line) => line.trim().length > 0);
+}
+
+export function computeSkillChangeSummary(
+  skillContent: string,
+  previousContent: string | null,
+): string | undefined {
+  if (previousContent === null) {
+    return undefined;
+  }
+  const proposedLines = skillContent.split("\n").filter((line) => line.trim().length > 0);
+  const currentLines = previousContent.split("\n").filter((line) => line.trim().length > 0);
+  const currentSet = new Set(currentLines);
+  let added = 0;
+  let removed = 0;
+  for (const line of proposedLines) {
+    if (!currentSet.has(line)) {
+      added += 1;
+    }
+  }
+  const proposedSet = new Set(proposedLines);
+  for (const line of currentLines) {
+    if (!proposedSet.has(line)) {
+      removed += 1;
+    }
+  }
+  if (added === 0 && removed === 0) {
+    return "no content changes";
+  }
+  const parts: string[] = [];
+  if (added > 0) {
+    parts.push(`+${added} line${added !== 1 ? "s" : ""}`);
+  }
+  if (removed > 0) {
+    parts.push(`-${removed} line${removed !== 1 ? "s" : ""}`);
+  }
+  return parts.join(", ");
 }
 
 async function readApplyTargetState(
