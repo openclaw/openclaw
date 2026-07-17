@@ -56,7 +56,7 @@ const SessionsSearchHitSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const SessionsSearchOutputSchema = Type.Union([
+const SessionsSearchOutputSchema = Type.Union([
   Type.Object(
     {
       results: Type.Array(SessionsSearchHitSchema),

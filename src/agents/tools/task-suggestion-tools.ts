@@ -40,7 +40,7 @@ const SpawnTaskToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const SpawnTaskOutputSchema = Type.Object(
+const SpawnTaskOutputSchema = Type.Object(
   { task_id: Type.String() },
   { additionalProperties: false },
 );

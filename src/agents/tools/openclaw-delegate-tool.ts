@@ -10,7 +10,7 @@ const OpenClawDelegateSchema = Type.Object({
   sessionId: Type.Optional(Type.String({ description: "Continue prior OpenClaw talk." })),
 });
 
-export const OpenClawDelegateOutputSchema = Type.Object(
+const OpenClawDelegateOutputSchema = Type.Object(
   {
     reply: Type.String(),
     action: Type.Optional(Type.String()),

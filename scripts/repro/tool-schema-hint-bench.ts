@@ -80,13 +80,15 @@ function buildCatalogTools(): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [];
   for (let index = 0; index < CATALOG_TOOL_COUNT; index += 1) {
     const declareOutput = index % 3 === 0;
+    const name = `bench_tool_${String(index).padStart(2, "0")}`;
     const tool = {
-      name: `bench_tool_${String(index).padStart(2, "0")}`,
+      name,
+      label: name,
       description: `Benchmark tool ${index} exercising catalog compaction cost.`,
       parameters: TypicalInputSchema,
       ...(declareOutput ? { outputSchema: TypicalOutputSchema } : {}),
-      execute: async () => jsonResult({ ok: true }),
-    } as AnyAgentTool;
+      execute: async (_toolCallId: string, _params: unknown) => jsonResult({ ok: true }),
+    } satisfies AnyAgentTool;
     setPluginToolMeta(tool, { pluginId: "bench-hints", optional: true });
     tools.push(tool);
   }

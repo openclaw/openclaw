@@ -49,7 +49,7 @@ const TerminalListSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TerminalToolOutputSchema = Type.Union([
+const TerminalToolOutputSchema = Type.Union([
   Type.Object({ sessions: Type.Array(TerminalListSessionSchema) }, { additionalProperties: false }),
   Type.Object(
     {

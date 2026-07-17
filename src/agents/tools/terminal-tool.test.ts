@@ -6,7 +6,7 @@ import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
-import { createTerminalTool, TerminalToolOutputSchema } from "./terminal-tool.js";
+import { createTerminalTool } from "./terminal-tool.js";
 
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 
@@ -91,7 +91,7 @@ describe("terminal tool", () => {
       callGateway,
       getGatewayContext: () => makeContext(manager),
     });
-    expect(tool.outputSchema).toBe(TerminalToolOutputSchema);
+    expect(tool.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
       "{ sessions: Array<{ agentId: string; attached: boolean; createdAtMs: number; cwd: string; owner: string; sessionId: string; shell: string }> } | { agentId: string; cwd: string; ok: true; sessionId: string; shell: string } | { sessionId: string; text: string } | { ok: boolean }",
     );

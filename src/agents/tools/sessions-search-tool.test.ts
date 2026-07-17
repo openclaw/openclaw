@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { sessionVisibilityGatewayTesting } from "../../plugin-sdk/session-visibility.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
-import { createSessionsSearchTool, SessionsSearchOutputSchema } from "./sessions-search-tool.js";
+import { createSessionsSearchTool } from "./sessions-search-tool.js";
 
 type CallGatewayRequest = Parameters<typeof gatewayCall>[0];
 
@@ -92,7 +92,7 @@ describe("sessions_search tool", () => {
       sessionKey: "01234567-89ab-4def-8123-456789abcdef",
     });
 
-    expect(tool.outputSchema).toBe(SessionsSearchOutputSchema);
+    expect(tool.outputSchema).toBeDefined();
     expect(Value.Check(tool.outputSchema!, success.details)).toBe(true);
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);

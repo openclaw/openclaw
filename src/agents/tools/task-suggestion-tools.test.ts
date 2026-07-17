@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
-import { createTaskSuggestionTools, SpawnTaskOutputSchema } from "./task-suggestion-tools.js";
+import { createTaskSuggestionTools } from "./task-suggestion-tools.js";
 
 function createTools(gatewayCall = vi.fn()) {
   return {
@@ -43,7 +43,7 @@ describe("task suggestion tools", () => {
     expect(result?.content).toEqual([
       { type: "text", text: JSON.stringify({ task_id: "task_123" }, null, 2) },
     ]);
-    expect(spawnTask?.outputSchema).toBe(SpawnTaskOutputSchema);
+    expect(spawnTask?.outputSchema).toBeDefined();
     expect(Value.Check(spawnTask!.outputSchema!, result?.details)).toBe(true);
     expect(compactToolOutputHint(spawnTask?.outputSchema)).toBe("{ task_id: string }");
     expect(tools.find((tool) => tool.name === "dismiss_task")?.outputSchema).toBeUndefined();
