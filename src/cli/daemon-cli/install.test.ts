@@ -513,7 +513,7 @@ describe("runDaemonInstall", () => {
         bind: "lan",
         auth: {
           mode: "none",
-          token: "durable-token",
+          token: "test-token",
         },
       },
     };
@@ -525,7 +525,7 @@ describe("runDaemonInstall", () => {
     });
     resolveGatewayAuthMock.mockReturnValue({
       mode: "none",
-      token: "durable-token",
+      token: "test-token",
       password: undefined,
       allowTailscale: false,
     });
