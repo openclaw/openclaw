@@ -769,9 +769,11 @@ export class TwilioProvider implements VoiceCallProvider {
         if (waitMs > 0) {
           try {
             await sleepWithAbort(Math.ceil(waitMs), signal);
-          } catch {
-            // Sleep rejected because the signal aborted; the post-delay
-            // abort check below exits the loop cleanly.
+          } catch (error) {
+            if (!signal.aborted) {
+              throw error;
+            }
+            break;
           }
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
