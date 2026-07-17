@@ -1314,13 +1314,17 @@ describe("main-session-restart-recovery", () => {
       return { runId: "recovery-run", status: "ok", endedAt: Date.now() };
     });
     const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    let postDispatchWrites = 0;
     let settlementFailed = false;
     const replacementSpy = vi
       .spyOn(sessionAccessor, "applySessionEntryReplacements")
       .mockImplementation(async (params) => {
-        if (dispatchFailed && !settlementFailed && params.requireWriteSuccess !== true) {
-          settlementFailed = true;
-          throw new Error("settlement store failure");
+        if (dispatchFailed && params.requireWriteSuccess !== true) {
+          postDispatchWrites += 1;
+          if (postDispatchWrites === 2) {
+            settlementFailed = true;
+            throw new Error("settlement store failure");
+          }
         }
         return await applySessionEntryReplacements(params);
       });
@@ -1334,6 +1338,7 @@ describe("main-session-restart-recovery", () => {
     }
     expect(settlementFailed).toBe(true);
     const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry).toMatchObject({ status: "running", abortedLastRun: true });
     expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
   });

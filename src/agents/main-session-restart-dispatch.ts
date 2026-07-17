@@ -30,6 +30,11 @@ import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
+  restoreAdmittedRecoveryWithRetries,
+  scheduleAdmittedRecoveryRestore,
+  type RestoreAdmittedRecovery,
+} from "./main-session-recovery-restore.js";
+import {
   isMainRestartRecoveryCandidate,
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
@@ -572,6 +577,36 @@ export async function resumeMainSession(params: {
       log.warn(
         `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
       );
+      const restoreAdmittedRecovery: RestoreAdmittedRecovery = async () => {
+        const restored = await commitMainSessionRecovery({
+          command: {
+            kind: "mark_admitted_recovery_interrupted",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            now: Date.now(),
+            runId: recoveryRunId,
+            sessionId: params.entry.sessionId,
+          },
+          requireWriteSuccess: true,
+          target: { sessionKey: params.sessionKey, storePath: params.storePath },
+        });
+        return restored.transition.kind === "applied" && restored.entry && restored.sessionKey
+          ? {
+              sessionId: restored.entry.sessionId,
+              sessionKey: restored.sessionKey,
+              storePath: params.storePath,
+            }
+          : undefined;
+      };
+      try {
+        scheduleMainSessionRecoveryPendingTarget(
+          await restoreAdmittedRecoveryWithRetries(restoreAdmittedRecovery),
+        );
+      } catch (restoreError) {
+        log.warn(
+          `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+        );
+        scheduleAdmittedRecoveryRestore(restoreAdmittedRecovery);
+      }
     }
     if (reservation) {
       const rollbackReservation = reservation;
