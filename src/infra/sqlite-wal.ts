@@ -18,6 +18,7 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
+const MOUNT_LOOKUP_TIMEOUT_MS = 10_000;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
@@ -172,7 +173,14 @@ function readMountEntries(): MountEntry[] {
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return parseMountCommandEntries(String(childProcess.execFileSync("mount", [])));
+    return parseMountCommandEntries(
+      String(
+        childProcess.execFileSync("mount", [], {
+          timeout: MOUNT_LOOKUP_TIMEOUT_MS,
+          killSignal: "SIGKILL",
+        }),
+      ),
+    );
   } catch {
     return [];
   }
