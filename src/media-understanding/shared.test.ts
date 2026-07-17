@@ -1039,3 +1039,31 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(call).not.toHaveProperty("mode");
   });
 });
+
+describe("fetchProviderDownloadResponse guardedOptions parameter", () => {
+  it("routes download requests through SSRF guard when guardedOptions is passed", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://api.example.com/v1/download",
+      release: async () => {},
+    });
+
+    // When guardedOptions is passed, the request must go through
+    // fetchWithTimeoutGuarded → fetchWithSsrFGuard (the SSRF guard).
+    // If guardedOptions were ignored, the request would use the unguarded
+    // fetchWithTimeout path and fetchWithSsrFGuard would never be called.
+    await fetchProviderDownloadResponse({
+      url: "https://api.example.com/v1/download",
+      init: { method: "GET" },
+      fetchFn: fetch,
+      provider: "test-provider",
+      requestFailedMessage: "test download failed",
+      guardedOptions: { ssrfPolicy: { allowPrivateNetwork: false } },
+    });
+
+    // Verify the SSRF guard was invoked — proves guardedOptions propagated.
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalled();
+    const [call] = fetchWithSsrFGuardMock.mock.calls[0];
+    expect(call).toBeDefined();
+  });
+});
