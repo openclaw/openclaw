@@ -279,7 +279,8 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
         splitCore: shardArgs.splitCore,
       });
       const hostResources = resolveHostResources();
-      console.log(
+      // stderr: stdout may carry machine-readable oxlint output for callers.
+      console.error(
         `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
           `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
       );

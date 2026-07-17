@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
@@ -10,9 +11,14 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.ChatWidgetResource
+import ai.openclaw.app.chat.ChatWidgetSurface
+import ai.openclaw.app.chat.ChatWidgetSurfaceUrls
+import ai.openclaw.app.chat.ChatWidgetUrlResolver
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
@@ -95,6 +101,10 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
+import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearProxyController
+import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.wear.shared.WearMessage
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -102,6 +112,7 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -464,6 +475,7 @@ class NodeRuntime private constructor(
   @Volatile private var connectingEndpointStableId: String? = null
   private val gatewayDataScopeLock = Any()
   private val gatewaySwitchMutex = Mutex()
+  private val inlineWidgetRefreshMutex = Mutex()
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
   private var gatewayDataGeneration = 0L
@@ -717,6 +729,7 @@ class NodeRuntime private constructor(
           hasRecordAudioPermission() &&
           isVoiceWakeWordsReadyForCurrentGateway()
       },
+      inlineWidgetsAvailable = { WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
           .firstOrNull { it.stableId == endpoint.stableId }
@@ -1076,6 +1089,7 @@ class NodeRuntime private constructor(
           operatorStatusText = "Connected"
         }
         micCapture.onGatewayConnectionChanged(true)
+        wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshWakeWordsFromGateway()
@@ -1096,17 +1110,59 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = message)
       },
       onConnectFailure = { error, pauseReconnect ->
+        val problem = gatewayConnectionProblem(error, pauseReconnect)
         updateStatus {
-          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+          operatorConnected = false
+          operatorStatusText = problem.message
+          operatorConnectionProblem = problem
         }
+        micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = problem.message)
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private val wearProxyController by lazy {
+    WearProxyController(
+      requestGateway = ::requestWearGateway,
+      isGatewayConnected = operatorSession::isReady,
+      gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+    )
+  }
+
+  internal suspend fun handleWearProxyRequest(request: WearMessage.Request): WearMessage.Response = wearProxyController.handle(request)
+
+  private suspend fun requestWearGateway(
+    method: String,
+    params: JsonObject,
+  ): JsonElement {
+    val lease =
+      operatorSession.captureRequestLease()
+        ?: throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+    val response =
+      try {
+        lease.request(method, params.toString())
+      } catch (err: GatewayRequestRejected) {
+        throw WearProxyGatewayException(err.gatewayError.code, err.gatewayError.message)
+      } catch (_: GatewayRequestNotEnqueued) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+      } catch (_: GatewayRequestOutcomeUnknown) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway request outcome is unknown")
+      }
+    return try {
+      json.parseToJsonElement(response)
+    } catch (_: Throwable) {
+      throw WearProxyGatewayException("invalid_response", "$method returned invalid JSON")
+    }
+  }
+
+  private fun wearProxyBridge(): WearProxyBridge? = (appContext as? NodeApp)?.wearProxyBridge
 
   private fun clearOperatorGatewayState(retirePendingCronRuns: Boolean) {
     invalidateNodeCapabilityApprovalState()
@@ -1324,6 +1380,19 @@ class NodeRuntime private constructor(
     }
   }
 
+  private val chatSessionDeletionListenerSequence = AtomicLong()
+  private val chatSessionDeletionListeners = ConcurrentHashMap<Long, (ChatSessionDeletion) -> Unit>()
+
+  internal fun addChatSessionDeletionListener(listener: (ChatSessionDeletion) -> Unit): () -> Unit {
+    val id = chatSessionDeletionListenerSequence.incrementAndGet()
+    chatSessionDeletionListeners[id] = listener
+    return { chatSessionDeletionListeners.remove(id) }
+  }
+
+  private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
+    chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
+  }
+
   private val chat: ChatController =
     when (mode) {
       NodeRuntimeMode.Live ->
@@ -1337,6 +1406,8 @@ class NodeRuntime private constructor(
           currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
+          onSessionDeleted = ::publishChatSessionDeletion,
+          onOfflineDefaultAgentRestored = ::syncMainSessionKey,
         )
       NodeRuntimeMode.ScreenshotFixture ->
         ChatController(
@@ -2244,6 +2315,10 @@ class NodeRuntime private constructor(
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+
+  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
+
+  suspend fun getBackgroundTask(taskId: String): BackgroundTask = chat.getBackgroundTask(taskId)
 
   fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
 
@@ -4078,6 +4153,52 @@ class NodeRuntime private constructor(
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
 
+  internal suspend fun resolveInlineWidgetResource(
+    path: String,
+    failedResource: ChatWidgetResource?,
+  ): ChatWidgetResource? {
+    fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
+      currentCanvasHostRoute()?.let { route ->
+        ChatWidgetSurface(
+          url = route.url,
+          tlsFingerprintSha256 = route.tlsFingerprintSha256,
+        )
+      }
+
+    fun currentSurfaceUrls(): ChatWidgetSurfaceUrls =
+      ChatWidgetSurfaceUrls(
+        node = nodeSession.currentWidgetSurface(),
+        operator = operatorSession.currentWidgetSurface(),
+      )
+
+    // Initial loads may use the operator fallback; failures rotate the preferred live route.
+    if (failedResource == null) return ChatWidgetUrlResolver.resolvePreferred(currentSurfaceUrls(), path, excluding = null)
+    return inlineWidgetRefreshMutex.withLock {
+      // Serialize both role sessions so sibling widgets cannot invalidate each other's new token.
+      ChatWidgetUrlResolver.resolveAfterFailure(
+        target = path,
+        failedResource = failedResource,
+        currentSurfaceUrls = ::currentSurfaceUrls,
+        refreshNodeSurface = { observedUrl ->
+          nodeSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
+        refreshOperatorSurface = { observedUrl ->
+          operatorSession.refreshCanvasHostRouteIfCurrent(observedUrl)?.let { route ->
+            ChatWidgetSurface(
+              url = route.url,
+              tlsFingerprintSha256 = route.tlsFingerprintSha256,
+            )
+          }
+        },
+      )
+    }
+  }
+
   fun loadChat(
     sessionKey: String,
     ownerAgentId: String? = null,
@@ -4135,9 +4256,7 @@ class NodeRuntime private constructor(
   suspend fun deleteChatSession(
     key: String,
     ownerAgentId: String?,
-  ) {
-    chat.deleteSession(key, ownerAgentId)
-  }
+  ): ChatSessionDeletion? = chat.deleteSession(key, ownerAgentId)
 
   suspend fun forkChatSession(
     parentKey: String,
@@ -4212,6 +4331,8 @@ class NodeRuntime private constructor(
     attachments: List<OutgoingAttachment>,
   ): Boolean = chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
 
+  internal fun canSendForOwner(owner: ChatComposerOwner): Boolean = chat.canSendForOwner(owner)
+
   internal suspend fun sendChatForOwnerAwaitAcceptance(
     owner: ChatComposerOwner,
     message: String,
@@ -4247,6 +4368,11 @@ class NodeRuntime private constructor(
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    if (event == "chat" && !payloadJson.isNullOrBlank()) {
+      runCatching { json.parseToJsonElement(payloadJson) }
+        .getOrNull()
+        ?.let { wearProxyBridge()?.publishChat(it) }
+    }
   }
 
   private fun handleNodeGatewayEvent(

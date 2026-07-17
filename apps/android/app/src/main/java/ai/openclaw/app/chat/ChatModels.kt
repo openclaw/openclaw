@@ -36,7 +36,18 @@ data class ChatMessageContent(
   val fileName: String? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val widget: ChatWidgetPreview? = null,
 )
+
+data class ChatWidgetPreview(
+  val title: String?,
+  val path: String,
+  val preferredHeight: Int?,
+  val sandbox: String,
+) {
+  val height: Int
+    get() = (preferredHeight ?: 320).coerceIn(160, 1200)
+}
 
 /**
  * Tool call placeholder shown while a gateway run is still streaming.

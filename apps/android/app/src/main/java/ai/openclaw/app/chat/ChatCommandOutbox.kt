@@ -399,9 +399,11 @@ internal interface ChatOutboxDao {
 
   @Query(
     "DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
-      "AND sessionKey = :sessionKey AND rowid NOT IN " +
+      "AND sessionKey = :sessionKey " +
+      "AND rowid NOT IN " +
       "(SELECT rowid FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
-      "AND sessionKey = :sessionKey ORDER BY rowid DESC LIMIT :keep)",
+      "AND sessionKey = :sessionKey " +
+      "ORDER BY rowid DESC LIMIT :keep)",
   )
   suspend fun pruneAdmissionReceipts(
     gatewayId: String,
@@ -412,6 +414,16 @@ internal interface ChatOutboxDao {
 
   @Query("DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId")
   suspend fun deleteAdmissionReceiptsForGateway(gatewayId: String)
+
+  @Query(
+    "DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey " +
+      "AND ownerAgentId = :ownerAgentId",
+  )
+  suspend fun deleteAdmissionReceiptsForSession(
+    gatewayId: String,
+    sessionKey: String,
+    ownerAgentId: String,
+  )
 
   @Query("SELECT * FROM outbox_attachments WHERE commandId IN (:commandIds) ORDER BY position ASC")
   suspend fun attachmentsForCommands(commandIds: List<String>): List<OutboxAttachmentEntity>
@@ -695,6 +707,7 @@ class RoomChatCommandOutbox internal constructor(
       for (id in dao.commandIdsForSession(gateway, key, owner)) {
         deleteCommandRowLocked(id)
       }
+      dao.deleteAdmissionReceiptsForSession(gateway, key, owner)
     }
   }
 

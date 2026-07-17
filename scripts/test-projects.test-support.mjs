@@ -527,6 +527,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/macos-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [
+    ".github/workflows/mantis-scenario.yml",
+    ["test/scripts/mantis-telegram-desktop-proof-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/mantis-telegram-desktop-proof.yml",
     [
       "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
@@ -822,7 +826,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/ci-workflow-guards.test.ts",
     ],
   ],
-  ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  [
+    "scripts/ci-changed-scope.mjs",
+    ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+  ],
   ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
@@ -1598,6 +1605,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
   ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
+  ["scripts/repro/tool-surface-live-bench.ts", ["test/scripts/tool-surface-live-bench.test.ts"]],
   [
     "scripts/repro/code-mode-namespace-live-docker.sh",
     ["test/scripts/code-mode-namespace-live.test.ts", "test/scripts/docker-build-helper.test.ts"],
@@ -2091,7 +2099,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
+  ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);

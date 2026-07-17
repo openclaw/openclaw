@@ -337,6 +337,9 @@ describe("release validation no-push transport", () => {
     expect(verify.run).toContain('"openclaw-release-checks.yml"');
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+    expect(dispatch.run).toContain("--connect-timeout 10");
+    expect(dispatch.run).toContain("--max-time 30");
+    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {

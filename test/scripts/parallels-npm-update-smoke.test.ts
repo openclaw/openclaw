@@ -271,6 +271,21 @@ exit 1
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
   });
 
+  it("does not recreate retired workspace setup state after update doctor migration", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.2",
+      updateTarget: "2026.7.2-beta.2",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("IDENTITY.md");
+      expect(script).not.toContain("workspace-state.json");
+    }
+    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
+    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
+  });
+
   it("accepts keyed and nested npm metadata for published update targets", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 

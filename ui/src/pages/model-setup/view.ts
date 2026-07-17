@@ -5,6 +5,7 @@ import "../../styles/model-setup.css";
 import type {
   ModelSetupActivationState,
   ModelSetupPageState,
+  ModelSetupVerifyState,
   ModelSetupWizardState,
 } from "./state.ts";
 import { activationTargetId } from "./state.ts";
@@ -16,9 +17,11 @@ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[numbe
 type ModelSetupViewProps = {
   page: ModelSetupPageState;
   activation: ModelSetupActivationState;
+  verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
   wizardValue: unknown;
   canAdmin: boolean;
+  canVerify: boolean;
   gatewayTooOld: boolean;
   actionsDisabled: boolean;
   manualProviderId: string;
@@ -26,6 +29,7 @@ type ModelSetupViewProps = {
   manualError: string | null;
   moreSignInOpen: boolean;
   onDetect: () => void;
+  onVerify: () => void;
   onActivateCandidate: (candidate: Candidate) => void;
   onStartAuth: (option: AuthOption) => void;
   onManualProviderChange: (providerId: string) => void;
@@ -137,6 +141,51 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
             </div>
           `;
         })}
+      </div>
+    </section>
+  `;
+}
+
+function renderCurrentConnection(props: ModelSetupViewProps, modelRef: string) {
+  // A successful verify reports the model that actually answered; prefer it over
+  // the detect-time snapshot so concurrent config changes cannot mislabel the result.
+  const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : modelRef;
+  return html`
+    <section class="settings-section model-setup__current" data-verify-phase=${props.verify.phase}>
+      <div class="settings-section__header">
+        <h2>${t("modelSetup.verify.title")}</h2>
+      </div>
+      <div class="model-setup__row">
+        <div class="model-setup__row-main">
+          <strong>${displayRef}</strong>
+          ${props.verify.phase === "checking"
+            ? html`<div class="model-setup__testing" role="status">
+                ${t("modelSetup.verify.checking", { modelRef })}
+              </div>`
+            : props.verify.phase === "ok"
+              ? html`<div class="model-setup__verified" role="status">
+                  ${props.verify.latencyMs === undefined
+                    ? t("modelSetup.verify.answered")
+                    : t("modelSetup.verify.answeredIn", {
+                        latencyMs: String(props.verify.latencyMs),
+                      })}
+                </div>`
+              : props.verify.phase === "failed"
+                ? html`<div class="callout danger" role="alert">
+                    <strong>${failureLabel(props.verify.status)}</strong> ${props.verify.error}
+                  </div>`
+                : nothing}
+        </div>
+        ${props.canVerify
+          ? html`<button
+              type="button"
+              class="btn"
+              ?disabled=${props.actionsDisabled}
+              @click=${props.onVerify}
+            >
+              ${t("modelSetup.verify.button")}
+            </button>`
+          : nothing}
       </div>
     </section>
   `;
@@ -298,15 +347,28 @@ function renderReady(props: ModelSetupViewProps, result: SystemAgentSetupDetectR
   if (props.activation.phase === "success") {
     return renderSuccess(props.activation, props.onOpenChat);
   }
+  const current = result.configuredModel
+    ? renderCurrentConnection(props, result.configuredModel)
+    : nothing;
+  if (!props.canAdmin) {
+    return html`${current}
+      <div class="callout warning" role="note">${t("modelSetup.access.adminRequired")}</div>`;
+  }
+  if (props.gatewayTooOld) {
+    return html`${current}
+      <div class="callout warning" role="note">${t("modelSetup.access.gatewayTooOld")}</div>`;
+  }
   return html`
-    ${renderCandidateRows(props, result)} ${renderUnavailable(result)}
+    ${current} ${renderCandidateRows(props, result)} ${renderUnavailable(result)}
     ${renderSignIn(props, result)} ${renderManual(props, result)}
   `;
 }
 
 export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
   let body: unknown;
-  if (!props.canAdmin) {
+  if (props.page.phase === "ready") {
+    body = renderReady(props, props.page.result);
+  } else if (!props.canAdmin) {
     body = html`<div class="callout warning" role="note">
       ${t("modelSetup.access.adminRequired")}
     </div>`;
@@ -321,8 +383,6 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
       <div class="callout danger" role="alert">${props.page.message}</div>
       <button type="button" class="btn" @click=${props.onDetect}>${t("modelSetup.retry")}</button>
     `;
-  } else {
-    body = renderReady(props, props.page.result);
   }
   return html`
     <div class="model-setup">
@@ -331,7 +391,10 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           <h1>${t("modelSetup.heading")}</h1>
           <p>${t("modelSetup.intro")}</p>
         </div>
-        ${props.page.phase === "ready" && props.activation.phase !== "success"
+        ${props.page.phase === "ready" &&
+        props.activation.phase !== "success" &&
+        props.canAdmin &&
+        !props.gatewayTooOld
           ? html`<button
               type="button"
               class="btn"

@@ -4,7 +4,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
@@ -16,6 +15,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
@@ -27,6 +27,7 @@ import {
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { formatErrorMessage } from "./errors.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
@@ -492,19 +493,6 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
-function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
-  if (tableExistsSql(db, "delivery_queue_entries")) {
-    db.prepare("DELETE FROM delivery_queue_entries").run();
-  }
-}
-
 async function listStateSqlitePaths(params: {
   stateDir: string;
   globalStateSqlitePath: string;
@@ -611,25 +599,36 @@ async function createStateSqliteBackupPlan(params: {
     globalStateSqlitePath,
     preservedStatePaths: params.preservedStatePaths,
   });
+  const globalStateIdentity = await fs.stat(globalStateSqlitePath).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  const canonicalGlobalSourcePath = globalStateIdentity
+    ? await fs.realpath(globalStateSqlitePath)
+    : globalStateSqlitePath;
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
     // Raw-copying malformed or unreadable databases would restore unsafe state.
     // Resolve the canonical global path so a symlinked DB reads the target's
     // live WAL/SHM state instead of looking for sidecars beside the symlink.
-    const sourceDatabasePath =
-      path.resolve(archiveSourcePath) === globalStateSqlitePath
-        ? await fs.realpath(archiveSourcePath)
-        : archiveSourcePath;
+    const archiveSourceIdentity = await fs.stat(archiveSourcePath);
+    const isGlobalStateDatabase =
+      globalStateIdentity !== undefined &&
+      sameFileIdentity(globalStateIdentity, archiveSourceIdentity);
+    // Every hardlink/symlink alias of the canonical global DB must read its
+    // canonical WAL and receive the same transient-row sanitizer.
+    const sourceDatabasePath = isGlobalStateDatabase
+      ? canonicalGlobalSourcePath
+      : archiveSourcePath;
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       await createVerifiedSqliteSnapshot({
         sourcePath: sourceDatabasePath,
         targetPath: sourcePath,
-        transform:
-          path.resolve(archiveSourcePath) === globalStateSqlitePath
-            ? sanitizeGlobalStateSqliteSnapshot
-            : undefined,
+        transform: isGlobalStateDatabase ? sanitizeOpenClawGlobalStateSnapshot : undefined,
       });
     } catch (err) {
       throw new Error(

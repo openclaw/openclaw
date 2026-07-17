@@ -98,6 +98,7 @@ const rootEntries = [
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   "scripts/repro/code-mode-namespace-live.ts!",
+  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-sqlite-reliability.ts!",
@@ -157,8 +158,6 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
-  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
-  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [

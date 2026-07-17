@@ -16,6 +16,32 @@ class SessionsScreenGroupingTest {
   }
 
   @Test
+  fun sessionActionTargetKeepsTheOwnerCapturedWhenTheDialogOpened() {
+    val target =
+      ChatSessionEntry(
+        key = "custom",
+        updatedAtMs = null,
+        ownerAgentId = "agent-a",
+        label = "Original",
+      ).toActionTarget("gateway-a")
+    val refreshed =
+      ChatSessionEntry(
+        key = "custom",
+        updatedAtMs = null,
+        ownerAgentId = "agent-b",
+        label = "Replacement",
+      )
+
+    assertEquals("gateway-a", target.gatewayStableId)
+    assertEquals("agent-a", target.ownerAgentId)
+    assertEquals("Original", target.label)
+    assertEquals("gateway-a:agent-a:custom", target.stateKey)
+    assertEquals(true, target.matchesGateway("gateway-a"))
+    assertEquals(false, target.matchesGateway("gateway-b"))
+    assertEquals("agent-b", refreshed.ownerAgentId)
+  }
+
+  @Test
   fun groupsPinnedThenAlphabeticalCategoriesThenUngrouped() {
     val sections =
       groupSessionEntries(

@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.ChatComposerSendAdmission
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
@@ -8,8 +7,10 @@ import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.resolveChatComposerOwner
+import ai.openclaw.app.chat.resolveChatComposerRoutingOwner
 import ai.openclaw.app.claimChatDraftForOwner
 import android.net.Uri
+import androidx.compose.runtime.saveable.SaverScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -53,19 +54,6 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun acceptedSnapshotDoesNotClearTextEditedAfterSendStarted() {
-    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
-    val store = ChatComposerTextDraftStore()
-    store[owner] = "sent text"
-    assertTrue(store.clearAccepted(owner, "sent text"))
-    assertEquals("", store[owner])
-
-    store[owner] = "edited after tap"
-    assertFalse(store.clearAccepted(owner, "sent text"))
-    assertEquals("edited after tap", store[owner])
-  }
-
-  @Test
   fun processRecreationHidesPendingDraftUntilOutboxReconciliation() {
     var saved = arrayListOf<String>()
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
@@ -79,6 +67,46 @@ class ChatComposerDraftTest {
     assertEquals(listOf("command-a"), restored.pendingAdmissions().map { it.commandId })
     restored.resolveAdmission("command-a", admitted = false)
     assertEquals("send once", restored[owner])
+  }
+
+  @Test
+  fun oversizedPendingDraftIsNotHiddenWithoutACompleteCrashCheckpoint() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
+    val oversized = "x".repeat(CHAT_COMPOSER_MAX_SEND_CHARS + 1)
+    val store = ChatComposerTextDraftStore()
+    store[owner] = oversized
+
+    assertFalse(store.beginAdmission(commandId = "command-a", owner = owner, inputSnapshot = oversized))
+
+    assertEquals(oversized, store[owner])
+    assertTrue(store.pendingAdmissions().isEmpty())
+  }
+
+  @Test
+  fun pendingDraftBudgetIncludesOtherOwnersAdmissions() {
+    val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val second = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:second")
+    val third = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:third")
+    val fourth = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:fourth")
+    val store = ChatComposerTextDraftStore()
+    store[first] = "a".repeat(CHAT_COMPOSER_MAX_SEND_CHARS)
+    store[second] = "b".repeat(CHAT_COMPOSER_MAX_SEND_CHARS)
+    store[third] = "c".repeat(CHAT_COMPOSER_MAX_SEND_CHARS)
+    store[fourth] = "d".repeat(10_000)
+
+    assertTrue(store.beginAdmission(commandId = "command-a", owner = first, inputSnapshot = store[first]))
+    assertTrue(store.beginAdmission(commandId = "command-b", owner = second, inputSnapshot = store[second]))
+    assertTrue(store.beginAdmission(commandId = "command-c", owner = third, inputSnapshot = store[third]))
+    assertFalse(store.beginAdmission(commandId = "command-d", owner = fourth, inputSnapshot = store[fourth]))
+
+    assertEquals("", store[first])
+    assertEquals("", store[second])
+    assertEquals("", store[third])
+    assertEquals("d".repeat(10_000), store[fourth])
+    assertEquals(
+      listOf("command-a", "command-b", "command-c"),
+      store.pendingAdmissions().map(PendingChatComposerSend::commandId),
+    )
   }
 
   @Test
@@ -101,12 +129,64 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun acceptedAliasAdmissionKeepsTheCanonicalDraftMergedBeforeResolution() {
+    var saved = arrayListOf<String>()
+    val alias = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+    val canonical = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = { saved = it })
+    store[alias] = "already sent"
+    store[canonical] = "keep editing"
+    store.beginAdmission(commandId = "command-a", owner = alias, inputSnapshot = "already sent")
+    store.migrate(alias, canonical)
+
+    val restored = ChatComposerTextDraftStore(initial = chatComposerTextDraftsFromSnapshot(saved))
+    assertEquals("keep editing", restored[canonical])
+    restored.resolveAdmission("command-a", admitted = true)
+
+    assertEquals("keep editing", restored[canonical])
+  }
+
+  @Test
+  fun rejectedAliasAdmissionRestoresSentTextAfterTheCanonicalDraft() {
+    var saved = arrayListOf<String>()
+    val alias = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+    val canonical = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = { saved = it })
+    store[alias] = "retry me"
+    store[canonical] = "keep editing"
+    store.beginAdmission(commandId = "command-a", owner = alias, inputSnapshot = "retry me")
+    store.migrate(alias, canonical)
+
+    val restored = ChatComposerTextDraftStore(initial = chatComposerTextDraftsFromSnapshot(saved))
+    restored.resolveAdmission("command-a", admitted = false)
+
+    assertEquals("retry me\n\nkeep editing", restored[canonical])
+  }
+
+  @Test
+  fun removingGatewayDraftsAlsoRemovesItsPendingAdmission() {
+    val removed = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+    val retained = ChatComposerOwner(gatewayStableId = "gateway-b", agentId = "main", sessionKey = "main")
+    val store = ChatComposerTextDraftStore()
+    store[removed] = "private a"
+    store[retained] = "private b"
+    store.beginAdmission(commandId = "command-a", owner = removed, inputSnapshot = "private a")
+
+    store.removeOwners { it.gatewayStableId == "gateway-a" }
+
+    assertEquals("", store[removed])
+    assertEquals("private b", store[retained])
+    assertTrue(store.pendingAdmissions().isEmpty())
+  }
+
+  @Test
   fun durablePendingSendStaysHiddenAndLaterEditsSurviveReconciliation() {
     var saved = arrayListOf<String>()
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
     val store = ChatComposerTextDraftStore(onSnapshotChanged = { saved = it })
     store[owner] = "send once"
     store.beginAdmission(commandId = "command-a", owner = owner, inputSnapshot = "send once")
+    assertEquals("", store[owner])
     store[owner] = "new draft"
 
     val restored = ChatComposerTextDraftStore(initial = chatComposerTextDraftsFromSnapshot(saved))
@@ -115,6 +195,32 @@ class ChatComposerDraftTest {
     restored.resolveAdmission("command-a", admitted = true)
     assertEquals("new draft", restored[owner])
     assertTrue(restored.pendingAdmissions().isEmpty())
+  }
+
+  @Test
+  fun identicallyRetypedDraftSurvivesAcceptedAdmission() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")
+    val store = ChatComposerTextDraftStore()
+    store[owner] = "send once"
+    store.beginAdmission(commandId = "command-a", owner = owner, inputSnapshot = "send once")
+    store[owner] = "send once"
+
+    store.resolveAdmission("command-a", admitted = true)
+
+    assertEquals("send once", store[owner])
+  }
+
+  @Test
+  fun rejectedPendingSendRestoresOriginalBeforePostAdmissionEdits() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+    val store = ChatComposerTextDraftStore()
+    store[owner] = "send once"
+    store.beginAdmission(commandId = "command-a", owner = owner, inputSnapshot = "send once")
+    store[owner] = "new draft"
+
+    store.resolveAdmission("command-a", admitted = false)
+
+    assertEquals("send once\n\nnew draft", store[owner])
   }
 
   @Test
@@ -235,7 +341,7 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun ownerlessProvisionalDraftStaysParkedWhenAGatewayAppears() {
+  fun ownerlessProvisionalDraftMovesWhenAGatewayIsSelected() {
     val unresolvedGateway =
       ChatComposerOwner(
         gatewayStableId = null,
@@ -244,7 +350,21 @@ class ChatComposerDraftTest {
       )
     val resolvedGateway = unresolvedGateway.copy(gatewayStableId = "gateway-a")
 
-    assertFalse(shouldMigrateComposerDraft(unresolvedGateway, resolvedGateway, "agent:main:device"))
+    assertTrue(shouldMigrateComposerDraft(unresolvedGateway, resolvedGateway, "agent:main:device"))
+  }
+
+  @Test
+  fun verifiedOwnerlessDraftDoesNotCrossAgentsWhenAGatewayIsSelected() {
+    val captured =
+      ChatComposerOwner(
+        gatewayStableId = null,
+        agentId = "agent-a",
+        sessionKey = "custom",
+        routingVerified = true,
+      )
+    val current = captured.copy(gatewayStableId = "gateway-a", agentId = "agent-b")
+
+    assertFalse(shouldMigrateComposerDraft(captured, current, "agent:agent-b:device"))
   }
 
   @Test
@@ -510,6 +630,24 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun removingGatewayAttachmentsAlsoCancelsItsInFlightImports() {
+    val removed = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
+    val retained = ChatComposerOwner(gatewayStableId = "gateway-b", agentId = "main", sessionKey = "main")
+    val store = ChatComposerAttachmentStore()
+    val removedAttachment = pendingAttachment("removed")
+    val retainedAttachment = pendingAttachment("retained")
+    val removedImport = store.beginImport(removed)
+    store.add(removed, listOf(removedAttachment))
+    store.add(retained, listOf(retainedAttachment))
+
+    store.removeOwners { it.gatewayStableId == "gateway-a" }
+
+    assertEquals(emptyList<PendingAttachment>(), store.get(removed))
+    assertEquals(listOf(retainedAttachment), store.get(retained))
+    assertEquals(null, store.completeImport(removedImport, listOf(pendingAttachment("late"))))
+  }
+
+  @Test
   fun ownerResolutionMigratesParkedDraftsAttachmentsAndImportsAfterNavigation() {
     val provisional = ChatComposerOwner("gateway", "main", "main", routingVerified = false)
     val unrelated = ChatComposerOwner("gateway", "other", "agent:other:device")
@@ -557,26 +695,7 @@ class ChatComposerDraftTest {
   }
 
   @Test
-  fun durableAdmissionClearsOnlyTheUnchangedOriginatingDraft() {
-    val owner = ChatComposerOwner(gatewayStableId = "gateway", agentId = "agent-a", sessionKey = "session-a")
-    val accepted =
-      ChatComposerSendAdmission(
-        id = 1,
-        owner = owner,
-        message = "send me",
-        inputSnapshot = " send me ",
-        attachmentIds = setOf("image"),
-        accepted = true,
-      )
-
-    assertEquals("", clearAcceptedChatComposerInput(accepted, owner, " send me "))
-    assertEquals(null, clearAcceptedChatComposerInput(accepted, owner, "new draft"))
-    assertEquals(null, clearAcceptedChatComposerInput(accepted, owner.copy(sessionKey = "session-b"), "send me"))
-    assertEquals(null, clearAcceptedChatComposerInput(accepted.copy(accepted = false), owner, "send me"))
-  }
-
-  @Test
-  fun ownerMigrationRetainsAndReportsAttachmentsBeyondTheDestinationLimit() {
+  fun ownerMigrationDropsAndReportsAttachmentsBeyondTheDestinationLimit() {
     val from = ChatComposerOwner("gateway", "main", "main", routingVerified = false)
     val to = ChatComposerOwner("gateway", "main", "agent:main:device")
     val store = ChatComposerAttachmentStore()
@@ -587,7 +706,50 @@ class ChatComposerDraftTest {
 
     assertEquals(1, store.migrate(from, to))
     assertEquals(CHAT_COMPOSER_MAX_ATTACHMENTS, store.attachments.value[to]?.size)
-    assertEquals(listOf(source.last()), store.attachments.value[from])
+    assertEquals(null, store.attachments.value[from])
+    store.remove(to, store.get(to).mapTo(mutableSetOf()) { it.id })
+    assertEquals(0, store.migrate(from, to))
+    assertEquals(null, store.attachments.value[to])
+  }
+
+  @Test
+  fun voiceNoteCompletionMustMatchTheRecordingThatStartedIt() {
+    val ownerA = ChatComposerOwner("gateway", "agent-a", "session-a")
+    val ownerB = ChatComposerOwner("gateway", "agent-b", "session-b")
+    val checkpoint = ChatVoiceNoteCommitCheckpoint()
+
+    checkpoint.begin(ownerA, "recording-a", mediaAuthorizationId = "auth-a")
+    checkpoint.begin(ownerB, "recording-b", mediaAuthorizationId = "auth-b")
+
+    assertEquals(null, checkpoint.consume("recording-a"))
+    assertEquals(ownerB, checkpoint.owner)
+    assertEquals(ChatComposerMediaLease(ownerB, "auth-b"), checkpoint.consume("recording-b"))
+    assertEquals(null, checkpoint.owner)
+  }
+
+  @Test
+  fun imagePickerCheckpointCarriesTheCredentialGenerationThroughRecreation() {
+    val owner = ChatComposerOwner("gateway", "agent", "session")
+    val checkpoint = ChatComposerOwnerCheckpoint()
+    checkpoint.begin(owner, mediaAuthorizationId = "media-auth")
+    val saverScope = SaverScope { true }
+    val saved =
+      with(ChatComposerOwnerCheckpoint.Saver) {
+        saverScope.save(checkpoint)
+      }
+    val restored = requireNotNull(ChatComposerOwnerCheckpoint.Saver.restore(requireNotNull(saved)))
+
+    assertEquals(ChatComposerMediaLease(owner, "media-auth"), restored.consume())
+  }
+
+  @Test
+  fun voiceRecorderSurvivesOnlyCanonicalOwnerMigration() {
+    val provisional = ChatComposerOwner("gateway", "main", "main", routingVerified = false)
+    val canonical = ChatComposerOwner("gateway", "work", "agent:work:device")
+    val tracker = VoiceNoteRecorderOwnerTracker(provisional)
+
+    assertTrue(tracker.moveTo(canonical, canonical.sessionKey))
+    assertFalse(tracker.moveTo(canonical.copy(sessionKey = "agent:work:other"), canonical.sessionKey))
   }
 
   @Test
@@ -625,6 +787,19 @@ class ChatComposerDraftTest {
         sessionKey = "main",
         mainSessionKey = "main",
       ).routingVerified,
+    )
+  }
+
+  @Test
+  fun routingOwnerRejectsABlankGatewayDefaultAgent() {
+    assertEquals(
+      null,
+      resolveChatComposerRoutingOwner(
+        gatewayStableId = "gateway-a",
+        gatewayDefaultAgentId = "  ",
+        sessionKey = "main",
+        mainSessionKey = "main",
+      ),
     )
   }
 

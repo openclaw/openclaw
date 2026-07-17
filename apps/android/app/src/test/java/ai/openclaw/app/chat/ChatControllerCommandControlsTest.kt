@@ -519,7 +519,7 @@ class ChatControllerCommandControlsTest {
       // Another client cleared the group and name; the gateway sends explicit nulls.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","label":null,"category":null}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null}}""",
       )
       advanceUntilIdle()
       val merged = controller.sessions.value.single()
@@ -557,7 +557,7 @@ class ChatControllerCommandControlsTest {
       failPatches = false
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })
@@ -624,7 +624,7 @@ class ChatControllerCommandControlsTest {
       // A run completes while the session stays open: the gateway flags it unread again.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(1, requests.count { it.first == "sessions.patch" })
@@ -632,12 +632,12 @@ class ChatControllerCommandControlsTest {
       // Server-confirmed read resets the episode; a stale duplicate must not re-patch.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":false}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":false}}""",
       )
       advanceUntilIdle()
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","unread":true}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true}}""",
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })

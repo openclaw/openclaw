@@ -118,7 +118,6 @@ vi.mock("../../agents/embedded-agent.js", () => {
   return {
     compactEmbeddedAgentSession: (params: unknown) =>
       compactState.compactEmbeddedAgentSessionMock(params),
-    queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     abortEmbeddedAgentRun: (sessionId: string) => {
       abortEmbeddedAgentRunMock(sessionId);

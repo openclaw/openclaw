@@ -16,43 +16,23 @@ private struct NodeInvokeCancelPayload: Codable {
     var invokeId: String
 }
 
-func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
-    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    guard !trimmed.isEmpty else { return nil }
-    guard var parsed = URLComponents(string: trimmed) else { return trimmed }
-
-    let parsedHost = parsed.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let parsedIsLoopback = !parsedHost.isEmpty && LoopbackHost.isLoopback(parsedHost)
-
-    if !parsedHost.isEmpty, !parsedIsLoopback {
-        guard let activeURL else { return trimmed }
-        let isTLS = activeURL.scheme?.lowercased() == "wss"
-        guard isTLS else { return trimmed }
-        parsed.scheme = "https"
-        if parsed.port == nil {
-            let tlsPort = activeURL.port ?? 443
-            parsed.port = (tlsPort == 443) ? nil : tlsPort
-        }
-        return parsed.string ?? trimmed
-    }
-
-    guard let activeURL, let fallbackHost = activeURL.host, !LoopbackHost.isLoopback(fallbackHost) else {
-        return trimmed
-    }
-    let isTLS = activeURL.scheme?.lowercased() == "wss"
-    parsed.scheme = isTLS ? "https" : "http"
-    parsed.host = fallbackHost
-    let fallbackPort = activeURL.port ?? (isTLS ? 443 : 80)
-    parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
-    return parsed.string ?? trimmed
-}
-
 /// Binds suspended work to one installed gateway channel generation.
 /// Callers use this lease so an actor hop cannot retarget a payload to a replacement gateway.
 public struct GatewayNodeSessionRoute: Sendable, Equatable {
     fileprivate let channelGeneration: UInt64
     fileprivate let admissionGeneration: UInt64
     fileprivate let socketGeneration: UInt64
+}
+
+/// One capability-scoped Canvas URL and the transport trust bound to its route.
+public struct GatewayCanvasHostRoute: Sendable, Equatable {
+    public let url: String
+    public let tlsFingerprintSHA256: String?
+
+    public init(url: String, tlsFingerprintSHA256: String?) {
+        self.url = url
+        self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+    }
 }
 
 /// A route lease became stale before its request touched the channel. Unlike
@@ -98,6 +78,7 @@ public struct GatewayNodeSessionCredentials: Sendable, Equatable {
 
 public actor GatewayNodeSession {
     @TaskLocal private static var executingLifecycleCallbackID: UUID?
+    private static let pluginSurfaceRefreshTimeoutMs = 8000.0
 
     private static let staleRouteInvokeMessage = "UNAVAILABLE: node route changed before dispatch"
     private enum ComputerInvokeReceiptState {
@@ -157,6 +138,7 @@ public actor GatewayNodeSession {
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
     private var admissionGeneration: UInt64 = 0
+    private var activeTLSRouteMetadataProvider: GatewayTLSRouteMetadataProviding?
     // A delayed push keeps its physical socket epoch. Once disconnect cleanup
     // retires that epoch, it cannot adopt the replacement route's admission.
     private var activeSocketGeneration: UInt64?
@@ -281,6 +263,18 @@ public actor GatewayNodeSession {
     private var serverEventSubscribers: [UUID: ServerEventSubscriber] = [:]
     private var pluginSurfaceUrls: [String: String] = [:]
 
+    private struct PluginSurfaceRefresh {
+        let id: UUID
+        let channelGeneration: UInt64
+        let admissionGeneration: UInt64
+        let task: Task<String?, Never>
+        var waiterIDs: Set<UUID>
+    }
+
+    /// Surface tokens belong to the shared session. A second rotation can invalidate
+    /// the URL returned to another chat before its web view has loaded it.
+    private var pluginSurfaceRefreshes: [String: PluginSurfaceRefresh] = [:]
+
     private struct PluginSurfaceRefreshResponse: Decodable {
         let pluginSurfaceUrls: [String: AnyCodable]?
     }
@@ -347,6 +341,7 @@ public actor GatewayNodeSession {
     {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
         let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
+        let nextTLSRouteMetadataProvider = sessionBox?.session as? GatewayTLSRouteMetadataProviding
         let shouldReconnect = self.activeURL != url ||
             self.activeCredentials != credentials ||
             self.activeConnectOptionsKey != nextOptionsKey ||
@@ -419,6 +414,7 @@ public actor GatewayNodeSession {
             self.activeCredentials = credentials
             self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
+            self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
         } else {
             channelGeneration = self.channelGeneration
             self.connectOptions = connectOptions
@@ -519,6 +515,7 @@ public actor GatewayNodeSession {
         self.activeCredentials = nil
         self.activeConnectOptionsKey = nil
         self.activeSessionIdentity = nil
+        self.activeTLSRouteMetadataProvider = nil
         self.connectOptions = nil
         self.onConnected = nil
         self.onDisconnected = nil
@@ -613,20 +610,148 @@ public actor GatewayNodeSession {
         self.pluginSurfaceUrls["canvas"]
     }
 
-    @discardableResult
-    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
-        guard let channel else { return nil }
-        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedSurface.isEmpty else { return nil }
-
-        return await self.requestPluginSurfaceRefresh(
-            channel: channel,
-            method: "node.pluginSurface.refresh",
-            params: ["surface": AnyCodable(trimmedSurface)],
-            surface: trimmedSurface,
-            timeoutSeconds: timeoutSeconds)
+    public func currentCanvasHostRoute() -> GatewayCanvasHostRoute? {
+        guard let url = currentCanvasHostUrl() else { return nil }
+        return GatewayCanvasHostRoute(
+            url: url,
+            tlsFingerprintSHA256: GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+                self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256,
+                surfaceURL: url,
+                gatewayURL: self.activeURL))
     }
 
+    @discardableResult
+    public func refreshCanvasHostRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
+        _ = await self.refreshCanvasHostUrl(replacing: observedURL)
+        // Re-read after the refresh suspension. A reconnect may have installed
+        // both a replacement capability and a different certificate pin.
+        return self.currentCanvasHostRoute()
+    }
+
+    @discardableResult
+    public func refreshPluginSurfaceUrl(
+        surface: String,
+        replacing observedURL: String?) async -> String?
+    {
+        await self.refreshPluginSurfaceUrl(
+            surface: surface,
+            observedURL: observedURL,
+            timeoutMs: Self.pluginSurfaceRefreshTimeoutMs)
+    }
+
+    // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
+    @discardableResult
+    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSurface.isEmpty else { return nil }
+        return await self.refreshPluginSurfaceUrl(
+            surface: trimmedSurface,
+            observedURL: self.pluginSurfaceUrls[trimmedSurface],
+            timeoutMs: Double(timeoutSeconds) * 1000)
+    }
+
+    private func refreshPluginSurfaceUrl(
+        surface: String,
+        observedURL: String?,
+        timeoutMs: Double) async -> String?
+    {
+        guard let channel else { return nil }
+        guard let method = self.pluginSurfaceRefreshMethod() else { return nil }
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSurface.isEmpty else { return nil }
+        if self.pluginSurfaceUrls[trimmedSurface] != observedURL {
+            return self.pluginSurfaceUrls[trimmedSurface]
+        }
+        let channelGeneration = self.channelGeneration
+        let admissionGeneration = self.admissionGeneration
+        let waiterID = UUID()
+        let refresh: PluginSurfaceRefresh
+        if var activeRefresh = self.pluginSurfaceRefreshes[trimmedSurface],
+           activeRefresh.channelGeneration == channelGeneration,
+           activeRefresh.admissionGeneration == admissionGeneration
+        {
+            activeRefresh.waiterIDs.insert(waiterID)
+            self.pluginSurfaceRefreshes[trimmedSurface] = activeRefresh
+            refresh = activeRefresh
+        } else {
+            // A reconnect retires the old channel owner. Do not leave its
+            // deadline-free request alive after installing the new generation.
+            self.pluginSurfaceRefreshes.removeValue(forKey: trimmedSurface)?.task.cancel()
+            let id = UUID()
+            let task = Task<String?, Never> { [weak self] in
+                guard let self else { return nil }
+                return await self.requestPluginSurfaceRefresh(
+                    channel: channel,
+                    channelGeneration: channelGeneration,
+                    admissionGeneration: admissionGeneration,
+                    method: method,
+                    surface: trimmedSurface,
+                    observedURL: observedURL)
+            }
+            refresh = PluginSurfaceRefresh(
+                id: id,
+                channelGeneration: channelGeneration,
+                admissionGeneration: admissionGeneration,
+                task: task,
+                waiterIDs: [waiterID])
+            self.pluginSurfaceRefreshes[trimmedSurface] = refresh
+        }
+
+        let value = await withTaskCancellationHandler {
+            await self.awaitPluginSurfaceRefresh(refresh.task, timeoutMs: timeoutMs)
+        } onCancel: {
+            Task {
+                await self.releasePluginSurfaceRefreshWaiter(
+                    surface: trimmedSurface,
+                    refreshID: refresh.id,
+                    waiterID: waiterID)
+            }
+        }
+        self.releasePluginSurfaceRefreshWaiter(
+            surface: trimmedSurface,
+            refreshID: refresh.id,
+            waiterID: waiterID)
+        return value
+    }
+
+    private func awaitPluginSurfaceRefresh(_ task: Task<String?, Never>, timeoutMs: Double) async -> String? {
+        do {
+            return try await AsyncTimeout.withTimeout(
+                seconds: max(0, timeoutMs) / 1000,
+                onTimeout: {
+                    NSError(
+                        domain: "Gateway",
+                        code: 8,
+                        userInfo: [NSLocalizedDescriptionKey: "plugin surface refresh timed out"])
+                },
+                operation: { await task.value })
+        } catch {
+            return nil
+        }
+    }
+
+    private func releasePluginSurfaceRefreshWaiter(surface: String, refreshID: UUID, waiterID: UUID) {
+        guard var refresh = self.pluginSurfaceRefreshes[surface], refresh.id == refreshID else { return }
+        guard refresh.waiterIDs.remove(waiterID) != nil else { return }
+        if refresh.waiterIDs.isEmpty {
+            // The request itself has no deadline because callers may select different
+            // timeouts. The last waiter cancels locally; observedUrl makes any retry
+            // reuse an on-wire predecessor's rotation instead of invalidating it.
+            self.pluginSurfaceRefreshes[surface] = nil
+            refresh.task.cancel()
+        } else {
+            self.pluginSurfaceRefreshes[surface] = refresh
+        }
+    }
+
+    @discardableResult
+    public func refreshCanvasHostUrl(
+        replacing observedURL: String?) async -> String?
+    {
+        await self.refreshPluginSurfaceUrl(surface: "canvas", replacing: observedURL)
+    }
+
+    // periphery:ignore - Shipped public refresh API; keep until a breaking OpenClawKit window.
     @discardableResult
     public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
         await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
@@ -959,7 +1084,7 @@ extension GatewayNodeSession {
     }
 
     private func normalizeCanvasHostUrl(_ raw: String?) -> String? {
-        canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
+        GatewayPluginSurfaceURL.canonicalize(raw: raw, against: self.activeURL)
     }
 
     private func normalizePluginSurfaceUrls(_ raw: [String: AnyCodable]?) -> [String: String] {
@@ -972,21 +1097,45 @@ extension GatewayNodeSession {
         return normalized
     }
 
+    private func pluginSurfaceRefreshMethod() -> String? {
+        switch self.connectOptions?.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "node": "node.pluginSurface.refresh"
+        case "operator": "plugin.surface.refresh"
+        default: nil
+        }
+    }
+
     private func requestPluginSurfaceRefresh(
         channel: GatewayChannelActor,
+        channelGeneration: UInt64,
+        admissionGeneration: UInt64,
         method: String,
-        params: [String: AnyCodable]?,
         surface: String,
-        timeoutSeconds: Int) async -> String?
+        observedURL: String?) async -> String?
     {
         do {
+            // Waiters own independent deadlines around this shared request. Zero
+            // leaves its lifetime unbounded; the last waiter cancels channel work.
+            var params = ["surface": AnyCodable(surface)]
+            if let observedURL {
+                // The gateway compares capability tokens, not hosts, because
+                // native clients rewrite loopback surface URLs for remote access.
+                params["observedUrl"] = AnyCodable(observedURL)
+            }
             let data = try await channel.request(
                 method: method,
                 params: params,
-                timeoutMs: Double(timeoutSeconds * 1000))
+                timeoutMs: 0)
             let decoded = try decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
             let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
             guard let refreshed = urls[surface] else { return nil }
+            guard self.channel === channel,
+                  self.channelGeneration == channelGeneration,
+                  self.admissionGeneration == admissionGeneration
+            else { return nil }
+            if self.pluginSurfaceUrls[surface] != observedURL {
+                return self.pluginSurfaceUrls[surface]
+            }
             self.pluginSurfaceUrls[surface] = refreshed
             return refreshed
         } catch {
@@ -1214,6 +1363,7 @@ extension GatewayNodeSession {
     func _test_broadcastServerEvent(_ event: EventFrame) {
         self.broadcastServerEvent(event)
     }
+
     #endif
 
     private func cancelActiveInvokes(

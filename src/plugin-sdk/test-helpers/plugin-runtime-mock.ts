@@ -414,6 +414,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      resolveCliBackendDispatchEligibility: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"],
       normalizeThinkingLevel: vi.fn(
         (raw?: string | null) => raw,
       ) as unknown as PluginRuntime["agent"]["normalizeThinkingLevel"],
@@ -807,6 +810,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+      openBlobStore: vi.fn(() => {
+        throw new Error("openBlobStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openBlobStore"],
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],

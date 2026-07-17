@@ -131,6 +131,24 @@ class ShareLaunchTest {
   }
 
   @Test
+  fun anotherOwnersShareCanAdvanceWithoutRetargetingTheGlobalHead() =
+    runBlocking {
+      val queue = ChatShareDraftQueue(capacity = 2)
+      val ownerA = composerOwner("agent-a", "session-a")
+      val ownerB = composerOwner("agent-b", "session-b")
+      val first = ChatShareDraft(id = 1, text = "first", imageUris = emptyList(), droppedImageCount = 0)
+      val second = ChatShareDraft(id = 2, text = "second", imageUris = emptyList(), droppedImageCount = 0)
+      queue.enqueue(first, ownerA)
+      queue.enqueue(second, ownerB)
+
+      assertEquals(first, queue.head.value)
+      assertTrue(queue.withHeadLease(second.id, ownerB) {})
+      assertTrue(queue.acknowledgeHead(second.id, ownerB))
+      assertEquals(first, queue.head.value)
+      assertTrue(queue.withHeadLease(first.id, ownerA) {})
+    }
+
+  @Test
   fun overlappingActivityLoadersCannotCommitTheSameHead() =
     runBlocking {
       val queue = ChatShareDraftQueue(capacity = 2)
@@ -199,12 +217,31 @@ class ShareLaunchTest {
       assertTrue(queue.withHeadLease(share.id, ownerA) {})
     }
 
+  @Test
+  fun removingGatewaySharesKeepsOtherGatewayOwners() =
+    runBlocking {
+      val queue = ChatShareDraftQueue(capacity = 2)
+      val ownerA = composerOwner("agent-a", "session-a", gatewayStableId = "gateway-a")
+      val ownerB = composerOwner("agent-b", "session-b", gatewayStableId = "gateway-b")
+      val first = ChatShareDraft(id = 1, text = "private a", imageUris = emptyList(), droppedImageCount = 0)
+      val second = ChatShareDraft(id = 2, text = "private b", imageUris = emptyList(), droppedImageCount = 0)
+      queue.enqueue(first, ownerA)
+      queue.enqueue(second, ownerB)
+
+      queue.removeOwners { it.gatewayStableId == "gateway-a" }
+
+      assertEquals(listOf(second), queue.queued.value)
+      assertNull(queue.ownerOf(first.id))
+      assertEquals(ownerB, queue.ownerOf(second.id))
+    }
+
   private fun composerOwner(
     agentId: String,
     sessionKey: String,
+    gatewayStableId: String = "gateway",
   ): ai.openclaw.app.chat.ChatComposerOwner =
     ai.openclaw.app.chat.ChatComposerOwner(
-      gatewayStableId = "gateway",
+      gatewayStableId = gatewayStableId,
       agentId = agentId,
       sessionKey = sessionKey,
     )

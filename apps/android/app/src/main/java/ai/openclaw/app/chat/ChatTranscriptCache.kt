@@ -17,7 +17,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
-/** Upper bound of cached session rows per gateway/agent owner; oldest positions are evicted. */
+/** Upper bound of cached session rows per gateway across every agent owner. */
 internal const val MAX_CACHED_SESSIONS = 50
 
 internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
@@ -144,9 +144,6 @@ internal interface ChatCacheDao {
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertSessions(rows: List<CachedSessionEntity>)
 
-  @Insert(onConflict = OnConflictStrategy.IGNORE)
-  suspend fun insertSessionStub(row: CachedSessionEntity)
-
   @Insert(onConflict = OnConflictStrategy.REPLACE)
   suspend fun insertMessages(rows: List<CachedMessageEntity>)
 
@@ -198,8 +195,8 @@ internal interface ChatCacheDao {
     keep: Int,
   )
 
-  // Transcripts must never outlive their session row; this keeps total cache size bounded
-  // by MAX_CACHED_SESSIONS * MAX_CACHED_MESSAGES_PER_SESSION rows per gateway/agent owner.
+  // Owner-local cleanup runs before the gateway-wide bound below; transcripts never outlive
+  // their corresponding session row.
   @Query(
     "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND agentId = :agentId AND sessionKey NOT IN " +
       "(SELECT sessionKey FROM cached_sessions WHERE gatewayId = :gatewayId AND agentId = :agentId)",
@@ -208,6 +205,25 @@ internal interface ChatCacheDao {
     gatewayId: String,
     agentId: String,
   )
+
+  // A gateway can expose many agent owners. Cap their aggregate cache by recent writes so
+  // switching owners cannot grow the disposable session/transcript tables without bound.
+  @Query(
+    "DELETE FROM cached_sessions WHERE gatewayId = :gatewayId AND rowid NOT IN " +
+      "(SELECT rowid FROM cached_sessions WHERE gatewayId = :gatewayId ORDER BY rowid DESC LIMIT :keep)",
+  )
+  suspend fun evictGatewaySessionsBeyond(
+    gatewayId: String,
+    keep: Int,
+  )
+
+  @Query(
+    "DELETE FROM cached_messages WHERE gatewayId = :gatewayId AND NOT EXISTS " +
+      "(SELECT 1 FROM cached_sessions WHERE cached_sessions.gatewayId = cached_messages.gatewayId " +
+      "AND cached_sessions.agentId = cached_messages.agentId " +
+      "AND cached_sessions.sessionKey = cached_messages.sessionKey)",
+  )
+  suspend fun evictGatewayOrphanedTranscripts(gatewayId: String)
 }
 
 @Database(
@@ -472,6 +488,8 @@ class RoomChatTranscriptCache internal constructor(
       dao.insertSessions(rows)
       retainedRow?.let { dao.insertSessions(listOf(it.copy(rowOrder = rows.size))) }
       dao.evictOrphanedTranscripts(gateway, agent)
+      dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
+      dao.evictGatewayOrphanedTranscripts(gateway)
     }
   }
 
@@ -511,18 +529,26 @@ class RoomChatTranscriptCache internal constructor(
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
       // switch); keep a stub row so the transcript stays reachable, then re-apply the bounds.
-      dao.insertSessionStub(
-        CachedSessionEntity(
-          gatewayId = gateway,
-          agentId = agent,
-          sessionKey = key,
-          displayName = null,
-          updatedAtMs = null,
-          rowOrder = dao.nextSessionRowOrder(gateway, agent),
+      val currentSession = dao.session(gateway, agent, key)
+      // REPLACE refreshes SQLite rowid, making the transcript's session the most recent gateway
+      // row while preserving list metadata when that session was already cached.
+      dao.insertSessions(
+        listOf(
+          currentSession
+            ?: CachedSessionEntity(
+              gatewayId = gateway,
+              agentId = agent,
+              sessionKey = key,
+              displayName = null,
+              updatedAtMs = null,
+              rowOrder = dao.nextSessionRowOrder(gateway, agent),
+            ),
         ),
       )
       dao.evictSessionsBeyondKeeping(gateway, agent, keepSessionKey = key, keep = MAX_CACHED_SESSIONS - 1)
       dao.evictOrphanedTranscripts(gateway, agent)
+      dao.evictGatewaySessionsBeyond(gateway, MAX_CACHED_SESSIONS)
+      dao.evictGatewayOrphanedTranscripts(gateway)
     }
   }
 

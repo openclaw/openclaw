@@ -262,6 +262,7 @@ class ChatControllerOutboxTest {
       rows.remove(id)
       attachmentBytes.remove(id)
       gatewayIds.remove(id)
+      admittedIds.remove(id)
       return true
     }
 

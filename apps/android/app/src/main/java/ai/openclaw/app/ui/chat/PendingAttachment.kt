@@ -78,6 +78,13 @@ internal class ChatComposerAttachmentStore(
     }
   }
 
+  fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
+    synchronized(lock) {
+      importOwners.entries.removeAll { matches(it.value) }
+      _attachments.value = _attachments.value.filterKeys { !matches(it) }
+    }
+  }
+
   fun migrate(
     from: ChatComposerOwner,
     to: ChatComposerOwner,
@@ -122,9 +129,7 @@ internal class ChatComposerAttachmentStore(
     if (source.isEmpty()) return 0
     val destination = _attachments.value[to].orEmpty()
     val admission = admitChatAttachments(currentAttachments = destination, candidates = source)
-    val overflow = source.toMutableList().apply { admission.accepted.forEach { remove(it) } }
-    var next = _attachments.value
-    next = if (overflow.isEmpty()) next - from else next + (from to overflow)
+    var next = _attachments.value - from
     val merged = destination + admission.accepted
     next = if (merged.isEmpty()) next - to else next + (to to merged)
     _attachments.value = next

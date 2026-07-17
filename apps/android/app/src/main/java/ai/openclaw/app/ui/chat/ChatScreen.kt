@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ChatComposerSendStartResult
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
@@ -7,6 +8,7 @@ import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -15,16 +17,20 @@ import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.chat.chatOutboxQueueFailureText
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.chat.resolveGatewayDefaultAgentId
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
@@ -82,6 +88,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
@@ -126,6 +133,7 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import kotlin.math.roundToInt
 
 /** Returns a pending assistant prompt only when chat can accept it immediately. */
@@ -181,7 +189,7 @@ fun ChatScreen(
   val sessions by viewModel.chatSessions.collectAsState()
   val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
-  val chatShareDraft by viewModel.chatShareDraft.collectAsState()
+  val chatShareDrafts by viewModel.chatShareDrafts.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
   val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -230,8 +238,7 @@ fun ChatScreen(
   val inputDrafts = remember(viewModel) { viewModel.chatComposerTextDrafts }
   val imagePickerOwnerCheckpoint =
     rememberSaveable(saver = ChatComposerOwnerCheckpoint.Saver) { ChatComposerOwnerCheckpoint() }
-  val voiceNoteOwnerCheckpoint =
-    rememberSaveable(saver = ChatComposerOwnerCheckpoint.Saver) { ChatComposerOwnerCheckpoint() }
+  val voiceNoteCommitCheckpoint = remember { ChatVoiceNoteCommitCheckpoint() }
   val input = inputDrafts[composerOwner]
   val attachmentsByOwner by viewModel.chatComposerAttachments.collectAsState()
   val attachments = attachmentsByOwner[composerOwner].orEmpty()
@@ -239,6 +246,12 @@ fun ChatScreen(
   val sendAdmissions by viewModel.chatComposerSendAdmissions.collectAsState()
   val attachmentNotices by viewModel.chatComposerAttachmentNotices.collectAsState()
   val shareOwnerRevision by viewModel.chatShareDraftOwnerRevision.collectAsState()
+  val chatShareDraft =
+    remember(chatShareDrafts, composerOwner, mainSessionKey, shareOwnerRevision) {
+      chatShareDrafts.firstOrNull { draft ->
+        viewModel.chatShareDraftTargetsOwner(draft.id, composerOwner, mainSessionKey)
+      }
+    }
   val shareStaging =
     chatShareDraft?.let { viewModel.chatShareDraftTargetsOwner(it.id, composerOwner, mainSessionKey) } == true
   val sendAdmission = sendAdmissions[composerOwner]
@@ -246,11 +259,14 @@ fun ChatScreen(
   val currentPickerMainSessionKey by rememberUpdatedState(mainSessionKey)
   val sendInFlight = composerOwner in sendOwnersInFlight
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
+  var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
+  var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
+  var sendCheckpointFull by rememberSaveable(composerOwner) { mutableStateOf(false) }
 
   LaunchedEffect(composerOwner, mainSessionKey, chatShareDraft?.id) {
     viewModel.resolveChatComposerOwnerAliases(to = composerOwner, mainSessionKey = mainSessionKey)
-    if (shouldMigrateComposerDraft(voiceNoteOwnerCheckpoint.owner, composerOwner, mainSessionKey)) {
-      voiceNoteOwnerCheckpoint.owner = composerOwner
+    if (shouldMigrateComposerDraft(voiceNoteCommitCheckpoint.owner, composerOwner, mainSessionKey)) {
+      voiceNoteCommitCheckpoint.owner = composerOwner
     }
     viewModel.resolveChatShareDraftOwner(chatShareDraft?.id, composerOwner, mainSessionKey)
   }
@@ -276,13 +292,10 @@ fun ChatScreen(
     rememberVoiceNoteRecorderController(
       viewModel = viewModel,
       ownerKey = composerOwner,
-      canCommit = { voiceNoteOwnerCheckpoint.owner != null },
-      onFinished = { attachment ->
-        val ownerSnapshot = voiceNoteOwnerCheckpoint.owner
-        voiceNoteOwnerCheckpoint.owner = null
-        if (ownerSnapshot != null) {
-          viewModel.addChatComposerAttachments(ownerSnapshot, listOf(attachment))
-        }
+      mainSessionKey = mainSessionKey,
+      onFinished = { recordingId, attachment ->
+        val lease = voiceNoteCommitCheckpoint.consume(recordingId) ?: return@rememberVoiceNoteRecorderController
+        viewModel.addChatComposerAttachments(lease.owner, lease.authorizationId, listOf(attachment))
       },
     )
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
@@ -290,17 +303,24 @@ fun ChatScreen(
   val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-      if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
-      val ownerSnapshot = imagePickerOwnerCheckpoint.owner ?: return@rememberLauncherForActivityResult
-      imagePickerOwnerCheckpoint.owner = null
+      val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
+      if (uris.isNullOrEmpty()) {
+        viewModel.cancelChatComposerMediaAcquisition(lease.authorizationId)
+        return@rememberLauncherForActivityResult
+      }
       val importOwner =
-        if (shouldMigrateComposerDraft(ownerSnapshot, currentPickerOwner, currentPickerMainSessionKey)) {
+        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
           currentPickerOwner
         } else {
-          ownerSnapshot
+          lease.owner
         }
       val selectedUris = uris.take(8)
-      viewModel.importChatComposerAttachments(importOwner, expectedCount = uris.size) {
+      viewModel.importChatComposerAttachments(
+        owner = importOwner,
+        mediaAuthorizationId = lease.authorizationId,
+        mainSessionKey = currentPickerMainSessionKey,
+        expectedCount = uris.size,
+      ) {
         selectedUris
           .mapNotNull { uri ->
             try {
@@ -323,7 +343,15 @@ fun ChatScreen(
     viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, composerOwner, healthOk, pendingRunCount, thinkingLevel) {
+  LaunchedEffect(
+    pendingAssistantAutoSend,
+    assistantAutoSendInFlight,
+    sendOwnersInFlight,
+    composerOwner,
+    healthOk,
+    pendingRunCount,
+    thinkingLevel,
+  ) {
     if (!healthOk) return@LaunchedEffect
     val pending =
       resolvePendingAssistantAutoSend(
@@ -344,7 +372,20 @@ fun ChatScreen(
         NativeText.Resource(source = "Could not stage an attachment for sending.", formatArgs = emptyList())
       ai.openclaw.app.ChatComposerAttachmentNotice.Image ->
         nativeText("Some shared images were omitted or could not be added.")
-      null -> null
+      null ->
+        when {
+          sendMessageTooLong ->
+            joinedNativeText(
+              separator = " ",
+              parts =
+                listOf(
+                  chatOutboxQueueFailureText(),
+                  verbatimText("${input.length}/$CHAT_COMPOSER_MAX_SEND_CHARS"),
+                ),
+            )
+          sendCheckpointFull -> chatOutboxQueueFailureText()
+          else -> null
+        }
     }
 
   LaunchedEffect(chatDraft, composerOwner, mainSessionKey) {
@@ -361,9 +402,6 @@ fun ChatScreen(
 
   LaunchedEffect(composerOwner, sendAdmission) {
     val admission = sendAdmission ?: return@LaunchedEffect
-    clearAcceptedChatComposerInput(admission, composerOwner, inputDrafts[composerOwner])?.let {
-      inputDrafts[composerOwner] = it
-    }
     viewModel.acknowledgeChatComposerSendAdmission(composerOwner, admission.id)
   }
 
@@ -384,7 +422,7 @@ fun ChatScreen(
       if (
         !canCommitStagedChatShare(
           stagedId = share.id,
-          currentHead = viewModel.chatShareDraft.value,
+          currentHead = viewModel.chatShareDraftForOwner(ownerSnapshot, mainSessionKey),
           ownerSnapshot = ownerSnapshot,
           currentOwner = ownerSnapshot,
         )
@@ -447,10 +485,11 @@ fun ChatScreen(
         startNewChat(false)
       },
       onNewChatInWorktree = { startNewChat(true) },
-      onMore = {
+      onRefresh = {
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
       },
+      onOpenBackgroundTasks = { showBackgroundTasks = true },
     )
 
     ChatAgentSelector(
@@ -497,14 +536,14 @@ fun ChatScreen(
       recoveryOutboxItems =
         outboxItemsForRecovery(
           items = outboxItems,
-          ownerAgentId = composerOwner.agentId,
         ),
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
-      onReplyMessage = viewModel::setChatReplyDraft,
+      onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
+      resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       modifier = Modifier.weight(1f),
     )
 
@@ -514,7 +553,11 @@ fun ChatScreen(
 
     ChatComposer(
       value = input,
-      onValueChange = { inputDrafts[composerOwner] = it },
+      onValueChange = {
+        sendMessageTooLong = false
+        sendCheckpointFull = false
+        inputDrafts[composerOwner] = it
+      },
       attachments = attachments,
       thinkingLevel = thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
@@ -530,6 +573,8 @@ fun ChatScreen(
       sendInFlight = sendInFlight,
       shareImportNotice = shareImportNotice,
       onDismissShareImportNotice = {
+        sendMessageTooLong = false
+        sendCheckpointFull = false
         viewModel.clearChatComposerAttachmentOmission(composerOwner)
       },
       commands = chatCommands,
@@ -537,7 +582,8 @@ fun ChatScreen(
       onOpenModelPicker = { showModelPicker = true },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        imagePickerOwnerCheckpoint.owner = composerOwner
+        val authorizationId = viewModel.beginChatComposerMediaAcquisition(composerOwner) ?: return@ChatComposer
+        imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
         pickImages.launch("image/*")
       },
       onRemoveAttachment = { id -> viewModel.removeChatComposerAttachments(composerOwner, setOf(id)) },
@@ -548,18 +594,31 @@ fun ChatScreen(
       onStartVoiceNote = {
         scope.launch {
           val ownerSnapshot = composerOwner
-          if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@launch
-          if (voiceNoteRecorder.start()) {
-            if (viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
-              voiceNoteOwnerCheckpoint.owner = ownerSnapshot
+          val mediaAuthorizationId = viewModel.beginChatComposerMediaAcquisition(ownerSnapshot) ?: return@launch
+          val recordingId = UUID.randomUUID().toString()
+          if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
+            viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
+            return@launch
+          }
+          if (voiceNoteRecorder.start(recordingId)) {
+            if (
+              viewModel.isCurrentChatComposerOwner(ownerSnapshot) &&
+              viewModel.isChatComposerMediaAcquisitionActive(mediaAuthorizationId)
+            ) {
+              voiceNoteCommitCheckpoint.begin(ownerSnapshot, recordingId, mediaAuthorizationId)
             } else {
               voiceNoteRecorder.cancel()
+              viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
             }
+          } else {
+            viewModel.cancelChatComposerMediaAcquisition(mediaAuthorizationId)
           }
         }
       },
       onCancelVoiceNote = {
-        voiceNoteOwnerCheckpoint.owner = null
+        voiceNoteCommitCheckpoint.clear()?.let { lease ->
+          viewModel.cancelChatComposerMediaAcquisition(lease.authorizationId)
+        }
         voiceNoteRecorder.cancel()
       },
       onFinishVoiceNote = voiceNoteRecorder::finish,
@@ -576,11 +635,8 @@ fun ChatScreen(
       onAbort = viewModel::abortChat,
       onSend = {
         // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
-        val currentShare = viewModel.chatShareDraft.value
-        val shareTargetsOwner =
-          currentShare != null &&
-            viewModel.chatShareDraftTargetsOwner(currentShare.id, composerOwner, mainSessionKey)
-        if (shareTargetsOwner || composerOwner in sendOwnersInFlight) {
+        val currentShare = viewModel.chatShareDraftForOwner(composerOwner, mainSessionKey)
+        if (currentShare != null || composerOwner in sendOwnersInFlight) {
           return@ChatComposer
         }
         val message = input.trim()
@@ -588,13 +644,16 @@ fun ChatScreen(
         val pendingAttachments = attachments.toList()
         val ownerSnapshot = composerOwner
         if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@ChatComposer
-        viewModel.beginChatComposerSend(
-          owner = ownerSnapshot,
-          message = message,
-          inputSnapshot = input,
-          thinking = thinkingLevel,
-          attachments = pendingAttachments,
-        )
+        val result =
+          viewModel.beginChatComposerSend(
+            owner = ownerSnapshot,
+            message = message,
+            inputSnapshot = input,
+            thinking = thinkingLevel,
+            attachments = pendingAttachments,
+          )
+        sendMessageTooLong = result == ChatComposerSendStartResult.MessageTooLong
+        sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
       },
     )
   }
@@ -609,6 +668,13 @@ fun ChatScreen(
         showModelPicker = false
       },
       onToggleFavorite = viewModel::toggleModelFavorite,
+    )
+  }
+  if (showBackgroundTasks) {
+    BackgroundTasksSheet(
+      viewModel = viewModel,
+      agentId = sessionAgentId,
+      onDismiss = { showBackgroundTasks = false },
     )
   }
 }
@@ -757,9 +823,10 @@ private fun ChatHeader(
   workspaceGit: Boolean,
   onNewChat: () -> Unit,
   onNewChatInWorktree: () -> Unit,
-  onMore: () -> Unit,
+  onRefresh: () -> Unit,
+  onOpenBackgroundTasks: () -> Unit,
 ) {
-  var newChatMenuExpanded by remember { mutableStateOf(false) }
+  var actionsMenuExpanded by remember { mutableStateOf(false) }
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     Row(
@@ -791,26 +858,41 @@ private fun ChatHeader(
           },
       )
       HeaderIcon(icon = Icons.Default.Add, contentDescription = nativeString("New chat"), enabled = newChatEnabled, onClick = onNewChat)
-      if (workspaceGit) {
-        Box {
-          HeaderIcon(
-            icon = Icons.Default.MoreHoriz,
-            contentDescription = nativeString("More new chat options"),
-            enabled = newChatEnabled,
-            onClick = { newChatMenuExpanded = true },
+      Box {
+        HeaderIcon(
+          icon = Icons.Default.MoreVert,
+          contentDescription = nativeString("Chat actions"),
+          onClick = { actionsMenuExpanded = true },
+        )
+        DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+          DropdownMenuItem(
+            text = { Text(nativeString("Refresh chat")) },
+            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+            onClick = {
+              actionsMenuExpanded = false
+              onRefresh()
+            },
           )
-          DropdownMenu(expanded = newChatMenuExpanded, onDismissRequest = { newChatMenuExpanded = false }) {
+          DropdownMenuItem(
+            text = { Text(nativeString("Background tasks")) },
+            leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
+            onClick = {
+              actionsMenuExpanded = false
+              onOpenBackgroundTasks()
+            },
+          )
+          if (workspaceGit) {
             DropdownMenuItem(
               text = { Text(newChatInWorktreeLabel) },
+              enabled = newChatEnabled,
               onClick = {
-                newChatMenuExpanded = false
+                actionsMenuExpanded = false
                 onNewChatInWorktree()
               },
             )
           }
         }
       }
-      HeaderIcon(icon = Icons.Default.Refresh, contentDescription = nativeString("Refresh chat"), onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
       Text(text = nativeString("Chat"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
@@ -897,6 +979,7 @@ private fun ChatMessageList(
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
@@ -937,6 +1020,8 @@ private fun ChatMessageList(
               onReplyMessage = onReplyMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
+              inlineWidgetResolverReady = healthOk,
+              resolveInlineWidgetResource = resolveInlineWidgetResource,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -971,6 +1056,8 @@ private fun ChatMessageList(
               onReplyMessage = onReplyMessage,
               speechState = null,
               onToggleListen = onToggleListen,
+              inlineWidgetResolverReady = healthOk,
+              resolveInlineWidgetResource = resolveInlineWidgetResource,
             )
           ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
@@ -1151,6 +1238,8 @@ private fun ChatBubble(
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineWidgetResolverReady: Boolean,
+  resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -1159,6 +1248,7 @@ private fun ChatBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
+        "canvas" -> normalizedRole == "assistant" && part.widget != null
         else -> part.isAudioAttachment()
       }
     }
@@ -1215,6 +1305,12 @@ private fun ChatBubble(
                 ChatBase64Image(
                   base64 = checkNotNull(part.base64),
                   mimeType = part.mimeType,
+                )
+              part.type == "canvas" && normalizedRole == "assistant" ->
+                ChatInlineWidget(
+                  preview = checkNotNull(part.widget),
+                  resolverReady = inlineWidgetResolverReady,
+                  resolveResource = resolveInlineWidgetResource,
                 )
               else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }

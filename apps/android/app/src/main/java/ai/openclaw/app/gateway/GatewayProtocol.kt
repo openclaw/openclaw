@@ -203,6 +203,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
@@ -378,6 +379,8 @@ enum class GatewayMethod(
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
   UiCommand("ui.command"),
+  ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
 }
 
 enum class GatewayEvent(

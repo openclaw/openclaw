@@ -87,10 +87,32 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
-  fun admissionReceiptsStayBoundedPerComposerOwner() =
+  fun admissionReceiptsRemainIndependentAcrossSessionOwners() =
     runTest {
       repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
         val id = "composer-command-$index"
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "agent:main:device-$index",
+          text = "message $index",
+          thinkingLevel = "off",
+          nowMs = index.toLong(),
+          ownerAgentId = "main",
+          idempotencyKey = id,
+        )
+        store.delete(id)
+      }
+
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
+        assertTrue(store.wasAdmitted("composer-command-$index"))
+      }
+    }
+
+  @Test
+  fun admissionReceiptsStayBoundedWithinOneFullComposerOwner() =
+    runTest {
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
+        val id = "same-session-command-$index"
         store.enqueue(
           gatewayId = "gateway-a",
           sessionKey = "agent:main:device",
@@ -103,10 +125,10 @@ class RoomChatCommandOutboxTest {
         store.delete(id)
       }
 
-      assertFalse(store.wasAdmitted("composer-command-0"))
-      assertFalse(store.wasAdmitted("composer-command-1"))
+      assertFalse(store.wasAdmitted("same-session-command-0"))
+      assertFalse(store.wasAdmitted("same-session-command-1"))
       repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER) { offset ->
-        assertTrue(store.wasAdmitted("composer-command-${offset + 2}"))
+        assertTrue(store.wasAdmitted("same-session-command-${offset + 2}"))
       }
     }
 
@@ -266,13 +288,31 @@ class RoomChatCommandOutboxTest {
   @Test
   fun deleteForSessionRemovesOnlyThatSessionsRows() =
     runTest {
-      store.enqueueQueued("for main", nowMs = 10)
+      store.enqueue(
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        text = "for main",
+        thinkingLevel = "off",
+        nowMs = 10,
+        ownerAgentId = "main",
+        idempotencyKey = "main-admission",
+      )
       store.enqueueQueued("for other", nowMs = 20, sessionKey = "agent:other:main")
-      store.enqueueQueued("other owner", nowMs = 30, ownerAgentId = "other")
+      store.enqueue(
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        text = "other owner",
+        thinkingLevel = "off",
+        nowMs = 30,
+        ownerAgentId = "other",
+        idempotencyKey = "other-owner-admission",
+      )
 
       store.deleteForSession("gateway-a", "main", "main")
 
       assertEquals(listOf("for other", "other owner"), store.load("gateway-a").map { it.text })
+      assertFalse(store.wasAdmitted("main-admission"))
+      assertTrue(store.wasAdmitted("other-owner-admission"))
     }
 
   private fun payload(

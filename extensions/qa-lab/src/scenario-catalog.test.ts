@@ -231,7 +231,6 @@ describe("qa scenario catalog", () => {
 
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
-    const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
     const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
@@ -244,14 +243,6 @@ describe("qa scenario catalog", () => {
     );
     expect(scenario.execution.flow).toBeUndefined();
     expect(scenario.coverage?.primary).toContain("ui.control");
-    expect(uxMatrix.execution.kind).toBe("script");
-    if (uxMatrix.execution.kind !== "script") {
-      throw new Error(`expected script scenario, got ${uxMatrix.execution.kind}`);
-    }
-    expect(uxMatrix.execution.path).toBe("scripts/qa/ux-matrix-evidence-producer.ts");
-    expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
-    expect(uxMatrix.execution.config).toBeUndefined();
-    expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
     expect(otelSmoke.execution.kind).toBe("script");
     if (otelSmoke.execution.kind !== "script") {
       throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
@@ -284,6 +275,7 @@ describe("qa scenario catalog", () => {
 
   it("routes Docker runtime scenarios through the shared lane adapter", () => {
     const scenarioLanes = [
+      ["codex-plugin-cold-install", "codex-on-demand"],
       ["openai-compatible-chat-tools", "openai-chat-tools"],
       ["openai-web-search-minimal", "openai-web-search-minimal"],
       ["openwebui-openai-compatible", "openwebui"],
@@ -326,7 +318,6 @@ describe("qa scenario catalog", () => {
         "auth-profile-codex-mixed-profiles",
         "auth-profile-doctor-migration-safety",
         "codex-plugin-cold-install",
-        "codex-plugin-install-race",
         "codex-plugin-pinned-new",
         "codex-plugin-pinned-old",
         "plugin-manifest-contract-health",
@@ -562,17 +553,21 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
-  it("loads the Codex plugin lifecycle fixture scenarios into the standard runtime tier", () => {
-    const scenarioIds = [
-      "codex-plugin-cold-install",
-      "codex-plugin-install-race",
+  it("loads Codex plugin lifecycle scenarios into the standard runtime tier", () => {
+    const coldInstall = readQaScenarioById("codex-plugin-cold-install");
+    expect(coldInstall.runtimeParityTier).toBe("standard");
+    expect(coldInstall.coverage?.primary).toContain("runtime.codex-plugin.lifecycle");
+    expect(coldInstall.coverage?.secondary).toBeUndefined();
+    expect(coldInstall.execution.kind).toBe("script");
+
+    const fixtureScenarioIds = [
       "codex-plugin-pinned-old",
       "codex-plugin-pinned-new",
       "auth-profile-codex-mixed-profiles",
       "auth-profile-doctor-migration-safety",
     ];
 
-    for (const scenarioId of scenarioIds) {
+    for (const scenarioId of fixtureScenarioIds) {
       const scenario = readQaScenarioById(scenarioId);
       expect(scenario.runtimeParityTier).toBe("standard");
       expect(scenario.coverage?.primary.length).toBeGreaterThan(0);

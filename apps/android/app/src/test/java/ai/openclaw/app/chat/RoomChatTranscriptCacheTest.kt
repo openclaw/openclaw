@@ -170,6 +170,33 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun sessionCacheIsBoundedAcrossEveryAgentInOneGateway() =
+    runTest {
+      val store = cache()
+      repeat(MAX_CACHED_SESSIONS + 1) { index ->
+        store.saveTranscript(
+          gatewayId = "gateway-a",
+          agentId = "agent-$index",
+          sessionKey = "main",
+          messages = listOf(message("message-$index")),
+        )
+      }
+
+      val cachedSessionCount =
+        (0..MAX_CACHED_SESSIONS).sumOf { index ->
+          store.loadSessions("gateway-a", "agent-$index").size
+        }
+      assertEquals(MAX_CACHED_SESSIONS, cachedSessionCount)
+      assertTrue(store.loadTranscript("gateway-a", "agent-0", "main").isEmpty())
+      assertEquals(
+        listOf("message-$MAX_CACHED_SESSIONS"),
+        store
+          .loadTranscript("gateway-a", "agent-$MAX_CACHED_SESSIONS", "main")
+          .map { it.content.single().text },
+      )
+    }
+
+  @Test
   fun activeDeepTranscriptSurvivesSessionListRefresh() =
     runTest {
       val store = cache()

@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.ChatComposerSendAdmission
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
@@ -14,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 
 internal const val CHAT_COMPOSER_MAX_DRAFT_OWNERS = 16
 internal const val CHAT_COMPOSER_DRAFT_SNAPSHOT_MAX_CHARS = 64 * 1024
+internal const val CHAT_COMPOSER_MAX_SEND_CHARS = 20_000
 private const val CHAT_COMPOSER_DRAFT_SNAPSHOT_FIELDS = 8
 private const val CHAT_COMPOSER_DRAFT_RECORD = "draft"
 private const val CHAT_COMPOSER_PENDING_SEND_RECORD = "pending-send"
@@ -73,6 +73,8 @@ internal class ChatComposerTextDraftStore(
     to: ChatComposerOwner,
   ) {
     if (from == to) return
+    val draft = drafts.remove(from)
+    val existing = drafts[to]
     var changed = false
     pendingSends.toMap().forEach { (commandId, pending) ->
       if (pending.owner == from) {
@@ -80,19 +82,13 @@ internal class ChatComposerTextDraftStore(
         pendingSends[commandId] = pending.copy(owner = to)
       }
     }
-    val draft = drafts.remove(from)
     if (draft == null) {
       if (changed) onSnapshotChanged(snapshot())
       return
     }
     recency.remove(from)
-    val existing = drafts[to]
     this[to] =
-      when {
-        existing.isNullOrEmpty() -> draft
-        draft == existing -> existing
-        else -> "$existing\n\n$draft"
-      }
+      requireNotNull(mergeChatComposerDraftText(existing, draft))
   }
 
   /** Resolves every parked alias, including drafts not visited since gateway hello. */
@@ -107,25 +103,25 @@ internal class ChatComposerTextDraftStore(
     return sources
   }
 
-  /** Clears only the exact text snapshot admitted to the durable outbox. */
-  fun clearAccepted(
-    owner: ChatComposerOwner,
-    acceptedInputSnapshot: String,
-  ): Boolean {
-    if (drafts[owner] != acceptedInputSnapshot) return false
-    this[owner] = ""
-    return true
-  }
-
   /** Checkpoints the pre-send draft with the id that the durable outbox will use. */
   fun beginAdmission(
     commandId: String,
     owner: ChatComposerOwner,
     inputSnapshot: String,
-  ) {
+  ): Boolean {
     check(commandId !in pendingSends)
-    pendingSends[commandId] = PendingChatComposerSend(commandId, owner, inputSnapshot)
+    if (inputSnapshot.length > CHAT_COMPOSER_MAX_SEND_CHARS) return false
+    val pending = PendingChatComposerSend(commandId, owner, inputSnapshot)
+    val checkpointChars =
+      (pendingSends.values + pending).sumOf { pendingSendCheckpointEntry(it, includeInput = true).sumOf(String::length) }
+    if (checkpointChars > CHAT_COMPOSER_DRAFT_SNAPSHOT_MAX_CHARS) return false
+    pendingSends[commandId] = pending
+    if (drafts[owner] == inputSnapshot) {
+      drafts.remove(owner)
+      recency.remove(owner)
+    }
     onSnapshotChanged(snapshot())
+    return true
   }
 
   /** Resolves one live or process-restored send without clearing text edited after admission. */
@@ -135,15 +131,13 @@ internal class ChatComposerTextDraftStore(
   ): PendingChatComposerSend? {
     val pending = pendingSends.remove(commandId) ?: return null
     val current = drafts[pending.owner]
-    if (admitted) {
-      if (current == pending.inputSnapshot) {
-        drafts.remove(pending.owner)
+    if (!admitted) {
+      val restored = mergeChatComposerDraftText(pending.inputSnapshot, current)
+      if (restored != null) {
+        drafts[pending.owner] = restored
         recency.remove(pending.owner)
+        recency.addLast(pending.owner)
       }
-    } else if (current.isNullOrEmpty() && !pending.inputSnapshot.isNullOrEmpty()) {
-      drafts[pending.owner] = pending.inputSnapshot
-      recency.remove(pending.owner)
-      recency.addLast(pending.owner)
     }
     onSnapshotChanged(snapshot())
     return pending
@@ -153,23 +147,27 @@ internal class ChatComposerTextDraftStore(
 
   fun pendingAdmission(commandId: String): PendingChatComposerSend? = pendingSends[commandId]
 
+  fun removeOwners(matches: (ChatComposerOwner) -> Boolean) {
+    val owners = drafts.keys.filterTo(linkedSetOf(), matches)
+    val removedPending = pendingSends.entries.removeAll { matches(it.value.owner) }
+    if (owners.isEmpty() && !removedPending) return
+    owners.forEach(drafts::remove)
+    recency.removeAll(owners::contains)
+    onSnapshotChanged(snapshot())
+  }
+
   internal fun snapshot(): ArrayList<String> {
     var remainingChars = CHAT_COMPOSER_DRAFT_SNAPSHOT_MAX_CHARS
     val records = mutableListOf<List<String>>()
     // Pending ids are the crash-consistency boundary. Always checkpoint the marker; keep its
     // draft too when it fits, so restart can restore it only after proving no outbox row exists.
     pendingSends.values.forEach { pending ->
-      val fullEntry =
-        listOf(CHAT_COMPOSER_PENDING_SEND_RECORD) +
-          pending.owner.toCheckpointValues() +
-          listOf(pending.commandId, pending.inputSnapshot.orEmpty())
+      val fullEntry = pendingSendCheckpointEntry(pending, includeInput = true)
       val entry =
         if (fullEntry.sumOf(String::length) <= remainingChars) {
           fullEntry
         } else {
-          listOf(CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD) +
-            pending.owner.toCheckpointValues() +
-            listOf(pending.commandId, "")
+          pendingSendCheckpointEntry(pending, includeInput = false)
         }
       records += entry
       remainingChars -= entry.sumOf(String::length)
@@ -179,7 +177,6 @@ internal class ChatComposerTextDraftStore(
     // but checkpoint only the newest complete entries that fit the bounded process-death budget.
     for (owner in recency.reversed()) {
       val text = drafts.getValue(owner)
-      if (pendingSends.values.any { pending -> pending.owner == owner && pending.inputSnapshot == text }) continue
       val entry = listOf(CHAT_COMPOSER_DRAFT_RECORD) + owner.toCheckpointValues() + listOf("", text)
       val entryChars = entry.sumOf(String::length)
       if (entryChars > remainingChars) continue
@@ -193,6 +190,14 @@ internal class ChatComposerTextDraftStore(
   internal fun size(): Int = drafts.size
 }
 
+private fun pendingSendCheckpointEntry(
+  pending: PendingChatComposerSend,
+  includeInput: Boolean,
+): List<String> =
+  listOf(if (includeInput) CHAT_COMPOSER_PENDING_SEND_RECORD else CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD) +
+    pending.owner.toCheckpointValues() +
+    listOf(pending.commandId, if (includeInput) pending.inputSnapshot.orEmpty() else "")
+
 internal fun chatComposerTextDraftsFromSnapshot(values: List<String>?): ChatComposerDraftSnapshot {
   if (values == null || values.size % CHAT_COMPOSER_DRAFT_SNAPSHOT_FIELDS != 0) {
     return ChatComposerDraftSnapshot()
@@ -204,25 +209,127 @@ internal fun chatComposerTextDraftsFromSnapshot(values: List<String>?): ChatComp
     when (entry[0]) {
       CHAT_COMPOSER_DRAFT_RECORD -> if (entry[7].isNotEmpty()) restored[owner] = entry[7]
       CHAT_COMPOSER_PENDING_SEND_RECORD -> {
-        if (entry[6].isNotEmpty()) pending += PendingChatComposerSend(entry[6], owner, entry[7])
+        if (entry[6].isNotEmpty()) {
+          pending += PendingChatComposerSend(entry[6], owner, entry[7])
+        }
       }
       CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD -> {
-        if (entry[6].isNotEmpty()) pending += PendingChatComposerSend(entry[6], owner, null)
+        if (entry[6].isNotEmpty()) {
+          pending += PendingChatComposerSend(entry[6], owner, null)
+        }
       }
     }
   }
   return ChatComposerDraftSnapshot(drafts = restored, pendingSends = pending)
 }
 
+private fun mergeChatComposerDraftText(
+  existing: String?,
+  incoming: String?,
+): String? =
+  when {
+    existing.isNullOrEmpty() -> incoming?.takeIf(String::isNotEmpty)
+    incoming.isNullOrEmpty() || incoming == existing -> existing
+    else -> "$existing\n\n$incoming"
+  }
+
+internal fun ChatComposerOwner.matchesSession(
+  gatewayStableId: String,
+  agentId: String,
+  sessionKey: String,
+  mainSessionKey: String,
+): Boolean {
+  if (this.gatewayStableId != gatewayStableId) return false
+  val canonicalMain = mainSessionKey.trim().ifEmpty { "main" }
+  val ownerKey = this.sessionKey.trim().let { if (it == "main") canonicalMain else it }
+  val deletedKey = sessionKey.trim().let { if (it == "main") canonicalMain else it }
+  return ownerKey == deletedKey && (this.agentId == agentId || !routingVerified)
+}
+
 internal class ChatComposerOwnerCheckpoint(
   var owner: ChatComposerOwner? = null,
+  private var mediaAuthorizationId: String? = null,
 ) {
+  fun begin(
+    owner: ChatComposerOwner,
+    mediaAuthorizationId: String,
+  ) {
+    this.owner = owner
+    this.mediaAuthorizationId = mediaAuthorizationId
+  }
+
+  fun consume(): ChatComposerMediaLease? {
+    val capturedOwner = owner ?: return null
+    val capturedAuthorizationId = mediaAuthorizationId ?: return null
+    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+  }
+
+  fun clear() {
+    owner = null
+    mediaAuthorizationId = null
+  }
+
   companion object {
     val Saver =
       listSaver<ChatComposerOwnerCheckpoint, String>(
-        save = { checkpoint -> checkpoint.owner?.toCheckpointValues().orEmpty() },
-        restore = { values -> ChatComposerOwnerCheckpoint(chatComposerOwnerFromCheckpointValues(values)) },
+        save = { checkpoint ->
+          val capturedOwner = checkpoint.owner
+          val capturedAuthorizationId = checkpoint.mediaAuthorizationId
+          if (capturedOwner == null || capturedAuthorizationId == null) {
+            emptyList()
+          } else {
+            capturedOwner.toCheckpointValues() + capturedAuthorizationId
+          }
+        },
+        restore = { values ->
+          ChatComposerOwnerCheckpoint(
+            owner = chatComposerOwnerFromCheckpointValues(values.take(5)),
+            mediaAuthorizationId = values.getOrNull(5),
+          )
+        },
       )
+  }
+}
+
+internal data class ChatComposerMediaLease(
+  val owner: ChatComposerOwner,
+  val authorizationId: String,
+)
+
+/** Binds an asynchronous voice-note preparation to the recording that started it. */
+internal class ChatVoiceNoteCommitCheckpoint {
+  var owner: ChatComposerOwner? = null
+  private var recordingId: String? = null
+  private var mediaAuthorizationId: String? = null
+
+  fun begin(
+    owner: ChatComposerOwner,
+    recordingId: String,
+    mediaAuthorizationId: String,
+  ) {
+    this.owner = owner
+    this.recordingId = recordingId
+    this.mediaAuthorizationId = mediaAuthorizationId
+  }
+
+  fun consume(recordingId: String): ChatComposerMediaLease? {
+    if (this.recordingId != recordingId) return null
+    val capturedOwner = owner ?: return null
+    val capturedAuthorizationId = mediaAuthorizationId ?: return null
+    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+  }
+
+  fun clear(): ChatComposerMediaLease? {
+    val lease =
+      owner?.let { capturedOwner ->
+        mediaAuthorizationId?.let { capturedAuthorizationId ->
+          ChatComposerMediaLease(capturedOwner, capturedAuthorizationId)
+        }
+      }
+    owner = null
+    recordingId = null
+    mediaAuthorizationId = null
+    return lease
   }
 }
 
@@ -256,9 +363,14 @@ internal fun shouldMigrateComposerDraft(
     previous.sessionKey == "main" &&
       canonicalMain != "main" &&
       current.sessionKey == canonicalMain
-  // A draft captured without a selected gateway has no safe resolution target. Only a
-  // provisional owner already bound to the active registry entry may follow hello metadata.
-  if (previous.gatewayStableId != current.gatewayStableId) return false
+  val unboundGatewayClaimed = previous.gatewayStableId == null && current.gatewayStableId != null
+  if (previous.gatewayStableId != current.gatewayStableId && !unboundGatewayClaimed) return false
+  // Content captured before gateway startup belongs to the gateway the user subsequently
+  // selects. Session identity still must match; an unverified agent id is only a placeholder.
+  if (unboundGatewayClaimed) {
+    if (previous.routingVerified && previous.agentId != current.agentId) return false
+    return previous.sessionKey == current.sessionKey || mainAliasResolved
+  }
   if (!previous.routingVerified && current.routingVerified) {
     return previous.sessionKey == current.sessionKey || mainAliasResolved
   }
@@ -282,12 +394,6 @@ internal fun mergeChatDraft(
     ChatDraftPlacement.BeforeExisting -> text + currentInput
   }
 }
-
-internal fun clearAcceptedChatComposerInput(
-  admission: ChatComposerSendAdmission,
-  currentOwner: ChatComposerOwner,
-  currentInput: String,
-): String? = if (admission.accepted && admission.owner == currentOwner && currentInput == admission.inputSnapshot) "" else null
 
 /** Appends system shares so existing drafts stay first and queued shares remain FIFO. */
 internal fun mergeSharedChatText(

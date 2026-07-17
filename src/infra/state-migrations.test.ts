@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as sessionStore from "../config/sessions.js";
@@ -480,12 +480,15 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
   };
 }
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
   pluginDoctorStateMigrationEntries.entries = [];
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+afterAll(async () => {
   await tempDirs.cleanup();
 });
 

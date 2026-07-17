@@ -4,20 +4,82 @@ mod cli;
 mod discovery;
 mod gateway;
 mod installer;
+mod notify;
+mod pending_approvals;
 mod tray;
 mod updater;
 
 use cli::{CliError, OpenClawCli};
 use gateway::{GatewayAction, GatewaySnapshot};
 use installer::InstallChannel;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
+use tauri_plugin_deep_link::DeepLinkExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    version: String,
+    release_build: bool,
+}
+
+fn is_release_version(version: &str) -> bool {
+    // The committed 0.1.0 version identifies branch builds; release builds are stamped by CI.
+    version != "0.1.0"
+}
+
+// The openclaw:// URL contract is deliberately tiny and handled entirely in
+// Rust: `openclaw://dashboard` opens/connects the dashboard; anything else
+// just focuses the app. New routes are added to this enum — the renderer
+// (which is often navigated away to the remote dashboard) never sees URLs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeepLinkRoute {
+    Dashboard,
+    FocusOnly,
+}
+
+fn deep_link_route(url: &Url) -> DeepLinkRoute {
+    if url.scheme() == "openclaw" && url.host_str() == Some("dashboard") {
+        DeepLinkRoute::Dashboard
+    } else {
+        DeepLinkRoute::FocusOnly
+    }
+}
+
+fn handle_deep_links(app: &AppHandle, urls: Vec<Url>) {
+    for url in urls {
+        match deep_link_route(&url) {
+            DeepLinkRoute::Dashboard => {
+                let desktop = app.state::<DesktopState>();
+                tray::open_dashboard(app, desktop.inner());
+            }
+            DeepLinkRoute::FocusOnly => tray::show_window(app),
+        }
+    }
+}
+
+#[cfg(test)]
+mod deep_link_tests {
+    use super::{deep_link_route, DeepLinkRoute, Url};
+
+    #[test]
+    fn dashboard_route_matches_only_the_openclaw_dashboard_host() {
+        let dashboard = Url::parse("openclaw://dashboard/ignored?source=test").unwrap();
+        let other = Url::parse("openclaw://settings/dashboard").unwrap();
+        let other_scheme = Url::parse("https://dashboard/").unwrap();
+
+        assert_eq!(deep_link_route(&dashboard), DeepLinkRoute::Dashboard);
+        assert_eq!(deep_link_route(&other), DeepLinkRoute::FocusOnly);
+        assert_eq!(deep_link_route(&other_scheme), DeepLinkRoute::FocusOnly);
+    }
+}
 
 #[derive(Default)]
 struct NavigationState {
@@ -83,6 +145,7 @@ struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
     navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
+    pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
     tray: Mutex<Option<tray::TrayHandles>>,
     quitting: AtomicBool,
@@ -100,6 +163,7 @@ impl DesktopState {
                 cli: Mutex::new(None),
                 navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
+                pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
                 local_url,
                 tray: Mutex::new(None),
                 quitting: AtomicBool::new(false),
@@ -234,6 +298,41 @@ impl DesktopState {
         }
     }
 
+    fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
+        let pending = match pending_approvals::fetch(cli) {
+            Ok(pending) => pending,
+            Err(error) => {
+                eprintln!("Could not poll pending approvals: {error}");
+                return;
+            }
+        };
+        if !self.watchdog_is_current(generation) {
+            return;
+        }
+        let diff = self
+            .inner
+            .pending_approvals
+            .lock()
+            .expect("pending approval mutex poisoned")
+            .update(&pending);
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.update_pending_count(diff.count);
+        }
+        if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
+            return;
+        }
+        // Notifications are a doorbell only; approval stays in the dashboard or CLI.
+        for request in diff.new {
+            notify::notify(app, "OpenClaw", &request.notification_body());
+        }
+    }
+
     // Caller holds the navigation lock, keeping the final arbitration check and navigation atomic.
     fn navigate_locked(
         &self,
@@ -352,6 +451,9 @@ impl DesktopState {
             };
             if snapshot.reachable {
                 state.update_tray(&snapshot);
+                drop(_operation);
+                // Pairing polls ride connected watchdog ticks; the reconnect loop never runs them.
+                state.poll_pending_approvals(&app, &cli, generation);
                 continue;
             }
 
@@ -418,7 +520,18 @@ fn local_mode(snapshot: &GatewaySnapshot) -> &'static str {
 
 #[cfg(test)]
 mod navigation_tests {
-    use super::NavigationState;
+    use super::{is_release_version, NavigationState};
+
+    #[test]
+    fn committed_package_version_is_a_development_build() {
+        assert!(!is_release_version("0.1.0"));
+    }
+
+    #[test]
+    fn stamped_package_versions_are_release_builds() {
+        assert!(is_release_version("2026.7.2"));
+        assert!(is_release_version("2026.7.2-beta.1"));
+    }
 
     #[test]
     fn newer_remote_selection_blocks_older_local_navigation() {
@@ -503,6 +616,15 @@ fn main_window(app: &AppHandle) -> Result<WebviewWindow, String> {
 }
 
 #[tauri::command]
+fn build_info(app: AppHandle) -> BuildInfo {
+    let version = app.package_info().version.to_string();
+    BuildInfo {
+        release_build: is_release_version(&version),
+        version,
+    }
+}
+
+#[tauri::command]
 async fn bootstrap(
     app: AppHandle,
     state: State<'_, DesktopState>,
@@ -538,20 +660,63 @@ async fn gateway_action(
 }
 
 fn main() {
-    let builder = tauri::Builder::default();
+    let global_shortcuts_supported = tray::global_shortcuts_supported();
+    // Single-instance must run first so it can pass deep-link argv to the primary process.
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_window(app);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
+    // global-hotkey's Linux backend is X11-only; omit it on Wayland instead of using XWayland.
+    // A GlobalShortcuts portal can follow later.
+    let builder = if global_shortcuts_supported {
+        builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        tray::show_window(app);
+                    }
+                })
+                .build(),
+        )
+    } else {
+        builder
+    };
     let builder = builder
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&["canvas"])
+                .build(),
+        );
     #[cfg(target_os = "linux")]
     let builder = canvas::register_protocol(builder);
 
-    let builder = builder.setup(|app| {
+    let builder = builder.setup(move |app| {
         let window = app
             .get_webview_window("main")
             .expect("tauri.conf.json must define the main window");
         let state = DesktopState::new(window.url()?);
         app.manage(state.clone());
+        let deep_link_app = app.handle().clone();
+        app.deep_link().on_open_url(move |event| {
+            handle_deep_links(&deep_link_app, event.urls());
+        });
+        if let Some(urls) = app.deep_link().get_current()? {
+            handle_deep_links(app.handle(), urls);
+        }
+        #[cfg(any(target_os = "linux", all(debug_assertions, target_os = "windows")))]
+        if let Err(error) = app.deep_link().register_all() {
+            eprintln!("Deep-link registration unavailable: {error}");
+        }
+
         app.manage(discovery::GatewayDiscovery::default());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
@@ -561,12 +726,13 @@ fn main() {
             }
             Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
         }
-        state.set_tray(tray::build(app, state.clone())?);
+        state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
         Ok(())
     });
     #[cfg(target_os = "linux")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        build_info,
         canvas::canvas_a2ui_action,
         updater::check_for_updates,
         discovery::connect_discovered_gateway,
@@ -580,6 +746,7 @@ fn main() {
     #[cfg(not(target_os = "linux"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         bootstrap,
+        build_info,
         updater::check_for_updates,
         discovery::connect_discovered_gateway,
         discovery::discover_gateways,

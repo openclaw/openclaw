@@ -42,6 +42,18 @@ describe("Workspaces document schema", () => {
     }, "widgets[0].kind");
   });
 
+  it("accepts the trusted builtin chart kind", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = "builtin:chart";
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:chart");
+  });
+
+  it("accepts the trusted builtin preview kind", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.kind = "builtin:preview";
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:preview");
+  });
+
   it("rejects a prototype-setter custom widget kind", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.widgets[0]!.kind = "custom:__proto__";

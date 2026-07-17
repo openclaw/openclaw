@@ -84,6 +84,7 @@ internal fun SessionsScreen(
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val coroutineScope = rememberCoroutineScope()
   val searchFocusRequester = remember { FocusRequester() }
@@ -92,9 +93,9 @@ internal fun SessionsScreen(
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
   var sortMenuExpanded by remember { mutableStateOf(false) }
-  var renameSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
-  var groupSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
-  var deleteSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
+  var renameSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
+  var groupSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
+  var deleteSessionTarget by remember { mutableStateOf<SessionActionTarget?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
   var searchLoading by remember { mutableStateOf(false) }
@@ -126,6 +127,12 @@ internal fun SessionsScreen(
     (sessions.mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
       .distinctBy { it.lowercase() }
       .sortedWith(String.CASE_INSENSITIVE_ORDER)
+
+  LaunchedEffect(activeGatewayStableId) {
+    renameSessionTarget = renameSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
+    groupSessionTarget = groupSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
+    deleteSessionTarget = deleteSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
+  }
 
   LaunchedEffect(isConnected, filter) {
     if (isConnected) {
@@ -348,7 +355,7 @@ internal fun SessionsScreen(
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, unread = unread)
                 }
               },
-              onRename = { renameSessionKey = session.key },
+              onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onFork = {
                 coroutineScope.launch {
                   viewModel.forkChatSession(session.key, session.ownerAgentId)?.let { newKey ->
@@ -362,7 +369,7 @@ internal fun SessionsScreen(
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, category = category)
                 }
               },
-              onNewGroup = { groupSessionKey = session.key },
+              onNewGroup = { groupSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onRemoveFromGroup = {
                 coroutineScope.launch {
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, clearCategory = true)
@@ -373,7 +380,7 @@ internal fun SessionsScreen(
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, archived = archived)
                 }
               },
-              onDelete = { deleteSessionKey = session.key },
+              onDelete = { deleteSessionTarget = session.toActionTarget(activeGatewayStableId) },
             )
           }
         }
@@ -381,16 +388,17 @@ internal fun SessionsScreen(
     }
   }
 
-  sessions.firstOrNull { it.key == renameSessionKey }?.let { session ->
+  renameSessionTarget?.let { session ->
     SessionTextDialog(
       title = nativeString("Rename session"),
-      stateKey = session.key,
+      stateKey = session.stateKey,
       initialValue = session.label ?: session.displayName.orEmpty(),
       confirmLabel = nativeString("Rename"),
       allowEmpty = true,
-      onDismiss = { renameSessionKey = null },
+      onDismiss = { renameSessionTarget = null },
       onConfirm = { value ->
-        renameSessionKey = null
+        renameSessionTarget = null
+        if (!session.matchesGateway(activeGatewayStableId)) return@SessionTextDialog
         val label = value.trim()
         coroutineScope.launch {
           viewModel.patchChatSession(
@@ -404,16 +412,17 @@ internal fun SessionsScreen(
     )
   }
 
-  sessions.firstOrNull { it.key == groupSessionKey }?.let { session ->
+  groupSessionTarget?.let { session ->
     SessionTextDialog(
       title = nativeString("New group"),
-      stateKey = session.key,
+      stateKey = session.stateKey,
       initialValue = "",
       confirmLabel = nativeString("Create"),
       allowEmpty = false,
-      onDismiss = { groupSessionKey = null },
+      onDismiss = { groupSessionTarget = null },
       onConfirm = { value ->
-        groupSessionKey = null
+        groupSessionTarget = null
+        if (!session.matchesGateway(activeGatewayStableId)) return@SessionTextDialog
         // Remember the name so the group survives locally even if the patch later empties it.
         viewModel.addChatSessionGroup(value)
         coroutineScope.launch {
@@ -480,16 +489,17 @@ internal fun SessionsScreen(
     )
   }
 
-  sessions.firstOrNull { it.key == deleteSessionKey }?.let { session ->
+  deleteSessionTarget?.let { session ->
     AlertDialog(
-      onDismissRequest = { deleteSessionKey = null },
+      onDismissRequest = { deleteSessionTarget = null },
       containerColor = ClawTheme.colors.surfaceRaised,
       title = { Text(nativeString("Delete session?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
       text = { Text(nativeString("This permanently deletes the session and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
       confirmButton = {
         TextButton(
           onClick = {
-            deleteSessionKey = null
+            deleteSessionTarget = null
+            if (!session.matchesGateway(activeGatewayStableId)) return@TextButton
             coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
           },
         ) {
@@ -497,7 +507,7 @@ internal fun SessionsScreen(
         }
       },
       dismissButton = {
-        TextButton(onClick = { deleteSessionKey = null }) {
+        TextButton(onClick = { deleteSessionTarget = null }) {
           Text(nativeString("Cancel"))
         }
       },
@@ -838,6 +848,28 @@ internal data class SessionSection(
   // Only custom category sections expose group actions; "Pinned"/"Ungrouped" are structural.
   val isCategory: Boolean = false,
 )
+
+/** Immutable row identity retained while a destructive or mutating dialog is open. */
+internal data class SessionActionTarget(
+  val gatewayStableId: String?,
+  val key: String,
+  val ownerAgentId: String?,
+  val label: String?,
+  val displayName: String?,
+) {
+  val stateKey: String = "${gatewayStableId.orEmpty()}:${ownerAgentId.orEmpty()}:$key"
+
+  fun matchesGateway(activeGatewayStableId: String?): Boolean = gatewayStableId == activeGatewayStableId
+}
+
+internal fun ChatSessionEntry.toActionTarget(gatewayStableId: String?): SessionActionTarget =
+  SessionActionTarget(
+    gatewayStableId = gatewayStableId,
+    key = key,
+    ownerAgentId = ownerAgentId,
+    label = label,
+    displayName = displayName,
+  )
 
 /** Groups pinned sessions once, followed by alphabetical categories and remaining sessions. */
 internal fun groupSessionEntries(

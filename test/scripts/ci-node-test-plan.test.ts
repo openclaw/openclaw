@@ -4,8 +4,10 @@ import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import {
+  assignVitestFsCacheWriter,
   createNodeTestShardBundles,
   createNodeTestShards,
+  type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
@@ -107,6 +109,40 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("assigns one semantic Vitest cache writer without changing shard order", () => {
+    const full = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const compact = createNodeTestShardBundles({
+      includeReleaseOnlyPluginShards: false,
+      compact: true,
+    });
+
+    const expectWriter = (plan: Array<Pick<NodeTestShard, "groups" | "shardName">>) => {
+      const marked = assignVitestFsCacheWriter(plan);
+      expect(marked.map((shard) => shard.shardName)).toEqual(plan.map((shard) => shard.shardName));
+      expect(marked.filter((shard) => shard.saveVitestFsCache)).toHaveLength(1);
+      expect(
+        marked.find((shard) => shard.saveVitestFsCache)?.shardName === "core-unit-fast" ||
+          marked
+            .find((shard) => shard.saveVitestFsCache)
+            ?.groups?.some((group) => group.shard_name === "core-unit-fast"),
+      ).toBe(true);
+    };
+    expectWriter(full);
+    expectWriter(compact);
+
+    expect(assignVitestFsCacheWriter([])).toEqual([]);
+    const changedOnly = {
+      checkName: "checks-node-changed-only",
+      configs: ["test/vitest/vitest.unit.config.ts"],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+      shardName: "changed-only",
+    };
+    expect(assignVitestFsCacheWriter([changedOnly])).toEqual([
+      { ...changedOnly, saveVitestFsCache: true },
+    ]);
+  });
+
   it("creates split shards without walking test roots", () => {
     const payload = expectNoNodeFsScans<{
       includePatterns: number;

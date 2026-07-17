@@ -1202,10 +1202,11 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       next[existingIndex] = replacement;
       return next.slice(-maxLines);
     }
-  }
-  const previous = lines.at(-1);
-  if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
-    return lines;
+  } else {
+    const previous = lines.at(-1);
+    if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
+      return lines;
+    }
   }
   return [...lines, line].slice(-maxLines);
 }

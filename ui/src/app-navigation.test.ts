@@ -78,6 +78,7 @@ describe("navigationIconForRoute", () => {
     ).toEqual({
       chat: "messageSquare",
       activity: "activity",
+      approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
@@ -130,6 +131,7 @@ describe("titleForRoute", () => {
     ).toEqual({
       chat: "Chat",
       activity: "Activity",
+      approvals: "Approvals",
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
@@ -168,6 +170,7 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       activity: "Browser-local tool activity summaries.",
+      approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
@@ -206,6 +209,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
+    expect(pathForRoute("approvals")).toBe("/settings/approvals");
   });
 
   it("prepends base path", () => {
@@ -371,6 +375,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "mcp",
       "infrastructure",
       "nodes",
+      "approvals",
       "worktrees",
       "debug",
       "logs",

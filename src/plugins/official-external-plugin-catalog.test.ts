@@ -1028,15 +1028,20 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("resolves external provider aliases beyond the primary provider id", () => {
+  it("resolves current external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
+
+  it.each(["qwen-oauth", "qwen-portal", "qwen-cli"])(
+    "does not resolve retired Qwen Portal alias %s",
+    (providerId) => {
+      expect(getOfficialExternalPluginCatalogEntry(providerId)).toBeUndefined();
+    },
+  );
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {
     expect(

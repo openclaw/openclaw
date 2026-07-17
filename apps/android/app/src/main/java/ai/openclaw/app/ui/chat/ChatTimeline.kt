@@ -2,7 +2,9 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 internal sealed class ChatTimelineItem {
@@ -125,19 +127,26 @@ internal fun outboxItemsForSession(
   return items.filter { item ->
     val itemKey = item.sessionKey.let { if (it == "main") mainKey else it }
     val ownerMatches = item.ownerAgentId == ownerAgentId
-    ownerMatches && itemKey == current && "${item.id}:user" !in visibleUserKeys
+    ownerMatches &&
+      itemKey == current &&
+      "${item.id}:user" !in visibleUserKeys &&
+      !isRecoveryOutboxItem(item)
   }
 }
 
-/** Rows that cannot be reached through the current canonical owner/session still need controls. */
-internal fun outboxItemsForRecovery(
-  items: List<ChatOutboxItem>,
-  ownerAgentId: String,
-): List<ChatOutboxItem> =
-  items.filter { item ->
-    item.ownerAgentId == null ||
-      (resolveAgentIdFromMainSessionKey(item.sessionKey) == null && item.ownerAgentId != ownerAgentId)
-  }
+/** Rows with missing or internally contradictory ownership still need neutral controls. */
+internal fun outboxItemsForRecovery(items: List<ChatOutboxItem>): List<ChatOutboxItem> = items.filter(::isRecoveryOutboxItem)
+
+private fun isRecoveryOutboxItem(item: ChatOutboxItem): Boolean {
+  val keyOwner = resolveAgentIdFromMainSessionKey(item.sessionKey)
+  val parkedMainAlias =
+    item.sessionKey.trim() == "main" &&
+      item.status == ChatOutboxStatus.Failed &&
+      item.lastError == OUTBOX_OWNER_CHANGED_ERROR
+  return item.ownerAgentId == null ||
+    (keyOwner != null && keyOwner != item.ownerAgentId) ||
+    parkedMainAlias
+}
 
 private fun stableMessageVersion(message: ChatMessage): String {
   val role = message.role.trim().lowercase()
