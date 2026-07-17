@@ -4015,6 +4015,57 @@ class AutoreviewHardeningTests(unittest.TestCase):
         self.assertIn('+const fixture = "redacted";', redacted_patch)
         self.assertIn('+log("redacted");', redacted_patch)
 
+    def test_review_patch_preserves_ambiguous_short_markerless_lines(self) -> None:
+        chunks = ["AB12", "CDef", "GH34", "ijKL", "MN56", "opQR"]
+        patch = (
+            "diff --git a/fixture.txt b/fixture.txt\n"
+            "--- a/fixture.txt\n"
+            "+++ b/fixture.txt\n"
+            f"@@ -0,0 +1,{len(chunks)} @@\n"
+            + "".join(f"+{chunk}\n" for chunk in chunks)
+        )
+
+        redacted_patch = self.helper["validate_review_patch"](
+            "local unstaged diff",
+            ["fixture.txt"],
+            patch,
+        )
+
+        self.assertEqual(redacted_patch, patch)
+
+    def test_review_patch_redacts_long_key_with_source_wrappers(self) -> None:
+        body = "".join(
+            (
+                "MIIEvQIBADAN",
+                "BgkqhkiG9w0B",
+                "AQEFAASC1234",
+                "567890abcdef",
+            )
+        )
+        cases = (
+            (f"+/* {body} */\n", "+/* redacted */\n"),
+            (f"+/* {body} */;\\\n", "+/* redacted */;\\\n"),
+            (f"+{body}\\\n", "+redacted\\\n"),
+        )
+        for addition, expected in cases:
+            with self.subTest(addition=addition[-4:]):
+                patch = (
+                    "diff --git a/fixture.txt b/fixture.txt\n"
+                    "--- a/fixture.txt\n"
+                    "+++ b/fixture.txt\n"
+                    "@@ -0,0 +1,1 @@\n"
+                    + addition
+                )
+
+                redacted_patch = self.helper["validate_review_patch"](
+                    "local unstaged diff",
+                    ["fixture.txt"],
+                    patch,
+                )
+
+                self.assertNotIn(body, redacted_patch)
+                self.assertIn(expected, redacted_patch)
+
     def test_review_patch_preserves_long_non_pem_identifier_lines(self) -> None:
         identifier = "runDangerousOperationWithLongIdentifier"
         patch = (

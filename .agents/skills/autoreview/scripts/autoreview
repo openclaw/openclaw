@@ -6089,7 +6089,8 @@ def orphan_private_key_body_spans(text: str) -> list[tuple[int, int]]:
         cursor = match.end()
     wrapper_parts.append(text[cursor:])
     if re.fullmatch(
-        r"(?:(?:#|//|/\*|\*)\s*)?[\s\"'`,;+\[\]]*",
+        r"(?:(?:#|//|/\*|\*)\s*)?[\s\\\"'`,;+\[\]]*"
+        r"(?:\*/[\s\\\"'`,;+\[\]]*)?",
         "".join(wrapper_parts).strip(),
     ) is None:
         return []
@@ -6176,6 +6177,8 @@ def pem_line_body_spans(
 
 
 def private_key_body_fragments(text: str) -> set[str]:
+    # Do not join short markerless chunks across lines. Without PEM boundaries,
+    # code and data are indistinguishable; explicit markers or long tokens redact.
     fragments: set[str] = set()
     in_private_key = False
     for line in text.split("\n"):
@@ -6341,11 +6344,17 @@ def review_hunk_header_secret_fragments(
             segment = header_section[begin.end() : segment_end]
             for start, end in private_key_token_spans(segment):
                 fragment = normalized_private_key_fragment(segment, start, end)
-                if fragment:
+                if (
+                    fragment
+                    and fragment.casefold() not in SECRET_PLACEHOLDER_VALUES
+                ):
                     fragments.add(fragment)
         for start, end in markerless_private_key_body_spans(header_section):
             fragment = normalized_private_key_fragment(header_section, start, end)
-            if fragment:
+            if (
+                fragment
+                and fragment.casefold() not in SECRET_PLACEHOLDER_VALUES
+            ):
                 fragments.add(fragment)
         for dialect in dialects:
             if not secret_text_risk(
