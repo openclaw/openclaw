@@ -292,11 +292,18 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
   });
 
   it("rejects malformed URLs with a stable error", async () => {
-    await expect(
-      assertHttpUrlTargetsPrivateNetwork("not-a-url", {
-        dangerouslyAllowPrivateNetwork: true,
-      }),
-    ).rejects.toThrow(new TypeError("Invalid URL"));
+    const err = await assertHttpUrlTargetsPrivateNetwork("not-a-url", {
+      dangerouslyAllowPrivateNetwork: true,
+    }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(TypeError);
+    expect((err as Error).message).toBe("Invalid URL");
+    expect((err as TypeError & { code?: string }).code).toBe("ERR_INVALID_URL");
   });
 
   it("does not reflect credential-bearing malformed URLs in errors", async () => {
@@ -314,6 +321,9 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
     );
 
     expect(error).toBeInstanceOf(TypeError);
+
+    // Preserve the ERR_INVALID_URL code for caller classification.
+    expect((error as TypeError & { code?: unknown }).code).toBe("ERR_INVALID_URL");
 
     // Outer message must be stable and non-disclosing.
     const message = (error as Error).message;

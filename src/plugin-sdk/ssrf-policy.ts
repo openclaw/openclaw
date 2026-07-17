@@ -232,11 +232,14 @@ export async function assertHttpUrlTargetsPrivateNetwork(
   try {
     parsed = new URL(url);
   } catch {
-    // Do not attach the native ERR_INVALID_URL as cause — Node's URL parser
+    // Preserve the ERR_INVALID_URL code for caller classification while
+    // stripping the native error's input and cause — Node's URL parser
     // retains the rejected URL in its structured input property, so callers
     // that inspect or serialize the complete error graph could recover
     // credential-bearing endpoint strings despite the safe outer message.
-    throw new TypeError("Invalid URL");
+    const err = new TypeError("Invalid URL") as TypeError & { code: string };
+    err.code = "ERR_INVALID_URL";
+    throw err;
   }
   if (parsed.protocol !== "http:") {
     return;
