@@ -20,7 +20,10 @@ import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accoun
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostPost,
+  fetchMattermostUser,
   normalizeMattermostBaseUrl,
+  type MattermostClient,
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
@@ -203,6 +206,49 @@ function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]):
   const suffix = mediaList.length === 1 ? label : `${label}s`;
   const tag = allImages ? "<media:image>" : "<media:document>";
   return `${tag} (${mediaList.length} ${suffix})`;
+}
+
+function formatMattermostPostBodyWithFiles(post: MattermostPost): string | undefined {
+  const text = normalizeOptionalString(post.message) ?? "";
+  const fileCount = Array.isArray(post.file_ids) ? post.file_ids.length : 0;
+  const fileSuffix =
+    fileCount > 0 ? (fileCount === 1 ? "<media:file>" : `<media:${fileCount} files>`) : "";
+  return normalizeOptionalString([text, fileSuffix].filter(Boolean).join(" "));
+}
+
+async function hydrateMattermostThreadContext(params: {
+  client: MattermostClient;
+  post: MattermostPost;
+  threadRootId?: string | null;
+}): Promise<{ threadStarterBody?: string; replyToBody?: string; replyToSender?: string }> {
+  const threadRootId = normalizeOptionalString(params.threadRootId);
+  if (!threadRootId) {
+    return {};
+  }
+  try {
+    const rootPost = await fetchMattermostPost(params.client, threadRootId);
+    const rootBody = formatMattermostPostBodyWithFiles(rootPost);
+    if (!rootBody) {
+      return {};
+    }
+    let replyToSender: string | undefined;
+    const rootUserId = normalizeOptionalString(rootPost.user_id);
+    if (rootUserId) {
+      try {
+        const rootUser = await fetchMattermostUser(params.client, rootUserId);
+        replyToSender = rootUser.username ? `@${rootUser.username}` : undefined;
+      } catch {
+        replyToSender = undefined;
+      }
+    }
+    return {
+      threadStarterBody: rootBody,
+      replyToBody: params.post.root_id === threadRootId ? rootBody : undefined,
+      replyToSender,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function buildMattermostWsUrl(baseUrl: string): string {
@@ -1335,6 +1381,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 limit: historyLimit,
               })
             : undefined;
+        const hydratedThreadContext = await hydrateMattermostThreadContext({
+          client,
+          post,
+          threadRootId,
+        });
         const ctxPayload = core.channel.reply.finalizeInboundContext({
           Body: combinedBody,
           BodyForAgent: bodyForAgent,
@@ -1368,6 +1419,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
           ReplyToId: effectiveReplyToId,
           MessageThreadId: effectiveReplyToId,
+          ThreadStarterBody: hydratedThreadContext.threadStarterBody,
+          ReplyToBody: hydratedThreadContext.replyToBody,
+          ReplyToSender: hydratedThreadContext.replyToSender,
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
           CommandAuthorized: commandAuthorized,

@@ -192,7 +192,8 @@ describe("mattermost channel message adapter", () => {
     expect(sendMessageMattermostMock).toHaveBeenLastCalledWith("channel:parent-1", "threaded", {
       cfg: {},
       accountId: "default",
-      replyToId: "thread-1",
+      replyToId: undefined,
+      threadId: "thread-1",
     });
     expect(result.receipt.threadId).toBe("thread-1");
   });
@@ -213,6 +214,7 @@ describe("mattermost channel message adapter", () => {
       cfg: {},
       accountId: "default",
       replyToId: "post-parent-1",
+      threadId: "thread-1",
     });
     expect(result.receipt.replyToId).toBe("post-parent-1");
   });

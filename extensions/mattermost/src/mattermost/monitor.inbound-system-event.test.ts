@@ -85,6 +85,8 @@ const mockState = vi.hoisted(() => ({
   dispatchReplyFromConfig: vi.fn(),
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
+  fetchMattermostPost: vi.fn(),
+  fetchMattermostUser: vi.fn(),
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
   recordMattermostThreadParticipation: vi.fn(),
@@ -102,6 +104,8 @@ vi.mock("./client.js", async () => {
     ...actual,
     createMattermostClient: mockState.createMattermostClient,
     fetchMattermostMe: mockState.fetchMattermostMe,
+    fetchMattermostPost: mockState.fetchMattermostPost,
+    fetchMattermostUser: mockState.fetchMattermostUser,
     normalizeMattermostBaseUrl: (value: string | undefined) => value?.trim() ?? "",
     updateMattermostPost: mockState.updateMattermostPost,
   };
@@ -445,6 +449,8 @@ describe("mattermost inbound user posts", () => {
       username: "openclaw",
       update_at: 1,
     });
+    mockState.fetchMattermostPost.mockRejectedValue(new Error("not found"));
+    mockState.fetchMattermostUser.mockRejectedValue(new Error("not found"));
     mockState.registerMattermostMonitorSlashCommands.mockResolvedValue(undefined);
     mockState.registerPluginHttpRoute.mockReturnValue(vi.fn());
     mockState.resolveChannelInfo.mockResolvedValue({
@@ -510,6 +516,49 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
     expect(ctx?.OriginatingChannel).toBe("mattermost");
     expect(ctx?.Provider).toBe("mattermost");
+  });
+
+  it("hydrates thread starter context for Mattermost thread replies", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    mockState.fetchMattermostPost.mockResolvedValueOnce({
+      id: "root-post-1",
+      channel_id: "chan-1",
+      user_id: "root-user-1",
+      message: "root context",
+      file_ids: ["file-1"],
+    });
+    mockState.fetchMattermostUser.mockResolvedValueOnce({
+      id: "root-user-1",
+      username: "bob",
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "reply-post-1",
+      message: "reply text",
+      rootId: "root-post-1",
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(mockState.fetchMattermostPost).toHaveBeenCalledWith(expect.anything(), "root-post-1");
+    expect(ctx?.ThreadStarterBody).toBe("root context <media:file>");
+    expect(ctx?.ReplyToBody).toBe("root context <media:file>");
+    expect(ctx?.ReplyToSender).toBe("@bob");
   });
 
   it("keeps verbose inbound previews on complete UTF-16 boundaries", async () => {

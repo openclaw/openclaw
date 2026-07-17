@@ -940,7 +940,8 @@ describe("mattermostPlugin", () => {
       );
 
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
-      expect(options.replyToId).toBe("post-root");
+      expect(options.replyToId).toBe("child-post");
+      expect(options.threadId).toBe("post-root");
     });
 
     it("keeps explicit replyToId precedence when threadId is also provided", async () => {
@@ -963,6 +964,7 @@ describe("mattermostPlugin", () => {
 
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
       expect(options.replyToId).toBe("explicit-root");
+      expect(options.threadId).toBe("post-root");
     });
 
     it("routes filePath send actions through Mattermost media upload options", async () => {
@@ -1641,7 +1643,8 @@ describe("mattermostPlugin", () => {
 
       const options = expectSingleMattermostSend("channel:CHAN1", "hello");
       expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
+      expect(options.replyToId).toBeUndefined();
+      expect(options.threadId).toBe("post-root");
     });
 
     it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
@@ -1661,7 +1664,8 @@ describe("mattermostPlugin", () => {
 
       const options = expectSingleMattermostSend("channel:CHAN1", "caption");
       expect(options.accountId).toBe("default");
-      expect(options.replyToId).toBe("post-root");
+      expect(options.replyToId).toBeUndefined();
+      expect(options.threadId).toBe("post-root");
       expect(options.requireMediaUpload).toBeUndefined();
     });
   });
