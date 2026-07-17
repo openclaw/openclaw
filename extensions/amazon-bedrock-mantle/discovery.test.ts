@@ -14,8 +14,6 @@ const {
   resolveMantleRuntimeBearerToken,
 } = await import("./api.js");
 
-const { sanitizeBlankAwsCredentials } = await import("./discovery.js");
-
 function createTokenProviderFactory(tokenProvider: () => Promise<string>) {
   return vi.fn(() => tokenProvider);
 }
@@ -783,72 +781,82 @@ describe("bedrock mantle discovery", () => {
   });
 });
 
-describe("sanitizeBlankAwsCredentials", () => {
+describe("credential sanitization before IAM token generation", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    resetIamTokenCacheForTest();
   });
 
-  it("clears whitespace-only AWS credential env vars", () => {
+  it("clears whitespace-only static credentials before invoking the token provider", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_SESSION_TOKEN", "token");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
-    sanitizeBlankAwsCredentials();
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
 
     expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
   });
 
-  it("clears a blank session token without removing valid static keys", () => {
+  it("clears a blank session token without removing valid static keys", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_SESSION_TOKEN", " \t ");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
-    sanitizeBlankAwsCredentials();
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
 
     expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
     expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
     expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
   });
 
-  it("clears a blank Bedrock bearer token without removing valid static keys", () => {
+  it("clears a blank Bedrock bearer token without removing valid static keys", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
-    sanitizeBlankAwsCredentials();
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
 
     expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
     expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
     expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
   });
 
-  it("does not clear valid static AWS credentials", () => {
+  it("preserves valid static credentials", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
-    sanitizeBlankAwsCredentials();
+    await generateBearerTokenFromIam({
+      region: "us-east-1",
+      tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+    });
 
     expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
     expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
   });
 
-  it("does not throw when no AWS credential env vars are set", () => {
-    expect(() => sanitizeBlankAwsCredentials()).not.toThrow();
-  });
+  it("does not throw when no AWS credential env vars are set", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-token"); // pragma: allowlist secret
 
-  it("clears blank static credentials before Mantle IAM token generation", () => {
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret-key");
-
-    // GenerateBearerTokenFromIam is expected to sanitize before using the
-    // AWS SDK default credential chain. We verify the sanitizer covers the
-    // Mantle call-path by checking that blank keys are removed.
-    sanitizeBlankAwsCredentials();
-
-    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
-    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
-    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        tokenProviderFactory: createTokenProviderFactory(tokenProvider),
+      }),
+    ).resolves.toBe("bedrock-token");
   });
 });

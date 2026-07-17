@@ -137,7 +137,7 @@ function getCachedIamTokenEntry(
  * whitespace static keys and any present Bedrock bearer-token value, preventing
  * fallback to profile, SSO, ECS, or IMDS credentials.
  */
-export function sanitizeBlankAwsCredentials(): void {
+function sanitizeBlankAwsCredentials(): void {
   if (
     process.env.AWS_BEARER_TOKEN_BEDROCK !== undefined &&
     !process.env.AWS_BEARER_TOKEN_BEDROCK.trim()
