@@ -489,16 +489,34 @@ describe("ollama provider models", () => {
       vi.fn(async () => makeOversizedJsonResponse()),
     );
     const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "evil-model:latest");
-    expect(showInfo).toEqual({ capabilities: [] });
+    expect(showInfo).toEqual({ showInspectionFailed: true });
     expect(canceled).toBe(true);
     expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+  });
+
+  it("keeps three capability states for tools and reasoning", () => {
+    const uninspected = buildOllamaModelDefinition("deepseek-r1:14b", 65536);
+    expect(uninspected.compat?.supportsTools).toBe(true);
+    expect(uninspected.reasoning).toBe(true);
+
+    const authoritativeEmpty = buildOllamaModelDefinition("deepseek-r1:14b", 65536, []);
+    expect(authoritativeEmpty.compat?.supportsTools).toBe(false);
+    expect(authoritativeEmpty.reasoning).toBe(false);
+
+    const inspectionFailed = buildOllamaModelDefinition("deepseek-r1:14b", 65536, undefined, {
+      showInspectionFailed: true,
+    });
+    expect(inspectionFailed.compat?.supportsTools).toBe(false);
+    expect(inspectionFailed.reasoning).toBe(true);
   });
 
   it("does not advertise tools when /api/show returns a non-OK status", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = requestUrl(input);
       if (url.endsWith("/api/tags")) {
-        return jsonResponse({ models: [{ name: "broken:latest", digest: "sha256:broken" }] });
+        return jsonResponse({
+          models: [{ name: "deepseek-r1:14b", digest: "sha256:broken" }],
+        });
       }
       if (url.endsWith("/api/show")) {
         return jsonResponse({ error: "model not found" }, 404);
@@ -510,8 +528,9 @@ describe("ollama provider models", () => {
     const provider = await buildOllamaProvider("http://127.0.0.1:11434");
     const model = expectDefined(provider.models[0], "broken Ollama model");
 
-    expect(model.id).toBe("broken:latest");
+    expect(model.id).toBe("deepseek-r1:14b");
     expect(model.compat?.supportsTools).toBe(false);
+    expect(model.reasoning).toBe(true);
   });
 
   it("does not advertise tools when /api/show throws", async () => {
@@ -533,10 +552,10 @@ describe("ollama provider models", () => {
     expect(model.compat?.supportsTools).toBe(false);
 
     const showInfo = await queryOllamaModelShowInfo("http://127.0.0.1:11434", "down:latest");
-    expect(showInfo).toEqual({ capabilities: [] });
+    expect(showInfo).toEqual({ showInspectionFailed: true });
   });
 
-  it("live HTTP: /api/show 500 does not advertise tools through buildOllamaProvider", async () => {
+  it("live HTTP: /api/show 500 keeps tools off and reasoning heuristic on", async () => {
     // L3: real TCP + undici fetch (no vi.stubGlobal). Matches node-inference live stub shape.
     let showHits = 0;
     await withLiveOllamaHttpServer(
@@ -545,7 +564,7 @@ describe("ollama provider models", () => {
         if (request.url === "/api/tags") {
           response.end(
             JSON.stringify({
-              models: [{ name: "stale:latest", digest: "sha256:stale-show-fail", size: 1 }],
+              models: [{ name: "deepseek-r1:14b", digest: "sha256:stale-show-fail", size: 1 }],
             }),
           );
           return;
@@ -564,12 +583,13 @@ describe("ollama provider models", () => {
         const model = expectDefined(provider.models[0], "live show-fail Ollama model");
 
         expect(showHits).toBeGreaterThan(0);
-        expect(model.id).toBe("stale:latest");
+        expect(model.id).toBe("deepseek-r1:14b");
         expect(model.compat?.supportsTools).toBe(false);
+        expect(model.reasoning).toBe(true);
 
         // Scrapable Evidence line for PR body (counts only; no secrets).
         console.info(
-          `[ollama show-fail live proof] base=${baseUrl} model=${model.id} showHits=${showHits} supportsTools=${String(model.compat?.supportsTools)}`,
+          `[ollama show-fail live proof] base=${baseUrl} model=${model.id} showHits=${showHits} supportsTools=${String(model.compat?.supportsTools)} reasoning=${String(model.reasoning)}`,
         );
       },
     );
