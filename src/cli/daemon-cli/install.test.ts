@@ -548,6 +548,7 @@ describe("runDaemonInstall", () => {
       customBindHost: "192.168.1.20",
       resolvedHost: "192.168.1.20",
       blocked: true,
+      message: undefined,
     },
     {
       name: "tailnet bind resolving to a tailnet interface",
@@ -555,13 +556,15 @@ describe("runDaemonInstall", () => {
       customBindHost: undefined,
       resolvedHost: "100.64.0.20",
       blocked: true,
+      message: undefined,
     },
     {
       name: "tailnet bind falling back to loopback",
       bind: "tailnet" as const,
       customBindHost: undefined,
       resolvedHost: "127.0.0.1",
-      blocked: false,
+      blocked: true,
+      message: "can later resolve to a Tailnet interface",
     },
     {
       name: "loopback bind",
@@ -569,6 +572,7 @@ describe("runDaemonInstall", () => {
       customBindHost: undefined,
       resolvedHost: "127.0.0.1",
       blocked: false,
+      message: undefined,
     },
   ])("handles explicit no-auth for $name", async (testCase) => {
     const config = {
@@ -598,6 +602,9 @@ describe("runDaemonInstall", () => {
     expect(resolveGatewayBindHostMock).toHaveBeenCalledWith(testCase.bind, testCase.customBindHost);
     if (testCase.blocked) {
       expect(actionState.failed[0]?.message).toContain(`gateway.bind=${testCase.bind}`);
+      if (testCase.message) {
+        expect(actionState.failed[0]?.message).toContain(testCase.message);
+      }
       expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
       expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     } else {

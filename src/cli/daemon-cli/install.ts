@@ -60,12 +60,15 @@ function formatNoAuthNonLoopbackInstallBlock(params: {
     env: params.env,
     tailscaleMode: params.config.gateway?.tailscale?.mode ?? "off",
   });
-  if (auth.mode !== "none" || isLoopbackHost(params.bindHost)) {
+  const bindCanExposeNetwork = params.bind === "tailnet" || !isLoopbackHost(params.bindHost);
+  if (auth.mode !== "none" || !bindCanExposeNetwork) {
     return undefined;
   }
-  const hints: string[] = [
-    `gateway.bind=${params.bind} resolves to ${params.bindHost}, but gateway.auth.mode=none disables Gateway auth.`,
-  ];
+  const bindReason =
+    params.bind === "tailnet" && isLoopbackHost(params.bindHost)
+      ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
+      : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
+  const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
   if (normalizeOptionalString(auth.token)) {
     hints.push(
       `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
