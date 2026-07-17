@@ -45,12 +45,12 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   ["agentic-agents-core-auth", 23],
   ["agentic-agents-core-isolated", 8],
   ["agentic-agents-core-models", 60],
-  // cli-runner.reliability.test.ts imports a ~245s module graph on its own
-  // (79 tests in <2s, import dominates); one file cannot be split further, so
-  // its stripe is a near-solo bin and the sibling stripes stay tiny.
-  ["agentic-agents-core-runner-cli-1", 245],
-  ["agentic-agents-core-runner-cli-2", 18],
-  ["agentic-agents-core-runner-cli-3", 8],
+  // Reliability's runtime-free provider check dropped its wall time from
+  // ~245s to ~5s. LPT now puts spawn in stripe 1 and balances the small files
+  // across the remaining stripes.
+  ["agentic-agents-core-runner-cli-1", 18],
+  ["agentic-agents-core-runner-cli-2", 11],
+  ["agentic-agents-core-runner-cli-3", 12],
   ["agentic-agents-core-runner-commands", 25],
   ["agentic-agents-core-runner-embedded", 9],
   ["agentic-agents-core-runner-sessions", 10],
@@ -136,10 +136,10 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
 // re-evaluation cost that dominates these serial suites.
 const STRIPE_FILE_SECONDS_HINTS = new Map([
   // cli-runner entries are CI wall clock (begin->checkmark deltas from the
-  // compact runs above); reliability's import graph alone runs ~245s, so LPT
-  // must isolate it or its stripe owns the PR tail.
+  // compact runs above), refreshed by focused Testbox profiling where noted.
   ["src/agents/cli-runner.context-engine.test.ts", 6],
-  ["src/agents/cli-runner.reliability.test.ts", 245],
+  // Fresh profile: 5.1s total, 3.8s import; retain a conservative packing hint.
+  ["src/agents/cli-runner.reliability.test.ts", 8],
   ["src/agents/cli-runner.spawn.test.ts", 18],
   ["src/auto-reply/reply/commands-export-session.test.ts", 8],
   ["src/auto-reply/reply/commands-gating.test.ts", 6],
