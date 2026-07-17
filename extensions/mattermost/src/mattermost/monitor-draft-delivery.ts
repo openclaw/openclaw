@@ -14,6 +14,7 @@ import { canFinalizeMattermostPreviewInPlace } from "./monitor-context.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
 
 export type MattermostDraftPreviewState = {
+  /** True once the preview is the durable final post and must not be reused as a draft. */
   finalizedViaPreviewPost: boolean;
 };
 

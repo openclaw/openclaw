@@ -355,10 +355,9 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     const deliverFinal = vi.fn(async () => {});
     const previewState = { finalizedViaPreviewPost: false };
     const params = {
-      kind: "channel" as const,
+      kind: "direct" as const,
       client: createMattermostClientMock(),
       draftStream,
-      effectiveReplyToId: "thread-root-1",
       resolvePreviewFinalText: (text?: string) => text?.trim(),
       previewState,
       logVerboseMessage: vi.fn(),
