@@ -38,8 +38,24 @@ function withBuildCacheFixture(
     step: {
       label: string;
       cache: {
-        inputs: string[];
-        outputs: Array<string | { path: string; extensions?: string[]; recursive?: boolean }>;
+        inputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
+        outputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
         restore?: "always";
       };
     };
@@ -372,15 +388,42 @@ describe("resolveBuildAllSteps", () => {
       throw new Error("Missing ciArtifacts write-plugin-sdk-entry-dts step");
     }
     expect(entryDts.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0" });
-    // Self-build outputs depend on the SDK source graph the canonical cache
-    // inputs do not cover; the profile must drop the step cache.
-    expect(entryDts.cache).toBeUndefined();
+    expect(entryDts.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        "package.json",
+        "pnpm-lock.yaml",
+        "tsconfig.plugin-sdk.dts.json",
+        expect.objectContaining({
+          path: "src",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+        expect.objectContaining({
+          path: "packages",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+      ]),
+    );
+    expect(entryDts.cache?.outputs).toEqual(
+      expect.arrayContaining([
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+      ]),
+    );
+    expect(entryDts.cache?.restore).toBe("always");
 
     const fullEntryDts = resolveBuildAllSteps("full").find(
       (step) => step.label === "write-plugin-sdk-entry-dts",
     );
     expect(fullEntryDts?.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
     expect(fullEntryDts?.cache).toBeDefined();
+    expect(fullEntryDts?.cache?.inputs).not.toContainEqual(
+      expect.objectContaining({ path: "src" }),
+    );
+    expect(fullEntryDts?.cache?.outputs).not.toContainEqual({
+      path: "dist/plugin-sdk",
+      extensions: [".d.ts"],
+      recursive: false,
+    });
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
@@ -692,6 +735,39 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
         stampPath: stale.stampPath,
       });
+    });
+  });
+
+  it("ignores generated and installed directories in broad cache inputs", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const ignoredDist = path.join(rootDir, "src/nested/dist/generated.ts");
+      const ignoredModules = path.join(rootDir, "src/node_modules/dependency.ts");
+      fs.mkdirSync(path.dirname(ignoredDist), { recursive: true });
+      fs.mkdirSync(path.dirname(ignoredModules), { recursive: true });
+      fs.writeFileSync(ignoredDist, "generated");
+      fs.writeFileSync(ignoredModules, "dependency");
+      const broadStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          inputs: [
+            {
+              path: "src",
+              excludeDirectories: ["dist", "node_modules"],
+              extensions: [".ts"],
+            },
+          ],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(broadStep, { rootDir });
+      writeBuildAllStepCacheStamp(broadStep, cacheState, { rootDir });
+
+      fs.writeFileSync(ignoredDist, "changed generated output");
+      fs.writeFileSync(ignoredModules, "changed installed dependency");
+      const fresh = resolveBuildAllStepCacheState(broadStep, { rootDir });
+
+      expect(fresh.fresh).toBe(true);
+      expect(fresh.inputFiles).toBe(1);
     });
   });
 

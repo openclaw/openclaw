@@ -43,6 +43,7 @@ import {
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import {
   resolveCanonicalDistRuntimeSource,
@@ -78,6 +79,7 @@ export function loadRuntimePluginCandidate(params: {
   const { candidate, manifestRecord, context, state } = params;
   const { registry } = params.registryBuilder;
   const pluginId = manifestRecord.id;
+  const policyId = normalizePluginPolicyId(pluginId);
   // Manifest filtering scopes diagnostics; this final guard also blocks imports
   // and registration outside the requested snapshot.
   if (
@@ -135,7 +137,7 @@ export function loadRuntimePluginCandidate(params: {
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource: context.activationSource,
       });
-  const entry = context.normalized.entries[pluginId];
+  const entry = context.normalized.entries[policyId];
   const record = createManifestPluginRecord({
     candidate,
     manifestRecord,

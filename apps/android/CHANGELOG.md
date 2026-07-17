@@ -6,6 +6,8 @@ Adds foreground, on-device Voice Wake with editable Gateway-synced wake words an
 
 Fixes malformed Android agent and profile initials when display names begin with emoji. Thanks @Leon-SK668.
 
+Adds a Wear OS companion for sessions, transcripts, text and voice replies, abort controls, reply notifications, and a launch Tile. The watch proxies through the paired phone and stores no Gateway credentials. Thanks @sibbl and @IWhatsskill.
+
 ## 2026.7.2 - 2026-07-13
 
 Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.

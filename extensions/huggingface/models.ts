@@ -154,6 +154,7 @@ export async function discoverHuggingfaceModels(
     });
     try {
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 

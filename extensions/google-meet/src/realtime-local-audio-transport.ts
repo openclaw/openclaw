@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { createSpeechThresholdGate, readPcm16AudioStats } from "openclaw/plugin-sdk/realtime-voice";
 import type { MeetRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 type BridgeProcess = {
@@ -64,23 +65,6 @@ function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "S
     }
   }, 1_000);
   timer.unref?.();
-}
-
-function readPcm16Stats(audio: Buffer): { rms: number; peak: number } {
-  let sumSquares = 0;
-  let peak = 0;
-  let samples = 0;
-  for (let offset = 0; offset + 1 < audio.byteLength; offset += 2) {
-    const sample = audio.readInt16LE(offset);
-    const abs = Math.abs(sample);
-    peak = Math.max(peak, abs);
-    sumSquares += sample * sample;
-    samples += 1;
-  }
-  return {
-    rms: samples > 0 ? Math.sqrt(sumSquares / samples) : 0,
-    peak,
-  };
 }
 
 export function createLocalMeetRealtimeAudioTransport(params: {
@@ -229,24 +213,23 @@ export function createLocalMeetRealtimeAudioTransport(params: {
         return;
       }
       const command = splitCommand(params.bargeInInputCommand ?? []);
-      let lastBargeInAt = 0;
+      const bargeInGate = createSpeechThresholdGate({
+        rmsThreshold: params.bargeInRmsThreshold,
+        peakThreshold: params.bargeInPeakThreshold,
+        cooldownMs: params.bargeInCooldownMs,
+      });
       bargeInInputProcess = spawnFn(command.command, command.args, {
         stdio: ["ignore", "pipe", "pipe"],
       });
       bargeInInputProcess.stdout?.on("data", (chunk) => {
         const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        const now = Date.now();
-        if (stopped || now - lastBargeInAt < params.bargeInCooldownMs) {
+        if (stopped) {
           return;
         }
-        const stats = readPcm16Stats(audio);
-        if (stats.rms < params.bargeInRmsThreshold && stats.peak < params.bargeInPeakThreshold) {
+        const stats = readPcm16AudioStats(audio);
+        if (!bargeInGate.accept(stats, { nowMs: Date.now(), onTrigger: () => onBargeIn(audio) })) {
           return;
         }
-        if (!onBargeIn(audio)) {
-          return;
-        }
-        lastBargeInAt = now;
         params.logger.debug?.(
           `[google-meet] human barge-in detected by local input (rms=${Math.round(
             stats.rms,

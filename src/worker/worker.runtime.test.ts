@@ -591,9 +591,13 @@ class FakeWorkerGateway {
     const toolCallId = "local-exec-call";
     const args = background
       ? {
-          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-            "setInterval(() => undefined, 1000)",
-          )}`,
+          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
+          command:
+            process.platform === "win32"
+              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                  "setInterval(() => undefined, 1000)",
+                )}`
+              : "exec sleep 60",
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };
@@ -926,10 +930,21 @@ describe("worker runtime", () => {
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
     await vi.waitFor(() => expect(gateway.inferenceRequests).toHaveLength(1));
 
-    controller.abort(new Error("operator stopped worker during outage"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const rejected = expect(result).rejects.toThrow("operator stopped worker during outage");
 
-    await expect(result).rejects.toThrow("operator stopped worker during outage");
-    expect(gateway.methods).toContain("worker.inference.cancel");
+      controller.abort(new Error("operator stopped worker during outage"));
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejected;
+      expect(gateway.methods).toContain("worker.inference.cancel");
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it.each([

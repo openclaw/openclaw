@@ -26,6 +26,7 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
+import { CONTROL_UI_PLUGIN_ICON_PATH_PREFIX } from "./control-ui-contract.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
@@ -96,6 +97,8 @@ const getManagedImageAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
+const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
@@ -126,6 +129,12 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+
+function isControlUiPluginIconRequest(pathname: string, basePath: string): boolean {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return pathname.startsWith(`${normalizedBasePath}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/`);
+}
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -811,6 +820,20 @@ export function createGatewayHttpServer(opts: {
         });
       }
 
+      if (controlUiEnabled && isControlUiPluginIconRequest(scopedRequestPath, controlUiBasePath)) {
+        requestStages.push({
+          name: "control-ui-plugin-icon",
+          run: async () =>
+            (await getPluginIconHttpModule()).handlePluginIconHttpRequest(req, res, {
+              basePath: controlUiBasePath,
+              config: configSnapshot,
+              auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-assistant-media",

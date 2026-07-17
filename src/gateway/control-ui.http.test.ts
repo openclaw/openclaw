@@ -445,7 +445,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
         expect(setHeader).toHaveBeenCalledWith(
           "Permissions-Policy",
-          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+          "camera=(self), microphone=*, geolocation=*, clipboard-write=*",
         );
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
       },

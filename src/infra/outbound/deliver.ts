@@ -1374,6 +1374,33 @@ function suppressedPayloadOutcome(params: {
   };
 }
 
+/** Adds directive-derived media to the queue copy before spool custody. */
+function materializeQueueCustodyMedia(
+  payloads: readonly ReplyPayload[],
+  plan: readonly OutboundPayloadPlan[],
+): ReplyPayload[] {
+  const effectiveBySource = new Map(
+    plan.map((entry) => [entry.sourceIndex, entry.parts.mediaUrls] as const),
+  );
+  return payloads.map((payload, index) => {
+    const effective = effectiveBySource.get(index);
+    if (!effective?.length) {
+      return payload;
+    }
+    const structured = new Set(
+      [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
+        .map((url) => url?.trim())
+        .filter((url): url is string => Boolean(url)),
+    );
+    if (effective.every((url) => structured.has(url))) {
+      return payload;
+    }
+    // Keep raw pre-hook text for deterministic replay. The singular anchor
+    // prevents recovery from re-adding its original MEDIA: path.
+    return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
+  });
+}
+
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
  * New message lifecycle code should use `sendDurableMessageBatch` from
@@ -1428,32 +1455,59 @@ export async function deliverOutboundPayloadsInternal(
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const strippedQueuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
-  const queuePayloadsChanged = strippedQueuePayloads.some(
-    (payload, index) => payload !== payloads[index],
-  );
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
-  // Media staging only rewrites source URLs one-for-one, and the plan is read for
-  // its per-payload counts (see resolveMessagePlanMediaCount), so it stays keyed
-  // to the payload shape rather than to which copy the row happens to reference.
-  const queueRenderedBatchPlan = queuePayloadsChanged
-    ? createRenderedMessageBatchPlan(strippedQueuePayloads)
-    : renderedBatchPlan;
 
   const stageAndEnqueueDelivery = async (): Promise<string | null> => {
+    // Legacy `MEDIA:` text directives carry local media that only materializes
+    // into structured fields at send time, so the spool (which reads structured
+    // media) would skip it and a retry would read the vanished producer path.
+    // Project each source payload's effective media through the same canonical
+    // plan the live send uses and fold directive-derived sources into the queue
+    // copy's structured media before staging. The raw payload and its pre-hook
+    // text are untouched, so the live send below stays copy-free on the original.
+    const directiveOptions = await resolveChannelOutboundDirectiveOptions({
+      cfg: params.cfg,
+      channel,
+    });
+    const queueCustodyPayloads = materializeQueueCustodyMedia(
+      strippedQueuePayloads,
+      createOutboundPayloadPlan(strippedQueuePayloads, {
+        cfg: params.cfg,
+        sessionKey: params.session?.policyKey ?? params.session?.key,
+        surface: channel,
+        conversationType: params.session?.conversationType,
+        extractMarkdownImages: directiveOptions.extractMarkdownImages,
+      }),
+    );
+    const queuePayloadsChanged = queueCustodyPayloads.some(
+      (payload, index) => payload !== payloads[index],
+    );
+    // Media staging only rewrites source URLs one-for-one, so the plan stays keyed
+    // to the custody payload counts rather than to which copy the row references;
+    // recovery replays entry.payloads and this plan together. Materialized custody
+    // anchors mediaUrl to the effective set (to override the in-text directive on
+    // replay), so count fan-out from mediaUrls alone for payloads we rewrote to
+    // keep the plan aligned with the deduped effective media recovery re-derives.
+    const renderPlanPayloads = queueCustodyPayloads.map((payload, index) =>
+      payload === strippedQueuePayloads[index] ? payload : { ...payload, mediaUrl: undefined },
+    );
+    const queueRenderedBatchPlan = queuePayloadsChanged
+      ? createRenderedMessageBatchPlan(renderPlanPayloads)
+      : renderedBatchPlan;
     // A durable row must not outlive its media. Producer-owned local sources
     // (TTS temps above all) are deleted when this process exits, so the queue
     // takes its own copy first and the row references that; the live send below
     // keeps the original path and stays copy-free.
     const staged = await stageQueuePayloadMedia({
-      payloads: strippedQueuePayloads,
+      payloads: queueCustodyPayloads,
       // Resolved exactly as the live send resolves it: staging must neither
       // reject media the send would deliver (agent workspace sources are only
       // reachable through the agent-scoped roots) nor read more than the send may.
       mediaAccess: resolveOutboundMediaAccessForSend(
         params,
         channel,
-        collectPayloadMediaSources(strippedQueuePayloads),
+        collectPayloadMediaSources(queueCustodyPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
         cfg: params.cfg,

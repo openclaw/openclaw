@@ -71,6 +71,23 @@ async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+// Pid files are written with plain writeFileSync, so an existence poll can
+// observe the open-truncate 0-byte window and parse NaN (the #109140 flake
+// class). Wait until the content parses to a real pid, not just for the file.
+async function waitForPidFile(filePath: string, timeoutMs: number): Promise<number> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      const pid = Number.parseInt(fs.readFileSync(filePath, "utf8"), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    }
+    await sleep(5);
+  }
+  throw new Error(`timed out waiting for pid in ${filePath}`);
+}
+
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
@@ -909,8 +926,7 @@ describe("runTsdownBuildInvocation", () => {
           },
         );
 
-        await waitForFile(childPidPath, timeoutMs);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, timeoutMs);
         expect(isProcessAlive(childPid)).toBe(true);
         const result = await runPromise;
 
@@ -976,7 +992,7 @@ describe("runTsdownBuildInvocation", () => {
         );
 
         await waitForFile(readyPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         const result = await runPromise;
 
         expect(result.timedOut).toBe(true);
@@ -1029,8 +1045,7 @@ describe("runTsdownBuildInvocation", () => {
         });
 
         await waitForFile(readyPath, 2_000);
-        await waitForFile(childPidPath, 2_000);
-        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");

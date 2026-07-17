@@ -206,6 +206,18 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
     expect(message).not.toContain("s".repeat(100));
     expect(message).not.toContain(prefix);
   });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
+  });
 });
 
 describe("Gateway child fixture helpers", () => {
@@ -1294,10 +1306,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {

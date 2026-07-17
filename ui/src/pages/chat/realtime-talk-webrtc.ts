@@ -1,4 +1,5 @@
 // Control UI chat module implements realtime talk webrtc behavior.
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
@@ -49,6 +50,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private channel: RTCDataChannel | null = null;
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
+  private captureVideo: HTMLVideoElement | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private closed = false;
   private responseActive = false;
@@ -56,6 +58,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
   private pendingOfferRequest: PendingOfferRequest | null = null;
+  private mediaSetupController: AbortController | null = null;
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
 
@@ -71,6 +74,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
+    this.mediaSetupController?.abort();
     const peer = new RTCPeerConnection();
     this.peer = peer;
     this.audio = document.createElement("audio");
@@ -83,7 +87,22 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.audio.srcObject = stream;
       }
     });
-    const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));
+    const mediaSetupController = new AbortController();
+    this.mediaSetupController = mediaSetupController;
+    let media: MediaStream | typeof cancelledSetup;
+    try {
+      media = await this.awaitSetupStep(
+        peer,
+        openRealtimeTalkInput(this.ctx.inputDeviceId, {
+          video: this.ctx.videoEnabled,
+          signal: mediaSetupController.signal,
+        }),
+      );
+    } finally {
+      if (this.mediaSetupController === mediaSetupController) {
+        this.mediaSetupController = null;
+      }
+    }
     if (media === cancelledSetup) {
       return;
     }
@@ -92,10 +111,22 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       return;
     }
     this.media = media;
+    if (this.ctx.videoEnabled) {
+      const captureVideo = document.createElement("video");
+      captureVideo.autoplay = true;
+      captureVideo.muted = true;
+      captureVideo.playsInline = true;
+      captureVideo.srcObject = media;
+      this.captureVideo = captureVideo;
+      this.ctx.callbacks.onVideoStream?.(media);
+      void captureVideo.play().catch(() => undefined);
+    }
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
     }
+    // Camera frames travel only as explicit describe_view data-channel events.
+    // Keeping video off the peer prevents unintended continuous camera upload.
     for (const track of media.getAudioTracks()) {
       peer.addTrack(track, media);
     }
@@ -249,6 +280,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "session.closed", final: true });
     }
     this.closed = true;
+    this.mediaSetupController?.abort();
+    this.mediaSetupController = null;
     this.abortOfferRequest();
     this.channel?.close();
     this.channel = null;
@@ -256,6 +289,11 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.peer = null;
     this.media?.getTracks().forEach((track) => track.stop());
     this.media = null;
+    if (this.captureVideo) {
+      this.captureVideo.srcObject = null;
+      this.captureVideo = null;
+    }
+    this.ctx.callbacks.onVideoStream?.(null);
     this.inputMeter?.stop();
     this.inputMeter = null;
     this.audio?.remove();
@@ -439,6 +477,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       });
       return;
     }
+    if (name === REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME) {
+      await this.handleDescribeViewToolCall(callId, key);
+      return;
+    }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       return;
     }
@@ -461,6 +503,47 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       });
     } finally {
       this.consultAbortControllers.delete(abortController);
+    }
+  }
+
+  private async handleDescribeViewToolCall(callId: string, itemId: string): Promise<void> {
+    this.emitTalkEvent({
+      type: "tool.call",
+      callId,
+      itemId,
+      payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME },
+    });
+    try {
+      const imageUrl = await captureRealtimeTalkVideoFrame(
+        this.captureVideo,
+        realtimeTalkDataChannelMaxMessageSize(this.peer),
+      );
+      this.send({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_image", image_url: imageUrl }],
+        },
+      });
+      this.submitToolResult(callId, { ok: true, frameAttached: true });
+      this.emitTalkEvent({
+        type: "tool.result",
+        callId,
+        itemId,
+        final: true,
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, frameAttached: true },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.submitToolResult(callId, { ok: false, error: message });
+      this.emitTalkEvent({
+        type: "tool.error",
+        callId,
+        itemId,
+        final: true,
+        payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, message },
+      });
     }
   }
 
@@ -529,4 +612,95 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.responseCreatePending = false;
     this.requestResponseCreate();
   }
+}
+
+const REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024;
+const REALTIME_TALK_FRAME_MAX_ATTEMPTS = 8;
+
+function realtimeTalkDataChannelMaxMessageSize(peer: RTCPeerConnection | null): number {
+  const negotiated = peer?.sctp?.maxMessageSize;
+  return typeof negotiated === "number" && Number.isFinite(negotiated) && negotiated > 0
+    ? negotiated
+    : REALTIME_TALK_DEFAULT_MAX_MESSAGE_SIZE;
+}
+
+function realtimeTalkImageEvent(imageUrl: string): unknown {
+  return {
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_image", image_url: imageUrl }],
+    },
+  };
+}
+
+async function captureRealtimeTalkVideoFrame(
+  video: HTMLVideoElement | null,
+  maxMessageSize: number,
+): Promise<string> {
+  if (!video?.srcObject) {
+    throw new Error("Camera preview is unavailable");
+  }
+  if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    await waitForRealtimeTalkVideoData(video);
+  }
+  if (
+    video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+    !video.videoWidth ||
+    !video.videoHeight
+  ) {
+    throw new Error("Camera frame has no image data");
+  }
+  let scale = Math.min(1, 1280 / video.videoWidth, 720 / video.videoHeight);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Camera frame capture is unavailable");
+  }
+  let quality = 0.8;
+  for (let attempt = 0; attempt < REALTIME_TALK_FRAME_MAX_ATTEMPTS; attempt += 1) {
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageUrl = canvas.toDataURL("image/jpeg", quality);
+    const eventBytes = new TextEncoder().encode(
+      JSON.stringify(realtimeTalkImageEvent(imageUrl)),
+    ).length;
+    if (eventBytes <= maxMessageSize) {
+      return imageUrl;
+    }
+    const reduction = Math.min(0.75, Math.sqrt(maxMessageSize / eventBytes) * 0.9);
+    scale *= reduction;
+    quality = Math.max(0.4, quality - 0.1);
+  }
+  throw new Error("Camera frame is too large for the Realtime connection");
+}
+
+function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      if (timeout === undefined) {
+        return;
+      }
+      globalThis.clearTimeout(timeout);
+      timeout = undefined;
+      video.removeEventListener("loadeddata", onData);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const onData = () => finish();
+    timeout = globalThis.setTimeout(
+      () => finish(new Error("Camera preview did not become ready")),
+      5_000,
+    );
+    video.addEventListener("loadeddata", onData);
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      finish();
+    }
+  });
 }

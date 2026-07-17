@@ -101,6 +101,10 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  acpReplayLedger: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;

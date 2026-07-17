@@ -2010,7 +2010,6 @@
     "ui:i18n:baseline": "node --import tsx scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
-    "ui:i18n:resolve-conflicts": "node --import tsx scripts/control-ui-i18n-resolve-conflicts.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:i18n:verify": "node --import tsx scripts/control-ui-i18n-verify.ts verify",
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",

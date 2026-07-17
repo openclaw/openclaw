@@ -280,9 +280,19 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
+  it("moves drawer and search controls into the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
-    await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);
+    const header = page.locator(".chat-pane__header").first();
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--merged-chat-chrome");
+    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
+      .toBe(true);
   });
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {

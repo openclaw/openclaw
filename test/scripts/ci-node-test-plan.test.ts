@@ -181,11 +181,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ).toBe(true);
     expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
     expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
-    expect(bundled.slice(0, 4).map((shard) => shard.shardName)).toEqual([
+    expect(bundled.slice(0, 5).map((shard) => shard.shardName)).toEqual([
       "core-tooling",
       "auto-reply-reply-commands-1",
       "auto-reply-reply-commands-2",
       "auto-reply-reply-commands-3",
+      "core-unit-fast",
     ]);
     expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
       DEFAULT_NODE_TEST_RUNNER,

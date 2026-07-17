@@ -21,6 +21,7 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -1788,7 +1789,7 @@ export function loadPluginManifest(
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
-  if (CORE_RESERVED_PLUGIN_IDS.has(id)) {
+  if (CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id))) {
     return cacheResult({
       ok: false,
       error: `plugin manifest id "${id}" is reserved by OpenClaw core`,

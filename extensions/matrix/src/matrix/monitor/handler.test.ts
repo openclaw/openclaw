@@ -884,6 +884,33 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it.each([
+    { body: "hello", isControlCommand: false, expectedDispatches: 0 },
+    { body: "/new", isControlCommand: true, expectedDispatches: 1 },
+  ])(
+    "keeps require-mention decision for unmentioned room text $body",
+    async ({ body, isControlCommand, expectedDispatches }) => {
+      const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+        cfg: { commands: { useAccessGroups: false } },
+        isDirectMessage: false,
+        mentionRegexes: [],
+        shouldHandleTextCommands: () => true,
+        hasControlCommand: (text?: string) => isControlCommand && text === body,
+        getMemberDisplayName: async () => "sender",
+      });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$unmentioned-${isControlCommand ? "command" : "text"}`,
+          body,
+        }),
+      );
+
+      expect(finalizeInboundContext).toHaveBeenCalledTimes(expectedDispatches);
+    },
+  );
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -2925,8 +2952,7 @@ describe("matrix monitor handler draft streaming", () => {
     onPlanUpdate?: (payload: {
       phase: string;
       explanation?: string;
-      steps?: string[];
-      planSteps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
+      steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void>;
     onApprovalEvent?: (payload: { phase: string; command?: string }) => Promise<void>;
     onCommandOutput?: (payload: {
@@ -3099,7 +3125,7 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onPlanUpdate?.({
       phase: "update",
       explanation: "Initial plan",
-      planSteps: [{ step: "Inspect", status: "in_progress" }],
+      steps: [{ step: "Inspect", status: "in_progress" }],
     });
     await vi.waitFor(() => {
       expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
@@ -3108,7 +3134,7 @@ describe("matrix monitor handler draft streaming", () => {
     await opts.onPlanUpdate?.({
       phase: "update",
       explanation: "Revised plan",
-      planSteps: [
+      steps: [
         { step: "Inspect", status: "completed" },
         { step: "Patch", status: "in_progress" },
       ],

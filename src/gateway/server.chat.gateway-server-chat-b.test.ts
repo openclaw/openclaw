@@ -3918,12 +3918,12 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
         dedupe: new Map(),
       } as unknown as GatewayRequestContext;
-      let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        queuedLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.queuedFollowupLifecycle;
-        queuedLifecycle?.onEnqueued?.();
+        turnAdoptionLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.turnAdoptionLifecycle;
+        turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
       });
@@ -3963,8 +3963,8 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await vi.waitFor(() => expect(queuedLifecycle).toBeDefined(), FAST_WAIT_OPTS);
-      expect(queuedLifecycle?.ownerKey).toBe("connection:conn-tui");
+      await vi.waitFor(() => expect(turnAdoptionLifecycle).toBeDefined(), FAST_WAIT_OPTS);
+      expect(turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
@@ -4034,18 +4034,18 @@ describe("gateway server chat", () => {
       queuedEntry?.controller.abort();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
 
-      queuedLifecycle?.onComplete?.();
+      turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       await vi.waitFor(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
 
-      let failedDispatchLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         failedDispatchLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.queuedFollowupLifecycle;
-        failedDispatchLifecycle?.onEnqueued?.();
+          ?.turnAdoptionLifecycle;
+        failedDispatchLifecycle?.onDeferred?.();
         throw new Error("post-enqueue bookkeeping failed");
       });
       await expectDefined(
@@ -4098,7 +4098,7 @@ describe("gateway server chat", () => {
         payload: { status: "ok" },
       });
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
-      failedDispatchLifecycle?.onComplete?.();
+      failedDispatchLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
     } finally {
       dispatchInboundMessageMock.mockReset();
