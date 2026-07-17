@@ -203,6 +203,40 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(tail).not.toContain("old\nold\nold\nold\nold\nold\nold\nold\nold");
   });
 
+  it("drops a leading character split by the log tail byte cut", () => {
+    const logPath = path.join(makeTempDir(), "gateway.log");
+    // 100 ASCII bytes + 4-byte emoji + 20 ASCII bytes: a 23-byte window starts
+    // one byte into the emoji, and a 24-byte window starts exactly on it.
+    fs.writeFileSync(
+      logPath,
+      Buffer.concat([Buffer.from("x".repeat(100)), Buffer.from("😀"), Buffer.from("y".repeat(20))]),
+    );
+
+    expect(readLogTail(logPath, 23)).toBe("y".repeat(20));
+    expect(readLogTail(logPath, 24)).toBe(`😀${"y".repeat(20)}`);
+  });
+
+  it("keeps the readiness timeout tail free of split surrogate pairs", async () => {
+    const logPath = path.join(makeTempDir(), "gateway.log");
+    // 4010 UTF-16 units with an emoji at units 9-10: the last-4000 cut starts
+    // on the emoji's low surrogate.
+    fs.writeFileSync(logPath, `${"a".repeat(9)}😀${"b".repeat(3999)}`, "utf8");
+
+    let message = "";
+    try {
+      await waitForLog(logPath, /\[gateway\] ready/u, "gateway", 0);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("did not become ready");
+    const tail = message.split("\n").at(-1) ?? "";
+    expect(tail).toBe("b".repeat(3999));
+    expect(tail).not.toMatch(
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u,
+    );
+  });
+
   it("honors short reads when a log shrinks during tailing", () => {
     vi.spyOn(fs, "statSync").mockReturnValue({
       isFile: () => true,

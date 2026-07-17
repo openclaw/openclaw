@@ -13,10 +13,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { decodeUtf8Tail } from "./lib/text-file-utils.mjs";
 import { telegramBotApi } from "./telegram-bot-api.ts";
 
 type CommandResult = {
@@ -582,7 +584,7 @@ function appendCommandText(current: string, chunk: Buffer): string {
 
 function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
   const next = appendCommandText(current, chunk);
-  return next.length > maxChars ? next.slice(-maxChars) : next;
+  return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
 }
 
 function appendCommandStdout(
@@ -898,7 +900,7 @@ function spawnLogged(command: string, args: string[], options: SpawnOptionsWitho
   child.stderr.setEncoding("utf8");
   let output = "";
   const capture = (chunk: string) => {
-    output = `${output}${chunk}`.slice(-12000);
+    output = sliceUtf16Safe(`${output}${chunk}`, -12000);
   };
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
@@ -922,7 +924,7 @@ function waitForOutput(
     const timeout = setTimeout(() => {
       reject(
         new Error(
-          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${output().slice(-4000)}`,
+          `${label} did not become ready within ${resolvedTimeoutMs}ms\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     }, resolvedTimeoutMs);
@@ -936,7 +938,7 @@ function waitForOutput(
       cleanup();
       reject(
         new Error(
-          `${label} exited before ready with code ${code ?? "unknown"}\n${output().slice(-4000)}`,
+          `${label} exited before ready with code ${code ?? "unknown"}\n${sliceUtf16Safe(output(), -4000)}`,
         ),
       );
     };
@@ -1032,7 +1034,9 @@ export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): s
   } finally {
     fs.closeSync(fd);
   }
-  return buffer.subarray(0, bytesRead).toString("utf8");
+  // The byte window can start inside a multi-byte UTF-8 character; drop the
+  // leading continuation bytes so failure diagnostics stay valid UTF-8.
+  return decodeUtf8Tail(buffer.subarray(0, bytesRead), stat.size > bytesToRead);
 }
 
 export async function waitForLog(
@@ -1052,7 +1056,9 @@ export async function waitForLog(
     });
   }
   const text = readLogTail(logPath);
-  throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
+  throw new Error(
+    `${label} did not become ready within ${timeoutMs}ms\n${sliceUtf16Safe(text, -4000)}`,
+  );
 }
 
 async function telegram(token: string, method: string, body: JsonObject = {}) {
