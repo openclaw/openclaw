@@ -7,11 +7,17 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -19,16 +25,13 @@ import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import {
+  isCompleteReplyConfig,
+  markReplyConfigRuntimeMode,
+  usesFullReplyRuntime,
+} from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { SessionInitResult } from "./session.js";
-
-const COMPLETE_REPLY_CONFIG_SYMBOL = Symbol.for("openclaw.reply.complete-config");
-const FULL_REPLY_RUNTIME_SYMBOL = Symbol.for("openclaw.reply.full-runtime");
-
-type ReplyConfigWithMarker = OpenClawConfig & {
-  [COMPLETE_REPLY_CONFIG_SYMBOL]?: true;
-  [FULL_REPLY_RUNTIME_SYMBOL]?: true;
-};
 
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
@@ -49,52 +52,8 @@ function resolveFastSessionKey(params: {
   return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
 }
 
-function markReplyConfigRuntimeMode(
-  config: ReplyConfigWithMarker,
-  runtimeMode: "fast" | "full" = "fast",
-): void {
-  Object.defineProperty(config, FULL_REPLY_RUNTIME_SYMBOL, {
-    value: runtimeMode === "full" ? true : undefined,
-    configurable: true,
-    enumerable: false,
-  });
-}
-
-export function markCompleteReplyConfig<T extends OpenClawConfig>(
-  config: T,
-  options?: { runtimeMode?: "fast" | "full" },
-): T {
-  Object.defineProperty(config as ReplyConfigWithMarker, COMPLETE_REPLY_CONFIG_SYMBOL, {
-    value: true,
-    configurable: true,
-    enumerable: false,
-  });
-  markReplyConfigRuntimeMode(config as ReplyConfigWithMarker, options?.runtimeMode ?? "fast");
-  return config;
-}
-
-export function withFastReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markCompleteReplyConfig(config, { runtimeMode: "fast" });
-}
-
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markCompleteReplyConfig(config, { runtimeMode: "full" });
-}
-
-function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
-  return Boolean(
-    config &&
-    typeof config === "object" &&
-    (config as ReplyConfigWithMarker)[COMPLETE_REPLY_CONFIG_SYMBOL] === true,
-  );
-}
-
-function usesFullReplyRuntime(config: unknown): boolean {
-  return Boolean(
-    config &&
-    typeof config === "object" &&
-    (config as ReplyConfigWithMarker)[FULL_REPLY_RUNTIME_SYMBOL] === true,
-  );
+  return markReplyConfigRuntimeMode(config, "full");
 }
 
 export function resolveGetReplyConfig(params: {
@@ -217,14 +176,10 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-    clone: false,
-  });
-  const existingEntry = resolveSessionStoreEntry({
-    store: sessionStore,
-    sessionKey,
-  }).existing;
+  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+  );
+  const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
@@ -240,6 +195,9 @@ export function initFastReplySessionState(params: {
   const softReset = parseSoftResetCommand(normalizedResetBody);
   const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
   const resetTriggered = Boolean(resetMatch) && !softReset.matched;
+  if (resetTriggered && isModelSelectionLocked(existingEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
@@ -250,7 +208,7 @@ export function initFastReplySessionState(params: {
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
       ? existingEntry.sessionFile
-      : resolveSessionTranscriptPath(sessionId, agentId);
+      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,

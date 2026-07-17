@@ -30,6 +30,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+  catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
   prepareBeforeToolCallParams?: (
@@ -52,6 +54,8 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+    catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
@@ -70,7 +74,7 @@ export function asToolParamsRecord(params: unknown): Record<string, unknown> {
     : {};
 }
 
-export type StringParamOptions = {
+type StringParamOptions = {
   required?: boolean;
   trim?: boolean;
   label?: string;
@@ -369,7 +373,7 @@ export function readStringArrayParam(
   return undefined;
 }
 
-export type ReactionParams = {
+type ReactionParams = {
   emoji: string;
   remove: boolean;
   isEmpty: boolean;
@@ -396,7 +400,7 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function stringifyToolPayload(payload: unknown): string {
+function stringifyToolPayload(payload: unknown): string {
   if (typeof payload === "string") {
     return payload;
   }
@@ -422,9 +426,9 @@ export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<
   return textResult(stringifyToolPayload(payload), payload);
 }
 
-export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
+type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
-export function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
+function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
   return {
     content: [],
     details: undefined,
@@ -439,7 +443,7 @@ export function toolProgressResult(progress: PublicToolProgress): AgentToolResul
 
 // Tool progress is a UI side channel. The model-facing tool result remains in
 // `content`; progress text must already be safe to show in channel previews.
-export function emitToolProgress(
+function emitToolProgress(
   onUpdate: AgentToolUpdateCallback | undefined,
   progress: PublicToolProgress,
 ): void {
@@ -482,7 +486,7 @@ export function scheduleToolProgress(
   return clear;
 }
 
-export async function imageResult(params: {
+async function imageResult(params: {
   label: string;
   path: string;
   base64: string;
@@ -539,7 +543,7 @@ export async function imageResultFromFile(params: {
   });
 }
 
-export type AvailableTag = {
+type AvailableTag = {
   id?: string;
   name: string;
   moderated?: boolean;

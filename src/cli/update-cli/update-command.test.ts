@@ -3,36 +3,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
-  resolveGatewayInstallEntrypoint,
-} from "../../daemon/gateway-entrypoint.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
+  resolvePostSyncPluginUpdateSkipIds,
+} from "./update-command-plugins.test-support.js";
+import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import {
+  resolvePostInstallDoctorEnv,
+  resolvePostUpdateServiceStateReadEnv,
+  resolveUpdatedGatewayRestartPort,
+  shouldPrepareUpdatedInstallRestart,
+} from "./update-command-service.js";
+import {
   formatPostUpdateGatewayRecoveryInstructions,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostCoreUpdateChildStdio,
-  resolvePostUpdateServiceStateReadEnv,
-  resolvePostInstallDoctorEnv,
-  shouldPrepareUpdatedInstallRestart,
-  resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
-  updatePluginsAfterCoreUpdate,
-} from "./update-command.js";
-
-describe("resolveGatewayInstallEntrypointCandidates", () => {
-  it("prefers index.js before legacy entry.js", () => {
-    expect(resolveGatewayInstallEntrypointCandidates("/tmp/openclaw-root")).toEqual([
-      path.join("/tmp/openclaw-root", "dist", "index.js"),
-      path.join("/tmp/openclaw-root", "dist", "index.mjs"),
-      path.join("/tmp/openclaw-root", "dist", "entry.js"),
-      path.join("/tmp/openclaw-root", "dist", "entry.mjs"),
-    ]);
-  });
-});
+} from "./update-command-service.test-support.js";
 
 describe("resolveGatewayInstallEntrypoint", () => {
   it("prefers dist/index.js over dist/entry.js when both exist", async () => {
@@ -535,6 +526,18 @@ describe("collectMissingPluginInstallPayloads", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePostSyncPluginUpdateSkipIds", () => {
+  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
+    expect(
+      resolvePostSyncPluginUpdateSkipIds({
+        switchedToClawHub: ["whatsapp"],
+        switchedToNpm: ["voice-call"],
+        repairedMissingPayloadIds: new Set(["telegram"]),
+      }),
+    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
   });
 });
 

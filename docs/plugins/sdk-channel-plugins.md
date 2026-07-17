@@ -75,11 +75,11 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply helpers such as `createChannelTurnReplyPipeline`,
-`dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
-remain available for compatibility dispatchers. Do not use them for new
-channel code; start with the `message` adapter, receipts, and receive/send
-lifecycle helpers on `openclaw/plugin-sdk/channel-outbound` instead.
+Legacy reply helpers such as `dispatchInboundReplyWithBase` and
+`recordInboundSessionAndDispatchReply` remain available for compatibility
+dispatchers. Do not use them for new channel code; start with the `message`
+adapter, receipts, and receive/send lifecycle helpers on
+`openclaw/plugin-sdk/channel-outbound` instead.
 
 ### Inbound ingress (experimental)
 
@@ -92,9 +92,7 @@ effects stay in the plugin. Keep plugin identity normalization in the
 descriptor you pass to the resolver; do not serialize raw match values from
 the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
-ownership boundary, and test expectations. The older
-`openclaw/plugin-sdk/channel-ingress` subpath stays exported as a deprecated
-compatibility facade for third-party plugins.
+ownership boundary, and test expectations.
 
 ### Typing indicators
 
@@ -311,6 +309,11 @@ Other approval helpers:
 - Preserve the delivered approval id kind end-to-end. Native clients should
   not guess or rewrite exec vs plugin approval routing from channel-local
   state.
+- Pass that explicit `approvalKind` to `resolveApprovalOverGateway`. This uses
+  the canonical `approval.resolve` service and returns the recorded winner when
+  another surface answers first. The older explicit `resolveMethod` input
+  remains for command-backed controls; new native actions must not use it or
+  infer kind from an ID.
 - Different approval kinds can intentionally expose different native
   surfaces. Current bundled examples: Matrix keeps the same native DM/channel
   routing and reaction UX for exec and plugin approvals, while still letting
@@ -329,6 +332,7 @@ For hot channel entrypoints, prefer these narrower subpaths over the broader
 - `openclaw/plugin-sdk/approval-client-runtime`
 - `openclaw/plugin-sdk/approval-delivery-runtime`
 - `openclaw/plugin-sdk/approval-gateway-runtime`
+- `openclaw/plugin-sdk/approval-reference-runtime`
 - `openclaw/plugin-sdk/approval-handler-adapter-runtime`
 - `openclaw/plugin-sdk/approval-handler-runtime`
 - `openclaw/plugin-sdk/approval-native-runtime`
@@ -462,6 +466,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
 const wasMentioned = matchesMentionWithExplicit({
   text,
@@ -483,12 +488,18 @@ const facts = {
   ],
 };
 
+const implicitMentions = resolveChannelImplicitMentions({
+  cfg,
+  channel: channelId,
+  accountId,
+});
+
 const decision = resolveInboundMentionDecision({
   facts,
   policy: {
     isGroup,
     requireMention,
-    allowedImplicitMentionKinds: requireExplicitMention ? [] : ["reply_to_bot", "quoted_bot"],
+    implicitMentions,
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,

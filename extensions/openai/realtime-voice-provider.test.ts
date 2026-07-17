@@ -304,6 +304,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     });
   });
 
@@ -316,6 +317,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(bridge.supportsToolResultContinuation).toBe(true);
+    expect(bridge.supportsToolResultSuppression).toBe(true);
   });
 
   it("adds OpenClaw attribution headers to native realtime websocket requests", () => {
@@ -1097,6 +1099,55 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
     expect(bridge.isConnected()).toBe(true);
 
+    bridge.close();
+  });
+
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    socket.readyState = FakeWebSocket.CLOSED;
+    socket.emit("close", 1006, Buffer.from("transient drop"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    const reconnectedSocket = FakeWebSocket.instances[1];
+    if (!reconnectedSocket) {
+      throw new Error("expected bridge to reconnect after close");
+    }
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
     bridge.close();
   });
 
@@ -1938,7 +1989,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
 
     expect(parseSent(socket).slice(-1)).toEqual([
       {
@@ -2154,7 +2205,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
-    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
 
     expect(parseSent(socket).slice(-1)).toEqual([
       {
@@ -2168,7 +2219,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     ]);
     expect(hasSentEventType(socket, "response.create")).toBe(false);
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
 
     expect(parseSent(socket).slice(-3)).toEqual([
       {
@@ -2209,7 +2260,11 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
-    bridge.submitToolResult("call_1", { status: "already_delivered" }, { suppressResponse: true });
+    void bridge.submitToolResult(
+      "call_1",
+      { status: "already_delivered" },
+      { suppressResponse: true },
+    );
 
     expect(parseSent(socket).slice(-1)).toEqual([
       {
@@ -2248,13 +2303,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
-    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    void bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
     expect(onError).not.toHaveBeenCalled();
     expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
 
     expect(parseSent(socket).slice(-3)).toEqual([
       {
@@ -2292,7 +2347,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.cancelled" })));
 
     expect(parseSent(socket).slice(-1)).toEqual([expectedResponseCreateEvent()]);
@@ -2530,7 +2585,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
     const responseCancelEvent = parseSent(socket).findLast(
       (event) => event.type === "response.cancel",
@@ -2598,7 +2653,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     if (!responseCancelEvent?.event_id) {
       throw new Error("expected response.cancel event id");
     }
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
     const sessionUpdateCount = parseSent(socket).filter(
       (event) => event.type === "session.update",
@@ -2656,7 +2711,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
     );
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
 
     expect(parseSent(socket).slice(-1)[0]?.type).toBe("conversation.item.create");
 
@@ -2706,7 +2761,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
     await connecting;
 
-    bridge.submitToolResult("call_1", { text: "done" });
+    void bridge.submitToolResult("call_1", { text: "done" });
     const responseCreateEvent = parseSent(socket).findLast(
       (event) => event.type === "response.create",
     );
@@ -2753,3 +2808,4 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

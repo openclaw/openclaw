@@ -12,8 +12,12 @@ import {
   buildBlockedToolResult,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
-  testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
+import {
+  adjustedParamsByToolCallId,
+  buildAdjustedParamsKey,
+  recordToolExecutionTracked,
+} from "./agent-tools.before-tool-call.state.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
@@ -29,6 +33,8 @@ import type {
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
+
+const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
 function createTestContext(): {
   ctx: ToolHandlerContext;
@@ -145,6 +151,52 @@ function requireString(value: unknown, label: string): string {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+describe("update_plan progress events", () => {
+  it("emits the typed full plan snapshot after a successful result", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const emitted: CapturedAgentEvent[] = [];
+    const unsubscribe = registerAgentEventListener((event) => emitted.push(event));
+    try {
+      await handleToolExecutionEnd(ctx, {
+        type: "tool_execution_end",
+        toolName: "update_plan",
+        toolCallId: "plan-1",
+        isError: false,
+        result: {
+          content: [],
+          details: {
+            status: "updated",
+            explanation: "Implementation underway",
+            plan: [
+              { step: "Inspect", status: "completed" },
+              { step: "Patch", status: "in_progress" },
+            ],
+          },
+        },
+      });
+      await Promise.resolve();
+
+      const expected = {
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "openclaw",
+          explanation: "Implementation underway",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        },
+      };
+      expect(onAgentEvent).toHaveBeenCalledWith(expected);
+      expect(emitted).toContainEqual(expect.objectContaining(expected));
+    } finally {
+      unsubscribe();
+    }
+  });
+});
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
@@ -320,7 +372,86 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
-    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(200)}…`);
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+  });
+
+  it("keeps read warning args previews on UTF-16 boundaries", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(200)}${emoji}tail`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${"x".repeat(200)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("marks astral-only read warning args previews as truncated", async () => {
+    const { ctx, warn } = createTestContext();
+    const emoji = "😀";
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-astral-args",
+      args: emoji.repeat(101),
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const argsPreview = warnMeta?.argsPreview;
+    expect(typeof argsPreview).toBe("string");
+    expect(argsPreview).toBe(`${emoji.repeat(100)}…`);
+    expect(argsPreview).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it("does not scan visible preview content beyond the raw warning bound", async () => {
+    const { ctx, warn } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-bounded-args",
+      args: `${" ".repeat(200)}hidden`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta).not.toHaveProperty("argsPreview");
+  });
+
+  it("does not split surrogate pairs when bounding read warning preview", async () => {
+    const { ctx, warn } = createTestContext();
+
+    // Whitespace collapsing must not let a surrogate half from the raw cap survive sanitization.
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-surrogate-args",
+      args: `${"x".repeat(198)}  🎉`,
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    const warnMeta = warn.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(warnMeta?.argsPreview).toBe(`${"x".repeat(198)}…`);
   });
 
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
@@ -692,6 +823,71 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
   });
 
+  it("uses wrapped execution-boundary evidence when terminal events omit it", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-aborted-before-execution";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: { details: { status: "error", error: "tool timed out" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("prefers wrapped execution-boundary evidence over a terminal event default", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-cancelled-before-body";
+    recordToolExecutionTracked(toolCallId, "run-test");
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        executionStarted: true,
+        result: { details: { status: "error", error: "cancelled before tool body" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
   it("keeps a policy-blocked cron mutation replay-safe", async () => {
     const { ctx } = createTestContext();
     const toolCallId = "tool-cron-blocked";
@@ -975,6 +1171,56 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "exec",
       middlewareError: true,
+    });
+  });
+
+  it("preserves an unresolved mutation across a later read failure", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        args: { path: "/tmp/demo.txt", content: "updated" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "write",
+        toolCallId: "tool-write-failed",
+        isError: true,
+        result: { error: "permission denied" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        args: { path: "/tmp/missing.txt" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "read",
+        toolCallId: "tool-read-failed",
+        isError: true,
+        result: { error: "file not found" },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "write",
+      error: "permission denied",
+      mutatingAction: true,
     });
   });
 
@@ -2171,10 +2417,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         result: {
           details: {
             status: "approval-unavailable",
-            reason: "initiating-platform-disabled",
+            reason: "no-approval-route",
             channel: "discord",
             channelLabel: "Discord",
             accountId: "work",
+            host: "node",
+            nodeId: "node-mac-1",
           },
         },
       } as never,
@@ -2184,7 +2432,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       requireMockCallArg(onToolResult, 0, "tool result").text,
       "tool result text",
     );
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
+    expect(text).toContain("no interactive approval client is currently available");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");
@@ -3443,3 +3697,4 @@ describe("control UI credential redaction (issue #72283)", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

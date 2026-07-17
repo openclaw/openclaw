@@ -4,6 +4,7 @@ import {
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveInboundSupplementalSenderAllowed,
   resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
@@ -22,6 +23,7 @@ export {
 export {
   createDirectDmPreCryptoGuardPolicy,
   createPreCryptoDirectDmAuthorizer,
+  dispatchInboundDirectDm,
   dispatchInboundDirectDmWithRuntime,
   resolveInboundDirectDmAccessWithRuntime,
   type AccessGroupMembershipResolver,
@@ -31,6 +33,7 @@ export {
   type ResolvedInboundDirectDmAccess,
 } from "../channels/direct-dm.js";
 export {
+  formatAgentEnvelope,
   formatInboundEnvelope,
   formatInboundFromLabel,
   resolveEnvelopeFormatOptions,
@@ -78,8 +81,12 @@ export {
   // @deprecated Prefer `resolveInboundMentionDecision({ facts, policy })`.
   resolveMentionGatingWithBypass,
 } from "../channels/mention-gating.js";
-export type { LocationSource, NormalizedLocation } from "../channels/location.js";
-export { formatLocationText, toLocationContext } from "../channels/location.js";
+export type { LocationSource, NormalizedLocation, OutboundLocation } from "../channels/location.js";
+export {
+  formatLocationText,
+  normalizeOutboundLocation,
+  toLocationContext,
+} from "../channels/location.js";
 export type { LogFn } from "../channels/logging.js";
 export { logInboundDrop } from "../channels/logging.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
@@ -89,11 +96,23 @@ export {
 } from "../channels/inbound-event/classification.js";
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
+  createChannelInboundEnvelopeBuilder,
+  resolveChannelInboundRouteEnvelope,
+  type ChannelInboundEnvelopeInput,
+} from "../channels/inbound-event/envelope.js";
+export {
+  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
+  recordChannelFeedbackEvent,
+  runChannelFeedbackReflection,
+  type ChannelFeedbackReflectionResult,
+} from "../channels/feedback-reflection.js";
+export {
   buildChannelInboundEventContext,
   // @deprecated Prefer `buildChannelInboundEventContext`.
   finalizeChannelInboundContext,
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
+  resolveInboundSupplementalSenderAllowed,
   // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
   resolveChannelInboundSupplementalContext,
 };
@@ -161,6 +180,7 @@ export const filterChannelTurnSupplementalContext = filterChannelInboundSuppleme
 export {
   runChannelInboundEvent,
   runPreparedInboundReply,
+  dispatchChannelInboundTurn,
   dispatchChannelInboundReply,
   recordDroppedChannelInboundHistory,
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -173,6 +193,7 @@ export type {
   AssembledInboundReply,
   ChannelBotLoopProtectionFacts,
   ChannelInboundEventRunnerParams,
+  ChannelInboundTurnPlan,
   ChannelInboundDroppedHistoryOptions,
   PreparedInboundReply,
   InboundReplyDispatchResult,

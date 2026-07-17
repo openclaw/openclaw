@@ -1,4 +1,5 @@
 // Control UI controller manages form utils gateway state.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 
 export function cloneConfigObject<T>(value: T): T {
@@ -16,10 +17,6 @@ const OMIT_VALUE: SanitizeResult = { omitted: true };
 
 function keepValue(value: unknown): SanitizeResult {
   return { omitted: false, value };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function hasOwnRecordValue(record: Record<string, unknown> | null, key: string): boolean {
@@ -146,6 +143,9 @@ function resolvePathContainer(
   for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i];
     const nextKey = path[i + 1];
+    if (key === undefined) {
+      return null;
+    }
     if (typeof key === "number") {
       if (!Array.isArray(current)) {
         return null;
@@ -173,9 +173,13 @@ function resolvePathContainer(
     current = record[key] as Record<string, unknown> | unknown[];
   }
 
+  const lastKey = path.at(-1);
+  if (lastKey === undefined) {
+    return null;
+  }
   return {
     current,
-    lastKey: path[path.length - 1],
+    lastKey,
   };
 }
 

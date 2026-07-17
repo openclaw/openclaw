@@ -132,6 +132,7 @@ export type EmbeddedAgentSubscribeState = {
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
+  lastAssistantStreamContentIndex?: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
   lastAssistantTextNormalized?: string;
@@ -195,6 +196,7 @@ export type EmbeddedAgentSubscribeContext = {
   builtinToolNames?: ReadonlySet<string>;
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
+  noteCompletedAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
@@ -282,6 +284,7 @@ type ToolHandlerParams = Pick<
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
+  | "observeToolTerminal"
   | "onToolResult"
   | "config"
   | "messageChannel"
@@ -298,6 +301,7 @@ type ToolHandlerParams = Pick<
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
+  | "onDeliveredMessageToolOnlySourceReply"
 >;
 
 type ToolHandlerState = Pick<

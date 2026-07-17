@@ -82,6 +82,9 @@ flowchart LR
   machine running OpenClaw").
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
   keys).
+- **Filename search** indexes paths separately from note bodies. Exact full
+  paths, basenames, and filename stems rank ahead of partial path matches,
+  while snippets and body keyword scores still come from note content.
 
 If only one path is available, the other runs alone.
 
@@ -154,6 +157,10 @@ remain text, but they match against visual and audio content. See
 for setup.
 
 ## Session memory search
+
+For exact full-text recall from session transcripts, use [`sessions_search`](/concepts/session-search)
+and then open a result with `sessions_history`. Session-memory search remains the semantic,
+experimental complement.
 
 Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add

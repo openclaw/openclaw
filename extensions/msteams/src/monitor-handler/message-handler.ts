@@ -2,9 +2,10 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
   logInboundDrop,
   resolveInboundMentionDecision,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -157,7 +158,6 @@ function buildStoredConversationReference(params: {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent,
-    bot: agent ? { id: agent.id, name: agent.name } : undefined,
     conversation: {
       id: conversationId,
       conversationType,
@@ -266,6 +266,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
     // For channel thread messages, resolve the thread root message ID so outbound
     // replies land in the correct thread. The root ID comes from the `messageid=`
     // portion of conversation.id (preferred) or from activity.replyToId.
@@ -699,11 +700,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 channelGroupId,
                 conversationId,
                 threadParentId,
-                (token, groupId, graphChannelId, messageId) =>
+                (token, groupId, requestedChannelId, messageId) =>
                   fetchChannelMessage(
                     token,
                     groupId,
-                    graphChannelId,
+                    requestedChannelId,
                     messageId,
                     preprocessingDeadline,
                   ),
@@ -731,14 +732,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           });
         }
         const isThreadSenderAllowed = (msg: GraphThreadMessage) =>
-          groupPolicy === "allowlist"
-            ? resolveMSTeamsAllowlistMatch({
-                allowFrom: effectiveGroupAllowFrom,
+          resolveInboundSupplementalSenderAllowed({
+            isGroup: isChannel,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
                 senderId: msg.from?.user?.id ?? "",
                 senderName: msg.from?.user?.displayName,
                 allowNameMatching,
-              }).allowed
-            : true;
+              }).allowed,
+          });
         const parentSummary = summarizeParentMessage(parentMsg);
         const visibleParentMessages = parentMsg
           ? filterSupplementalContextItems({
@@ -783,17 +788,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-      cfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-    });
-    const body = core.channel.reply.formatAgentEnvelope({
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+    const body = buildEnvelope({
       channel: "Teams",
       from: envelopeFrom,
       timestamp,
-      previousTimestamp,
-      envelope: envelopeOptions,
       body: agentBody,
     });
     let combinedBody = body;
@@ -806,12 +805,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
+          buildEnvelope({
             channel: "Teams",
             from: conversationType,
             timestamp: entry.timestamp,
+            previousTimestamp: null,
             body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-            envelope: envelopeOptions,
           }),
       });
     }
@@ -826,14 +825,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const commandBody = text.trim();
     const quoteSenderAllowed =
       quoteInfo && quoteInfo.sender
-        ? !isChannel || groupPolicy !== "allowlist"
-          ? true
-          : resolveMSTeamsAllowlistMatch({
-              allowFrom: effectiveGroupAllowFrom,
-              senderId: quoteSenderId ?? "",
-              senderName: quoteSenderName,
-              allowNameMatching,
-            }).allowed
+        ? resolveInboundSupplementalSenderAllowed({
+            isGroup: !isDirectMessage,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
+                senderId: quoteSenderId ?? "",
+                senderName: quoteSenderName,
+                allowNameMatching,
+              }).allowed,
+          })
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -846,10 +849,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
     const nativeChannelId =
-      isChannel && teamAadGroupId ? `${teamAadGroupId}/${conversationId}` : undefined;
+      isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "msteams",
-      finalize: core.channel.reply.finalizeInboundContext,
       contextVisibility: contextVisibilityMode,
       supplemental: {
         quote: quoteInfo
@@ -899,7 +901,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           wasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
         },
         commands: {
-          authorized: commandAuthorized,
+          authorized: commandAuthorized === true,
         },
       },
       extra: {
@@ -966,12 +968,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
+            cfg,
             channel: "msteams",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
+            route: { agentId: route.agentId, sessionKey: route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             record: {
               onRecordError: (err) => {
                 logVerboseMessage(
@@ -1115,3 +1116,4 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

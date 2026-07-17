@@ -7,6 +7,7 @@
   },
   "name": "Workboard",
   "description": "Dashboard workboard for agent-owned issues and sessions.",
+  "catalog": { "featured": true, "order": 10 },
   "contracts": {
     "tools": [
       "workboard_list",
@@ -42,7 +43,8 @@
       "workboard_proof",
       "workboard_worker_log",
       "workboard_protocol_violation",
-      "workboard_unblock"
+      "workboard_unblock",
+      "workboard_move"
     ]
   },
   "commandAliases": [
@@ -153,6 +155,9 @@
       "optional": true
     },
     "workboard_unblock": {
+      "optional": true
+    },
+    "workboard_move": {
       "optional": true
     }
   },

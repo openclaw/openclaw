@@ -38,6 +38,7 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
 
 const loadMatrixActionClientModule = createLazyRuntimeModule(
   () => import("./matrix/actions/client.js"),
@@ -46,10 +47,6 @@ const loadMatrixActionClientModule = createLazyRuntimeModule(
 const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
-
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
 
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
@@ -72,10 +69,18 @@ function markCliFailure(): void {
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    totalBytes += buffer.byteLength;
+    if (totalBytes > MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES) {
+      throw new Error(
+        `Matrix recovery key stdin exceeds ${MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES} bytes.`,
+      );
+    }
+    chunks.push(buffer);
   }
-  const recoveryKey = Buffer.concat(chunks).toString("utf8").trim();
+  const recoveryKey = Buffer.concat(chunks, totalBytes).toString("utf8").trim();
   if (!recoveryKey) {
     throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");
   }
@@ -1638,7 +1643,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("setup")
     .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
     .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
     .option(
       "--force-reset-cross-signing",
       "Force reset cross-signing identity before bootstrap (requires active recovery key)",
@@ -1649,6 +1658,7 @@ export function registerMatrixCli(params: { program: Command }): void {
       async (options: {
         account?: string;
         recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
         forceResetCrossSigning?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1659,7 +1669,10 @@ export function registerMatrixCli(params: { program: Command }): void {
           run: async () =>
             await setupMatrixEncryption({
               account: options.account,
-              recoveryKey: options.recoveryKey,
+              recoveryKey: await resolveMatrixCliRecoveryKeyInput({
+                recoveryKey: options.recoveryKey,
+                recoveryKeyStdin: options.recoveryKeyStdin,
+              }),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
           onText: (result, verbose) => {
@@ -2316,3 +2329,4 @@ export function registerMatrixCli(params: { program: Command }): void {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -102,6 +102,7 @@ describe("ensureConfigReady", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
     tempRoots.push(root);
     setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_PROFILE");
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
     return root;
   }
@@ -126,7 +127,7 @@ describe("ensureConfigReady", () => {
   }
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
@@ -186,6 +187,12 @@ describe("ensureConfigReady", () => {
     }
   });
 
+  it("keeps status config guard reads non-observing", async () => {
+    await runEnsureConfigReady(["status"]);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
     const root = useTempOpenClawHome();
     writeLegacyTaskSidecarMarker(root);
@@ -196,6 +203,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
     });
   });
 
@@ -209,6 +217,7 @@ describe("ensureConfigReady", () => {
       migrateState: true,
       migrateLegacyConfig: false,
       invalidConfigNote: false,
+      observe: false,
     });
   });
 
@@ -314,26 +323,45 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+  it.each([
+    { commandPath: ["agent"], source: "exec-approvals.json" },
+    { commandPath: ["status"], source: "plugin-binding-approvals.json" },
+    { commandPath: ["plugins", "list"], source: "exec-approvals.json" },
+    { commandPath: ["tasks", "list"], source: "plugin-binding-approvals.json" },
+  ])(
+    "ignores default-state $source while $commandPath uses custom state",
+    async ({ commandPath, source }) => {
+      const root = useTempOpenClawHome();
+      const stateDir = path.join(root, "custom-state");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      writeStateMarker(root, source);
+      const sourcePath = path.join(root, ".openclaw", source);
+      const sourceRaw = fs.readFileSync(sourcePath, "utf8");
+
+      await runEnsureConfigReady(commandPath);
+
+      expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(sourceRaw);
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "exec-approvals.json"))).toBe(false);
+    },
+  );
+
+  it("keeps named profiles isolated from default-profile approval migrations", async () => {
     const root = useTempOpenClawHome();
-    const stateDir = path.join(root, "custom-state");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("OPENCLAW_PROFILE", "work");
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, ".openclaw-work"));
     writeStateMarker(root, "exec-approvals.json");
+    writeStateMarker(root, "plugin-binding-approvals.json");
 
     await runEnsureConfigReady(["agent"]);
 
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-      migrateState: true,
-      migrateLegacyConfig: false,
-      invalidConfigNote: false,
-    });
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it.each([
     ["Discord model picker preferences", "discord/model-picker-preferences.json"],
     ["Discord thread bindings", "discord/thread-bindings.json"],
-    ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
     ["Telegram bot info cache", "telegram/bot-info-default.json"],
     ["Telegram update offset", "telegram/update-offset-default.json"],
     ["Telegram sticker cache", "telegram/sticker-cache.json"],

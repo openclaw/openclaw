@@ -12,6 +12,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
+import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -84,6 +85,10 @@ function coerceCanvasPreview(
   if (!render) {
     return null;
   }
+  const mcpApp =
+    preview.mcpApp && typeof preview.mcpApp === "object" && !Array.isArray(preview.mcpApp)
+      ? (preview.mcpApp as Record<string, unknown>)
+      : undefined;
   return {
     kind: "canvas",
     surface: "assistant_message",
@@ -98,6 +103,19 @@ function coerceCanvasPreview(
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
     ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
       ? { sandbox: preview.sandbox }
+      : {}),
+    ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
+      ? {
+          mcpApp: {
+            viewId: mcpApp.viewId,
+            ...(typeof mcpApp.serverName === "string" ? { serverName: mcpApp.serverName } : {}),
+            ...(typeof mcpApp.toolName === "string" ? { toolName: mcpApp.toolName } : {}),
+            ...(typeof mcpApp.uiResourceUri === "string"
+              ? { uiResourceUri: mcpApp.uiResourceUri }
+              : {}),
+            ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
+          },
+        }
       : {}),
   };
 }
@@ -158,26 +176,8 @@ const MIME_BY_EXT: Record<string, string> = {
   zip: "application/zip",
 };
 
-function getFileExtension(url: string): string | undefined {
-  const trimmed = url.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const source = (() => {
-    try {
-      if (/^https?:\/\//i.test(trimmed)) {
-        return new URL(trimmed).pathname;
-      }
-    } catch {}
-    return trimmed;
-  })();
-  const fileName = source.split(/[\\/]/).pop() ?? source;
-  const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
-  return match?.[1]?.toLowerCase();
-}
-
 function mimeTypeFromUrl(url: string): string | undefined {
-  const ext = getFileExtension(url);
+  const ext = getMediaFileExtension(url);
   return ext ? MIME_BY_EXT[ext] : undefined;
 }
 

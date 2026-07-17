@@ -2,6 +2,11 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
+import {
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "./gateway-work-admission.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -24,7 +29,6 @@ type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
-let CommandLaneTaskTimeoutError: CommandQueueModule["CommandLaneTaskTimeoutError"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
@@ -34,7 +38,6 @@ let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
-let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
@@ -96,7 +99,6 @@ describe("command queue", () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
-      CommandLaneTaskTimeoutError,
       enqueueCommandInLane,
       GatewayDrainingError,
       getActiveTaskCount,
@@ -106,7 +108,6 @@ describe("command queue", () => {
       markGatewayDraining,
       resetAllLanes,
       resetCommandLane,
-      resetCommandQueueStateForTest,
       setCommandLaneConcurrency,
       waitForActiveTasks,
     } = await import("./command-queue.js"));
@@ -496,7 +497,10 @@ describe("command queue", () => {
       const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
         taskTimeoutMs: 25,
       });
-      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      const firstRejected = expect(first).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("elapsed 25ms reached task budget 25ms"),
+      });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
         secondRan = true;
@@ -602,7 +606,12 @@ describe("command queue", () => {
         taskTimeoutAbortSignal: abortController.signal,
         taskTimeoutAbortGraceMs: 25,
       });
-      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      const firstRejected = expect(first).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "abort grace 25ms elapsed (task budget 172800000ms, elapsed 25ms)",
+        ),
+      });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
         secondRan = true;
@@ -635,7 +644,12 @@ describe("command queue", () => {
         taskTimeoutAbortGraceMs: 25,
         taskTimeoutReleaseSignal: releaseController.signal,
       });
-      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      const firstRejected = expect(first).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining(
+          "lane release requested after 0ms (task budget 172800000ms)",
+        ),
+      });
       let secondRan = false;
       const second = enqueueCommandInLane(lane, async () => {
         secondRan = true;
@@ -665,7 +679,10 @@ describe("command queue", () => {
           throw new Error("progress failed");
         },
       });
-      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      const firstRejected = expect(first).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+        message: expect.stringContaining("no progress for 25ms (task budget 25ms"),
+      });
 
       await vi.advanceTimersByTimeAsync(25);
       await firstRejected;
@@ -850,6 +867,62 @@ describe("command queue", () => {
     markGatewayDraining();
     release();
     await expect(task).resolves.toBe("ok");
+  });
+
+  it("reversibly fences new enqueues without disturbing an active task", async () => {
+    const { task, release } = enqueueBlockedMainTask(async () => "active-finished");
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
+
+    release();
+    await expect(task).resolves.toBe("active-finished");
+    expect(suspension?.release()).toBe(true);
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "resumed")).resolves.toBe(
+      "resumed",
+    );
+  });
+
+  it("lets an admitted root enqueue while suspension preparation refuses new work", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "continued");
+    });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+
+    try {
+      continueRoot.resolve();
+      await expect(result).resolves.toBe("continued");
+      await expect(
+        enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      suspension?.rollback();
+      root?.release();
+    }
+  });
+
+  it("rejects subordinate enqueues from an admitted root after restart drain", async () => {
+    const continueRoot = createDeferred();
+    const root = tryBeginGatewayRootWorkAdmission();
+    expect(root).not.toBeNull();
+    const result = root?.run(async () => {
+      await continueRoot.promise;
+      return await enqueueCommandInLane(CommandLane.Main, async () => "blocked");
+    });
+
+    try {
+      markGatewayDraining();
+      continueRoot.resolve();
+      await expect(result).rejects.toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      root?.release();
+    }
   });
 
   it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {

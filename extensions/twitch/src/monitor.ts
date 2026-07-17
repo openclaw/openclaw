@@ -5,6 +5,7 @@
  * resolves agent routes, and handles replies.
  */
 
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -15,12 +16,12 @@ import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
-export type TwitchRuntimeEnv = {
+type TwitchRuntimeEnv = {
   log?: (message: string) => void;
   error?: (message: string) => void;
 };
 
-export type TwitchMonitorOptions = {
+type TwitchMonitorOptions = {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown; // OpenClawConfig
@@ -29,7 +30,7 @@ export type TwitchMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type TwitchMonitorResult = {
+type TwitchMonitorResult = {
   stop: () => void;
 };
 
@@ -75,11 +76,10 @@ async function processTwitchMessage(params: {
         });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
-        const body = core.channel.reply.formatAgentEnvelope({
+        const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
           channel: "Twitch",
           from: fromLabel,
           timestamp: input.timestamp,
-          envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
@@ -113,9 +113,6 @@ async function processTwitchMessage(params: {
             commandBody: input.textForCommands,
           },
         });
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg,
           channel: "twitch",
@@ -125,13 +122,8 @@ async function processTwitchMessage(params: {
           cfg,
           channel: "twitch",
           accountId,
-          agentId: route.agentId,
-          routeSessionKey: route.sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: `twitch:channel:${message.channel}`,
@@ -190,25 +182,24 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    const client = await clientManager.getClient(
-      account,
-      config as Parameters<typeof clientManager.getClient>[1],
-      accountId,
-    );
-    if (!client) {
-      runtime.error?.(`No client available for sending reply`);
-      return { visibleReplySent: false };
-    }
-
-    // Send the reply
     if (!payload.text) {
       runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
     }
-
     const textToSend = stripMarkdownForTwitch(payload.text);
-
-    await client.say(channel, textToSend);
+    if (!textToSend) {
+      return { visibleReplySent: false };
+    }
+    const result = await clientManager.sendMessage(
+      account,
+      channel,
+      textToSend,
+      config as Parameters<typeof clientManager.sendMessage>[3],
+      accountId,
+    );
+    if (!result.ok) {
+      throw new Error(result.error ?? "Send failed");
+    }
     return { visibleReplySent: true };
   } catch (err) {
     runtime.error?.(`Failed to send reply: ${String(err)}`);

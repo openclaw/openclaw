@@ -16,6 +16,11 @@ actor TalkModeRuntime {
         case systemVoiceOnly
     }
 
+    enum MLXFailureDisposition: Equatable {
+        case canceled
+        case fallback
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
@@ -360,9 +365,11 @@ actor TalkModeRuntime {
         await self.stopRecognition()
         await self.sendAndSpeak(text)
     }
+}
 
-    // MARK: - Gateway + TTS
+// MARK: - Gateway + TTS
 
+extension TalkModeRuntime {
     private func sendAndSpeak(_ transcript: String) async {
         let gen = self.lifecycleGeneration
         await self.reloadConfig()
@@ -389,12 +396,12 @@ actor TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
-            let normalizedStatus = Self.normalizedChatSendStatus(response.status)
+            let normalizedStatus = ChatSendStatus.normalized(response.status)
             self.logger.info(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "status=\(normalizedStatus, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
-            if Self.isTerminalChatSendFailure(response.status) {
+            if ChatSendStatus.acceptance(of: response.status) == .terminalFailure {
                 self.logger.warning(
                     "talk chat.send terminal ack runId=\(response.runId, privacy: .public) " +
                         "status=\(normalizedStatus, privacy: .public)")
@@ -403,7 +410,7 @@ actor TalkModeRuntime {
             }
 
             var assistantText: String?
-            if Self.isTerminalChatSendSuccess(response.status) {
+            if ChatSendStatus.acceptance(of: response.status) == .terminalSuccess {
                 self.logger.info(
                     "talk chat.send terminal ok runId=\(response.runId, privacy: .public); " +
                         "using history fallback")
@@ -517,19 +524,6 @@ actor TalkModeRuntime {
         }
     }
 
-    private static func normalizedChatSendStatus(_ status: String) -> String {
-        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
-        self.normalizedChatSendStatus(status) == "ok"
-    }
-
-    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
-        let normalized = self.normalizedChatSendStatus(status)
-        return normalized == "timeout" || normalized == "error"
-    }
-
     private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {
         let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -622,10 +616,11 @@ actor TalkModeRuntime {
         case .mlxThenSystemVoice:
             do {
                 try await self.playMLX(input: input)
-            } catch TalkMLXSpeechSynthesizer.SynthesizeError.canceled {
-                self.ttsLogger.info("talk mlx canceled")
-                return
             } catch {
+                if Self.mlxFailureDisposition(error) == .canceled {
+                    self.ttsLogger.info("talk mlx canceled")
+                    return
+                }
                 self.ttsLogger
                     .error(
                         "talk MLX failed: \(error.localizedDescription, privacy: .public); " +
@@ -664,6 +659,13 @@ actor TalkModeRuntime {
         default:
             return .gatewayTalkSpeakThenSystemVoice
         }
+    }
+
+    static func mlxFailureDisposition(_ error: Error) -> MLXFailureDisposition {
+        if case TalkMLXSpeechSynthesizer.SynthesizeError.canceled = error {
+            return .canceled
+        }
+        return .fallback
     }
 
     private struct TalkPlaybackInput {
@@ -935,7 +937,7 @@ actor TalkModeRuntime {
                         voicePreset: input.voicePreset)
                 })
         } catch TalkMLXSpeechSynthesizer.SynthesizeError.timedOut {
-            self.stopMLXVoice()
+            await self.stopMLXVoice()
             throw TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
         }
         let result = await self.playTalkAudio(data: audioData)
@@ -1003,7 +1005,7 @@ actor TalkModeRuntime {
         _ = usePCM ? await self.stopMP3() : await self.stopPCM()
         let localInterruptedAt = await self.stopTalkAudio()
         await TalkSystemSpeechSynthesizer.shared.stop()
-        self.stopMLXVoice()
+        await self.stopMLXVoice()
         guard self.phase == .speaking else { return }
         let interruptedAt = remoteInterruptedAt ?? localInterruptedAt
         if reason == .speech, let interruptedAt {
@@ -1125,8 +1127,8 @@ extension TalkModeRuntime {
             voicePreset: voicePreset)
     }
 
-    private func stopMLXVoice() {
-        TalkMLXSpeechSynthesizer.shared.stop()
+    private func stopMLXVoice() async {
+        await TalkMLXSpeechSynthesizer.shared.cancelCurrent()
     }
 
     // MARK: - Config
@@ -1271,52 +1273,5 @@ extension TalkModeRuntime {
             return spoken.contains(probe)
         }
         return spoken.contains(probe)
-    }
-
-    private static func resolveSpeed(speed: Double?, rateWPM: Int?, logger: Logger) -> Double? {
-        if let rateWPM, rateWPM > 0 {
-            let resolved = Double(rateWPM) / 175.0
-            if resolved <= 0.5 || resolved >= 2.0 {
-                logger.warning("talk rateWPM out of range: \(rateWPM, privacy: .public)")
-                return nil
-            }
-            return resolved
-        }
-        if let speed {
-            if speed <= 0.5 || speed >= 2.0 {
-                logger.warning("talk speed out of range: \(speed, privacy: .public)")
-                return nil
-            }
-            return speed
-        }
-        return nil
-    }
-
-    private static func validatedUnit(_ value: Double?, name: String, logger: Logger) -> Double? {
-        guard let value else { return nil }
-        if value < 0 || value > 1 {
-            logger.warning("talk \(name, privacy: .public) out of range: \(value, privacy: .public)")
-            return nil
-        }
-        return value
-    }
-
-    private static func validatedSeed(_ value: Int?, logger: Logger) -> UInt32? {
-        guard let value else { return nil }
-        if value < 0 || value > 4_294_967_295 {
-            logger.warning("talk seed out of range: \(value, privacy: .public)")
-            return nil
-        }
-        return UInt32(value)
-    }
-
-    private static func validatedNormalize(_ value: String?, logger: Logger) -> String? {
-        guard let value else { return nil }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["auto", "on", "off"].contains(normalized) else {
-            logger.warning("talk normalize invalid: \(normalized, privacy: .public)")
-            return nil
-        }
-        return normalized
     }
 }

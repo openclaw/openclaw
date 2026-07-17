@@ -106,6 +106,15 @@ export function buildStatusCommandOverviewRows(
   const eventsValue = buildStatusEventsValue({
     queuedSystemEvents: params.summary.queuedSystemEvents,
   });
+  const degradedSecretOwners = params.summary.degradedSecretOwners ?? [];
+  const degradedSecretsValue =
+    degradedSecretOwners.length > 0
+      ? params.warn(
+          `${degradedSecretOwners.length} unavailable · ${degradedSecretOwners
+            .map((owner) => `${owner.ownerKind}:${owner.ownerId}`)
+            .join(", ")}`,
+        )
+      : null;
   const tasksValue = buildStatusTasksValue({
     summary: params.summary,
     warn: params.warn,
@@ -166,6 +175,7 @@ export function buildStatusCommandOverviewRows(
         ? [{ Item: "Update restart", Value: params.updateRestartValue }]
         : []),
       { Item: "Memory", Value: memoryValue },
+      ...(degradedSecretsValue ? [{ Item: "Degraded secrets", Value: degradedSecretsValue }] : []),
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
       { Item: "Events", Value: eventsValue },

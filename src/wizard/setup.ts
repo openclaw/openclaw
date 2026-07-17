@@ -1,4 +1,3 @@
-// Setup wizard orchestrates onboarding prompts and generated OpenClaw config.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -27,6 +26,7 @@ import { runSetupModelAuthStep } from "./setup.model-auth.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import {
   readSetupConfigFileSnapshot,
+  readValidSetupConfigFile,
   requireRiskAcknowledgement,
   resolveQuickstartGatewayDefaults,
   writeWizardConfigFile,
@@ -61,7 +61,7 @@ async function offerLiveModelVerification(params: {
     return params.config;
   }
 
-  const { verifySetupInference } = await import("../crestodian/setup-inference.js");
+  const { verifySetupInference } = await import("../system-agent/setup-inference.js");
   const verify = async () => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const result = await withConsoleSubsystemsSuppressed(() =>
@@ -136,7 +136,7 @@ async function runSetupWizardOnce(
   let runtime = runtimeInput;
   runtime ??= defaultRuntime;
   const onboardHelpers = await import("../commands/onboard-helpers.js");
-  onboardHelpers.printWizardHeader(runtime);
+  await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
 
   const snapshot = await readSetupConfigFileSnapshot();
@@ -252,18 +252,26 @@ async function runSetupWizardOnce(
         hint: t("wizard.setup.flowKeepModelHint"),
       }
     : undefined;
+  // Import flags are import intent. Non-interactive setup already routes them
+  // to the migration import; showing the mode prompt here would let the answer
+  // silently drop the requested import.
+  const importIntent = Boolean(
+    opts.importFrom?.trim() || opts.importSource?.trim() || opts.importSecrets,
+  );
   let flow: SetupFlowChoice =
     explicitFlow ??
-    (await prompter.select({
-      message: t("wizard.setup.setupMode"),
-      options: [
-        ...(keepModelOption ? [keepModelOption] : []),
-        { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
-        { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
-        ...importOptions,
-      ],
-      initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
-    }));
+    (importIntent
+      ? "import"
+      : await prompter.select({
+          message: t("wizard.setup.setupMode"),
+          options: [
+            ...(keepModelOption ? [keepModelOption] : []),
+            { value: "quickstart", label: t("wizard.setup.flowQuickstart"), hint: quickstartHint },
+            { value: "advanced", label: t("wizard.setup.flowAdvanced"), hint: manualHint },
+            ...importOptions,
+          ],
+          initialValue: hasExistingModelConfig ? "keep-model" : "quickstart",
+        }));
 
   let keepExistingModelConfig = flow === "keep-model";
   if (keepExistingModelConfig) {
@@ -295,6 +303,7 @@ async function runSetupWizardOnce(
       detections: migrationDetections,
       prompter,
       runtime,
+      readConfigFile: readValidSetupConfigFile,
       commitConfigFile: (cfg) => writeWizardConfigFile(cfg, { allowConfigSizeDrop: true }),
       continueOnboarding: true,
     });
@@ -559,7 +568,7 @@ async function runSetupWizardOnce(
   }
 
   prompter.disableBackNavigation?.();
-  if (opts.skipChannels ?? opts.skipProviders) {
+  if (opts.skipChannels) {
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
@@ -592,6 +601,11 @@ async function runSetupWizardOnce(
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
+  if (!usedImportFlow) {
+    const { runSetupMemoryImportStep } = await import("./setup.memory-import.js");
+    await runSetupMemoryImportStep({ config: nextConfig, prompter, runtime });
+  }
+
   if (opts.skipSearch) {
     await prompter.note(t("wizard.setup.skipSearch"), t("wizard.setup.searchTitle"));
   } else {
@@ -611,7 +625,6 @@ async function runSetupWizardOnce(
     });
   }
 
-  // Plugin configuration (sandbox backends, tool plugins, etc.)
   if (flow !== "quickstart") {
     const { setupOfficialPluginInstalls } = await import("./setup.official-plugins.js");
     nextConfig = await setupOfficialPluginInstalls({

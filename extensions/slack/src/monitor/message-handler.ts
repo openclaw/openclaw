@@ -23,6 +23,7 @@ import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
+import type { PreparedSlackMessage } from "./message-handler/types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
@@ -71,17 +72,7 @@ const RETRYABLE_FLUSH_MAX_ATTEMPTS = 3;
 const RETRYABLE_FLUSH_RETRY_DELAY_MS = 1_000;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
-export class SlackRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "SlackRetryableInboundError";
-  }
-}
-
 function isRetryableSlackInboundError(error: unknown): boolean {
-  if (error instanceof SlackRetryableInboundError) {
-    return true;
-  }
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
   );
@@ -113,8 +104,10 @@ export function createSlackMessageHandler(params: {
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
+  /** Called after access/routing preparation accepts a human message. */
+  onPrepared?: (prepared: PreparedSlackMessage) => void;
 }): SlackMessageHandler {
-  const { ctx, account, trackEvent } = params;
+  const { ctx, account, trackEvent, onPrepared } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
     opts: QueuedSlackMessageOptions;
@@ -271,6 +264,7 @@ export function createSlackMessageHandler(params: {
             if (!prepared) {
               return;
             }
+            onPrepared?.(prepared);
             if (entries.length > 1) {
               const ids = entries.map((entry) => entry.message.ts).filter(Boolean) as string[];
               if (ids.length > 0) {
@@ -403,6 +397,9 @@ export function createSlackMessageHandler(params: {
     ) {
       return undefined;
     }
+    // Record Slack's explicit type before delivery-state or thread-resolution awaits.
+    // Relay and native events can overlap; a following typeless bot event must see it.
+    ctx.rememberSlackChannelType(message.channel, message.channel_type, opts.eventScope);
     const seenMessageKey = buildSeenMessageKey(
       message.channel,
       message.ts,

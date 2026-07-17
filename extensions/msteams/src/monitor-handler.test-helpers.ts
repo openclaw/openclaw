@@ -3,7 +3,8 @@ import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import type { MSTeamsActivityHandler, MSTeamsMessageHandlerDeps } from "./monitor-handler.js";
+import type { MSTeamsActivityHandler } from "./monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -27,6 +28,8 @@ type MSTeamsTestRuntimeOptions = {
 };
 
 export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {
+  const recordInboundSession = options.recordInboundSession ?? vi.fn(async () => undefined);
+  const resolveStorePath = options.resolveStorePath ?? (() => "/tmp/msteams-sessions.json");
   const runPrepared = vi.fn(async (turn: PreparedInboundReply<unknown>) => {
     await turn.recordInboundSession({
       storePath: turn.storePath,
@@ -62,7 +65,16 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         : (preflightResult ?? {});
     const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
     if ("runDispatch" in turn) {
-      return await runPrepared(turn);
+      const preparedTurn =
+        "route" in turn
+          ? ({
+              ...turn,
+              routeSessionKey: turn.route.sessionKey,
+              storePath: resolveStorePath(),
+              recordInboundSession,
+            } as PreparedInboundReply<unknown>)
+          : turn;
+      return await runPrepared(preparedTurn);
     }
     throw new Error("msteams test runtime only supports prepared turn dispatch");
   });
@@ -123,8 +135,8 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         resolveHumanDelayConfig: () => undefined,
       },
       session: {
-        recordInboundSession: options.recordInboundSession ?? vi.fn(async () => undefined),
-        ...(options.resolveStorePath ? { resolveStorePath: options.resolveStorePath } : {}),
+        recordInboundSession,
+        resolveStorePath,
       },
       inbound: {
         run: run as unknown as PluginRuntime["channel"]["inbound"]["run"],
@@ -171,7 +183,6 @@ export function createMSTeamsMessageHandlerDeps(params?: {
     list: async () => [],
     remove: async () => false,
     findPreferredDmByUserId: async () => null,
-    findByUserId: async () => null,
   };
   const pollStore: MSTeamsPollStore = {
     createPoll: async () => {},

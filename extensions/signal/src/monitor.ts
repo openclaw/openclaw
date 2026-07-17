@@ -1,6 +1,7 @@
 // Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -57,6 +58,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -92,10 +94,10 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
 function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
   const inFlight = new Set<Promise<void>>();
   return {
-    runEventTask(task: () => Promise<void>): void {
+    runTask(task: () => Promise<void>): void {
       const trackedTask = Promise.resolve()
         .then(task)
-        .catch((err: unknown) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .catch((err: unknown) => runtime.error?.(`signal monitor task failed: ${String(err)}`))
         .finally(() => inFlight.delete(trackedTask));
       inFlight.add(trackedTask);
     },
@@ -107,55 +109,22 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
   };
 }
 
-function mergeAbortSignals(
-  a?: AbortSignal,
-  b?: AbortSignal,
-): { signal?: AbortSignal; dispose: () => void } {
-  if (!a && !b) {
-    return { signal: undefined, dispose: () => {} };
-  }
-  if (!a) {
-    return { signal: b, dispose: () => {} };
-  }
-  if (!b) {
-    return { signal: a, dispose: () => {} };
-  }
-  const controller = new AbortController();
-  const abortFrom = (source: AbortSignal) => {
-    if (!controller.signal.aborted) {
-      controller.abort(source.reason);
-    }
-  };
-  if (a.aborted) {
-    abortFrom(a);
-    return { signal: controller.signal, dispose: () => {} };
-  }
-  if (b.aborted) {
-    abortFrom(b);
-    return { signal: controller.signal, dispose: () => {} };
-  }
-  const onAbortA = () => abortFrom(a);
-  const onAbortB = () => abortFrom(b);
-  a.addEventListener("abort", onAbortA, { once: true });
-  b.addEventListener("abort", onAbortB, { once: true });
-  return {
-    signal: controller.signal,
-    dispose: () => {
-      a.removeEventListener("abort", onAbortA);
-      b.removeEventListener("abort", onAbortB);
-    },
-  };
-}
-
 function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   let daemonHandle: SignalDaemonHandle | null = null;
   let daemonStopRequested = false;
   let daemonExitError: Error | undefined;
   const daemonAbortController = new AbortController();
-  const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
-  const stop = () => {
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, daemonAbortController.signal])
+    : daemonAbortController.signal;
+  const stop = (): Promise<void> => {
     daemonStopRequested = true;
-    daemonHandle?.stop();
+    if (!daemonAbortController.signal.aborted) {
+      daemonAbortController.abort(
+        params.abortSignal?.reason ?? new Error("Signal monitor stopped"),
+      );
+    }
+    return daemonHandle?.stop() ?? Promise.resolve();
   };
   const attach = (handle: SignalDaemonHandle) => {
     daemonHandle = handle;
@@ -174,8 +143,7 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
     attach,
     stop,
     getExitError,
-    abortSignal: mergedAbort.signal,
-    dispose: mergedAbort.dispose,
+    abortSignal,
   };
 }
 
@@ -401,15 +369,16 @@ export async function deliverReplies(params: {
       messageId: string;
       meta: { signalVisibleText: string };
     }> = [];
+    const presentationPayload = materializeSignalPresentationFallback(payload);
     const deliveredPayload =
       addSignalApprovalReactionHintToStructuredPayload({
         cfg: params.cfg,
         accountId,
         to: target,
-        payload,
+        payload: presentationPayload,
         targetAuthor: account,
         targetAuthorUuid: accountUuid,
-      }) ?? payload;
+      }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
     const nextNativeReply = createSignalNativeReplyResolver({
       payload: deliveredPayload,
@@ -491,16 +460,26 @@ function resolveSignalNativeReplyOptions(params: {
     return {};
   }
   const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
-  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
-  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
+  const isExplicitCurrentReply =
+    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  if (
+    !payloadReplyToId &&
+    !isExplicitCurrentReply &&
+    params.replyContext?.allowImplicitCurrentMessage === false
+  ) {
     return {};
   }
+  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
+  if (!contextReplyToId || (payloadReplyToId && payloadReplyToId !== contextReplyToId)) {
+    return {};
+  }
+  const replyToId = payloadReplyToId ?? contextReplyToId;
   const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
   if (!replyToAuthor) {
-    return { replyToId: payloadReplyToId };
+    return { replyToId };
   }
   return {
-    replyToId: payloadReplyToId,
+    replyToId,
     replyToAuthor,
     replyToBody: params.replyContext?.body ?? "",
   };
@@ -636,7 +615,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   }
 
   const onAbort = () => {
-    daemonLifecycle.stop();
+    void daemonLifecycle.stop();
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -678,12 +657,14 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
     const handleEvent = createSignalEventHandler({
       runtime,
+      abortSignal: daemonLifecycle.abortSignal,
+      runTrackedTask: (task) => monitorTaskRunner.runTask(task),
       cfg,
       baseUrl,
       account,
       accountUuid: accountInfo.config.accountUuid,
       accountId: accountInfo.accountId,
-      blockStreaming: accountInfo.config.blockStreaming,
+      blockStreaming: resolveChannelStreamingBlockEnabled(accountInfo.config),
       historyLimit,
       groupHistories,
       textLimit,
@@ -715,7 +696,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        monitorTaskRunner.runEventTask(() => handleEvent(event));
+        monitorTaskRunner.runTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -729,9 +710,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
-    await monitorTaskRunner.waitForIdle();
-    daemonLifecycle.dispose();
+    // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
+    // child has exited and already-started reply work has drained.
+    await Promise.all([daemonLifecycle.stop(), monitorTaskRunner.waitForIdle()]);
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonLifecycle.stop();
   }
 }

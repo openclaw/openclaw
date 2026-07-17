@@ -1,7 +1,8 @@
 // Speech Core tests cover tts behavior.
-import { rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -9,6 +10,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
+  SpeechListVoicesRequest,
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
@@ -82,8 +84,8 @@ vi.mock("openclaw/plugin-sdk/channel-targets", () => ({
   },
 }));
 
-vi.mock("../api.js", async () => {
-  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
+vi.mock("openclaw/plugin-sdk/speech-core", async () => {
+  const actual = await vi.importActual("openclaw/plugin-sdk/speech-core");
   const mockProvider: SpeechProviderPlugin = {
     id: "mock",
     label: "Mock",
@@ -113,13 +115,15 @@ const {
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
+  listSpeechVoices,
   maybeApplyTtsToPayload,
+  prepareTtsRequest,
   resolveTtsConfig,
   setSummarizationEnabled,
   setTtsMaxLength,
   synthesizeSpeech,
   textToSpeechTelephony,
-} = await import("./tts.js");
+} = await import("../runtime-api.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -145,13 +149,21 @@ function installSpeechProviders(providers: SpeechProviderPlugin[]): void {
   );
 }
 
+// macOS os.tmpdir() is a /var -> /private/var symlink and fs-safe rejects
+// symlinked store roots; resolve the canonical dir before writing prefs.
+const PREFS_TMP_DIR = realpathSync(os.tmpdir());
+
+function prefsPathFor(prefsName: string): string {
+  return path.join(PREFS_TMP_DIR, `${prefsName}.json`);
+}
+
 function createTtsConfig(prefsName: string): OpenClawConfig {
   return {
     messages: {
       tts: {
         enabled: true,
         provider: "mock",
-        prefsPath: `/tmp/${prefsName}.json`,
+        prefsPath: prefsPathFor(prefsName),
       },
     },
   };
@@ -229,6 +241,7 @@ async function expectTtsPayloadResult(params: {
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+    delete (Object.prototype as Record<string, unknown>).polluted;
     synthesizeMock.mockClear();
     prepareSynthesisMock.mockClear();
     transcodeAudioBufferMock.mockClear();
@@ -254,6 +267,84 @@ describe("speech-core native voice-note routing", () => {
     expect(hint).toContain(
       "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
     );
+  });
+
+  it("prepares deep-merged surface config and directive inputs", () => {
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          provider: "mock",
+          modelOverrides: { allowProvider: false },
+          providers: {
+            mock: {
+              model: "base-model",
+              voiceSettings: { stability: 0.4 },
+            },
+          },
+        },
+      },
+    };
+
+    const prepared = prepareTtsRequest({
+      cfg,
+      override: {
+        modelOverrides: { allowProvider: true },
+        providers: {
+          mock: {
+            voice: "surface-voice",
+            voiceSettings: { speed: 1.1 },
+          },
+        },
+      },
+      text: "Hello [[tts:text]]Speak this instead[[/tts:text]] caller",
+    });
+
+    expect(prepared.cfg).not.toBe(cfg);
+    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voice: "surface-voice",
+      voiceSettings: { stability: 0.4, speed: 1.1 },
+    });
+    expect(prepared.cfg.messages?.tts?.modelOverrides?.allowProvider).toBe(true);
+    expect(prepared.directives).toEqual({
+      cleanedText: "Hello  caller",
+      hasDirective: true,
+      overrides: {
+        ttsText: "Speak this instead",
+      },
+      ttsText: "Speak this instead",
+      warnings: [],
+    });
+    expect(cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voiceSettings: { stability: 0.4 },
+    });
+  });
+
+  it("sanitizes blocked override keys while preparing TTS config", () => {
+    const prepared = prepareTtsRequest({
+      cfg: {
+        messages: {
+          tts: {
+            provider: "mock",
+            providers: { mock: { model: "base-model" } },
+          },
+        },
+      },
+      override: JSON.parse(
+        '{"__proto__":{"polluted":"top"},"providers":{"mock":{"voice":"safe","__proto__":{"polluted":"nested"}}}}',
+      ) as TtsConfig,
+      text: "[[tts:text]]Speak this instead[[/tts:text]]",
+    });
+
+    expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+    expect(prepared.cfg.messages?.tts).not.toHaveProperty("polluted");
+    expect(prepared.cfg.messages?.tts?.providers?.mock).toEqual({
+      model: "base-model",
+      voice: "safe",
+    });
+    expect(prepared.directives.cleanedText).toBe("");
+    expect(prepared.directives.ttsText).toBe("Speak this instead");
   });
 
   it("marks Discord auto TTS replies as native voice messages", async () => {
@@ -420,6 +511,31 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
     expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("resolves the configured timeout for voice listing", async () => {
+    const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        defaultTimeoutMs: 60_000,
+        listVoices: listVoicesMock,
+      }),
+    ]);
+
+    await listSpeechVoices({
+      provider: "mock",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 45_000,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(listVoicesMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
   });
 
   it("caps oversized provider default TTS timeouts before synthesis", async () => {
@@ -942,7 +1058,7 @@ describe("speech-core native voice-note routing", () => {
 
   it("truncates long TTS text on a UTF-16 boundary", async () => {
     const prefsName = "openclaw-speech-core-utf16-truncate-test";
-    const prefsPath = `/tmp/${prefsName}.json`;
+    const prefsPath = prefsPathFor(prefsName);
     const cfg = createTtsConfig(prefsName);
     setTtsMaxLength(prefsPath, 11);
     setSummarizationEnabled(prefsPath, false);
@@ -1511,3 +1627,4 @@ describe("speech-core per-agent TTS config", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

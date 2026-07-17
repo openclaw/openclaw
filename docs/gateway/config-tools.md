@@ -41,7 +41,7 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:ui`         | `browser`, `canvas`                                                                                                                                   |
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                |
 | `group:messaging`  | `message`                                                                                                                                             |
-| `group:nodes`      | `nodes`                                                                                                                                               |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                   |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                              |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                  |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                 |
@@ -85,9 +85,10 @@ Without that sandbox-layer entry, the MCP server can still load successfully whi
 ### `tools.codeMode`
 
 `tools.codeMode` enables the generic OpenClaw code-mode surface. When enabled
-for a run with tools, the model sees only `exec` and `wait`; normal OpenClaw
-tools move behind the in-sandbox `tools.*` catalog bridge, and MCP tools are
-available through the generated `MCP` namespace.
+for a run with tools, normal OpenClaw tools move behind the in-sandbox `tools.*`
+catalog bridge, and MCP tools are available through the generated `MCP`
+namespace. The model normally sees `exec` and `wait`; tools such as `computer`
+whose structured results cannot cross the JSON-only bridge stay direct.
 
 ```json5
 {
@@ -208,7 +209,7 @@ Controls elevated exec access outside the sandbox:
       commandHighlighting: false,
       applyPatch: {
         enabled: true,
-        allowModels: ["gpt-5.5"],
+        allowModels: ["gpt-5.6-sol"],
       },
     },
   },
@@ -773,8 +774,8 @@ Interactive custom-provider onboarding infers image input for known vision-model
       env: { SYNTHETIC_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-          models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+          models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
         },
       },
       models: {
@@ -786,12 +787,12 @@ Interactive custom-provider onboarding infers image input for known vision-model
             api: "anthropic-messages",
             models: [
               {
-                id: "hf:MiniMaxAI/MiniMax-M2.5",
-                name: "MiniMax M2.5",
+                id: "hf:MiniMaxAI/MiniMax-M3",
+                name: "MiniMax M3",
                 reasoning: true,
-                input: ["text"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 192000,
+                contextWindow: 262144,
                 maxTokens: 65536,
               },
             ],

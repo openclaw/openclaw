@@ -1,11 +1,15 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
+import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type InternalHookEvent,
 } from "../hooks/internal-hooks.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
@@ -13,7 +17,6 @@ import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
-const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -31,6 +34,17 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
 );
 const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
+);
+const getSessionStateVersionMock = vi.hoisted(() =>
+  vi.fn((_sessionKey: string, _agentId: string) => 0),
+);
+const listSessionStateEventsSinceMock = vi.hoisted(() =>
+  vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
+    events: [] as Array<Record<string, unknown>>,
+    truncated: false,
+    earliestAvailableSequence: 0,
+    historyGap: false,
+  })),
 );
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
@@ -55,7 +69,7 @@ let mockConfig: Record<string, unknown> = createMockConfig();
 const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
-  // Two stores simulate per-agent session files merged by gateway status paths.
+  // Two stores simulate per-agent session files selected by scoped status lookups.
   return new Map<string, Record<string, unknown>>([
     [
       "/tmp/main/sessions.json",
@@ -78,12 +92,7 @@ function installScopedSessionStores(syncUpdates = false) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
-  });
   if (syncUpdates) {
     updateSessionStoreMock.mockImplementation(
       (storePath: string, store: Record<string, unknown>) => {
@@ -96,15 +105,11 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock() {
-  const actual =
-    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
     opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json";
   const cloneEntry = (entry: SessionEntry): SessionEntry => structuredClone(entry);
   return {
-    ...actual,
-    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     patchSessionEntryWithKey: async (
       scope: { agentId?: string; sessionKey: string; storePath?: string },
       update: (
@@ -116,7 +121,7 @@ async function createSessionsModuleMock() {
       const storePath =
         scope.storePath ?? resolveMockStorePath(undefined, { agentId: scope.agentId });
       const store = loadSessionStoreMock(storePath) as Record<string, SessionEntry>;
-      const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
       const existing = resolved.existing ?? options?.fallbackEntry;
       if (!existing) {
         return null;
@@ -129,7 +134,7 @@ async function createSessionsModuleMock() {
       }
       const next = options?.replaceEntry
         ? cloneEntry(patch as SessionEntry)
-        : actual.mergeSessionEntry(existing, patch);
+        : mergeSessionEntry(existing, patch);
       store[resolved.normalizedKey] = next;
       updateSessionStoreMock(storePath, store);
       return { sessionKey: resolved.normalizedKey, entry: cloneEntry(next) };
@@ -147,7 +152,7 @@ async function createSessionsModuleMock() {
         if (!candidateKey) {
           continue;
         }
-        const resolved = actual.resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+        const resolved = resolveSessionStoreEntry({ store, sessionKey: candidateKey });
         if (!resolved.existing) {
           continue;
         }
@@ -170,15 +175,6 @@ async function createSessionsModuleMock() {
           }
         : null;
     },
-    updateSessionStore: async (
-      storePath: string,
-      mutator: (store: Record<string, unknown>) => Promise<void> | void,
-    ) => {
-      const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
-      await mutator(store);
-      updateSessionStoreMock(storePath, store);
-      return store;
-    },
     resolveStorePath: resolveMockStorePath,
   };
 }
@@ -189,21 +185,8 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock() {
-  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
-    "../gateway/session-utils.js",
-  );
+function createConfigModuleMock() {
   return {
-    ...actual,
-    loadCombinedSessionStoreForGateway: (cfg: unknown) =>
-      loadCombinedSessionStoreForGatewayMock(cfg),
-  };
-}
-
-async function createConfigModuleMock() {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
     getRuntimeConfig: () => mockConfig,
   };
 }
@@ -324,7 +307,6 @@ function createCommandsStatusRuntimeModuleMock() {
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
 vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
@@ -332,6 +314,12 @@ vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
 }));
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+vi.mock("../plugins/provider-thinking.js", () => ({
+  resolveProviderBinaryThinking: () => undefined,
+  resolveProviderDefaultThinkingLevel: () => undefined,
+  resolveProviderThinkingProfile: () => undefined,
+  resolveProviderXHighThinking: () => undefined,
 }));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real
@@ -366,6 +354,16 @@ vi.mock("../tasks/task-owner-access.js", () => ({
       now: TASK_STATUS_SNAPSHOT_NOW,
     }),
 }));
+vi.mock("../sessions/session-state-events.js", () => ({
+  getSessionStateVersion: (sessionKey: string, agentId: string) =>
+    getSessionStateVersionMock(sessionKey, agentId),
+  listSessionStateEventsSince: (
+    sessionKey: string,
+    agentId: string,
+    after: number,
+    limit: number,
+  ) => listSessionStateEventsSinceMock(sessionKey, agentId, after, limit),
+}));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
@@ -394,14 +392,18 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   loadSessionStoreMock.mockClear();
   updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionStoreForGatewayMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
-  loadSessionStoreMock.mockReturnValue(store);
-  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-    storePath: "(multiple)",
-    store,
+  getSessionStateVersionMock.mockReset();
+  getSessionStateVersionMock.mockReturnValue(0);
+  listSessionStateEventsSinceMock.mockReset();
+  listSessionStateEventsSinceMock.mockReturnValue({
+    events: [],
+    truncated: false,
+    earliestAvailableSequence: 0,
+    historyGap: false,
   });
+  loadSessionStoreMock.mockReturnValue(store);
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
     if (request.method === "sessions.resolve") {
@@ -537,6 +539,33 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+  });
+
+  it("returns read-only state changes and the signal-log head", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+    getSessionStateVersionMock.mockReturnValue(12);
+    listSessionStateEventsSinceMock.mockReturnValue({
+      events: [{ sequence: 12, kind: "upstream_missing", summary: "upstream missing via codex" }],
+      truncated: false,
+      earliestAvailableSequence: 12,
+      historyGap: true,
+    });
+
+    const result = await getSessionStatusTool().execute("call-state", { changesSince: 3 });
+    const details = result.details as Record<string, unknown>;
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+
+    expect(getSessionStateVersionMock).toHaveBeenCalledWith("main", "main");
+    expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith("main", "main", 3, 200);
+    expect(details.stateVersion).toBe(12);
+    expect(details.stateChanges).toMatchObject({ historyGap: true });
+    expect(text).toContain("Session state changes:");
+    expect(text).toContain('"kind": "upstream_missing"');
   });
 
   it("enables transcript usage fallback for session_status", async () => {
@@ -1259,7 +1288,10 @@ describe("session_status tool", () => {
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1322,7 +1354,7 @@ describe("session_status tool", () => {
     });
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = events[0];
+    const event = expectDefined(events[0], "events[0] test invariant");
     expect(event.type).toBe("session");
     expect(event.action).toBe("patch");
     expect(event.sessionKey).toBe("main");
@@ -1335,6 +1367,33 @@ describe("session_status tool", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
       liveModelSwitchPending: true,
+    });
+  });
+
+  it("rejects model changes for model-locked sessions", async () => {
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelSelectionLocked: true,
+      },
+    };
+    resetSessionStore(store);
+
+    const tool = getSessionStatusTool();
+    await expect(
+      tool.execute("call-session-status-model-locked", {
+        model: "anthropic/claude-sonnet-4-6",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(store.main).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelSelectionLocked: true,
     });
   });
 
@@ -1351,7 +1410,10 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -2428,3 +2490,4 @@ describe("session_status tool", () => {
     expect(saved.liveModelSwitchPending).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

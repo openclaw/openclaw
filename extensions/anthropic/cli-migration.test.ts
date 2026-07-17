@@ -445,6 +445,15 @@ describe("anthropic cli migration", () => {
     ]);
   });
 
+  it("does not persist a synthetic profile for Claude CLI apiKeyHelper auth", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      { type: "api_key_helper", provider: "anthropic", helperHash: "helper-hash" },
+    );
+
+    expect(result.profiles).toEqual([]);
+  });
+
   it("registered non-interactive cli auth keeps anthropic fallbacks and selects claude-cli runtime", async () => {
     readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({
       type: "oauth",

@@ -992,6 +992,9 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       return;
     }
     const body = await readJsonBodyOrError(req, res, MAX_BODY_BYTES);
+    if (body === undefined) {
+      return;
+    }
     if (!isStringRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
       sendInvalidRequest(res, "invalid node invoke result");
       return;
@@ -1077,9 +1080,4 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     },
   };
 }
-
-export const testing = {
-  createChallengeStore,
-  hasOnlyBoundedWatchSurface,
-  isCanonicalWatchNode,
-};
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

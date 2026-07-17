@@ -1,6 +1,8 @@
 /**
  * Tests shared gateway auth behavior across config method updates.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -175,7 +177,10 @@ async function runConfigPatch(
     },
   });
 
-  await configHandlers["config.patch"](options);
+  await expectDefined(
+    configHandlers["config.patch"],
+    'configHandlers["config.patch"] test invariant',
+  )(options);
   await flushConfigHandlerMicrotasks();
   return { disconnectClientsUsingSharedGatewayAuth };
 }
@@ -234,7 +239,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -243,9 +251,80 @@ describe("config shared auth disconnects", () => {
       {
         ok: true,
         path: "/tmp/openclaw.json",
+        // Ack hash from the persisted write; equals what config.get reports.
+        hash: "next-hash",
         config: persistedConfig,
       },
       undefined,
+    );
+  });
+
+  it("acks config.apply with the persisted snapshot hash", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.apply",
+      params: {
+        raw: JSON.stringify(tokenAuthConfig("new-token"), null, 2),
+        baseHash: "base-hash",
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.apply"],
+      'configHandlers["config.apply"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash" }),
+      undefined,
+    );
+  });
+
+  it("rejects unresolved TTS SecretRefs before config.set writes", async () => {
+    const submittedConfig: OpenClawConfig = {
+      messages: {
+        tts: {
+          providers: {
+            elevenlabs: {
+              apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+            },
+          },
+        },
+      },
+    };
+    mockPreviousConfig({});
+    prepareSecretsRuntimeSnapshotMock.mockRejectedValueOnce(
+      new Error('Environment variable "ELEVENLABS_API_KEY" is missing or empty.'),
+    );
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.set",
+      params: {
+        raw: JSON.stringify(submittedConfig),
+        baseHash: "base-hash",
+      },
+    });
+
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(prepareSecretsRuntimeSnapshotMock).toHaveBeenCalledWith({
+      config: submittedConfig,
+      includeAuthStoreRefs: false,
+    });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("active SecretRef resolution failed"),
+      }),
     );
   });
 
@@ -261,7 +340,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -390,7 +472,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.patch"](options);
+    await expectDefined(
+      configHandlers["config.patch"],
+      'configHandlers["config.patch"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
