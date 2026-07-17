@@ -25,7 +25,8 @@ export function hasValidIsoCalendarComponents(raw: string): boolean {
   const minute = Number(minuteRaw);
   const second = Number(secondRaw);
   const millisecond = fractionRaw ? Number(fractionRaw.slice(1, 4).padEnd(3, "0")) : 0;
-  const isEndOfDay = hour === 24 && minute === 0 && second === 0 && millisecond === 0;
+  const hasZeroFraction = !fractionRaw || !/[1-9]/.test(fractionRaw);
+  const isEndOfDay = hour === 24 && minute === 0 && second === 0 && hasZeroFraction;
 
   // Date.parse rolls invalid calendar components forward, so validate them independently.
   const probe = new Date(0);
