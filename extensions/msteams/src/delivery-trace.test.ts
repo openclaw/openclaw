@@ -324,7 +324,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
         // armed StreamCancelledError write fault, so this step maps to nothing.
         break;
       case "idle":
-        await created.markDispatchIdle();
+        await created.dispatcherOptions.onSettled?.();
         break;
       case "wire-fault":
         // The shared write-error fault vocabulary covers this shape, but a

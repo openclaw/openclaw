@@ -413,7 +413,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     dispatcher.replyOptions.onPartialReply?.({ text: "streamed" });
     await options.deliver({ text: "streamed final" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(renderReplyPayloadsToMessagesMock).toHaveBeenCalledWith(
       [{ text: "streamed final" }],
@@ -637,7 +637,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
@@ -660,7 +660,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
-    await dispatcher.markDispatchIdle();
+    await dispatcher.dispatcherOptions.onSettled?.();
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });

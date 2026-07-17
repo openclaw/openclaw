@@ -1,6 +1,7 @@
 // Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatChannelProgressDraftLineForEntry,
@@ -14,7 +15,6 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
@@ -659,7 +659,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return nextIdleSideEffects;
   };
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, agentId),
@@ -689,6 +689,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
+    onIdle: () => queueIdleSideEffects(),
+    onCleanup: () => {
+      typingCallbacks?.onCleanup?.();
+    },
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload: ReplyPayload, info) => {
       if (info?.kind === "final") {
         skippedFinalReason = null;
@@ -892,16 +898,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       );
       await queueIdleSideEffects({ markClosedForReply: false });
     },
-    onIdle: () => queueIdleSideEffects(),
-    onCleanup: () => {
-      typingCallbacks?.onCleanup?.();
-    },
-  });
+  };
 
   return {
-    dispatcher,
+    dispatcherOptions,
+    delivery,
     replyOptions: {
-      ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
@@ -977,7 +979,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
         : undefined,
     },
-    markDispatchIdle,
     ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({
       visibleReplySent,

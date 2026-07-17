@@ -8,7 +8,6 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  dispatchReplyFromConfigWithSettledDispatcher,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -914,7 +913,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
-    const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
+    const { dispatcherOptions, delivery, replyOptions } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -951,6 +950,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
           }
         : undefined;
+    const dispatchCfg = configOverride
+      ? {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              ...configOverride.agents?.defaults,
+            },
+          },
+        }
+      : cfg;
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
@@ -968,7 +979,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
-            cfg,
+            cfg: dispatchCfg,
             channel: "msteams",
             accountId: route.accountId,
             route: { agentId: route.agentId, sessionKey: route.sessionKey },
@@ -986,20 +997,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               historyMap: conversationHistories,
               limit: historyLimit,
             },
-            onPreDispatchFailure: () =>
-              core.channel.reply.settleReplyDispatcher({
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-              }),
-            runDispatch: () =>
-              dispatchReplyFromConfigWithSettledDispatcher({
-                cfg,
-                ctxPayload,
-                dispatcher,
-                onSettled: () => markDispatchIdle(),
-                replyOptions,
-                configOverride,
-              }),
+            dispatcherOptions,
+            delivery,
+            replyOptions,
           }),
         },
       });
