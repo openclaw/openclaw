@@ -165,6 +165,7 @@ export async function dispatchAssembledChannelTurn(
             params.dispatchReplyWithBufferedBlockDispatcher({
               ctx: params.ctxPayload,
               cfg: params.cfg,
+              configOverride: params.configOverride,
               dispatcherOptions: {
                 ...replyPipeline.dispatcherOptions,
                 deliver: async (payload: ReplyPayload, info) => {

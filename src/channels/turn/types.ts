@@ -256,6 +256,8 @@ type ChannelTurnReplyPipelineOptions = Omit<
 /** Fully assembled channel turn ready to build the dispatch runner. */
 export type AssembledChannelTurn = {
   cfg: OpenClawConfig;
+  /** Optional patch applied only when the reply resolver receives its config. */
+  configOverride?: OpenClawConfig;
   channel: string;
   accountId?: string;
   agentId: string;

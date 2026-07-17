@@ -950,19 +950,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             },
           }
         : undefined;
-    const dispatchCfg = configOverride
-      ? {
-          ...cfg,
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              ...configOverride.agents?.defaults,
-            },
-          },
-        }
-      : cfg;
-
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const turnResult = await core.channel.inbound.run({
@@ -979,7 +966,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
-            cfg: dispatchCfg,
+            cfg,
+            configOverride,
             channel: "msteams",
             accountId: route.accountId,
             route: { agentId: route.agentId, sessionKey: route.sessionKey },

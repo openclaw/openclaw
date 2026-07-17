@@ -19,6 +19,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBuffered
     return await dispatchInboundMessageWithBufferedDispatcher({
       ctx: params.ctx,
       cfg: params.cfg,
+      configOverride: params.configOverride,
       dispatcherOptions: params.dispatcherOptions,
       toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
@@ -31,6 +32,7 @@ export const dispatchReplyWithDispatcher: DispatchReplyWithDispatcher = async (p
   return await dispatchInboundMessageWithDispatcher({
     ctx: params.ctx,
     cfg: params.cfg,
+    configOverride: params.configOverride,
     dispatcherOptions: params.dispatcherOptions,
     toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,

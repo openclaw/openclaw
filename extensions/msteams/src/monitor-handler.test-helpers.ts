@@ -98,6 +98,7 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
         await dispatchReplyWithBufferedBlockDispatcher({
           ctx: turn.ctxPayload,
           cfg: turn.cfg,
+          configOverride: turn.configOverride,
           dispatcherOptions: {
             ...turn.dispatcherOptions,
             deliver: turn.delivery.deliver,

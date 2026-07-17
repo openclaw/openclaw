@@ -807,6 +807,9 @@ describe("msteams monitor handler authz", () => {
           team: { id: "team123", name: "Team 123" },
           channel: { name: "General" },
         },
+        extraActivity: {
+          entities: [{ type: "clientInfo", timezone: "America/New_York" }],
+        },
       }),
     );
 
@@ -820,6 +823,13 @@ describe("msteams monitor handler authz", () => {
     expect(systemEventCall[0]).not.toContain("please check the build");
     const dispatched = firstSettledDispatch();
     expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
+    const dispatchParams = recordFromMockCall(
+      mockCallArg(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher, 0, 0),
+    );
+    expect(dispatchParams.cfg).toBe(deps.cfg);
+    expect(dispatchParams.configOverride).toEqual({
+      agents: { defaults: { userTimezone: "America/New_York" } },
+    });
   });
 
   it("extracts message text from a mixed-case HTML attachment type", async () => {
