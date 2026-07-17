@@ -716,7 +716,7 @@ describe("google-meet CLI", () => {
   });
 
   it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
-    stubMeetArtifactsApi({ participantDisplayName: "@SUM(1+1)" });
+    stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
     const stdout = captureStdout();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
 
@@ -737,7 +737,7 @@ describe("google-meet CLI", () => {
         { from: "user" },
       );
       expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
-        "conferenceRecords/rec-1,'@SUM(1+1),users/alice",
+        "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
       );
     } finally {
       stdout.restore();

@@ -1090,7 +1090,9 @@ function renderAttendanceMarkdown(result: GoogleMeetAttendanceResult): string {
 }
 
 function neutralizeSpreadsheetFormulaCell(text: string): string {
-  return /^[ \t\r\n]*[=+\-@]/.test(text) || /^[\t\r\n]/.test(text) ? `'${text}` : text;
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text) || /^[\t\r\n]/.test(text)
+    ? `'${text}`
+    : text;
 }
 
 function csvCell(value: unknown): string {
