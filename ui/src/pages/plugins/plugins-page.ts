@@ -16,6 +16,7 @@ import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugi
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,
@@ -125,6 +126,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private mcpMessage: PluginRowMessage | null = null;
   @state() private mcpBusy = false;
   @state() private mcpFormOpen = false;
+  @state() private publisherFeedsAvailable = false;
 
   private gatewaySource?: ApplicationContext["gateway"];
   private sourceGeneration = 0;
@@ -208,6 +210,8 @@ class PluginsPage extends OpenClawLightDomElement {
         (candidate, index) => candidate !== this.iconAuthCandidates[index],
       );
     this.iconAuthCandidates = nextIconAuthCandidates;
+    this.publisherFeedsAvailable =
+      isGatewayMethodAdvertised(snapshot, "publisherFeeds.list") === true;
     const shouldRefreshAfterChange =
       (sourceChanged || connectionChanged || clientChanged || iconAuthChanged) &&
       snapshot.connected &&
@@ -525,6 +529,10 @@ class PluginsPage extends OpenClawLightDomElement {
         "plugins",
         tab === "discover" ? { search: "?tab=discover" } : undefined,
       );
+      return;
+    }
+    if (tab === "following") {
+      this.context.navigate("skills", { search: "?tab=following" });
       return;
     }
     this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
@@ -943,6 +951,7 @@ class PluginsPage extends OpenClawLightDomElement {
           ${renderPluginsHubTabs({
             active: this.activeTab,
             installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+            publisherFeedsAvailable: this.publisherFeedsAvailable,
             onSelect: (tab) => this.selectHubTab(tab),
           })}
         </div>

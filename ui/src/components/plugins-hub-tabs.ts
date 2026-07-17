@@ -6,9 +6,15 @@ import { ref } from "lit/directives/ref.js";
 import { t } from "../i18n/index.ts";
 import "./web-awesome-tabs.ts";
 
-export type PluginsHubTab = "installed" | "discover" | "skills" | "workshop";
+export type PluginsHubTab = "installed" | "discover" | "skills" | "following" | "workshop";
 
-const HUB_TABS: readonly PluginsHubTab[] = ["installed", "discover", "skills", "workshop"];
+const HUB_TABS: readonly PluginsHubTab[] = [
+  "installed",
+  "discover",
+  "skills",
+  "following",
+  "workshop",
+];
 
 // Keyboard activation of a cross-route tab unmounts the strip that had focus,
 // so the destination strip reclaims focus for its active tab on first render.
@@ -21,6 +27,7 @@ type PluginsHubTabsProps = {
   active: PluginsHubTab;
   /** Installed-plugin count badge; omit on pages without catalog data. */
   installedCount?: number | null;
+  publisherFeedsAvailable?: boolean;
   onSelect: (tab: PluginsHubTab) => void;
 };
 
@@ -32,6 +39,8 @@ function hubTabLabel(tab: PluginsHubTab): string {
       return t("pluginsPage.discoverTab");
     case "skills":
       return t("tabs.skills");
+    case "following":
+      return t("publisherFeedsPage.tab");
     case "workshop":
       return t("pluginsPage.workshopTab");
     default:
@@ -86,34 +95,36 @@ export function renderPluginsHubTabs(props: PluginsHubTabsProps) {
       @wa-tab-show=${(event: CustomEvent<{ name: PluginsHubTab }>) =>
         selectHubTab(event.detail.name, props)}
     >
-      ${HUB_TABS.map((tab) => {
-        const selected = props.active === tab;
-        const count = tab === "installed" ? (props.installedCount ?? null) : null;
-        return html`
-          <wa-tab
-            id=${`plugins-tab-${tab}`}
-            panel=${tab}
-            aria-controls="plugins-hub-panel"
-            class="hub-tab"
-            ?active=${selected}
-            @click=${(event: MouseEvent) => {
-              // Trusted pointer clicks carry a click count. Keyboard and AT
-              // synthesized clicks use detail=0 and need focus recovery.
-              pointerActivation = event.detail > 0;
-            }}
-            @keydown=${() => {
-              // Any keyboard interaction supersedes a prior pointer click.
-              // This also clears clicks on the already-active tab, which do
-              // not emit wa-tab-show and would otherwise leave stale state.
-              pointerActivation = false;
-            }}
-            ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
-          >
-            ${hubTabLabel(tab)}
-            ${count === null ? nothing : html`<span class="settings-count">${count}</span>`}
-          </wa-tab>
-        `;
-      })}
+      ${HUB_TABS.filter((tab) => tab !== "following" || props.publisherFeedsAvailable).map(
+        (tab) => {
+          const selected = props.active === tab;
+          const count = tab === "installed" ? (props.installedCount ?? null) : null;
+          return html`
+            <wa-tab
+              id=${`plugins-tab-${tab}`}
+              panel=${tab}
+              aria-controls="plugins-hub-panel"
+              class="hub-tab"
+              ?active=${selected}
+              @click=${(event: MouseEvent) => {
+                // Trusted pointer clicks carry a click count. Keyboard and AT
+                // synthesized clicks use detail=0 and need focus recovery.
+                pointerActivation = event.detail > 0;
+              }}
+              @keydown=${() => {
+                // Any keyboard interaction supersedes a prior pointer click.
+                // This also clears clicks on the already-active tab, which do
+                // not emit wa-tab-show and would otherwise leave stale state.
+                pointerActivation = false;
+              }}
+              ${selected ? ref((element) => reclaimFocus(tab, element)) : nothing}
+            >
+              ${hubTabLabel(tab)}
+              ${count === null ? nothing : html`<span class="settings-count">${count}</span>`}
+            </wa-tab>
+          `;
+        },
+      )}
     </wa-tab-group>
   `;
 }
