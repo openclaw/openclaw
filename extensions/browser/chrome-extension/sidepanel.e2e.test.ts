@@ -63,6 +63,14 @@ type GatewayHarness = {
   holdNextSubscription: () => () => void;
 };
 
+type RelayHarness = {
+  readonly connectionCount: number;
+  hellos: Array<Record<string, unknown>>;
+  port: number;
+  close: () => Promise<void>;
+  setAvailable: (available: boolean) => void;
+};
+
 type TargetInfo = { targetId: string; type: string; url: string };
 
 type PanelTarget = {
@@ -131,6 +139,62 @@ function sendError(socket: WebSocket, id: string, message: string): void {
       error: { code: "UNAVAILABLE", message, retryable: true },
     }),
   );
+}
+
+async function createRelayHarness(): Promise<RelayHarness> {
+  const server = createServer();
+  const port = await listen(server);
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (protocols) => protocols.values().next().value ?? false,
+  });
+  const hellos: Array<Record<string, unknown>> = [];
+  let available = true;
+  let connectionCount = 0;
+  server.on("upgrade", (request, socket, head) => {
+    if (!available) {
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(request, socket, head, (client) => {
+      wss.emit("connection", client, request);
+    });
+  });
+  wss.on("connection", (socket) => {
+    connectionCount += 1;
+    socket.on("message", (data) => {
+      const message = JSON.parse(rawDataText(data)) as Record<string, unknown>;
+      if (message.type === "hello") {
+        hellos.push(message);
+      }
+    });
+  });
+  return {
+    get connectionCount() {
+      return connectionCount;
+    },
+    hellos,
+    port,
+    setAvailable: (nextAvailable) => {
+      available = nextAvailable;
+      if (!available) {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+      }
+    },
+    close: async () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
 }
 
 async function createGatewayHarness(): Promise<GatewayHarness> {
@@ -551,6 +615,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
   it("isolates two tab sessions, enforces bindings, denies unshared use, and archives on close", async () => {
     const gateway = await createGatewayHarness();
     cleanups.push(gateway.close);
+    const relay = await createRelayHarness();
+    cleanups.push(relay.close);
     const fixture = await createFixtureServer();
     cleanups.push(fixture.close);
     const unpackedExtension = await copyExtension();
@@ -575,15 +641,17 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const alphaTab = context.pages()[0] ?? (await context.newPage());
     await alphaTab.goto(`chrome-extension://${extensionId}/e2e-launcher.html`);
     await alphaTab.evaluate(
-      async ({ gatewayPort }) =>
+      async ({ gatewayPort, relayPort }) =>
         await chrome.runtime.sendMessage({
           type: "pair",
-          pairingString: `ws://127.0.0.1:9/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
+          pairingString: `ws://127.0.0.1:${relayPort}/extension?gateway=${encodeURIComponent(`ws://127.0.0.1:${gatewayPort}`)}#relay-e2e-token`,
           groupColor: "#ff7020",
         }),
-      { gatewayPort: gateway.port },
+      { gatewayPort: gateway.port, relayPort: relay.port },
     );
     await expect.poll(() => gateway.connectParams.length, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => relay.connectionCount, { timeout: 10_000 }).toBe(1);
+    await expect.poll(() => relay.hellos.length, { timeout: 10_000 }).toBe(1);
 
     const artifactDir =
       process.env.OPENCLAW_BROWSER_COPILOT_ARTIFACT_DIR ??
@@ -896,6 +964,47 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       })
       .toContain("Isolated reply: reopened marker");
 
+    await reopenedBetaPanel.fill("#message-input", "relay disconnect linger marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    await reopenedBetaPanel.click("#send-button");
+    await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(7);
+    const relayRunId = textValue(gateway.chatSends[6]?.idempotencyKey);
+    const relayConnectionsBeforeDrop = relay.connectionCount;
+    relay.setAvailable(false);
+    await expect
+      .poll(
+        async () => ({
+          detail: await reopenedBetaPanel.text("#gate-detail"),
+          disabled: await reopenedBetaPanel.disabled("#message-input"),
+          title: await reopenedBetaPanel.text("#gate-title"),
+        }),
+        { timeout: 10_000 },
+      )
+      .toEqual({
+        detail: "Browser relay reconnecting",
+        disabled: true,
+        title: "Preparing this tab",
+      });
+    await expect
+      .poll(
+        () =>
+          gateway.requests.some(
+            (request) =>
+              request.method === "sessions.abort" && request.params?.runId === relayRunId,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    relay.setAvailable(true);
+    await expect
+      .poll(() => relay.connectionCount, { timeout: 15_000 })
+      .toBeGreaterThan(relayConnectionsBeforeDrop);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+
     const connectionsBeforeWorkerRestart = gateway.connectParams.length;
     await restartServiceWorker(browserCdp, worker, reopenedBetaPanel);
     await expect
@@ -906,5 +1015,5 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         timeout: 15_000,
       })
       .toBe(true);
-  }, 60_000);
+  }, 75_000);
 });

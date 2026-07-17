@@ -8,6 +8,7 @@ import {
 } from "./copilot-background-shared.js";
 import { CopilotGatewayClient } from "./copilot-gateway.js";
 import { createCopilotRecoveryController } from "./copilot-recovery.js";
+import { createCopilotRelayCustodyController } from "./copilot-relay-custody.js";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
 import { createCopilotSessionController } from "./copilot-session.js";
 import { gatewayUrlFromPairing } from "./panel-core.js";
@@ -79,6 +80,29 @@ export function createCopilotController({
     broadcastTab,
     broadcastStatus,
     refreshPanelState,
+    runLifecycle,
+  });
+
+  const relayCustody = createCopilotRelayCustodyController({
+    appendGatewayRevocation: (revocation) => {
+      const previousRevocation = pendingGatewayRevocation;
+      pendingGatewayRevocation = Promise.allSettled([previousRevocation, revocation]).then(
+        () => undefined,
+      );
+    },
+    broadcastStatus,
+    currentGatewayScope,
+    drainAborts,
+    getGatewayStatus: () => gatewayStatus,
+    invalidateGatewayEpoch: () => {
+      gatewayRevision += 1;
+    },
+    markGatewayAbortError: () => {
+      reconciledGatewayStatusRevision = 0;
+      gatewayStatus = { state: "error", label: "Could not stop the previous tab run" };
+    },
+    registry,
+    revokeActiveBindings,
     runLifecycle,
   });
 
@@ -168,6 +192,10 @@ export function createCopilotController({
     return typeof currentConfig?.gatewayUrl === "string" ? currentConfig.gatewayUrl : null;
   }
 
+  function currentPanelStatus() {
+    return relayCustody.currentPanelStatus();
+  }
+
   async function restoreDebuggerIfReleased(tabId) {
     if (registry.list().some((entry) => entry.tabId === tabId && entry.activeRunId)) {
       return;
@@ -180,6 +208,7 @@ export function createCopilotController({
     if (
       !gatewayScope ||
       configTransitioning ||
+      !relayCustody.isOperational() ||
       !gateway.ready ||
       gatewayStatus.state !== "ready" ||
       reconciledGatewayStatusRevision !== gatewayStatusRevision
@@ -200,6 +229,7 @@ export function createCopilotController({
       epoch.statusRevision === gatewayStatusRevision &&
       reconciledGatewayStatusRevision === epoch.statusRevision &&
       !configTransitioning &&
+      relayCustody.isOperational() &&
       gateway.ready &&
       gatewayStatus.state === "ready"
     );
@@ -308,11 +338,12 @@ export function createCopilotController({
     }
     const shared = typeof knownShared === "boolean" ? knownShared : await isTabShared(tabId);
     const entry = registry.get(tabId, currentGatewayScope());
+    const panelStatus = currentPanelStatus();
     const state = selectCopilotPanelState({
       paired: Boolean(currentConfig?.relayUrl),
       shared,
       abortPending: Boolean(entry?.abortPending),
-      gatewayState: gatewayStatus.state,
+      gatewayState: panelStatus.state,
     });
     const panelState = {
       type: "panel.state",
@@ -322,8 +353,8 @@ export function createCopilotController({
           ? "Share this tab before the copilot can act"
           : state === "reconciling"
             ? "Stopping the previous tab run"
-            : gatewayStatus.label,
-      requestId: gatewayStatus.requestId,
+            : panelStatus.label,
+      requestId: panelStatus.requestId,
       tab: {
         title: typeof tab.title === "string" ? tab.title : "",
         url: typeof tab.url === "string" ? tab.url : "",
@@ -688,6 +719,7 @@ export function createCopilotController({
     initialize,
     preparePanel,
     onConsentChanged,
+    onRelayStatus: (status) => relayCustody.onStatus(status),
     onTabRemoved,
     refreshConfig,
     drainAborts,

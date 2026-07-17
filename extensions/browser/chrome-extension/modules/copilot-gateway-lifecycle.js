@@ -2,6 +2,24 @@ import { ed25519Utils, getPublicKeyAsync, signAsync } from "./copilot-runtime.js
 
 const IDENTITIES_KEY = "copilotDeviceIdentitiesV1";
 const TOKENS_KEY = "copilotDeviceTokensV1";
+// Main and stale-scope clients share one Chrome storage map. Serialize the
+// full read-modify-write or a late client can erase another scope's credential.
+const credentialStorageTails = new WeakMap();
+
+function withCredentialStorage(storage, operation) {
+  const previous = credentialStorageTails.get(storage) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  credentialStorageTails.set(storage, tail);
+  return result.finally(() => {
+    if (credentialStorageTails.get(storage) === tail) {
+      credentialStorageTails.delete(storage);
+    }
+  });
+}
 
 function toBase64Url(bytes) {
   let binary = "";
@@ -25,40 +43,42 @@ async function sha256Hex(bytes) {
 }
 
 export async function loadOrCreateCopilotIdentity(storage, gatewayScope) {
-  const identities = (await storage.get([IDENTITIES_KEY]))[IDENTITIES_KEY];
-  const stored = identities?.[gatewayScope];
-  if (
-    typeof stored?.deviceId === "string" &&
-    typeof stored?.publicKey === "string" &&
-    typeof stored?.secretKey === "string"
-  ) {
-    const secretKey = fromBase64Url(stored.secretKey);
+  return await withCredentialStorage(storage, async () => {
+    const identities = (await storage.get([IDENTITIES_KEY]))[IDENTITIES_KEY];
+    const stored = identities?.[gatewayScope];
+    if (
+      typeof stored?.deviceId === "string" &&
+      typeof stored?.publicKey === "string" &&
+      typeof stored?.secretKey === "string"
+    ) {
+      const secretKey = fromBase64Url(stored.secretKey);
+      return {
+        deviceId: stored.deviceId,
+        publicKey: stored.publicKey,
+        sign: async (payload) =>
+          toBase64Url(await signAsync(new TextEncoder().encode(payload), secretKey)),
+      };
+    }
+    const secretKey = ed25519Utils.randomSecretKey();
+    const publicKeyBytes = await getPublicKeyAsync(secretKey);
+    const identity = {
+      deviceId: await sha256Hex(publicKeyBytes),
+      publicKey: toBase64Url(publicKeyBytes),
+      secretKey: toBase64Url(secretKey),
+    };
+    await storage.set({
+      [IDENTITIES_KEY]: {
+        ...(identities && typeof identities === "object" ? identities : {}),
+        [gatewayScope]: identity,
+      },
+    });
     return {
-      deviceId: stored.deviceId,
-      publicKey: stored.publicKey,
+      deviceId: identity.deviceId,
+      publicKey: identity.publicKey,
       sign: async (payload) =>
         toBase64Url(await signAsync(new TextEncoder().encode(payload), secretKey)),
     };
-  }
-  const secretKey = ed25519Utils.randomSecretKey();
-  const publicKeyBytes = await getPublicKeyAsync(secretKey);
-  const identity = {
-    deviceId: await sha256Hex(publicKeyBytes),
-    publicKey: toBase64Url(publicKeyBytes),
-    secretKey: toBase64Url(secretKey),
-  };
-  await storage.set({
-    [IDENTITIES_KEY]: {
-      ...(identities && typeof identities === "object" ? identities : {}),
-      [gatewayScope]: identity,
-    },
   });
-  return {
-    deviceId: identity.deviceId,
-    publicKey: identity.publicKey,
-    sign: async (payload) =>
-      toBase64Url(await signAsync(new TextEncoder().encode(payload), secretKey)),
-  };
 }
 
 function tokenKey(gatewayScope, { clientId, deviceId, role }) {
@@ -68,27 +88,33 @@ function tokenKey(gatewayScope, { clientId, deviceId, role }) {
 export function createCopilotTokenStore(storage, gatewayScope) {
   return {
     async load(params) {
-      const tokens = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
-      const record = tokens?.[tokenKey(gatewayScope, params)];
-      return typeof record?.token === "string" && Array.isArray(record.scopes) ? record : null;
+      return await withCredentialStorage(storage, async () => {
+        const tokens = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
+        const record = tokens?.[tokenKey(gatewayScope, params)];
+        return typeof record?.token === "string" && Array.isArray(record.scopes) ? record : null;
+      });
     },
     async store(params) {
-      const current = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
-      const tokens = current && typeof current === "object" ? { ...current } : {};
-      tokens[tokenKey(gatewayScope, params)] = {
-        token: params.token,
-        scopes: [...params.scopes],
-      };
-      await storage.set({ [TOKENS_KEY]: tokens });
+      await withCredentialStorage(storage, async () => {
+        const current = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
+        const tokens = current && typeof current === "object" ? { ...current } : {};
+        tokens[tokenKey(gatewayScope, params)] = {
+          token: params.token,
+          scopes: [...params.scopes],
+        };
+        await storage.set({ [TOKENS_KEY]: tokens });
+      });
     },
     async clear(params) {
-      const current = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
-      if (!current || typeof current !== "object") {
-        return;
-      }
-      const tokens = { ...current };
-      delete tokens[tokenKey(gatewayScope, params)];
-      await storage.set({ [TOKENS_KEY]: tokens });
+      await withCredentialStorage(storage, async () => {
+        const current = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
+        if (!current || typeof current !== "object") {
+          return;
+        }
+        const tokens = { ...current };
+        delete tokens[tokenKey(gatewayScope, params)];
+        await storage.set({ [TOKENS_KEY]: tokens });
+      });
     },
   };
 }

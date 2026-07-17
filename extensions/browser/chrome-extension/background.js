@@ -21,10 +21,17 @@ const BADGE = {
   on: { text: "ON", color: "#0F9D58" },
   error: { text: "!", color: "#B91C1C" },
 };
+const COPILOT_RELAY_LABEL = {
+  off: "Browser relay disconnected",
+  connecting: "Connecting to browser relay",
+  on: "Browser relay connected",
+  error: "Browser relay reconnecting",
+};
 
 /** @type {WebSocket|null} */
 let relayWs = null;
 let relayState = "off"; // off | connecting | on | error
+let copilot = null;
 let reconnectAttempt = 0;
 let reconnectTimer = null;
 /** Tab ids with an active chrome.debugger attachment. */
@@ -45,6 +52,10 @@ function setBadge(kind) {
   const cfg = BADGE[kind] ?? BADGE.off;
   void chrome.action.setBadgeText({ text: cfg.text });
   void chrome.action.setBadgeBackgroundColor({ color: cfg.color });
+  void copilot?.onRelayStatus({
+    ready: kind === "on",
+    label: COPILOT_RELAY_LABEL[kind] ?? COPILOT_RELAY_LABEL.off,
+  });
 }
 
 async function getConfig() {
@@ -411,7 +422,7 @@ async function connectRelay() {
   // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
-const copilot = createCopilotController({
+copilot = createCopilotController({
   getConfig: getCopilotConfig,
   isTabShared,
   addTabToOpenClawGroup,

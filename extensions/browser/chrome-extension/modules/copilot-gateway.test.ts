@@ -19,6 +19,38 @@ function storageArea() {
   };
 }
 
+function controllableStorageArea() {
+  const values: Record<string, unknown> = {};
+  let nextWrite: { release: Promise<void>; started: () => void } | undefined;
+  const storage = {
+    get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.map((key) => [key, values[key]]))),
+    set: vi.fn(async (update: Record<string, unknown>) => {
+      const blocked = nextWrite;
+      nextWrite = undefined;
+      if (blocked) {
+        blocked.started();
+        await blocked.release;
+      }
+      Object.assign(values, update);
+    }),
+  };
+  return {
+    storage,
+    blockNextWrite() {
+      let markStarted: (() => void) | undefined;
+      let releaseWrite: (() => void) | undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const release = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      nextWrite = { release, started: () => markStarted?.() };
+      return { started, release: () => releaseWrite?.() };
+    },
+  };
+}
+
 class FakeWebSocket {
   static OPEN = 1;
   static instances: FakeWebSocket[] = [];
@@ -90,6 +122,65 @@ describe("browser copilot Gateway custody", () => {
       scopes: ["operator.read"],
     });
     await expect(tokenB.load(tokenParams)).resolves.toBeNull();
+  });
+
+  it("serializes shared credential maps across concurrent Gateway clients", async () => {
+    const controlled = controllableStorageArea();
+    const gatewayA = "ws://127.0.0.1:18789/";
+    const gatewayB = "ws://127.0.0.1:28789/";
+
+    const identityWrite = controlled.blockNextWrite();
+    const firstIdentity = loadOrCreateCopilotIdentity(controlled.storage, gatewayA);
+    await identityWrite.started;
+    const secondIdentity = loadOrCreateCopilotIdentity(controlled.storage, gatewayB);
+    identityWrite.release();
+    const [identityA, identityB] = await Promise.all([firstIdentity, secondIdentity]);
+    await expect(loadOrCreateCopilotIdentity(controlled.storage, gatewayA)).resolves.toMatchObject({
+      deviceId: identityA.deviceId,
+    });
+    await expect(loadOrCreateCopilotIdentity(controlled.storage, gatewayB)).resolves.toMatchObject({
+      deviceId: identityB.deviceId,
+    });
+
+    const tokenParams = (deviceId: string) => ({
+      clientId: "openclaw-browser-copilot",
+      deviceId,
+      role: "operator",
+    });
+    const tokenA = createCopilotTokenStore(controlled.storage, gatewayA);
+    const tokenB = createCopilotTokenStore(controlled.storage, gatewayB);
+    const storeGate = controlled.blockNextWrite();
+    const firstStore = tokenA.store({
+      ...tokenParams(identityA.deviceId),
+      token: "test-token-placeholder",
+      scopes: ["operator.read"],
+    });
+    await storeGate.started;
+    const secondStore = tokenB.store({
+      ...tokenParams(identityB.deviceId),
+      token: "test-token-placeholder",
+      scopes: ["operator.write"],
+    });
+    storeGate.release();
+    await Promise.all([firstStore, secondStore]);
+    await expect(tokenA.load(tokenParams(identityA.deviceId))).resolves.toMatchObject({
+      token: "test-token-placeholder",
+    });
+    await expect(tokenB.load(tokenParams(identityB.deviceId))).resolves.toMatchObject({
+      token: "test-token-placeholder",
+    });
+
+    const replacementWrite = controlled.blockNextWrite();
+    const replacing = tokenA.store({
+      ...tokenParams(identityA.deviceId),
+      token: "test-token-placeholder",
+      scopes: ["operator.read", "operator.write"],
+    });
+    await replacementWrite.started;
+    const clearing = tokenA.clear(tokenParams(identityA.deviceId));
+    replacementWrite.release();
+    await Promise.all([replacing, clearing]);
+    await expect(tokenA.load(tokenParams(identityA.deviceId))).resolves.toBeNull();
   });
 
   it("keeps the pairing approval state when the failed socket closes", () => {

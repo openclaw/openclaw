@@ -202,12 +202,13 @@ export function createCopilotSessionController({
       current.hydrateHistory ||= hydrateHistory;
       return await current.promise;
     }
-    const gatewayScope = currentGatewayScope();
-    if (!gatewayScope) {
+    const readyEpoch = currentReadyEpoch();
+    if (!readyEpoch) {
       return null;
     }
+    const gatewayScope = readyEpoch.gatewayScope;
     const tabRevision = tabRevisions.get(tabId) ?? 0;
-    const configRevision = getGatewayRevision();
+    const configRevision = readyEpoch.configRevision;
     const request = { hydrateHistory, promise: null };
     const pending = ensureSessionInner(tabId, tabRevision, configRevision, gatewayScope, false)
       .then(async (entry) => {
