@@ -465,6 +465,7 @@ export async function resumeMainSession(params: {
       }
     }
     if (reservation) {
+      const rollbackReservation = reservation;
       await retryAsync(
         async () =>
           await commitMainSessionRecovery({
@@ -473,7 +474,7 @@ export async function resumeMainSession(params: {
                 dispatchStarted && !explicitlyRejected
                   ? "abandon_reservation"
                   : "cancel_reservation",
-              reservation,
+              reservation: rollbackReservation,
             },
             requireWriteSuccess: true,
             target: { sessionKey: params.sessionKey, storePath: params.storePath },

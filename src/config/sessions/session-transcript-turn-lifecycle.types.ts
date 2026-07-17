@@ -1,5 +1,5 @@
 import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
