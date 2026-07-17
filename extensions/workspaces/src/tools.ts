@@ -60,9 +60,11 @@ const WIDGET_KIND_DESCRIPTION = [
   "builtin:table (binding id `rows`; props {columns: string[]}),",
   "builtin:iframe-embed (props {url}),",
   "builtin:preview (props {url, defaultViewport?: desktop|tablet|mobile}, or binding id `value`; live sandboxed preview with reload and viewport controls),",
-  "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
-  "(each reads its own rpc binding; see workspace_get for a worked example).",
+  "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity,",
+  "builtin:agent-status (binding id `value` to sessions.list; live Busy/Idle rows),",
+  "builtin:custom-widget-approvals (pending custom-widget registry decisions only; operator.approvals controls),",
   "builtin:chart (binding id `value`; props {type?: line|bar|area|sparkline|gauge, min?: number, max?: number}; value is number[] or {points: Array<number|{y|value}>}).",
+  "Data widgets read their declared rpc binding; see workspace_get for a worked example.",
 ].join(" ");
 
 const JsonSchema = Type.Unknown({

@@ -75,6 +75,11 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
   });
 
+  it("advertises session workspace reveal", () => {
+    expect(listGatewayMethods()).toContain("sessions.files.reveal");
+    expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
+  });
+
   it("advertises the versioned activity audit method", () => {
     expect(listGatewayMethods()).toContain("audit.activity.list");
     expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");

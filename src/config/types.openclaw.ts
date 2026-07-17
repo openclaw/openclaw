@@ -278,6 +278,8 @@ export type RuntimeConfig = BrandedConfigState<"runtime">;
 export type ConfigValidationIssue = {
   /** Dot-path to the invalid or legacy config value. */
   path: string;
+  /** Structured validator path used internally for lossless source diagnostics. */
+  pathSegments?: Array<string | number>;
   /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */

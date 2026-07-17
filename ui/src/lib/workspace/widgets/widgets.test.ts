@@ -1,13 +1,16 @@
-// Data-shape mapping tests for the L4 builtin widgets: each `map*` turns an RPC
-// payload fixture into the rendered view model. The render fns are exercised
-// separately (empty/populated) to lock the empty/loading/error affordances.
+// Focused renderer tests for builtin data shapes and empty/error affordances.
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
+import { renderAgentStatus } from "./agent-status.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
+import {
+  buildCustomWidgetApprovalsSource,
+  renderCustomWidgetApprovals,
+} from "./custom-widget-approvals.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -40,6 +43,97 @@ const STRICT_EMBED: BuiltinWidgetContext = {
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
   preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
+
+describe("agent-status mapping", () => {
+  it("maps only keyed sessions and clamps goal progress", () => {
+    const container = renderToContainer(
+      renderAgentStatus(widget({ props: { limit: 2 } }), {
+        sessions: [
+          {
+            key: "agent:one",
+            displayName: "One",
+            hasActiveRun: true,
+            goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
+          },
+          { key: "agent:two", status: "idle" },
+          { displayName: "missing key" },
+        ],
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(2);
+    expect(container.textContent).toContain("Ship the workspace");
+    expect(container.textContent).toContain("100");
+    expect(container.textContent).not.toContain("missing key");
+  });
+
+  it("renders accessible status text and an empty state", () => {
+    const populated = renderToContainer(
+      renderAgentStatus(widget(), { sessions: [{ key: "agent:one", hasActiveRun: true }] }),
+    );
+    expect(
+      populated.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+    ).toContain("Busy");
+    const empty = renderToContainer(renderAgentStatus(widget(), { sessions: [] }));
+    expect(empty.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+  });
+});
+
+describe("custom-widget-approvals mapping", () => {
+  it("exposes only pending custom-widget registry entries", () => {
+    const decisions: Array<[string, "approved" | "rejected"]> = [];
+    const source = buildCustomWidgetApprovalsSource(
+      {
+        schemaVersion: 1,
+        workspaceVersion: 3,
+        tabs: [],
+        prefs: { tabOrder: [] },
+        widgetsRegistry: {
+          pending: { status: "pending", createdBy: "agent:builder" },
+          approved: { status: "approved", createdBy: "agent:builder" },
+        },
+      },
+      new Set(),
+      (name, decision) => decisions.push([name, decision]),
+    );
+    expect(source.pending).toEqual([
+      { id: "pending", title: "pending", requestedBy: "builder", deciding: false },
+    ]);
+    source.onDecide?.(source.pending[0]!, "reject");
+    expect(decisions).toEqual([["pending", "rejected"]]);
+  });
+
+  it("limits rows and renders permission-aware decision controls", () => {
+    const source = {
+      pending: [
+        { id: "one", title: "one", requestedBy: null, deciding: false },
+        { id: "two", title: "two", requestedBy: "builder", deciding: false },
+      ],
+      onDecide: () => undefined,
+    };
+    const container = renderToContainer(
+      renderCustomWidgetApprovals(widget({ props: { limit: 1 } }), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: source,
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(1);
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.querySelector("button")?.disabled).toBe(false);
+    expect(container.textContent).toContain("Approve");
+    expect(container.textContent).toContain("Reject");
+
+    const restricted = renderToContainer(
+      renderCustomWidgetApprovals(widget(), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: { pending: source.pending },
+      }),
+    );
+    expect(
+      Array.from(restricted.querySelectorAll("button")).every((button) => button.disabled),
+    ).toBe(true);
+    expect(restricted.textContent).toContain("Approval permission required");
+  });
+});
 
 describe("stat-card mapping", () => {
   it("renders the value and omits a duplicate label", () => {

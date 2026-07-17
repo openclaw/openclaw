@@ -341,6 +341,7 @@ import {
   SessionFileRelevanceSchema,
   SessionPlacementSchema,
   SessionPlacementStateSchema,
+  isCloudWorkerPlacementState,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -367,6 +368,8 @@ import {
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionsFilesRevealParamsSchema,
+  SessionsFilesRevealResultSchema,
   SessionsListParamsSchema,
   SessionCatalogSchema,
   SessionCatalogCapabilitiesSchema,
@@ -645,6 +648,7 @@ export const validateSessionsResolveParams = lazyCompile(SessionsResolveParamsSc
 export const validateSessionsFilesListParams = lazyCompile(SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParamsSchema);
 export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
+export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
@@ -847,6 +851,7 @@ export const validateWebLoginWaitParams = lazyCompile(WebLoginWaitParamsSchema);
 
 // Explicit schema exports keep public protocol changes reviewable.
 export {
+  isCloudWorkerPlacementState,
   ConnectParamsSchema,
   GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
@@ -991,6 +996,8 @@ export {
   SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
+  SessionsFilesRevealParamsSchema,
+  SessionsFilesRevealResultSchema,
   SessionDiffFileSchema,
   SessionDiffFileStatusSchema,
   SessionsDiffParamsSchema,
@@ -1442,6 +1449,8 @@ export type {
   SessionsFilesGetResult,
   SessionsFilesSetParams,
   SessionsFilesSetResult,
+  SessionsFilesRevealParams,
+  SessionsFilesRevealResult,
   SessionDiffFile,
   SessionDiffFileStatus,
   SessionsDiffParams,

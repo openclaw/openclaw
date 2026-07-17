@@ -94,6 +94,10 @@ function collectGoogleChatAccountAssignment(params: {
     ref,
     path: `${params.path}.serviceAccount`,
     expected: "string-or-object",
+    ownerKind: "unknown",
+    ownerId: `${params.path}.serviceAccount`,
+    requiredForGateway: false,
+    disposition: "fail-closed",
     apply: (value) => {
       params.target.serviceAccount = value;
     },
