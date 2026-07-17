@@ -1888,9 +1888,13 @@ describe("ci workflow guards", () => {
     });
     const stickyConsumers = Object.entries(workflow.jobs).flatMap(([jobName, job]) => {
       const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
-      return steps
-        .filter((step) => step.with && step.with["sticky-disk"] !== undefined)
-        .map((step) => ({ jobName, step }));
+      return steps.flatMap((step) => {
+        const stepWith = step.with;
+        if (!stepWith || stepWith["sticky-disk"] === undefined) {
+          return [];
+        }
+        return [{ jobName, stepWith }];
+      });
     });
     // Every Linux Blacksmith lane that installs Node dependencies consumes
     // the snapshot; missing entries silently pay the full install again.
@@ -1908,9 +1912,9 @@ describe("ci workflow guards", () => {
       "native-i18n",
       "qa-smoke-ci-profile",
     ]);
-    for (const { jobName, step } of stickyConsumers) {
-      const stickyCondition = step.with["sticky-disk"];
-      const cacheCondition = step.with["use-actions-cache"];
+    for (const { jobName, stepWith } of stickyConsumers) {
+      const stickyCondition = stepWith["sticky-disk"];
+      const cacheCondition = stepWith["use-actions-cache"];
       expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
       expect(stickyCondition, jobName).toContain(
         "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
@@ -1924,14 +1928,14 @@ describe("ci workflow guards", () => {
     // Exactly one CI job may publish the shared snapshot; concurrent
     // committers would race the disk and consumers could clone a torn tree.
     const ciWriters = stickyConsumers.filter(
-      (entry) => entry.step.with["save-sticky-disk"] === "true",
+      (entry) => entry.stepWith["save-sticky-disk"] === "true",
     );
     expect(ciWriters.map((entry) => entry.jobName)).toEqual(["build-artifacts"]);
     // The disk key is partitioned by node-version and both writers rely on
     // the action default; a consumer pinning any other version would split
     // onto a writerless key and silently regress to permanently cold installs.
-    for (const { jobName, step } of stickyConsumers) {
-      const nodeVersion = step.with["node-version"];
+    for (const { jobName, stepWith } of stickyConsumers) {
+      const nodeVersion = stepWith["node-version"];
       expect(
         nodeVersion === undefined ||
           nodeVersion === "24.x" ||
