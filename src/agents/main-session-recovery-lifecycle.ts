@@ -65,7 +65,10 @@ export function projectMainSessionRecoveryLifecycle(params: {
   currentLifecycleGeneration: string;
   entry?:
     | (Partial<MainRecoveryStateFields> &
-        Pick<Partial<SessionEntry>, "restartRecoveryTerminalRunIds">)
+        Pick<
+          Partial<SessionEntry>,
+          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds"
+        >)
     | null;
   event: MainRecoveryLifecycleEvent;
   snapshotPatch: Partial<SessionEntry>;
@@ -140,14 +143,21 @@ export function projectMainSessionRecoveryLifecycle(params: {
     ) {
       return { action: "apply", patch: { restartRecoveryRuns: remaining } };
     }
-    if ((remaining?.length ?? 0) > 0 || hasCurrentOwner) {
-      // Mark this completion healthy, but retain every other durable owner.
+    const recoveryDeliveryRunId =
+      typeof params.entry?.restartRecoveryDeliveryRunId === "string"
+        ? params.entry.restartRecoveryDeliveryRunId.trim()
+        : undefined;
+    if ((remaining?.length ?? 0) > 0 && recoveryDeliveryRunId !== runId) {
+      // A different terminal run may consume only its own fence. Another
+      // admitted recovery remains the durable owner of the aggregate.
       patch.abortedLastRun = false;
-      patch.restartRecoveryRuns = remaining?.length ? remaining : undefined;
+      patch.restartRecoveryRuns = remaining;
       patch.mainRestartRecovery = params.entry?.mainRestartRecovery;
-    } else {
-      Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
+      return { action: "apply", patch };
     }
+    // An admitted recovery clears the interruption flag before it runs. With
+    // no live owner left, that exact delivery run is the durable cleanup boundary.
+    Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
     return { action: "apply", patch };
   }
   if (phase === "start" || !matchesFence || !remaining) {

@@ -520,6 +520,7 @@ describe("main session recovery state", () => {
   it("owns lifecycle fence suppression, consumption, and healthy clearing", () => {
     const entry = interruptedEntry({
       abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "recovery",
       restartRecoveryRuns: [
         { runId: "interrupted", lifecycleGeneration: "generation-1" },
         { runId: "recovery", lifecycleGeneration: "generation-1" },
@@ -554,8 +555,8 @@ describe("main session recovery state", () => {
       patch: {
         status: "done",
         abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: "interrupted", lifecycleGeneration: "generation-1" }],
-        mainRestartRecovery: entry.mainRestartRecovery,
+        restartRecoveryRuns: undefined,
+        mainRestartRecovery: undefined,
       },
     });
 
@@ -575,8 +576,8 @@ describe("main session recovery state", () => {
       patch: {
         status: "failed",
         abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: "interrupted", lifecycleGeneration: "generation-1" }],
-        mainRestartRecovery: entry.mainRestartRecovery,
+        restartRecoveryRuns: undefined,
+        mainRestartRecovery: undefined,
       },
     });
   });
@@ -686,6 +687,38 @@ describe("main session recovery state", () => {
       patch: {
         restartRecoveryRuns: [{ runId: "recovery-2", lifecycleGeneration: "generation-1" }],
         restartRecoveryTerminalRunIds: ["recovery-1"],
+      },
+    });
+  });
+
+  it("does not let another terminal run clear the active recovery delivery", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "recovery-2",
+      restartRecoveryRuns: [
+        { runId: "recovery-1", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-2", lifecycleGeneration: "generation-1" },
+      ],
+    });
+
+    expect(
+      projectMainSessionRecoveryLifecycle({
+        currentLifecycleGeneration: "generation-1",
+        entry,
+        event: {
+          runId: "recovery-1",
+          lifecycleGeneration: "generation-1",
+          data: { phase: "end" },
+        },
+        snapshotPatch: { status: "done", abortedLastRun: false },
+      }),
+    ).toEqual({
+      action: "apply",
+      patch: {
+        status: "done",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "recovery-2", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: entry.mainRestartRecovery,
       },
     });
   });
