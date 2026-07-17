@@ -474,7 +474,6 @@ export async function dispatchOutbound(
           deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
             hasResponse = true;
 
-            // ---- Tool deliver ----
             if (info.kind === "tool") {
               toolDeliverCount++;
               const toolText = (payload.text ?? "").trim();
@@ -536,7 +535,6 @@ export async function dispatchOutbound(
               return;
             }
 
-            // ---- Block deliver ----
             markBlockResponse();
 
             if (!streamingController && isSilentBlockReply(payload)) {

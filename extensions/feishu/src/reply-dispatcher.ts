@@ -700,11 +700,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     params.runtime.error?.(
       `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
     );
-    await queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError: unknown) => {
+    await queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError: unknown) =>
       params.runtime.error?.(
         `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
-      );
-    });
+      ),
+    );
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload: ReplyPayload, info) => {
