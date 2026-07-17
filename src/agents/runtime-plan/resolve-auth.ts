@@ -3,7 +3,7 @@ import { toErrorObject } from "../../infra/errors.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import { getApiKeyForModel, providerHasPluginSyntheticAuthHook } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
 import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
@@ -274,12 +274,20 @@ export async function resolvePreparedRuntimeModelAuth(
     // Stored-profile discovery stays off (empty store + fallback disabled), but
     // provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook the
     // gateway route still depends on, so keep it reachable on its own flag.
+    // Scope that flag to providers that actually expose a synthetic-auth hook so
+    // a stored-key provider (e.g. openai) does not pay for plugin discovery just
+    // to fail closed.
     const auth = await getApiKeyForModel({
       ...authParams,
       store: { version: 1, profiles: {} },
       lockedProfile: false,
       allowAuthProfileFallback: false,
-      allowPluginSyntheticAuth: true,
+      allowPluginSyntheticAuth: providerHasPluginSyntheticAuthHook({
+        provider: authParams.model.provider,
+        cfg: authParams.cfg,
+        workspaceDir: authParams.workspaceDir,
+        modelApi: authParams.model.api,
+      }),
       skipSetupProviderFallback: plan.modelRoute?.provider === "openai",
     });
     assertResolvedAuthMatchesPreparedRoute({ plan, auth });

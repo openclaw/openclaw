@@ -24,6 +24,7 @@ import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import {
   getApiKeyForModel,
   MissingProviderAuthError,
+  providerHasPluginSyntheticAuthHook,
   type ResolvedProviderAuth,
 } from "../../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
@@ -454,8 +455,15 @@ export function createEmbeddedRunAuthController(params: {
       allowAuthProfileFallback,
       // Provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook,
       // not stored-profile discovery. Keep it reachable so a direct/gateway
-      // attempt (allowAuthProfileFallback: false) still resolves it.
-      allowPluginSyntheticAuth: true,
+      // attempt (allowAuthProfileFallback: false) still resolves it, but only for
+      // providers that actually expose such a hook so a stored-key provider does
+      // not pay for plugin discovery just to fail closed.
+      allowPluginSyntheticAuth: providerHasPluginSyntheticAuthHook({
+        provider: model.provider,
+        cfg: params.config,
+        workspaceDir: params.workspaceDir,
+        modelApi: model.api,
+      }),
       secretSentinels: true,
     });
   };

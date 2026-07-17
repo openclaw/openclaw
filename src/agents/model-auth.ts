@@ -952,6 +952,40 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+/**
+ * True when a provider is confirmed to expose a plugin-owned synthetic-auth hook
+ * (e.g. an anthropic-vertex GCP-ADC plugin). Gateway-isolated callers use this to
+ * decide whether to keep plugin synthetic auth reachable while stored-profile
+ * fallback is off, without paying for plugin discovery on providers that have no
+ * such hook. Fails closed: when the plugin ref state is not authoritatively
+ * complete, returns false so the resolver stays on its env/config path (matching
+ * the pre-decoupling behavior for non-plugin providers like openai).
+ */
+export function providerHasPluginSyntheticAuthHook(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  modelApi?: string;
+}): boolean {
+  const refState = resolveRuntimeSyntheticAuthProviderRefState({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  });
+  if (!refState.complete || refState.refs.length === 0) {
+    return false;
+  }
+  const eligibleRefs = new Set(
+    normalizeUniqueStringEntries(refState.refs.map((ref) => normalizeProviderId(ref))),
+  );
+  return listProviderSyntheticAuthRefs({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelApi: params.modelApi,
+  }).some((ref) => eligibleRefs.has(ref));
+}
+
 /** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
