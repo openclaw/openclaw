@@ -514,18 +514,18 @@ export class WhatsAppConnectionController {
       ...params.socketTiming,
     };
     this.socketRef = { current: null };
-    this.abortPromise =
-      params.abortSignal &&
-      new Promise<"aborted">((resolve) => {
-        params.abortSignal?.addEventListener("abort", () => resolve("aborted"), { once: true });
-      });
-
     if (params.abortSignal?.aborted) {
+      this.abortPromise = Promise.resolve("aborted");
       this.stopDisconnectRetries();
       this.ownerAcquireAbortController.abort(params.abortSignal.reason);
       this.setupAbortController.abort(params.abortSignal.reason);
-    } else {
-      params.abortSignal?.addEventListener(
+    } else if (params.abortSignal) {
+      this.abortPromise = new Promise<"aborted">((resolve) => {
+        params.abortSignal.addEventListener("abort", () => resolve("aborted"), {
+          once: true,
+        });
+      });
+      params.abortSignal.addEventListener(
         "abort",
         () => {
           this.stopDisconnectRetries();

@@ -1053,4 +1053,37 @@ describe("WhatsAppConnectionController", () => {
       vi.useRealTimers();
     }
   });
+
+  it("resolves waitForClose as aborted when the stop signal is already aborted", async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const preAbortedController = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: false,
+      heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 60_000,
+      watchdogCheckMs: 5_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+      abortSignal: abort.signal,
+    });
+
+    createWaSocketMock.mockResolvedValueOnce({ ws: { close: vi.fn() } } as never);
+    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+    await preAbortedController.openConnection({
+      connectionId: "conn-pre-aborted",
+      createListener: async () => createListenerStub() as never,
+    });
+
+    await expect(preAbortedController.waitForClose()).resolves.toBe("aborted");
+    await preAbortedController.shutdown();
+  });
 });
