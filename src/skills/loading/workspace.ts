@@ -1629,7 +1629,7 @@ export function resolveSkillsPromptForRun(params: {
     return snapshotPrompt;
   }
   const loadedEntries =
-    params.entries && params.entries.length > 0
+    params.entries !== undefined
       ? params.entries
       : snapshotHasUnavailableSkill
         ? loadVisibleWorkspaceSkillEntries(params.workspaceDir, {

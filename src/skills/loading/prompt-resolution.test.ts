@@ -186,6 +186,43 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).not.toContain("/app/skills/new-skill/SKILL.md");
   });
 
+  it("preserves an explicitly empty supplied catalog during a degraded rebuild", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prompt-"));
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "healthy-skill"),
+      name: "healthy-skill",
+      description: "Healthy",
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "skill:cold-skill",
+        state: "unavailable",
+        paths: ["skills.entries.cold-skill.apiKey"],
+        refKeys: ["env:default:MISSING_SKILL_KEY"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    try {
+      const prompt = resolveSkillsPromptForRun({
+        skillsSnapshot: {
+          prompt: "STALE COLD SKILL PROMPT",
+          skills: [
+            { name: "cold-skill", skillKey: "cold-skill" },
+            { name: "healthy-skill", skillKey: "healthy-skill" },
+          ],
+        },
+        entries: [],
+        workspaceDir,
+      });
+
+      expect(prompt).toBe("");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not load newly installed skills into a degraded snapshot-only prompt", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prompt-"));
     for (const name of ["cold-skill", "healthy-skill", "new-skill"]) {
