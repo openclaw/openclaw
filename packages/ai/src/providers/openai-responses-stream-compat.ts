@@ -58,11 +58,23 @@ type ResponsesMessageSnapshotLineage = {
   outputIndex: number | undefined;
 };
 
+export function allowsResponsesCrossItemSnapshotCollapse(model: {
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
+  return provider === "amazon-bedrock-mantle" || baseUrl.includes("bedrock-mantle.");
+}
+
 // Some openai-responses providers re-emit one assistant output slot as cumulative
 // snapshots — each a strict prefix-superset of the previous one — instead of one
 // final message item. A same-output-slot or same-item, same-phase strict
 // extension replaces the prior text block, or the visible reply repeats once per
 // snapshot (#91959).
+// Bedrock Mantle's shipped compatibility path can emit rotating message ids and
+// separate output items, so that provider route keeps the older cross-item
+// strict-prefix collapse. Other routes use item id / output_index lineage.
 // Extension-only on purpose: equal or shrinking adjacent items stay distinct
 // (the Responses protocol allows multiple message items per response), so a
 // false positive can only merge rendering — it can never lose text.
@@ -74,10 +86,14 @@ export function isResponsesMessageSnapshotLineage(params: {
   nextPhase: string | undefined;
   nextItemId: string | undefined;
   nextOutputIndex: number | undefined;
+  allowCrossItemSnapshot: boolean;
 }): boolean {
   const { prior } = params;
   if (!prior || prior.phase !== params.nextPhase) {
     return false;
+  }
+  if (params.allowCrossItemSnapshot) {
+    return true;
   }
   if (prior.itemId && params.nextItemId && prior.itemId === params.nextItemId) {
     return true;
@@ -85,9 +101,7 @@ export function isResponsesMessageSnapshotLineage(params: {
   if (prior.outputIndex !== undefined && params.nextOutputIndex !== undefined) {
     return prior.outputIndex === params.nextOutputIndex;
   }
-  // Older compatibility fixtures and non-conforming provider streams may omit
-  // output_index; keep the original adjacent-prefix behavior for those streams.
-  return prior.outputIndex === undefined && params.nextOutputIndex === undefined;
+  return false;
 }
 
 export function resolveResponsesMessageSnapshotCollapse(params: {
@@ -96,6 +110,7 @@ export function resolveResponsesMessageSnapshotCollapse(params: {
   nextPhase: string | undefined;
   nextItemId: string | undefined;
   nextOutputIndex: number | undefined;
+  allowCrossItemSnapshot: boolean;
 }): ResponsesMessageSnapshotCollapse {
   const { prior, nextText } = params;
   if (
@@ -106,6 +121,7 @@ export function resolveResponsesMessageSnapshotCollapse(params: {
       nextPhase: params.nextPhase,
       nextItemId: params.nextItemId,
       nextOutputIndex: params.nextOutputIndex,
+      allowCrossItemSnapshot: params.allowCrossItemSnapshot,
     })
   ) {
     return { kind: "keep" };

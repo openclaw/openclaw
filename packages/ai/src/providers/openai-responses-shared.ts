@@ -52,6 +52,7 @@ import {
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
+  allowsResponsesCrossItemSnapshotCollapse,
   isAzureResponsesTextDeltaEvent,
   isResponsesMessageSnapshotLineage,
   isResponsesTextContentPartType,
@@ -730,6 +731,7 @@ export async function processResponsesStream<TApi extends Api>(
   let unindexedOutputSlot: ResponsesOutputSlot | undefined;
   let terminalResponseEvent: "finalized" | "failed" | undefined;
   let lastTextBlock: TextBlockReference | null = null;
+  const allowCrossItemSnapshot = allowsResponsesCrossItemSnapshotCollapse(model);
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   const readOutputIndex = (event: object): number | undefined => {
@@ -843,6 +845,7 @@ export async function processResponsesStream<TApi extends Api>(
         nextPhase: phase,
         nextItemId: itemId,
         nextOutputIndex: outputIndex,
+        allowCrossItemSnapshot,
       })
         ? lastTextBlock
         : null;
@@ -1286,6 +1289,7 @@ export async function processResponsesStream<TApi extends Api>(
                 nextPhase: phase,
                 nextItemId: readIdentityValue(item.id),
                 nextOutputIndex: readOutputIndex(event) ?? outputSlot.outputIndex,
+                allowCrossItemSnapshot,
               })
             : ({ kind: "keep" } as const);
         outputSlot.pendingText = null;

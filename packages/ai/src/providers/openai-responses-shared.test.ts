@@ -77,6 +77,12 @@ const nativeOpenAIModel = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
+const bedrockMantleResponsesModel = {
+  ...nativeOpenAIModel,
+  provider: "amazon-bedrock-mantle",
+  baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+} satisfies Model<"openai-responses">;
+
 const proxyOpenAIModel = {
   ...nativeOpenAIModel,
   id: "custom-model",
@@ -1096,7 +1102,7 @@ describe("processResponsesStream", () => {
       ]),
       output,
       stream,
-      nativeOpenAIModel,
+      bedrockMantleResponsesModel,
     );
 
     expect(output.content).toMatchObject([
@@ -2638,45 +2644,38 @@ describe("processResponsesStream", () => {
       responseEvents([
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
         {
           type: "response.content_part.added",
-          output_index: 0,
           part: { type: "output_text", text: "" },
         },
-        { type: "response.output_text.delta", output_index: 0, delta: snapshot1 },
+        { type: "response.output_text.delta", delta: snapshot1 },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_1", snapshot1),
         },
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_2", snapshot2),
         },
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_3", snapshot3),
         },
         { type: "response.completed", response: { id: "resp_1", status: "completed" } },
       ]),
       output,
       stream,
-      nativeOpenAIModel,
+      bedrockMantleResponsesModel,
     );
     stream.end();
     await collect;

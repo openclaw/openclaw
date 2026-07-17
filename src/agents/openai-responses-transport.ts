@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import {
+  allowsResponsesCrossItemSnapshotCollapse,
   createResponsesToolCallTracker,
   isOpenAICompatibleAzureResponsesBaseUrl,
   isResponsesMessageSnapshotLineage,
@@ -1234,6 +1235,7 @@ async function processResponsesStream(
     contentIndex: number;
   };
   const streamingToolCalls = createResponsesToolCallTracker<StreamingToolCallState>();
+  const allowCrossItemSnapshot = allowsResponsesCrossItemSnapshotCollapse(model);
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
@@ -1327,6 +1329,7 @@ async function processResponsesStream(
       nextPhase: phase,
       nextItemId: itemId,
       nextOutputIndex: outputIndex,
+      allowCrossItemSnapshot,
     });
     if (collapse.kind === "extend" && lastTextBlock) {
       // Cumulative snapshot of the prior message item: replace, don't append;
@@ -1459,6 +1462,7 @@ async function processResponsesStream(
             nextPhase: phase,
             nextItemId: itemId,
             nextOutputIndex: outputIndex,
+            allowCrossItemSnapshot,
           })
         ) {
           currentBlock = null;
@@ -1621,6 +1625,7 @@ async function processResponsesStream(
                 nextPhase: phase,
                 nextItemId: readIdentityValue(item.id),
                 nextOutputIndex: outputIndex,
+                allowCrossItemSnapshot,
               })
             : ({ kind: "keep" } as const);
         pendingMessageText = null;

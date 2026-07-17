@@ -413,7 +413,10 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
-    const model = createAzureResponsesModel();
+    const model = makeResponsesModel({
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+    });
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
     const textBlockSignatures: Array<[string, number, string | undefined]> = [];
@@ -431,33 +434,27 @@ describe("openai transport stream", () => {
       streamChunks([
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
-        { type: "response.output_text.delta", output_index: 0, delta: snapshot1 },
+        { type: "response.output_text.delta", delta: snapshot1 },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_1", snapshot1),
         },
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_2", snapshot2),
         },
         {
           type: "response.output_item.added",
-          output_index: 0,
           item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
         {
           type: "response.output_item.done",
-          output_index: 0,
           item: messageItem("msg_3", snapshot3),
         },
         {
@@ -706,7 +703,10 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
-    const model = createAzureResponsesModel();
+    const model = makeResponsesModel({
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+    });
     const output = createResponsesAssistantOutput(model);
 
     await testing.processResponsesStream(
