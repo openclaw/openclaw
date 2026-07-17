@@ -336,6 +336,7 @@ describe("Bedrock bearer token resolution", () => {
     await runWithBearerToken(" \t ");
 
     expect(getConfiguredToken()).toBeUndefined();
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
   });
 
   it("trims configured bearer tokens", async () => {

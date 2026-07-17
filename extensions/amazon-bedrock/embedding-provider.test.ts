@@ -1,7 +1,34 @@
 // Amazon Bedrock tests cover embedding provider plugin behavior.
-import { describe, expect, it, vi } from "vitest";
-import { hasAwsCredentials } from "./embedding-provider.js";
+import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createBedrockEmbeddingProvider, hasAwsCredentials } from "./embedding-provider.js";
 import { embeddingTesting as testing } from "./test-support.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+describe("Bedrock embedding credentials", () => {
+  it("sanitizes blank static credentials before creating the runtime client", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      body: new TextEncoder().encode('{"embedding":[1,0]}'),
+    } as never);
+    const { provider } = await createBedrockEmbeddingProvider({
+      config: {},
+      model: "amazon.titan-embed-text-v2:0",
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
+  });
+});
 
 describe("hasAwsCredentials", () => {
   it("accepts static AWS key credentials without loading the credential chain", async () => {

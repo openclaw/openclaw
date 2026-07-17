@@ -1,5 +1,5 @@
 // Amazon Bedrock tests cover discovery plugin behavior.
-import type { BedrockClient } from "@aws-sdk/client-bedrock";
+import { BedrockClient } from "@aws-sdk/client-bedrock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   discoverBedrockModels,
@@ -51,6 +51,23 @@ describe("bedrock discovery", () => {
 
   afterEach(() => {
     resetBedrockDiscoveryCacheForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("sanitizes blank static credentials before creating the discovery client", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
+    vi.spyOn(BedrockClient.prototype, "send")
+      .mockResolvedValueOnce({ modelSummaries: [] } as never)
+      .mockResolvedValueOnce({ inferenceProfileSummaries: [] } as never);
+
+    await discoverBedrockModels({ region: "us-east-1" });
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
   });
 
   it("filters to active streaming text models and maps modalities", async () => {
