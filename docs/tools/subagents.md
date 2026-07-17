@@ -48,6 +48,10 @@ by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for
 the raw full transcript.
 
+In the Control UI, parent sessions with recent child runs have an expandable
+sidebar row. The nested rows show child status and runtime, and selecting one
+opens that child's chat while preserving the parent hierarchy.
+
 ### Thread binding controls
 
 These commands work on channels with persistent thread bindings. See
@@ -611,10 +615,10 @@ status summaries, descendant completion gating, and per-session
 concurrency checks.
 
 After a gateway restart, stale unended restored runs are pruned unless
-their child session is marked `abortedLastRun: true`. Those
-restart-aborted child sessions remain recoverable through the sub-agent
-orphan recovery flow, which sends a synthetic resume message before
-clearing the aborted marker.
+their child session is marked `abortedLastRun: true`. Restart-aborted
+runs remain registered for the sub-agent orphan recovery flow: stale
+runs are finalized without a resume, while fresh child sessions receive
+a synthetic resume message before the aborted marker is cleared.
 
 Automatic restart recovery is bounded per child session. If the same
 sub-agent child is accepted for orphan recovery repeatedly inside the
@@ -652,6 +656,7 @@ still need normal device approval for scope upgrades.
 
 ## Related
 
+- [Session tools and state changes](/concepts/session-tool)
 - [ACP agents](/tools/acp-agents)
 - [Agent send](/tools/agent-send)
 - [Background tasks](/automation/tasks)

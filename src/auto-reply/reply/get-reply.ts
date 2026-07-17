@@ -1,7 +1,6 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -23,11 +22,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import {
-  buildAgentHookContextChannelFields,
-  buildAgentHookContextIdentityFields,
-} from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -56,12 +55,18 @@ import type {
   ReplySessionBinding,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
+import {
+  hasInboundAudio,
+  hasInboundMedia,
+  hasInboundMediaForUnderstanding,
+} from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
-import { initSessionState } from "./session.js";
+import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
+import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -135,44 +140,6 @@ function loadCommandsCoreRuntime() {
   return commandsCoreRuntimeLoader.load();
 }
 
-const hookRunnerGlobalLoader = createLazyImportLoader(
-  () => import("../../plugins/hook-runner-global.js"),
-);
-const originRoutingLoader = createLazyImportLoader(() => import("./origin-routing.js"));
-
-function loadHookRunnerGlobal() {
-  return hookRunnerGlobalLoader.load();
-}
-
-function loadOriginRouting() {
-  return originRoutingLoader.load();
-}
-
-function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
-  const normalize = (list?: string[]) => {
-    if (!Array.isArray(list)) {
-      return undefined;
-    }
-    return normalizeStringEntries(list);
-  };
-  const channel = normalize(channelFilter);
-  const agent = normalize(agentFilter);
-  if (!channel && !agent) {
-    return undefined;
-  }
-  if (!channel) {
-    return agent;
-  }
-  if (!agent) {
-    return channel;
-  }
-  if (channel.length === 0 || agent.length === 0) {
-    return [];
-  }
-  const agentSet = new Set(agent);
-  return channel.filter((name) => agentSet.has(name));
-}
-
 function hasLinkCandidate(ctx: MsgContext): boolean {
   const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
   if (!message) {
@@ -188,6 +155,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
+  processingMode?: "audio-only";
 }): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return undefined;
@@ -202,6 +170,11 @@ async function applyMediaUnderstandingIfNeeded(params: {
     );
     return undefined;
   }
+}
+
+function hasExplicitAudioUnderstandingConfig(cfg: OpenClawConfig): boolean {
+  const audio = cfg.tools?.media?.audio;
+  return audio !== undefined && audio.enabled !== false;
 }
 
 function withExtractedFileImages(
@@ -316,9 +289,11 @@ export async function getReplyFromConfig(
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );
-  const resolvedOpts =
+  const optsWithSkillFilter =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
+  const internalOptsWithSkillFilter = optsWithSkillFilter as
+    | RuntimeInternalGetReplyOptions
+    | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   const agentCfg = cfg.agents?.defaults;
   const agentEntry = resolveAgentConfig(cfg, agentId);
@@ -406,7 +381,7 @@ export async function getReplyFromConfig(
         model,
         workspaceDir: workspaceDirForNativeCommand,
         typing,
-        opts: resolvedOpts,
+        opts: optsWithSkillFilter,
         skillFilter: mergedSkillFilter,
       }),
   );
@@ -440,22 +415,42 @@ export async function getReplyFromConfig(
       }),
     );
   }
-  if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
-    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
-      applyMediaUnderstandingIfNeeded({
-        ctx: finalized,
-        cfg,
-        agentId,
-        agentDir,
-        workspaceDir,
-        activeModel: { provider, model },
-      }),
-    );
-    if (mediaResult?.extractedFileImages.length) {
-      extractedFileImages = mediaResult.extractedFileImages;
+
+  const mediaUnderstandingRequested = !isFastTestEnv && hasInboundMediaForUnderstanding(finalized);
+  const linkUnderstandingRequested = !isFastTestEnv && hasLinkCandidate(finalized);
+  const preprocessingState =
+    mediaUnderstandingRequested || linkUnderstandingRequested
+      ? await traceGetReplyPhase("reply.resolve_session_preprocessing_state", () =>
+          resolveReplySessionPreprocessingState({ ctx: finalized, cfg }),
+        )
+      : undefined;
+  const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
+
+  if (mediaUnderstandingRequested) {
+    const shouldApplyLockedAudio =
+      utilityModelSelectionLocked &&
+      hasInboundAudio(finalized) &&
+      hasExplicitAudioUnderstandingConfig(cfg);
+    // Native harnesses own image, video, and file interpretation. They cannot
+    // transcribe audio, so an explicitly configured STT pipeline still runs alone.
+    if (!utilityModelSelectionLocked || shouldApplyLockedAudio) {
+      const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
+        applyMediaUnderstandingIfNeeded({
+          ctx: finalized,
+          cfg,
+          agentId,
+          agentDir,
+          workspaceDir,
+          activeModel: { provider, model },
+          ...(shouldApplyLockedAudio ? { processingMode: "audio-only" as const } : {}),
+        }),
+      );
+      if (mediaResult?.extractedFileImages.length) {
+        extractedFileImages = mediaResult.extractedFileImages;
+      }
     }
   }
-  if (!isFastTestEnv && hasLinkCandidate(finalized)) {
+  if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
@@ -470,24 +465,38 @@ export async function getReplyFromConfig(
   });
 
   const commandAuthorized = finalized.CommandAuthorized;
-  const sessionState = useFastTestBootstrap
-    ? initFastReplySessionState({
-        ctx: finalized,
-        cfg,
-        agentId,
-        commandAuthorized,
-        workspaceDir,
-      })
-    : await traceGetReplyPhase("reply.init_session_state", () =>
-        initSessionState({
+  let sessionState: Awaited<ReturnType<typeof initSessionState>>;
+  try {
+    sessionState = useFastTestBootstrap
+      ? initFastReplySessionState({
           ctx: finalized,
           cfg,
+          agentId,
           commandAuthorized,
-          requestedSessionId: internalResolvedOpts?.requestedSessionId,
-          resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
-          signal: internalResolvedOpts?.abortSignal,
-        }),
-      );
+          workspaceDir,
+        })
+      : await traceGetReplyPhase("reply.init_session_state", () =>
+          initSessionState({
+            ctx: finalized,
+            cfg,
+            commandAuthorized,
+            ...(internalOptsWithSkillFilter?.expectedExistingSessionId
+              ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
+              : {}),
+            pinExpectedExistingSession:
+              internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
+            requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
+            resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
+            signal: internalOptsWithSkillFilter?.abortSignal,
+          }),
+        );
+  } catch (error) {
+    if (error instanceof ModelSelectionLockedError) {
+      typing.cleanup();
+      return { text: error.message };
+    }
+    throw error;
+  }
   const {
     sessionCtx,
     sessionEntry,
@@ -507,6 +516,24 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+  const sessionModelSelectionLocked = isModelSelectionLocked(sessionEntry);
+  if (sessionModelSelectionLocked && hasResolvedHeartbeatModelOverride) {
+    // Heartbeat routing is turn-local. A native harness lock owns the durable
+    // model selection, so heartbeat.model must not retarget its AppServer turn.
+    provider = defaultProvider;
+    model = defaultModel;
+    hasResolvedHeartbeatModelOverride = false;
+  }
+  // Utility-model narration is turn-local decoration. Initialize the durable
+  // session first, then keep it completely outside model-locked native runs.
+  const resolvedOpts = attachProgressNarratorToReplyOptions({
+    cfg,
+    agentId,
+    userMessage: finalized.BodyForAgent ?? finalized.Body,
+    opts: optsWithSkillFilter,
+    disabled: sessionModelSelectionLocked,
+  });
+  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
   internalResolvedOpts?.onSessionPrepared?.({
@@ -580,6 +607,10 @@ export async function getReplyFromConfig(
         aliasIndex,
       });
     } catch (error) {
+      if (error instanceof ModelSelectionLockedError) {
+        typing.cleanup();
+        return { text: error.message };
+      }
       if (!isSessionWorkStartInvalidatedError(error)) {
         throw error;
       }
@@ -616,7 +647,7 @@ export async function getReplyFromConfig(
       })
     : null;
   const resolvedChannelModelOverride =
-    channelModelOverride && !hasResolvedHeartbeatModelOverride
+    channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
       ? resolveModelRefFromString({
           raw: channelModelOverride.model,
           defaultProvider,
@@ -639,18 +670,22 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
-    isHeartbeat: opts?.isHeartbeat === true,
-    hasResolvedHeartbeatModelOverride,
-    sessionEntry,
-    storedOverride: storedModelOverride,
-    defaultProvider,
-    defaultModel,
-    primaryProvider,
-    primaryModel,
-  });
+  const staleHeartbeatAutoFallbackOverride =
+    !sessionModelSelectionLocked &&
+    isStaleHeartbeatAutoFallbackOverride({
+      isHeartbeat: opts?.isHeartbeat === true,
+      hasResolvedHeartbeatModelOverride,
+      sessionEntry,
+      storedOverride: storedModelOverride,
+      defaultProvider,
+      defaultModel,
+      primaryProvider,
+      primaryModel,
+    });
   const staleLegacyAutoFallbackWithoutOrigin =
-    storedModelOverride?.source === "session" && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
+    !sessionModelSelectionLocked &&
+    storedModelOverride?.source === "session" &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
@@ -661,7 +696,9 @@ export async function getReplyFromConfig(
     model = storedModelOverride.model;
   }
   const canApplyAutoFallbackPrimaryProbe =
-    !hasResolvedHeartbeatModelOverride && !staleHeartbeatAutoFallbackOverride;
+    !sessionModelSelectionLocked &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride;
   const autoFallbackPrimaryProbe = canApplyAutoFallbackPrimaryProbe
     ? resolveAutoFallbackPrimaryProbe({
         entry: sessionEntry,
@@ -849,6 +886,7 @@ export async function getReplyFromConfig(
       cfg,
       command,
       sessionKey,
+      storePath,
       sessionEntry,
       previousSessionEntry,
       workspaceDir,
@@ -940,6 +978,10 @@ export async function getReplyFromConfig(
         isHeartbeat: opts?.isHeartbeat === true,
       });
     } catch (error) {
+      if (error instanceof ModelSelectionLockedError) {
+        typing.cleanup();
+        return { text: error.message };
+      }
       if (!isSessionWorkStartInvalidatedError(error)) {
         throw error;
       }
@@ -976,52 +1018,6 @@ export async function getReplyFromConfig(
         thinkingActive || hasExplicitThinkLevel
           ? "off"
           : await runModelState.resolveDefaultReasoningLevel();
-    }
-  }
-
-  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
-  if (!useFastTestBootstrap) {
-    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_agent_reply")) {
-      const { resolveOriginMessageProvider } = await loadOriginRouting();
-      const hookMessageProvider = resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
-      });
-      const hookChatId =
-        normalizeOptionalString(sessionCtx.NativeChannelId) ??
-        normalizeOptionalString(sessionCtx.ChatId);
-      const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
-      const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
-        hookRunner.runBeforeAgentReply(
-          { cleanedBody },
-          {
-            agentId,
-            sessionKey: agentSessionKey,
-            sessionId,
-            workspaceDir,
-            trigger: hookTrigger,
-            ...buildAgentHookContextChannelFields({
-              sessionKey: agentSessionKey,
-              messageProvider: hookMessageProvider,
-              currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
-              senderId: sessionCtx.SenderId ?? ctx.SenderId,
-            }),
-            ...buildAgentHookContextIdentityFields({
-              trigger: hookTrigger,
-              senderId: sessionCtx.SenderId,
-              chatId: hookChatId,
-              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
-            }),
-          },
-        ),
-      );
-      if (hookResult?.handled) {
-        logResolverTiming("completed", "before_agent_reply_hook");
-        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
-      }
     }
   }
 
@@ -1097,3 +1093,4 @@ export async function getReplyFromConfig(
   logResolverTiming("completed", "prepared_reply");
   return replyResult;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

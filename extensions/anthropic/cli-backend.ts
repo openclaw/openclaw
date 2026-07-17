@@ -14,6 +14,7 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
+  resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
@@ -31,11 +32,24 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         binaryName: "claude",
       },
     },
+    // Current native builds are self-contained; script distributions keep the
+    // complete inference implementation in this published package tree.
+    runtimeArtifact: {
+      kind: "bundled-package-tree",
+      packageName: "@anthropic-ai/claude-code",
+      entrypoint: "command",
+      nativeExecutableNames: ["claude", "claude.exe"],
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
-    nativeToolMode: "always-on",
+    nativeToolMode: "selectable",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    // Anthropic routes direct anthropic-messages calls on subscription OAuth
+    // tokens to metered extra-usage billing (or rejects them without balance);
+    // opted-in embedded runs on subscription credentials execute through this
+    // backend on plan limits instead.
+    subscriptionAuthDispatch: true,
     config: {
       command: "claude",
       args: [
@@ -66,6 +80,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--resume",
         "{sessionId}",
       ],
+      forkArg: "--fork-session",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -90,6 +105,11 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    autoSelectAuthProfile: false,
+    prepareExecution: ({ contextTokenBudget }) => {
+      const env = resolveClaudeCliAutoCompactEnv(contextTokenBudget);
+      return env ? { env } : undefined;
+    },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

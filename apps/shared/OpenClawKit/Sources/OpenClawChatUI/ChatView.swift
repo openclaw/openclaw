@@ -203,6 +203,8 @@ public struct OpenClawChatView: View {
         VStack(spacing: Layout.stackSpacing) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -213,6 +215,9 @@ public struct OpenClawChatView: View {
         VStack(spacing: 0) {
             self.messageList
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
+            self.planPill
+                .padding(.horizontal, Layout.composerPaddingHorizontal)
+                .padding(.top, Layout.stackSpacing)
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -222,6 +227,15 @@ public struct OpenClawChatView: View {
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity, alignment: .top)
         #endif
+    }
+
+    @ViewBuilder
+    private var planPill: some View {
+        if self.viewModel.hasBlockingRunActivity, !self.viewModel.planSteps.isEmpty {
+            ChatPlanPill(
+                steps: self.viewModel.planSteps,
+                explanation: self.viewModel.planExplanation)
+        }
     }
 
     private var composer: some View {
@@ -350,6 +364,8 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListRows: some View {
+        let contextWindowTokens = self.viewModel.contextUsage?.contextWindowTokens
+
         if let introText = visibleEmptyAssistantIntro {
             ChatAssistantIntroCard(
                 text: introText,
@@ -367,10 +383,10 @@ public struct OpenClawChatView: View {
         }
 
         ForEach(self.visibleMessages) { msg in
-            self.messageRow(for: msg)
+            self.messageRow(for: msg, contextWindowTokens: contextWindowTokens)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
@@ -389,9 +405,7 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
+        if let text = viewModel.streamingAssistantText, self.hasVisibleStreamingAssistantText {
             ChatStreamingAssistantBubble(
                 text: text,
                 markdownVariant: self.markdownVariant,
@@ -406,7 +420,10 @@ public struct OpenClawChatView: View {
     }
 
     @ViewBuilder
-    private func messageRow(for msg: OpenClawChatMessage) -> some View {
+    private func messageRow(
+        for msg: OpenClawChatMessage,
+        contextWindowTokens: Int?) -> some View
+    {
         let bubble = ChatMessageBubble(
             message: msg,
             style: self.style,
@@ -417,7 +434,12 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             showsAssistantAvatar: self.showsAssistantAvatars,
-            isClean: self.composerChrome == .clean)
+            isClean: self.composerChrome == .clean,
+            contextWindowTokens: contextWindowTokens,
+            inlineWidgetResolverReady: self.viewModel.healthOK,
+            inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
+                await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            })
             .frame(
                 maxWidth: .infinity,
                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
@@ -656,12 +678,15 @@ public struct OpenClawChatView: View {
         return self.hasVisibleTransientContent
     }
 
+    private var hasVisibleStreamingAssistantText: Bool {
+        guard let text = self.viewModel.streamingAssistantText else { return false }
+        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+    }
+
     private var hasVisibleTransientContent: Bool {
-        self.viewModel.pendingRunCount > 0 ||
+        self.viewModel.hasBlockingRunActivity ||
             !self.viewModel.pendingToolCalls.isEmpty ||
-            (self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false)
+            self.hasVisibleStreamingAssistantText
     }
 
     @ViewBuilder
@@ -713,10 +738,8 @@ public struct OpenClawChatView: View {
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
-            !(self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false) &&
-            self.viewModel.pendingRunCount == 0 &&
+            !self.hasVisibleStreamingAssistantText &&
+            !self.viewModel.hasBlockingRunActivity &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -768,7 +791,7 @@ public struct OpenClawChatView: View {
     private func handleTimelineChange() {
         guard self.hasPerformedInitialScroll else { return }
         if self.viewModel.messages.isEmpty,
-           self.viewModel.pendingRunCount == 0,
+           !self.viewModel.hasBlockingRunActivity,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {

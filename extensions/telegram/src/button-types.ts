@@ -1,15 +1,21 @@
 // Telegram plugin module implements button types behavior.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { reduceLegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
-  normalizeInteractiveReply,
-  type InteractiveReply,
+  normalizeLegacyInteractiveReply,
+  resolveMessagePresentationButtonAction,
+  type LegacyInteractiveReply,
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { sanitizeTelegramCallbackData } from "./approval-callback-data.js";
+import {
+  buildTelegramApprovalCallbackData,
+  hasTelegramApprovalCallbackPrefix,
+  rewriteTelegramApprovalDecisionAlias,
+  sanitizeTelegramCallbackData,
+} from "./approval-callback-data.js";
 import {
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
@@ -39,47 +45,40 @@ function toTelegramInlineButton(
   button: MessagePresentationButton,
 ): TelegramInlineButton | undefined {
   const style = toTelegramButtonStyle(button.style);
-  if (button.url) {
-    return {
-      text: button.label,
-      url: button.url,
-      style,
-    };
+  const action = resolveMessagePresentationButtonAction(button);
+  if (!action) {
+    return undefined;
   }
-  const callbackData = toTelegramCallbackData(button);
-  if (callbackData) {
-    return {
-      text: button.label,
-      callback_data: callbackData,
-      style,
-    };
+  if (action.type === "url") {
+    return { text: button.label, url: action.url, style };
   }
-  if (button.webApp?.url) {
-    return {
-      text: button.label,
-      web_app: { url: button.webApp.url },
-      style,
-    };
+  if (action.type === "web-app") {
+    return action.url ? { text: button.label, web_app: { url: action.url }, style } : undefined;
   }
-  return undefined;
-}
-
-function toTelegramCallbackData(button: MessagePresentationButton): string | undefined {
-  if (button.action?.type === "command") {
-    const command = button.action.command.trim();
-    if (!command) {
-      return undefined;
-    }
-    if (parseExecApprovalCommandText(command)) {
-      return sanitizeTelegramCallbackData(command);
-    }
-    const callbackData = buildTelegramNativeCommandCallbackData(command);
-    return sanitizeTelegramCallbackData(callbackData);
+  if (action.type === "approval") {
+    const callbackData = buildTelegramApprovalCallbackData(action);
+    return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
   }
-  if (button.action?.type === "callback") {
-    return sanitizeTelegramCallbackData(buildTelegramOpaqueCallbackData(button.action.value));
+  if (action.type === "command") {
+    const command = rewriteTelegramApprovalDecisionAlias(action.command.trim());
+    const nativeCallbackData = command
+      ? sanitizeTelegramCallbackData(buildTelegramNativeCommandCallbackData(command))
+      : undefined;
+    // Historical approval commands may consume the full callback budget. Preserve
+    // their authorized raw-command path when tgcmd: is the only overflow.
+    const callbackData =
+      nativeCallbackData ??
+      (parseExecApprovalCommandText(command) ? sanitizeTelegramCallbackData(command) : undefined);
+    return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
   }
-  return button.value ? sanitizeTelegramCallbackData(button.value) : undefined;
+  // Reserve the full approval prefix, including malformed values, so legacy
+  // plugin callbacks cannot be consumed by the approval handler.
+  const needsOpaqueEnvelope =
+    Boolean(button.action) || hasTelegramApprovalCallbackPrefix(action.value);
+  const callbackData = sanitizeTelegramCallbackData(
+    needsOpaqueEnvelope ? buildTelegramOpaqueCallbackData(action.value) : action.value,
+  );
+  return callbackData ? { text: button.label, callback_data: callbackData, style } : undefined;
 }
 
 function chunkInteractiveButtons(
@@ -100,10 +99,10 @@ function chunkInteractiveButtons(
 /**
  * @deprecated Use buildTelegramPresentationButtons with MessagePresentation.
  */
-export function buildTelegramInteractiveButtons(
-  interactive?: InteractiveReply,
+function buildTelegramInteractiveButtons(
+  interactive?: LegacyInteractiveReply,
 ): TelegramInlineButtons | undefined {
-  const rows = reduceInteractiveReply(
+  const rows = reduceLegacyInteractiveReply(
     interactive,
     [] as TelegramInlineButton[][],
     (state, block) => {
@@ -115,6 +114,7 @@ export function buildTelegramInteractiveButtons(
         chunkInteractiveButtons(
           block.options.map((option) => ({
             label: option.label,
+            action: option.action,
             value: option.value,
           })),
           state,
@@ -159,7 +159,7 @@ export function resolveTelegramInlineButtons(params: {
 }): TelegramInlineButtons | undefined {
   return (
     params.buttons ??
-    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive)) ??
+    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive)) ??
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation))
   );
 }

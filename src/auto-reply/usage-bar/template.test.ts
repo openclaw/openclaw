@@ -1,12 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
-import {
-  clearUsageBarTemplateCacheForTest,
-  loadUsageBarTemplate,
-} from "./template.js";
+import { loadUsageBarTemplate } from "./template.js";
+import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
 
@@ -113,6 +112,36 @@ describe("loadUsageBarTemplate", () => {
     expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
   });
 
+  it("bounds invalid-template warnings by least-recently-used path", () => {
+    const dir = tmpDir();
+    const paths = Array.from({ length: 257 }, (_, index) => {
+      const path = join(dir, `bad-${index}.json`);
+      writeFileSync(path, "{ not json");
+      return path;
+    });
+
+    for (const path of paths.slice(0, 256)) {
+      expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    }
+    expect(warnSpy).toHaveBeenCalledTimes(256);
+
+    // Refresh the oldest warning before overflow so the next key becomes the LRU victim.
+    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(256);
+
+    expect(loadUsageBarTemplate(paths[256])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(257);
+    expect(loadUsageBarTemplate(paths[0])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(257);
+
+    expect(loadUsageBarTemplate(paths[1])).toBe(DEFAULT_USAGE_BAR_TEMPLATE);
+    expect(warnSpy).toHaveBeenCalledTimes(258);
+    expect(warnSpy).toHaveBeenLastCalledWith(
+      "configured usage template could not be used; using built-in footer",
+      { source: "file", reason: "invalid-json", path: paths[1] },
+    );
+  });
+
   describe("cache eviction", () => {
     it("evicts the oldest entry and closes its watcher when inserting a new key over the limit", () => {
       const dir = tmpDir();
@@ -149,7 +178,10 @@ describe("loadUsageBarTemplate", () => {
       // disk — not return stale in-memory data. This proves both eviction and
       // watcher closure. Re-accessing paths[0] may evict another entry, but
       // the non-evicted check above has already completed.
-      writeFileSync(paths[0], JSON.stringify({ segments: [{ text: "v2-0" }] }));
+      writeFileSync(
+        expectDefined(paths[0], "paths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "v2-0" }] }),
+      );
       expect(loadUsageBarTemplate(paths[0])).toMatchObject({
         segments: [{ text: "v2-0" }],
       });
@@ -181,7 +213,10 @@ describe("loadUsageBarTemplate", () => {
       expect(loadUsageBarTemplate(invalidPath)).toMatchObject(tplB);
 
       // validPaths[0] should still be cached — not evicted by the retry.
-      writeFileSync(validPaths[0], JSON.stringify({ segments: [{ text: "changed" }] }));
+      writeFileSync(
+        expectDefined(validPaths[0], "validPaths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "changed" }] }),
+      );
       expect(loadUsageBarTemplate(validPaths[0])).toMatchObject({
         segments: [{ text: `v1-0` }],
       });

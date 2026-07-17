@@ -34,6 +34,7 @@ import {
   loadPluginManifest,
   type OpenClawPackageManifest,
   type PluginManifestActivation,
+  type PluginManifestCatalog,
   type PluginManifestConfigContracts,
   type PluginManifest,
   type PluginManifestCapabilityProviderMetadata,
@@ -56,6 +57,7 @@ import {
   normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
@@ -66,6 +68,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
@@ -180,6 +183,7 @@ export type PluginManifestContractListKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "workerProviders"
   | "usageProviders"
   | "migrationProviders"
   | "gatewayMethodDispatch";
@@ -202,6 +206,7 @@ export type PluginManifestRecord = {
   id: string;
   name?: string;
   description?: string;
+  catalog?: PluginManifestCatalog;
   icon?: string;
   version?: string;
   packageName?: string;
@@ -286,6 +291,38 @@ export type BundledChannelConfigCollector = (params: {
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
 }) => Record<string, PluginManifestChannelConfig> | undefined;
+
+function rejectCaseFoldedIdCollisions(
+  records: readonly PluginManifestRecord[],
+  diagnostics: PluginDiagnostic[],
+): PluginManifestRecord[] {
+  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
+  for (const record of records) {
+    const policyId = normalizePluginPolicyId(record.id);
+    const matches = recordsByPolicyId.get(policyId) ?? [];
+    matches.push(record);
+    recordsByPolicyId.set(policyId, matches);
+  }
+
+  const rejected = new Set<PluginManifestRecord>();
+  for (const [policyId, matches] of recordsByPolicyId) {
+    const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
+    if (declaredIds.length < 2) {
+      continue;
+    }
+    const message = `plugin ids ${declaredIds.map((id) => JSON.stringify(id)).join(", ")} collide as normalized id ${JSON.stringify(policyId)}; refusing all colliding plugins`;
+    for (const record of matches) {
+      rejected.add(record);
+      diagnostics.push({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message,
+      });
+    }
+  }
+  return records.filter((record) => !rejected.has(record));
+}
 
 function safeStatMtimeMs(filePath: string): number | null {
   try {
@@ -380,6 +417,7 @@ function mergeManifestContracts(
     "webContentExtractors",
     "webFetchProviders",
     "webSearchProviders",
+    "workerProviders",
     "usageProviders",
     "migrationProviders",
     "gatewayMethodDispatch",
@@ -444,6 +482,26 @@ function mergeCatalogChannelConfigs(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+function mergeManifestCatalog(
+  manifestCatalog: PluginManifestCatalog | undefined,
+  officialCatalog: PluginManifestCatalog | undefined,
+): PluginManifestCatalog | undefined {
+  const featuredCandidate = manifestCatalog?.featured ?? officialCatalog?.featured;
+  const orderCandidate = manifestCatalog?.order ?? officialCatalog?.order;
+  const featured = typeof featuredCandidate === "boolean" ? featuredCandidate : undefined;
+  const order =
+    typeof orderCandidate === "number" && Number.isFinite(orderCandidate)
+      ? orderCandidate
+      : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -491,6 +549,7 @@ function buildRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+    catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
     icon: normalizeOptionalString(params.manifest.icon),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
@@ -741,6 +800,7 @@ function matchesInstalledPluginRecord(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
+  installPathOnly?: boolean;
 }): boolean {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
@@ -760,7 +820,11 @@ function matchesInstalledPluginRecord(params: {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  const trackedPaths = [record.installPath, record.sourcePath]
+  // Security decisions must bind to the current install output. sourcePath can
+  // legitimately identify path installs, but it can also survive a source switch.
+  const trackedPaths = (
+    params.installPathOnly ? [record.installPath] : [record.installPath, record.sourcePath]
+  )
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .map((entry) => {
       const resolved = resolveUserPath(entry, params.env);
@@ -803,6 +867,7 @@ function isTrustedOfficialPluginInstall(params: {
       candidate: params.candidate,
       env: params.env,
       installRecords: params.installRecords,
+      installPathOnly: true,
     })
   ) {
     return false;
@@ -820,8 +885,19 @@ function isTrustedOfficialPluginInstall(params: {
   if (!installRecord) {
     return false;
   }
+  const officialClawHubInstall =
+    installRecord.source === "clawhub"
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({
+          pluginId: params.pluginId,
+          record: installRecord,
+        })
+      : undefined;
+  // Local npm-pack archives also persist source="npm". Only registry installs
+  // may inherit catalog trust; local artifacts and source links stay untrusted.
   if (
     installRecord.source === "npm" &&
+    installRecord.artifactKind === undefined &&
+    installRecord.sourcePath === undefined &&
     officialInstall?.npmSpec === packageName &&
     [
       installRecord.resolvedName,
@@ -832,14 +908,7 @@ function isTrustedOfficialPluginInstall(params: {
   ) {
     return true;
   }
-  if (
-    installRecord.source === "clawhub" &&
-    officialInstall?.clawhubSpec &&
-    installRecord.clawhubChannel === "official" &&
-    (installRecord.clawhubPackage === packageName ||
-      installRecord.spec === officialInstall.clawhubSpec ||
-      installRecord.resolvedSpec === officialInstall.clawhubSpec)
-  ) {
+  if (installRecord.source === "clawhub" && officialClawHubInstall) {
     return true;
   }
   return false;
@@ -1185,11 +1254,8 @@ export function loadPluginManifestRegistry(
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
-  const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
+  const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
+  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
-
-export const testing = {
-  mergeManifestContracts,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

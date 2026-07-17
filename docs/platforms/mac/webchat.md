@@ -13,7 +13,13 @@ The full chat window is a native split view:
 - **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu (new session, refresh, copy session key, export transcript, compact, clear history).
 - **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it.
 
-The anchored quick-chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+The anchored compact chat panel from the menu bar keeps the compact single-column layout with inline pickers.
+
+## Quick Chat bar
+
+Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to open a floating composer for the main session. Change the global shortcut with the recorder in **Settings → General → Quick Chat shortcut**.
+
+Quick Chat shows the main session's agent, sends directly to the main session, and leaves replies in the full chat window. Press Return to send, Command-Return to send and open full chat, Shift-Return for a newline, or Escape to dismiss. Clicking outside the bar also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.

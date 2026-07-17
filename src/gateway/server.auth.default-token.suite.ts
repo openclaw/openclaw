@@ -12,7 +12,6 @@ import {
   createSignedDevice,
   expectHelloOkServerVersion,
   getFreePort,
-  getPreauthHandshakeTimeoutMsFromEnv,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -22,6 +21,7 @@ import {
   PROTOCOL_VERSION,
   readConnectChallengeNonce,
   resolveGatewayTokenOrEnv,
+  resolvePreauthHandshakeTimeoutMs,
   rpcReq,
   sendRawConnectReq,
   startGatewayServer,
@@ -113,7 +113,7 @@ export function registerDefaultAuthTokenSuite(): void {
       try {
         await withGatewayServer(async ({ port: isolatedPort }) => {
           const ws = await openWs(isolatedPort);
-          const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+          const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs();
           const closed = await waitForWsClose(ws, handshakeTimeoutMs + 10_000);
           expect(closed).toBe(true);
         });
@@ -132,9 +132,9 @@ export function registerDefaultAuthTokenSuite(): void {
       process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "75";
       process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS = "20";
       try {
-        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(75);
+        expect(resolvePreauthHandshakeTimeoutMs()).toBe(75);
         process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "";
-        expect(getPreauthHandshakeTimeoutMsFromEnv()).toBe(20);
+        expect(resolvePreauthHandshakeTimeoutMs()).toBe(20);
       } finally {
         if (prevHandshakeTimeout === undefined) {
           delete process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS;
@@ -166,6 +166,9 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(payload?.type).toBe("hello-ok");
       expect(payload?.features?.capabilities).toContain(
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
+      );
+      expect(payload?.features?.capabilities).toContain(
+        GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
       );
       expect(payload?.snapshot?.configPath).toBe(createConfigIO().configPath);
       expect(payload?.snapshot?.stateDir).toBe(STATE_DIR);

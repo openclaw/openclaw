@@ -4,6 +4,7 @@ import {
   buildUsageHttpErrorSnapshot,
   discardUsageResponseBody,
   fetchJson,
+  parseUsageResetAt,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -34,14 +35,17 @@ type ClaudeWebOrganizationsResponse = Array<{
   name?: string;
 }>;
 
-function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
+function buildClaudeUsageWindows(
+  data: ClaudeUsageResponse,
+  options?: { skipExtraUsage?: boolean },
+): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
   if (data.five_hour?.utilization !== undefined) {
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(data.five_hour.resets_at),
     });
   }
 
@@ -49,7 +53,7 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(data.seven_day.resets_at),
     });
   }
 
@@ -75,11 +79,17 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
     windows.push({
       label,
       usedPercent: clampPercent(limit.percent ?? 0),
-      resetAt: limit.resets_at ? new Date(limit.resets_at).getTime() : undefined,
+      resetAt: parseUsageResetAt(limit.resets_at),
     });
   }
 
-  if (data.extra_usage?.is_enabled && Number.isFinite(data.extra_usage.utilization)) {
+  // Skipped when the caller also emits an extra-usage budget billing entry;
+  // rendering both would duplicate the same credits as window and budget.
+  if (
+    !options?.skipExtraUsage &&
+    data.extra_usage?.is_enabled &&
+    Number.isFinite(data.extra_usage.utilization)
+  ) {
     windows.push({
       label: "Extra usage",
       usedPercent: clampPercent(data.extra_usage.utilization ?? 0),
@@ -224,7 +234,6 @@ export async function fetchClaudeUsage(
     return parsed.snapshot;
   }
   const data = parsed.data as ClaudeUsageResponse;
-  const windows = buildClaudeUsageWindows(data);
   const extra = data.extra_usage;
   const unit = extra?.currency?.trim().toUpperCase() || "USD";
   const billing =
@@ -246,6 +255,7 @@ export async function fetchClaudeUsage(
           },
         ]
       : undefined;
+  const windows = buildClaudeUsageWindows(data, { skipExtraUsage: Boolean(billing) });
 
   return {
     provider: "anthropic",

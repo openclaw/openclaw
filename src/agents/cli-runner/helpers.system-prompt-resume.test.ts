@@ -29,7 +29,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { CliBackendConfig } from "../../config/types.js";
-import { buildClaudeLiveArgs } from "./claude-live-session.js";
+import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 
 // Minimal backend config matching the Anthropic claude-cli backend shape.
@@ -180,6 +180,41 @@ describe("buildCliArgs — issue #80374", () => {
         `systemPromptWhen=${backend.systemPromptWhen} should include flag on fresh session`,
       ).toContain("--append-system-prompt-file");
     }
+  });
+
+  it("appends a configured fork argument only to the marked resume", () => {
+    const backend = { ...BACKEND_ALWAYS, forkArg: "--fork-session" } as CliBackendConfig;
+    const resumed = buildCliArgs({
+      backend,
+      baseArgs: ["--resume", "source-session"],
+      modelId: "claude-haiku-4-5",
+      sessionId: "source-session",
+      useResume: true,
+      forkResume: true,
+    });
+    const subsequent = buildCliArgs({
+      backend,
+      baseArgs: ["--resume", "forked-session"],
+      modelId: "claude-haiku-4-5",
+      sessionId: "forked-session",
+      useResume: true,
+      forkResume: false,
+    });
+    expect(resumed).toContain("--fork-session");
+    expect(subsequent).not.toContain("--fork-session");
+  });
+
+  it("rejects a marked fork when the backend has no fork argument", () => {
+    expect(() =>
+      buildCliArgs({
+        backend: BACKEND_ALWAYS as CliBackendConfig,
+        baseArgs: ["--resume", "source-session"],
+        modelId: "claude-haiku-4-5",
+        sessionId: "source-session",
+        useResume: true,
+        forkResume: true,
+      }),
+    ).toThrow("does not support forked session resume");
   });
 });
 

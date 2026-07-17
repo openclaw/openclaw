@@ -71,6 +71,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -1016,8 +1017,11 @@ function resolveAcpSpawnRuntimeOptions(params: {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
-}): { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions } | { ok: false; error: string } {
+}):
+  | { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions; modelExplicit: boolean }
+  | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
+  const modelExplicit = normalizeOptionalString(params.model) !== undefined;
   const model = resolveConfiguredSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: policyAgentId,
@@ -1058,7 +1062,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
-  return { ok: true, runtimeOptions };
+  return { ok: true, runtimeOptions, modelExplicit };
 }
 
 async function initializeAcpSpawnRuntime(params: {
@@ -1068,6 +1072,7 @@ async function initializeAcpSpawnRuntime(params: {
   runtimeMode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
+  modelExplicit?: boolean;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
@@ -1095,6 +1100,7 @@ async function initializeAcpSpawnRuntime(params: {
     mode: params.runtimeMode,
     resumeSessionId: params.resumeSessionId,
     runtimeOptions: params.runtimeOptions,
+    modelExplicit: params.modelExplicit,
     cwd: params.cwd,
     backendId: params.cfg.acp?.backend,
   });
@@ -1494,6 +1500,7 @@ export async function spawnAcpDirect(
       runtimeMode,
       resumeSessionId: params.resumeSessionId,
       runtimeOptions: runtimeOptionsResult.runtimeOptions,
+      modelExplicit: runtimeOptionsResult.modelExplicit,
       cwd: runtimeCwd,
     });
     initializedRuntime = initializedSession.runtimeCloseHandle;
@@ -1533,6 +1540,14 @@ export async function spawnAcpDirect(
   });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  // ACP children take this branch instead of spawnSubagentDirect; without this the
+  // signal log has no child_spawned event and the parent cursor is never seeded.
+  recordSubagentSpawned({
+    childSessionKey: sessionKey,
+    childRunId: childIdem,
+    requesterSessionKey: requesterInternalKey,
+    agentId: targetAgentId,
+  });
   const streamLogPath =
     effectiveStreamToParent && parentSessionKey
       ? resolveAcpSpawnStreamLogPath({
@@ -1718,3 +1733,4 @@ export async function spawnAcpDirect(
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

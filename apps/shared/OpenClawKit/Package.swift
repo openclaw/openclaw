@@ -7,6 +7,7 @@ let package = Package(
     platforms: [
         .iOS(.v18),
         .macOS(.v15),
+        .watchOS(.v11),
     ],
     products: [
         .library(name: "OpenClawProtocol", targets: ["OpenClawProtocol"]),
@@ -33,7 +34,10 @@ let package = Package(
             name: "OpenClawKit",
             dependencies: [
                 "OpenClawProtocol",
-                .product(name: "ElevenLabsKit", package: "ElevenLabsKit", condition: .when(traits: ["Talk"])),
+                .product(
+                    name: "ElevenLabsKit",
+                    package: "ElevenLabsKit",
+                    condition: .when(platforms: [.iOS, .macOS], traits: ["Talk"])),
             ],
             path: "Sources/OpenClawKit",
             resources: [
@@ -46,6 +50,7 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawProtocol",
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
@@ -55,7 +60,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "OpenClawKitTests",
-            dependencies: ["OpenClawKit", "OpenClawChatUI"],
+            dependencies: ["OpenClawKit", "OpenClawChatUI", "OpenClawProtocol"],
             path: "Tests/OpenClawKitTests",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

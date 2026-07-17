@@ -44,11 +44,9 @@ describe("config doc baseline integration", () => {
     sharedByPathPromise ??= getSharedRendered().then(
       ({ baseline }) =>
         new Map(
-          [
-            ...baseline.coreEntries,
-            ...baseline.channelEntries,
-            ...baseline.pluginEntries,
-          ].map((entry) => [entry.path, entry]),
+          [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries].map(
+            (entry) => [entry.path, entry],
+          ),
         ),
     );
     return sharedByPathPromise;
@@ -141,6 +139,14 @@ describe("config doc baseline integration", () => {
     expect(requireEntry(byPath, "bindings.*.type").path).toBe("bindings.*.type");
     expect(requireEntry(byPath, "bindings.*.match.channel").path).toBe("bindings.*.match.channel");
     expect(requireEntry(byPath, "bindings.*.match.peer.id").path).toBe("bindings.*.match.peer.id");
+  });
+
+  it("merges tuple item branches from the bundled config schema", async () => {
+    const byPath = await getSharedByPath();
+    const rangePath = "models.providers.*.models.*.cost.tieredPricing.*.range";
+
+    expect(requireEntry(byPath, rangePath).type).toBe("array");
+    expect(requireEntry(byPath, `${rangePath}.*`).type).toBe("number");
   });
 
   it("supports check mode for stale hash files", async () => {

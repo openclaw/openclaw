@@ -31,23 +31,16 @@ import type {
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
-import type { ResourceLoader } from "./resource-loader.js";
-import { DefaultResourceLoader } from "./resource-loader.js";
+import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 import {
-  createBashTool,
   createCodingTools,
   createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadOnlyTools,
   createReadTool,
   createWriteTool,
   type ToolName,
-  withFileMutationQueue,
 } from "./tools/index.js";
 
 type ThinkingCatalogCompat = NonNullable<ThinkingCatalogEntry["compat"]>;
@@ -126,7 +119,7 @@ export interface CreateAgentSessionOptions {
 }
 
 /** Result from createAgentSession */
-export interface CreateAgentSessionResult {
+interface CreateAgentSessionResult {
   /** The created session */
   session: AgentSession;
   /** Extensions result (for UI context setup in interactive mode) */
@@ -139,30 +132,12 @@ export interface CreateAgentSessionResult {
 
 export type {
   ExtensionAPI,
-  ExtensionCommandContext,
   ExtensionContext,
   ExtensionFactory,
-  SlashCommandInfo,
-  SlashCommandSource,
   ToolDefinition,
 } from "./extensions/index.js";
-export type { PromptTemplate } from "./prompt-templates.js";
-export type { Skill } from "../../skills/loading/session.js";
-export type { Tool } from "./tools/index.js";
 
-export {
-  withFileMutationQueue,
-  // Tool factories (for custom cwd)
-  createCodingTools,
-  createReadOnlyTools,
-  createReadTool,
-  createBashTool,
-  createEditTool,
-  createWriteTool,
-  createGrepTool,
-  createFindTool,
-  createLsTool,
-};
+export { createCodingTools, createReadTool, createEditTool, createWriteTool };
 
 // Helper Functions
 
@@ -379,18 +354,17 @@ export async function createAgentSession(
                   ? { type: "text" as const, text: "Image reading is disabled." }
                   : c,
               )
-              .filter(
-                (c, i, arr) =>
-                  // Dedupe consecutive "Image reading is disabled." texts
-                  !(
-                    c.type === "text" &&
-                    c.text === "Image reading is disabled." &&
-                    i > 0 &&
-                    arr[i - 1].type === "text" &&
-                    (arr[i - 1] as { type: "text"; text: string }).text ===
-                      "Image reading is disabled."
-                  ),
-              );
+              .filter((c, i, arr) => {
+                const previous = arr.at(i - 1);
+                // Dedupe consecutive "Image reading is disabled." texts
+                return !(
+                  c.type === "text" &&
+                  c.text === "Image reading is disabled." &&
+                  i > 0 &&
+                  previous?.type === "text" &&
+                  previous.text === "Image reading is disabled."
+                );
+              });
             return Object.assign({}, msg, { content: filteredContent });
           }
         }

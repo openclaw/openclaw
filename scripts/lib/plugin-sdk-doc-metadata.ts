@@ -36,6 +36,12 @@ export const pluginSdkDocMetadata = {
   "approval-delivery-runtime": {
     category: "runtime",
   },
+  "approval-gateway-runtime": {
+    category: "runtime",
+  },
+  "approval-reference-runtime": {
+    category: "runtime",
+  },
   "approval-native-runtime": {
     category: "runtime",
   },
@@ -67,9 +73,6 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "channel-pairing": {
-    category: "channel",
-  },
-  "channel-ingress": {
     category: "channel",
   },
   "channel-ingress-runtime": {
@@ -111,10 +114,16 @@ export const pluginSdkDocMetadata = {
   "tool-results": {
     category: "utilities",
   },
+  "widget-html": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
   "provider-catalog-live-runtime": {
+    category: "provider",
+  },
+  "provider-model-types": {
     category: "provider",
   },
   "runtime-store": {
@@ -129,13 +138,16 @@ export const pluginSdkDocMetadata = {
   "sqlite-runtime": {
     category: "runtime",
   },
-  "qa-live-transport-scenarios": {
-    category: "utilities",
-  },
   "agent-runtime": {
     category: "runtime",
   },
+  "agent-harness-runtime": {
+    category: "runtime",
+  },
   "speech-core": {
+    category: "provider",
+  },
+  "speech-settings": {
     category: "provider",
   },
   "realtime-voice": {
@@ -156,7 +168,3 @@ export const pluginSdkDocMetadata = {
 } as const satisfies Record<string, PluginSdkDocMetadata>;
 
 export type PluginSdkDocEntrypoint = keyof typeof pluginSdkDocMetadata;
-
-export function resolvePluginSdkDocImportSpecifier(entrypoint: PluginSdkDocEntrypoint): string {
-  return entrypoint === "index" ? "openclaw/plugin-sdk" : `openclaw/plugin-sdk/${entrypoint}`;
-}

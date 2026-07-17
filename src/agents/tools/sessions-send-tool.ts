@@ -23,6 +23,7 @@ import {
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   type GatewayMessageChannel,
@@ -66,6 +67,7 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  watch: Type.Optional(Type.Boolean()),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -235,7 +237,10 @@ function shouldFallbackCronRunScopedActiveDelivery(
   outcome: EmbeddedAgentQueueMessageOutcome,
 ): boolean {
   return (
-    !outcome.queued && (outcome.reason === "not_streaming" || outcome.reason === "no_active_run")
+    !outcome.queued &&
+    (outcome.reason === "not_streaming" ||
+      outcome.reason === "no_active_run" ||
+      outcome.reason === "stale_run")
   );
 }
 
@@ -505,6 +510,7 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
       const timeoutMs =
         finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, {
           floorSeconds: true,
@@ -512,6 +518,16 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
+      // Fire-and-forget self-send remains a channel-delivery path. A synchronous
+      // self-send would wait behind its own active session lane until timeout.
+      if (timeoutSeconds !== 0 && requesterSessionKey === resolvedKey) {
+        return jsonResult({
+          runId,
+          status: "error",
+          error: "sessions_send cannot target the calling session; use your own reply instead",
+          sessionKey: unresolvedDisplayKey,
+        });
+      }
       if (parseSessionThreadInfo(resolvedKey).threadId) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -552,10 +568,23 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      // Watch registration follows successful dispatch: a failed send must not leave
+      // a hidden watch, and cron run-scoped sends can fall back to the durable parent
+      // session, which is the key that receives future state changes.
+      const watchRequested = params.watch === true;
+      const registerWatchIfRequested = (targetSessionKey: string) => {
+        const watched =
+          watchRequested && requesterSessionKey && requesterSessionKey !== targetSessionKey
+            ? registerSessionStateWatch({
+                watcherSessionKey: requesterSessionKey,
+                targetSessionKey,
+              })
+            : false;
+        return watchRequested ? { watched } : {};
+      };
       const fallbackA2ASessionKey =
         timeoutSeconds === 0 && isIsolatedCronRequester
           ? resolveCronRunScopedFallbackSessionKey(displayKey)
@@ -594,14 +623,14 @@ export function createSessionsSendTool(opts?: {
           : undefined;
 
       const agentMessageContext = buildAgentToAgentMessageContext({
-        requesterSessionKey: opts?.agentSessionKey,
-        requesterChannel: opts?.agentChannel,
+        requesterSessionKey,
+        requesterChannel,
         targetSessionKey: displayKey,
       });
       const inputProvenance = {
         kind: "inter_session" as const,
-        sourceSessionKey: opts?.agentSessionKey,
-        sourceChannel: opts?.agentChannel,
+        sourceSessionKey: requesterSessionKey,
+        sourceChannel: requesterChannel,
         sourceTool: "sessions_send",
       };
       const sendParams = {
@@ -702,6 +731,7 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
+        const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
         if (!start.activeRunQueue) {
           startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
         }
@@ -710,6 +740,7 @@ export function createSessionsSendTool(opts?: {
           status: "accepted",
           sessionKey: displayKey,
           delivery,
+          ...watchField,
         });
       }
 
@@ -724,6 +755,7 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      const watchField = registerWatchIfRequested(resolvedKey);
       const result = await waitForAgentRunAndReadUpdatedAssistantReply({
         runId,
         sessionKey: resolvedKey,
@@ -743,6 +775,7 @@ export function createSessionsSendTool(opts?: {
             sentBeforeError: true,
             sessionKey: displayKey,
             delivery,
+            ...watchField,
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
@@ -752,6 +785,7 @@ export function createSessionsSendTool(opts?: {
             status: "accepted",
             sessionKey: displayKey,
             delivery,
+            ...watchField,
           });
         }
         return jsonResult({
@@ -760,6 +794,7 @@ export function createSessionsSendTool(opts?: {
           error: result.error,
           sentBeforeError: true,
           sessionKey: displayKey,
+          ...watchField,
         });
       }
       if (result.status === "error") {
@@ -769,6 +804,7 @@ export function createSessionsSendTool(opts?: {
           error: result.error ?? "agent error",
           sentBeforeError: true,
           sessionKey: displayKey,
+          ...watchField,
         });
       }
       const reply = result.replyText;
@@ -780,7 +816,9 @@ export function createSessionsSendTool(opts?: {
         reply,
         sessionKey: displayKey,
         delivery,
+        ...watchField,
       });
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

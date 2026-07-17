@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
+import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
@@ -14,17 +14,19 @@ vi.mock("../runtime-api.js", () => {
 
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
-  testing.resetRoomCache();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
 });
 
-function requireFirstFetchParams(): {
+type RoomInfoFetchParams = {
   auditContext?: string;
   init?: { headers?: { Authorization?: string } };
+  timeoutMs?: number;
   url?: string;
-} {
+};
+
+function requireFirstFetchParams(): RoomInfoFetchParams {
   const [call] = fetchWithSsrFGuard.mock.calls;
   if (!call) {
     throw new Error("expected Nextcloud Talk room info fetch call");
@@ -33,7 +35,7 @@ function requireFirstFetchParams(): {
   if (!fetchParams || typeof fetchParams !== "object" || Array.isArray(fetchParams)) {
     throw new Error("expected Nextcloud Talk room info fetch call");
   }
-  return fetchParams as { auditContext?: string; url?: string };
+  return fetchParams as RoomInfoFetchParams;
 }
 
 function jsonResponse(payload: unknown, init?: ResponseInit): Response {
@@ -76,6 +78,7 @@ describe("nextcloud talk room info", () => {
       "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
     );
     expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
+    expect(fetchParams.timeoutMs).toBe(30_000);
     expect(release).toHaveBeenCalledTimes(1);
   });
 

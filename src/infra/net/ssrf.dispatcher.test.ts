@@ -1,7 +1,8 @@
 // Pinned dispatcher tests cover undici family policy, pinned lookup injection,
 // timeout propagation, and proxy dispatcher construction.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
   agentCtor: vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
@@ -292,6 +293,29 @@ describe("createPinnedDispatcher", () => {
           pinnedHostname: {
             hostname: "model.lan",
             addresses: ["64:ff9b::127.0.0.1"],
+          },
+        },
+        { allowedHostnames: ["model.lan"] },
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
+  it("rejects a trusted private hostname override rebound to an unspecified address", () => {
+    const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "model.lan",
+      addresses: ["192.168.1.25"],
+      lookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "model.lan",
+            addresses: ["0.0.0.0"],
           },
         },
         { allowedHostnames: ["model.lan"] },

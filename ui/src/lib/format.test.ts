@@ -1,6 +1,7 @@
 // Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  clampText,
   formatDateTimeMs,
   formatDateMs,
   formatCompactTokenCount,
@@ -11,6 +12,7 @@ import {
   formatUnknownText,
   parseSessionKeyParts,
   setUiTimeFormatPreference,
+  truncateText,
 } from "./format.ts";
 import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
@@ -269,5 +271,33 @@ describe("formatTokens", () => {
     expect(formatTokens(12_345)).toBe("12k");
     expect(formatTokens(5_500)).toBe("5.5k");
     expect(formatTokens(null)).toBe("0");
+  });
+});
+
+describe("text truncation", () => {
+  it("keeps clampText output valid when the ellipsis boundary bisects an emoji", () => {
+    expect(clampText(`${"a".repeat(118)}😀x`, 120)).toBe(`${"a".repeat(118)}…`);
+  });
+
+  it("keeps truncateText output valid when the boundary bisects an emoji", () => {
+    expect(truncateText(`${"a".repeat(120)}😀`, 121)).toEqual({
+      text: "a".repeat(120),
+      truncated: true,
+      total: 122,
+    });
+  });
+
+  it("leaves short text unchanged", () => {
+    expect(clampText("hello", 120)).toBe("hello");
+    expect(truncateText("hello", 120)).toEqual({
+      text: "hello",
+      truncated: false,
+      total: 5,
+    });
+  });
+
+  it("preserves ordinary truncation behavior", () => {
+    expect(clampText("abc", 2)).toBe("a…");
+    expect(truncateText("abc", 2)).toEqual({ text: "ab", truncated: true, total: 3 });
   });
 });

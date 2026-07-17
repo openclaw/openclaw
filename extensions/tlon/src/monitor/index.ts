@@ -1,6 +1,8 @@
-// Tlon plugin entrypoint registers its OpenClaw integration.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
@@ -46,6 +48,7 @@ import {
   isSummarizationRequest,
   resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
+  resolveTlonGroupMentionDecision,
   stripBotMention,
 } from "./utils.js";
 
@@ -113,16 +116,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
         const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          if (opts.abortSignal) {
-            const onAbort = () => {
-              clearTimeout(timer);
-              reject(new Error("Aborted"));
-            };
-            opts.abortSignal.addEventListener("abort", onAbort, { once: true });
-          }
-        });
+        await sleepWithAbort(delay, opts.abortSignal);
       }
     }
     throw new Error("unreachable Tlon authentication retry loop exit");
@@ -509,7 +503,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       bodyWithAttachments = mediaLines + "\n" + messageText;
     }
 
-    const body = core.channel.reply.formatAgentEnvelope({
+    const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
       channel: "Tlon",
       from: fromLabel,
       timestamp,
@@ -566,10 +560,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       cfg,
       route.agentId,
     ).responsePrefix;
-    const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
-    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-      agentId: route.agentId,
-    });
+    const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
     const deliveryTarget = isGroup ? groupChannel : senderShip;
 
     const prepareReplyPayload = (payload: ReplyPayload): ReplyPayload => {
@@ -603,17 +594,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
     };
 
-    await core.channel.inbound.dispatchReply({
+    await core.channel.inbound.dispatch({
       channel: "tlon",
       accountId: route.accountId,
       cfg,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
+      route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
       delivery: {
         preparePayload: prepareReplyPayload,
         durable: deliveryTarget
@@ -827,13 +813,19 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const mentioned = isBotMentioned(rawText, botShipName, botNickname ?? undefined);
           const inParticipatedThread =
             isThreadReply && parentId && participatedThreads.has(parentId);
+          const mentionDecision = resolveTlonGroupMentionDecision({
+            cfg,
+            accountId: account.accountId,
+            wasMentioned: mentioned,
+            botParticipatedInThread: Boolean(inParticipatedThread),
+          });
 
-          if (!mentioned && !inParticipatedThread) {
+          if (mentionDecision.shouldSkip) {
             return;
           }
 
           // Log why we're responding
-          if (inParticipatedThread && !mentioned) {
+          if (mentionDecision.implicitMention && !mentioned) {
             runtime.log?.(
               `[tlon] Responding to thread we participated in (no mention): ${parentId}`,
             );
@@ -1530,3 +1522,4 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

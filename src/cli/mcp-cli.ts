@@ -2,6 +2,8 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -83,8 +85,8 @@ function parsePositiveNumberOption(value: string | undefined, label: string): nu
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined || parsed <= 0) {
     fail(`${label} must be a positive number.`);
   }
   return parsed;
@@ -332,7 +334,14 @@ async function collectMcpDoctorIssues(params: {
           serverName: name,
           serverUrl: resolved.url,
         });
-        if (!authStatus.hasTokens) {
+        if (authStatus.requiresAuthorization) {
+          issues.push(
+            issue(
+              "warning",
+              `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+            ),
+          );
+        } else if (!authStatus.hasTokens) {
           issues.push(
             issue(
               "warning",
@@ -549,7 +558,7 @@ async function probeMcpServersOrFail(params: {
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
     if (result.diagnostics.length > 0) {
-      const first = result.diagnostics[0];
+      const first = expectDefined(result.diagnostics[0], "diagnostics entry at 0");
       fail(`MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`);
     }
     for (const name of Object.keys(params.servers)) {
@@ -693,7 +702,11 @@ export function registerMcpCli(program: Command) {
       for (const entry of status) {
         const transport = entry.enabled ? (entry.transport ?? "invalid") : "disabled";
         const auth = entry.auth === "oauth" ? " oauth" : "";
-        const oauth = entry.authStatus?.hasTokens ? " authorized" : "";
+        const oauth = entry.authStatus?.requiresAuthorization
+          ? " authorization-required"
+          : entry.authStatus?.hasTokens
+            ? " authorized"
+            : "";
         const filters = entry.toolFilter ? " tool-filtered" : "";
         const parallel = entry.supportsParallelToolCalls ? " parallel" : "";
         defaultRuntime.log(`- ${entry.name}: ${transport}${auth}${oauth}${filters}${parallel}`);
@@ -704,7 +717,7 @@ export function registerMcpCli(program: Command) {
           );
           if (entry.auth === "oauth") {
             defaultRuntime.log(
-              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
+              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} authorization=${entry.authStatus?.requiresAuthorization ? "required" : entry.authStatus?.hasTokens ? "ready" : "missing"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
             );
           }
           if (entry.toolFilter) {
@@ -1260,6 +1273,7 @@ export function registerMcpCli(program: Command) {
             clientCert: resolved.clientCert,
             clientKey: resolved.clientKey,
             resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
           }),
           headers: withoutMcpAuthorizationHeader(resolved.headers),
           resourceUrl: resolved.url,
@@ -1342,3 +1356,4 @@ export function registerMcpCli(program: Command) {
 
   applyParentDefaultHelpAction(mcp);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

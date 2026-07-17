@@ -9,8 +9,13 @@ type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
 };
-type OpenAICompatibleChoice = Omit<DeepPartial<ChatCompletionChunk["choices"][number]>, "delta"> & {
+type OpenAICompatibleChoice = Omit<
+  DeepPartial<ChatCompletionChunk["choices"][number]>,
+  "delta" | "message"
+> & {
   delta?: OpenAICompatibleDelta;
+  // Some OpenAI-compatible endpoints deliver a full message instead of delta.
+  message?: OpenAICompatibleDelta;
 };
 type OpenAICompatibleChatCompletionChunk = Omit<
   DeepPartial<ChatCompletionChunk>,
@@ -124,6 +129,32 @@ function makeTextChunk(text: string): OpenAICompatibleChatCompletionChunk {
   };
 }
 
+function makeRefusalChunk(refusal: string): OpenAICompatibleChatCompletionChunk {
+  return {
+    id: "chatcmpl-test",
+    choices: [
+      {
+        index: 0,
+        delta: { role: "assistant", content: null, refusal },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
+function makeRefusalMessageChunk(refusal: string): OpenAICompatibleChatCompletionChunk {
+  return {
+    id: "chatcmpl-test",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: null, refusal },
+        finish_reason: "stop",
+      },
+    ],
+  };
+}
+
 function makeToolCallChunk(
   id: string,
   name: string,
@@ -219,6 +250,30 @@ describe("OpenAI-compatible completions params", () => {
     } finally {
       configureAiTransportHost({});
     }
+  });
+
+  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
+    mockChunksRef.chunks = [makeRefusalChunk("I can't help with that.")];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+    expect(result.stopReason).toBe("stop");
+  });
+
+  it("surfaces aggregated chat-completions message.refusal as visible assistant text", async () => {
+    mockChunksRef.chunks = [makeRefusalMessageChunk("Requests like this are not allowed.")];
+
+    const result = await streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.content).toStrictEqual([
+      { type: "text", text: "Requests like this are not allowed." },
+    ]);
+    expect(result.stopReason).toBe("stop");
   });
 
   it("preserves a valid provider-reported usage cost", async () => {
@@ -510,6 +565,62 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("does not emit image turns or placeholders for payload-less tool media", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_husk",
+    });
+    expect(JSON.stringify(capturedMessages)).not.toContain("image_url");
+    expect(JSON.stringify(capturedMessages)).not.toContain("see attached image");
+  });
+
   it("preserves image-bearing tool results with image placeholders and attachments", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
@@ -610,6 +721,54 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedMaxTokens).toBe(32_000);
+  });
+
+  it("uses Z.AI max_tokens and disables thinking by default", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        maxTokens: 1_024,
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      max_tokens: 1_024,
+      thinking: { type: "disabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("max_completion_tokens");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
+  });
+
+  it("enables Z.AI thinking with the documented payload when requested", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "high",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
   it("forwards simple stop sequences to request params", async () => {
@@ -1464,3 +1623,4 @@ describe("openai-completions stop-reason tool-call guard", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

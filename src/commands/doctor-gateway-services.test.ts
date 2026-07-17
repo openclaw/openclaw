@@ -404,6 +404,19 @@ describe("maybeRepairGatewayServiceConfig", () => {
     }
   });
 
+  it("reports the installed Gateway heap limit and derivation", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+
+    await runRepair({ gateway: {} });
+
+    expectNoteContaining("6144 MiB", "Gateway heap");
+    expectNoteContaining("adaptive default", "Gateway heap");
+  });
+
   it("treats gateway.auth.token as source of truth for service token repairs", async () => {
     setupGatewayTokenRepairScenario();
 
@@ -457,14 +470,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
+    const nvmNode = "/home/test/.nvm/versions/node/v22.22.3/bin/node";
     mocks.readCommand.mockResolvedValue({
       programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v22.22.3/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -492,7 +505,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
     expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
-      "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
+      "Using /home/test/.nvm/versions/node/v22.22.3/bin/node",
     );
   });
 
@@ -1787,3 +1800,4 @@ describe("maybeScanExtraGatewayServices", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

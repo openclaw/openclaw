@@ -1,48 +1,33 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html } from "lit";
 import { state } from "lit/decorators.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { NostrProfile } from "../../api/types.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
+import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
-function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) {
-    return {};
-  }
-  const errors: Record<string, string> = {};
-  for (const entry of details) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) {
-      continue;
-    }
-    const field = rawField.trim();
-    const message = rest.join(":").trim();
-    if (field && message) {
-      errors[field] = message;
-    }
-  }
-  return errors;
-}
+type NostrOperation = {
+  generation: number;
+  gateway: ApplicationContext["gateway"];
+  channels: ApplicationContext["channels"];
+  client: GatewayBrowserClient;
+  formAccountId: string | null;
+  accountId: string;
+  headers: Record<string, string>;
+};
 
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
-}
-
-class ChannelsPage extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
-  @consume({ context: applicationContext, subscribe: false })
+class ChannelsPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @state()
@@ -51,36 +36,98 @@ class ChannelsPage extends LitElement {
   @state()
   private nostrProfileAccountId: string | null = null;
 
-  private stopChannelsSubscription?: () => void;
-  private stopConfigSubscription?: () => void;
-  private stopGatewaySubscription?: () => void;
+  @state()
+  private selectedChannel: string | null = null;
+
+  private readonly wizardHost = new ChannelWizardHost({
+    getContext: () => this.context,
+    requestUpdate: () => this.requestUpdate(),
+    clearSelection: () => {
+      this.selectedChannel = null;
+    },
+  });
+
   private schemaLoadStarted = false;
+  private gatewaySource?: ApplicationContext["gateway"];
+  private channelsSource?: ApplicationContext["channels"];
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private gatewayConnected = false;
+  private hasGatewaySnapshot = false;
+  private nostrOperationGeneration = 0;
 
-  private readonly requestPageUpdate = () => this.requestUpdate();
-
-  override connectedCallback() {
-    super.connectedCallback();
-    this.ensureSubscriptions();
-    this.ensureInitialData();
-  }
-
-  private ensureSubscriptions() {
-    const context = this.context;
-    if (!context || this.stopChannelsSubscription) {
-      return;
-    }
-    this.stopChannelsSubscription = context.channels.subscribe(this.requestPageUpdate);
-    this.stopConfigSubscription = context.runtimeConfig.subscribe(() => {
-      this.requestPageUpdate();
-      this.ensureInitialData();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      if (snapshot.connected && snapshot.client) {
-        this.ensureInitialData();
-      } else {
+  private readonly subscriptions = new SubscriptionsController(this)
+    .effect(
+      () => this.context?.channels,
+      (channels) => {
+        const sourceChanged = this.channelsSource !== undefined && this.channelsSource !== channels;
+        this.channelsSource = channels;
+        if (sourceChanged) {
+          this.invalidateNostrForm();
+        }
+        const handleChange = () => {
+          if (this.channelsSource === channels) {
+            this.requestUpdate();
+          }
+        };
+        handleChange();
+        return channels.subscribe(handleChange);
+      },
+    )
+    .effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
         this.schemaLoadStarted = false;
-      }
-    });
+        const handleChange = () => {
+          if (this.context.runtimeConfig !== runtimeConfig) {
+            return;
+          }
+          this.requestUpdate();
+          this.ensureInitialData();
+        };
+        handleChange();
+        const unsubscribe = runtimeConfig.subscribe(handleChange);
+        return () => {
+          unsubscribe();
+          this.schemaLoadStarted = false;
+        };
+      },
+    )
+    .effect(
+      () => this.context?.gateway,
+      (gateway) => {
+        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
+        this.gatewaySource = gateway;
+        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
+        return gateway.subscribe((snapshot) => {
+          if (this.gatewaySource !== gateway) {
+            return;
+          }
+          this.applyGatewaySnapshot(snapshot, false);
+        });
+      },
+    );
+
+  private applyGatewaySnapshot(
+    snapshot: ApplicationContext["gateway"]["snapshot"],
+    sourceChanged: boolean,
+  ) {
+    const clientChanged = this.hasGatewaySnapshot && this.gatewayClient !== snapshot.client;
+    const connectionChanged =
+      this.hasGatewaySnapshot && this.gatewayConnected !== snapshot.connected;
+    if (!this.hasGatewaySnapshot || sourceChanged || clientChanged || connectionChanged) {
+      this.nostrOperationGeneration += 1;
+    }
+    if (sourceChanged || clientChanged || !snapshot.connected) {
+      this.clearNostrForm();
+    }
+    this.hasGatewaySnapshot = true;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.connected;
+    if (snapshot.connected && snapshot.client) {
+      this.ensureInitialData();
+    } else {
+      this.schemaLoadStarted = false;
+    }
   }
 
   private ensureInitialData() {
@@ -106,12 +153,15 @@ class ChannelsPage extends LitElement {
   }
 
   override disconnectedCallback() {
-    this.stopChannelsSubscription?.();
-    this.stopChannelsSubscription = undefined;
-    this.stopConfigSubscription?.();
-    this.stopConfigSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
+    this.wizardHost.cancelOnDisconnect();
+    this.selectedChannel = null;
+    this.gatewaySource = undefined;
+    this.channelsSource = undefined;
+    this.gatewayClient = null;
+    this.gatewayConnected = false;
+    this.hasGatewaySnapshot = false;
+    this.invalidateNostrForm();
+    this.subscriptions.clear();
     this.schemaLoadStarted = false;
     super.disconnectedCallback();
   }
@@ -145,30 +195,79 @@ class ChannelsPage extends LitElement {
 
   private resolveNostrAccountId(): string {
     const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
-    return accounts[0]?.accountId ?? this.nostrProfileAccountId ?? "default";
+    return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
   }
 
-  private buildGatewayHttpHeaders(): Record<string, string> {
-    const context = this.context;
-    if (!context) {
-      return {};
-    }
+  private buildGatewayHttpHeaders(gateway: ApplicationContext["gateway"]): Record<string, string> {
     const authorization = resolveControlUiAuthHeader({
-      hello: context.gateway.snapshot.hello,
-      settings: { token: context.gateway.connection.token },
-      password: context.gateway.connection.password,
+      hello: gateway.snapshot.hello,
+      settings: { token: gateway.connection.token },
+      password: gateway.connection.password,
     });
     return authorization ? { Authorization: authorization } : {};
   }
 
+  private clearNostrForm() {
+    this.nostrProfileFormState = null;
+    this.nostrProfileAccountId = null;
+  }
+
+  private invalidateNostrForm() {
+    this.nostrOperationGeneration += 1;
+    this.clearNostrForm();
+  }
+
+  private beginNostrOperation(): NostrOperation | null {
+    const gateway = this.context.gateway;
+    const channels = this.context.channels;
+    const client = gateway.snapshot.client;
+    if (
+      !this.isConnected ||
+      this.gatewaySource !== gateway ||
+      this.channelsSource !== channels ||
+      !gateway.snapshot.connected ||
+      !client
+    ) {
+      return null;
+    }
+    const generation = this.nostrOperationGeneration + 1;
+    this.nostrOperationGeneration = generation;
+    return {
+      generation,
+      gateway,
+      channels,
+      client,
+      formAccountId: this.nostrProfileAccountId,
+      accountId: this.resolveNostrAccountId(),
+      headers: this.buildGatewayHttpHeaders(gateway),
+    };
+  }
+
+  private currentNostrForm(operation: NostrOperation): NonNullable<NostrProfileFormState> | null {
+    const form = this.nostrProfileFormState;
+    if (
+      !form ||
+      !this.isConnected ||
+      this.nostrOperationGeneration !== operation.generation ||
+      this.nostrProfileAccountId !== operation.formAccountId ||
+      this.context.gateway !== operation.gateway ||
+      this.context.channels !== operation.channels ||
+      operation.gateway.snapshot.client !== operation.client ||
+      !operation.gateway.snapshot.connected
+    ) {
+      return null;
+    }
+    return form;
+  }
+
   private editNostrProfile(accountId: string, profile: NostrProfile | null) {
+    this.nostrOperationGeneration += 1;
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
   private cancelNostrProfile() {
-    this.nostrProfileFormState = null;
-    this.nostrProfileAccountId = null;
+    this.invalidateNostrForm();
   }
 
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
@@ -193,37 +292,35 @@ class ChannelsPage extends LitElement {
 
   private async saveNostrProfile() {
     const form = this.nostrProfileFormState;
-    if (!form || form.saving) {
+    if (!form || form.saving || form.importing) {
       return;
     }
-    const accountId = this.resolveNostrAccountId();
-    this.nostrProfileFormState = {
+    const operation = this.beginNostrOperation();
+    if (!operation) {
+      return;
+    }
+    const pendingForm = {
       ...form,
       saving: true,
       error: null,
       success: null,
       fieldErrors: {},
     };
+    this.nostrProfileFormState = pendingForm;
 
     try {
-      const response = await fetch(buildNostrProfileUrl(accountId), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.buildGatewayHttpHeaders(),
-        },
-        body: JSON.stringify(form.values),
+      const { data, response } = await putNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
+        values: form.values,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        details?: unknown;
-        persisted?: boolean;
-      } | null;
-
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       if (!response.ok || data?.ok === false || !data) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           saving: false,
           error: data?.error ?? `Profile update failed (${response.status})`,
           success: null,
@@ -234,7 +331,7 @@ class ChannelsPage extends LitElement {
 
       if (!data.persisted) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           saving: false,
           error: "Profile publish failed on all relays.",
           success: null,
@@ -243,17 +340,21 @@ class ChannelsPage extends LitElement {
       }
 
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         saving: false,
         error: null,
         success: "Profile published to relays.",
         fieldErrors: {},
         original: { ...form.values },
       };
-      await this.context?.channels.refresh(true);
+      await operation.channels.refresh(true);
     } catch (err) {
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         saving: false,
         error: `Profile update failed: ${String(err)}`,
         success: null,
@@ -263,10 +364,13 @@ class ChannelsPage extends LitElement {
 
   private async importNostrProfile() {
     const form = this.nostrProfileFormState;
-    if (!form || form.importing) {
+    if (!form || form.importing || form.saving) {
       return;
     }
-    const accountId = this.resolveNostrAccountId();
+    const operation = this.beginNostrOperation();
+    if (!operation) {
+      return;
+    }
     this.nostrProfileFormState = {
       ...form,
       importing: true,
@@ -275,25 +379,17 @@ class ChannelsPage extends LitElement {
     };
 
     try {
-      const response = await fetch(buildNostrProfileUrl(accountId, "/import"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...this.buildGatewayHttpHeaders(),
-        },
-        body: JSON.stringify({ autoMerge: true }),
+      const { data, response } = await importNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        imported?: NostrProfile;
-        merged?: NostrProfile;
-        saved?: boolean;
-      } | null;
-
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       if (!response.ok || data?.ok === false || !data) {
         this.nostrProfileFormState = {
-          ...form,
+          ...currentForm,
           importing: false,
           error: data?.error ?? `Profile import failed (${response.status})`,
           success: null,
@@ -302,9 +398,9 @@ class ChannelsPage extends LitElement {
       }
 
       const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...form.values, ...merged } : form.values;
+      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         importing: false,
         values,
         error: null,
@@ -315,11 +411,15 @@ class ChannelsPage extends LitElement {
       };
 
       if (data.saved) {
-        await this.context?.channels.refresh(true);
+        await operation.channels.refresh(true);
       }
     } catch (err) {
+      const currentForm = this.currentNostrForm(operation);
+      if (!currentForm) {
+        return;
+      }
       this.nostrProfileFormState = {
-        ...form,
+        ...currentForm,
         importing: false,
         error: `Profile import failed: ${String(err)}`,
         success: null,
@@ -335,11 +435,9 @@ class ChannelsPage extends LitElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
-          <div class="page-sub">${subtitleForRoute("channels")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(
-        context.basePath,
         renderChannels({
           connected: channels.connected,
           loading: channels.channelsLoading,
@@ -358,9 +456,25 @@ class ChannelsPage extends LitElement {
           configFormDirty: config.configFormDirty,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
+          selectedChannel: this.selectedChannel,
+          wizard: this.wizardHost.state,
+          wizardMultiselect: this.wizardHost.multiselect,
+          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
+          onShowDetail: (channelId) => {
+            this.selectedChannel = channelId;
+          },
+          onCloseDetail: () => {
+            this.selectedChannel = null;
+          },
+          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onWizardAnswer: (value) => this.wizardHost.answer(value),
+          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
+          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
-          onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
-          onWhatsAppWait: () => void context.channels.waitWhatsApp(),
+          onWhatsAppStart: (force) =>
+            void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
+          onWhatsAppWait: () =>
+            void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
           onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
@@ -372,9 +486,6 @@ class ChannelsPage extends LitElement {
           onNostrProfileImport: () => void this.importNostrProfile(),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
         }),
-        "channels",
-        (routeId) => context.navigate(routeId),
-        (routeId) => context.preload(routeId),
       )}
     `;
   }

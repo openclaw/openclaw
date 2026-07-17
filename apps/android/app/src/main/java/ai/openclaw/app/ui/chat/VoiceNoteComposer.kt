@@ -5,13 +5,17 @@ import ai.openclaw.app.chat.AndroidVoiceNoteRecordingEngine
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.VoiceNoteRecorderController
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.TalkWaveform
+import ai.openclaw.app.ui.design.TalkWaveformPhase
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -106,7 +110,7 @@ internal fun VoiceNotePreparing(modifier: Modifier = Modifier) {
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = "Preparing voice note…", style = ClawTheme.type.label)
+      Text(text = nativeString("Preparing voice note…"), style = ClawTheme.type.label)
     }
   }
 }
@@ -126,7 +130,7 @@ internal fun VoiceNoteRecordButton(
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Mic, contentDescription = "Record voice note", modifier = Modifier.size(18.dp))
+      Icon(imageVector = Icons.Default.Mic, contentDescription = nativeString("Record voice note"), modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -134,6 +138,7 @@ internal fun VoiceNoteRecordButton(
 @Composable
 internal fun VoiceNoteRecordingControls(
   elapsedMs: Long,
+  level: Float,
   onCancel: () -> Unit,
   onDone: () -> Unit,
   modifier: Modifier = Modifier,
@@ -154,28 +159,31 @@ internal fun VoiceNoteRecordingControls(
       Text(
         text = formatVoiceNoteDuration(elapsedMs),
         style = ClawTheme.type.label.copy(fontWeight = FontWeight.SemiBold),
-        modifier = Modifier.weight(1f),
+      )
+      TalkWaveform(
+        phase = TalkWaveformPhase.Listening(level = level, speechActive = false),
+        modifier = Modifier.weight(1f).height(30.dp),
       )
       Surface(
         onClick = onCancel,
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
         color = ClawTheme.colors.canvas,
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Close, contentDescription = "Cancel voice note", modifier = Modifier.size(17.dp))
+          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
         }
       }
       Surface(
         onClick = onDone,
-        modifier = Modifier.size(36.dp),
+        modifier = Modifier.size(ClawTheme.spacing.touchTarget),
         shape = CircleShape,
         color = ClawTheme.colors.primary,
         contentColor = ClawTheme.colors.primaryText,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Check, contentDescription = "Finish voice note", modifier = Modifier.size(17.dp))
+          Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
         }
       }
     }
@@ -202,7 +210,7 @@ internal fun VoiceNoteMessageRow(durationMs: Long?) {
       modifier = Modifier.size(16.dp),
       tint = ClawTheme.colors.textMuted,
     )
-    Text(text = "Voice note", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+    Text(text = nativeString("Voice note"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
     durationMs?.let { duration ->
       Text(
         text = formatVoiceNoteDuration(duration),

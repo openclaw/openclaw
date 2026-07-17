@@ -18,7 +18,6 @@ import type {
   QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
-import { qaChannelPlugin } from "./runtime-api.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -142,6 +141,7 @@ async function handleQaChannelAction(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) {
+  const { qaChannelPlugin } = await import("openclaw/plugin-sdk/qa-channel");
   return await qaChannelPlugin.actions?.handleAction?.({
     channel: QA_CHANNEL_ID,
     action: params.action,
@@ -192,9 +192,6 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
   createReportNotes = createQaChannelReportNotes;
 }
 
-export function createQaChannelTransport(
-  state: QaBusState,
-  transportPolicy?: QaTransportPolicy,
-) {
+export function createQaChannelTransport(state: QaBusState, transportPolicy?: QaTransportPolicy) {
   return new QaChannelTransport(state, transportPolicy);
 }

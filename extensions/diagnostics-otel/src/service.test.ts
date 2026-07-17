@@ -5321,6 +5321,9 @@ describe("diagnostics-otel service", () => {
     });
     await service.start(ctx);
 
+    // The 8,192-character candidate budget leaves an 8,178-character text prefix;
+    // place a surrogate pair across that boundary so serialized JSON must stay valid.
+    const surrogateBoundaryPrefix = "x".repeat(8177);
     emitTrustedModelCallCompletedWithContent(
       {
         runId: "run-1",
@@ -5333,7 +5336,9 @@ describe("diagnostics-otel service", () => {
         inputMessages: [
           {
             role: "user",
-            content: `single-message-${"x".repeat(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS)}`,
+            content: `${surrogateBoundaryPrefix}🚀${"y".repeat(
+              MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS,
+            )}`,
           },
         ],
         toolDefinitions: [
@@ -5364,13 +5369,14 @@ describe("diagnostics-otel service", () => {
     const toolDefinitions = stringAttribute(attrs, "gen_ai.tool.definitions");
     expect(genAiInput.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
     expect(toolDefinitions.length).toBeLessThanOrEqual(MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    expect(genAiInput).not.toContain("\\ud83d");
     expect(JSON.parse(genAiInput)).toEqual([
       {
         role: "user",
         parts: [
           {
             type: "text",
-            content: expect.stringContaining("single-message-"),
+            content: `${surrogateBoundaryPrefix}...(truncated)`,
           },
         ],
       },
@@ -5488,3 +5494,4 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

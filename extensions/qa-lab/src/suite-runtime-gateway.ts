@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements suite runtime gateway behavior.
+import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -15,10 +16,13 @@ type QaGatewayMutationEnv = Pick<
   "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
 >;
 
-async function fetchJson<T>(url: string): Promise<T> {
+const QA_SUITE_FETCH_JSON_TIMEOUT_MS = 15_000;
+
+async function fetchJson<T>(url: string, timeoutMs = QA_SUITE_FETCH_JSON_TIMEOUT_MS): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url,
     policy: { allowPrivateNetwork: true },
+    timeoutMs,
     auditContext: "qa-lab-suite-fetch-json",
   });
   try {
@@ -32,12 +36,13 @@ async function fetchJson<T>(url: string): Promise<T> {
 }
 
 async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, timeoutMs = 45_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const { response, release } = await fetchWithSsrFGuard({
         url: `${env.gateway.baseUrl}/readyz`,
         policy: { allowPrivateNetwork: true },
+        timeoutMs: Math.max(1, deadline - Date.now()),
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       });
       try {
@@ -50,7 +55,10 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     } catch {
       // retry
     }
-    await sleep(250);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(250, remainingMs));
+    }
   }
   throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
@@ -381,15 +389,28 @@ async function applyConfig(params: {
   });
 }
 
+async function restartGatewayWithConfigPatch(params: {
+  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  patch: Record<string, unknown>;
+}) {
+  const restart = params.env.gateway.restartAfterStateMutation;
+  if (!restart) {
+    throw new Error("qa gateway child cannot restart after state mutation");
+  }
+  await restart(async ({ configPath }) => {
+    const raw = await fs.readFile(configPath, "utf8");
+    const config = JSON.parse(raw || "{}") as Record<string, unknown>;
+    const nextConfig = applyQaMergePatch(config, params.patch);
+    await fs.writeFile(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+  });
+}
+
 export {
   applyConfig,
   fetchJson,
-  getGatewayRetryAfterMs,
-  isConfigApplyNoopForSnapshot,
-  isConfigPatchNoopForSnapshot,
-  isConfigHashConflict,
   patchConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
   waitForQaChannelReady,

@@ -1,15 +1,21 @@
 // Discord plugin module implements shared interactive behavior.
 import {
-  reduceInteractiveReply,
-  resolveMessagePresentationControlValue,
+  reduceLegacyInteractiveReply,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
-  InteractiveReply,
+  LegacyInteractiveReply,
   MessagePresentation,
   MessagePresentationButton,
   MessagePresentationOption,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { buildDiscordApprovalCustomId } from "./approval-custom-id.js";
+import {
+  buildDiscordActivityCustomId,
+  isValidDiscordActivityWidgetId,
+} from "./component-custom-id.js";
 import type {
   DiscordComponentButtonSpec,
   DiscordComponentButtonStyle,
@@ -22,22 +28,15 @@ function resolveDiscordInteractiveButtonStyle(
   return style ?? "secondary";
 }
 
-function applyDiscordButtonCallback(
-  spec: DiscordComponentButtonSpec,
-  button: MessagePresentationButton,
-): void {
-  const callbackData = resolveMessagePresentationControlValue(button);
-  if (!callbackData) {
-    return;
-  }
-  spec.callbackData = callbackData;
-  if (button.action?.type === "command" || button.action?.type === "callback") {
-    spec.callbackDataKind = button.action.type;
-  }
-}
-
 function resolveDiscordSelectOptionValue(option: MessagePresentationOption): string | undefined {
-  return resolveMessagePresentationControlValue(option);
+  const action = resolveMessagePresentationOptionAction(option);
+  if (action?.type === "command") {
+    return action.command;
+  }
+  if (action?.type === "callback") {
+    return action.value;
+  }
+  return undefined;
 }
 
 function resolveDiscordSelectCallbackDataKind(
@@ -64,13 +63,87 @@ function resolveDiscordSelectCallbackDataKind(
 
 const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
+function buildDiscordButtonComponent(
+  button: MessagePresentationButton,
+): DiscordComponentButtonSpec | undefined {
+  const action = resolveMessagePresentationButtonAction(button);
+  if (!action) {
+    return undefined;
+  }
+  if (action.type === "approval") {
+    const internalCustomId = buildDiscordApprovalCustomId(action);
+    if (!internalCustomId) {
+      return undefined;
+    }
+    return {
+      label: button.label,
+      style: resolveDiscordInteractiveButtonStyle(button.style),
+      internalCustomId,
+      ...(button.disabled === true ? { disabled: true } : {}),
+    };
+  }
+  if (
+    action.type === "web-app" &&
+    action.widgetId &&
+    isValidDiscordActivityWidgetId(action.widgetId)
+  ) {
+    return {
+      label: button.label,
+      style: resolveDiscordInteractiveButtonStyle(button.style),
+      internalCustomId: buildDiscordActivityCustomId(action.widgetId),
+      ...(button.disabled === true ? { disabled: true } : {}),
+      ...(button.reusable === true ? { reusable: true } : {}),
+    };
+  }
+  if (action.type === "web-app" && !action.url) {
+    return undefined;
+  }
+  const component: DiscordComponentButtonSpec = {
+    label: button.label,
+    style:
+      action.type === "url" || action.type === "web-app"
+        ? "link"
+        : resolveDiscordInteractiveButtonStyle(button.style),
+  };
+  if (action.type === "url" || action.type === "web-app") {
+    component.url = action.url;
+  } else {
+    component.callbackData = action.type === "command" ? action.command : action.value;
+    if (button.action?.type === "command" || button.action?.type === "callback") {
+      component.callbackDataKind = button.action.type;
+    }
+  }
+  if (button.disabled === true) {
+    component.disabled = true;
+  }
+  if (button.reusable === true) {
+    component.reusable = true;
+  }
+  return component;
+}
+
+function appendDiscordButtonBlocks(
+  blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
+  buttons: readonly MessagePresentationButton[],
+): void {
+  const components = buttons
+    .map((button) => buildDiscordButtonComponent(button))
+    .filter((button): button is DiscordComponentButtonSpec => Boolean(button));
+  for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
+    blocks.push({
+      type: "actions",
+      buttons: components.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE),
+    });
+  }
+}
+
 /**
  * @deprecated Use buildDiscordPresentationComponents with MessagePresentation.
  */
 export function buildDiscordInteractiveComponents(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceInteractiveReply(
+  const blocks = reduceLegacyInteractiveReply(
     interactive,
     [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
     (state, block) => {
@@ -82,37 +155,7 @@ export function buildDiscordInteractiveComponents(
         return state;
       }
       if (block.type === "buttons") {
-        if (block.buttons.length === 0) {
-          return state;
-        }
-        for (
-          let index = 0;
-          index < block.buttons.length;
-          index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE
-        ) {
-          state.push({
-            type: "actions",
-            buttons: block.buttons
-              .slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE)
-              .map((button) => {
-                const spec: DiscordComponentButtonSpec = {
-                  label: button.label,
-                  style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
-                };
-                applyDiscordButtonCallback(spec, button);
-                if (button.url) {
-                  spec.url = button.url;
-                }
-                if (button.disabled === true) {
-                  spec.disabled = true;
-                }
-                if (button.reusable === true) {
-                  spec.reusable = true;
-                }
-                return spec;
-              }),
-          });
-        }
+        appendDiscordButtonBlocks(state, block.buttons);
         return state;
       }
       if (block.type === "select" && block.options.length > 0) {
@@ -208,29 +251,7 @@ function appendDiscordPresentationButtonBlocks(
   spec: DiscordComponentMessageSpec,
   buttons: readonly MessagePresentationButton[],
 ) {
-  if (buttons.length === 0) {
-    return;
-  }
-  for (let index = 0; index < buttons.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
-    spec.blocks?.push({
-      type: "actions",
-      buttons: buttons.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE).map((button) => {
-        const component: DiscordComponentButtonSpec = {
-          label: button.label,
-          style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
-        };
-        applyDiscordButtonCallback(component, button);
-        if (button.url) {
-          component.url = button.url;
-        }
-        if (button.disabled === true) {
-          component.disabled = true;
-        }
-        if (button.reusable === true) {
-          component.reusable = true;
-        }
-        return component;
-      }),
-    });
+  if (spec.blocks) {
+    appendDiscordButtonBlocks(spec.blocks, buttons);
   }
 }

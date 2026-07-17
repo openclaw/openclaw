@@ -162,6 +162,8 @@ export const CallRecordSchema = z.object({
   from: z.string(),
   to: z.string(),
   sessionKey: z.string().optional(),
+  /** Agent selected when the call was created. Optional for legacy records. */
+  agentId: z.string().optional(),
   startedAt: z.number(),
   answeredAt: z.number().optional(),
   endedAt: z.number().optional(),
@@ -315,4 +317,6 @@ export type OutboundCallOptions = {
   dtmfSequence?: string;
   /** Session that initiated the call, used for agent context/delegated message routing */
   requesterSessionKey?: string;
+  /** Agent selected for this call instead of the plugin default. */
+  agentId?: string;
 };

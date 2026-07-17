@@ -85,10 +85,9 @@ function shouldDeliverToolProgressImmediately(
   if (useOfficialC2cStream) {
     return true;
   }
+  // Absent streaming keeps tool progress buffered; a configured object opts in
+  // unless mode is "off". Legacy scalar spellings are doctor-migrated.
   const streaming = account.config?.streaming;
-  if (streaming === true) {
-    return true;
-  }
   return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
 }
 
@@ -422,10 +421,6 @@ export async function dispatchOutbound(
     });
   }
 
-  const cfgWithSession = cfg as { session?: { store?: unknown } };
-  const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
-    agentId: routeAgentId,
-  });
   const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
@@ -439,12 +434,11 @@ export async function dispatchOutbound(
         raw: inbound,
       }),
       resolveTurn: () => ({
+        cfg: openClawCfg,
         channel: "qqbot",
         accountId: inbound.route.accountId,
-        routeSessionKey: inbound.route.sessionKey,
-        storePath,
+        route: { agentId: routeAgentId, sessionKey: inbound.route.sessionKey },
         ctxPayload,
-        recordInboundSession: runtime.channel.session.recordInboundSession,
         record: {
           onRecordError: (err: unknown) => {
             log?.error(
@@ -687,13 +681,7 @@ export async function dispatchOutbound(
             replyOptions: {
               disableBlockStreaming: useOfficialC2cStream
                 ? true
-                : (() => {
-                    const s = account.config?.streaming;
-                    if (s === false) {
-                      return true;
-                    }
-                    return typeof s === "object" && s !== null && s.mode === "off";
-                  })(),
+                : account.config?.streaming?.mode === "off",
               ...(streamingController
                 ? {
                     onPartialReply: async (payload: { text?: string }) => {
@@ -780,7 +768,6 @@ async function buildCtxPayload(
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
   const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
   return buildChannelInboundEventContext({
-    finalize: runtime.channel.reply.finalizeInboundContext,
     channel: "qqbot",
     accountId: inbound.route.accountId,
     messageId: event.messageId,
@@ -859,3 +846,4 @@ async function buildCtxPayload(
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

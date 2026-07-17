@@ -16,6 +16,19 @@ function expectSlackConfigIssue(config: unknown, path: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts explicit Enterprise Grid org-install mode", () => {
+    expectSlackConfigValid({ enterpriseOrgInstall: true });
+    expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });
+    expectSlackConfigIssue({ enterpriseOrgInstall: "true" }, "enterpriseOrgInstall");
+  });
+
+  it("keeps workspace-scoped mention pattern policies valid for workspace installs", () => {
+    expectSlackConfigValid({ mentionPatterns: { denyIn: ["C123"] } });
+    expectSlackConfigValid({
+      accounts: { workspace: { mentionPatterns: { mode: "deny", allowIn: ["C456"] } } },
+    });
+  });
+
   it("defaults groupPolicy to allowlist", () => {
     const res = SlackConfigSchema.safeParse({});
 
@@ -23,6 +36,20 @@ describe("slack config schema", () => {
     if (res.success) {
       expect(res.data.groupPolicy).toBe("allowlist");
     }
+  });
+
+  it("keeps presence events off by default and accepts account/channel modes", () => {
+    const absent = SlackConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.presenceEvents).toBeUndefined();
+    }
+    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({
+      accounts: { ops: { presenceEvents: { mode: "on" } } },
+      channels: { C123: { presenceEvents: { mode: "off" } } },
+    });
+    expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
   });
 
   it("accepts historyLimit overrides per account", () => {
@@ -278,5 +305,20 @@ describe("slack config schema", () => {
       },
       "accounts.ops.signingSecret",
     );
+  });
+
+  it("accepts canonical implicit mention policy at root and account scope", () => {
+    expectSlackConfigValid({
+      implicitMentions: { replyToBot: false, threadParticipation: true },
+      accounts: {
+        ops: {
+          implicitMentions: { quotedBot: false },
+        },
+      },
+    });
+  });
+
+  it("rejects the retired thread requireExplicitMention runtime key", () => {
+    expectSlackConfigIssue({ thread: { requireExplicitMention: true } }, "thread");
   });
 });

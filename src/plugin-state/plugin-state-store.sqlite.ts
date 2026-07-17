@@ -469,7 +469,7 @@ function assertCanInsertPluginStateEntry(params: {
   }
 }
 
-function resolveMaxPluginStateEntriesPerPlugin(): number {
+export function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
@@ -481,6 +481,9 @@ export function pluginStateRegister(params: {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   ttlMs?: number;
+  // Migration-only override: eviction orders rows by created_at, so imported
+  // legacy rows must keep their original age instead of the import time.
+  createdAtMs?: number;
   env?: NodeJS.ProcessEnv;
 }): void {
   try {
@@ -522,7 +525,7 @@ export function pluginStateRegister(params: {
             namespace: params.namespace,
             key: params.key,
             valueJson: params.valueJson,
-            createdAt: now,
+            createdAt: params.createdAtMs ?? now,
             expiresAt,
           }),
         );
@@ -792,6 +795,40 @@ export function pluginStateDelete(params: {
   }
 }
 
+export function pluginStateDeleteIf(params: {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  predicate: (current: unknown) => boolean;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  try {
+    return runWriteTransaction(
+      "delete",
+      ({ db }) => {
+        const row = selectPluginStateEntry(db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now: Date.now(),
+        });
+        if (!row || !params.predicate(parseStoredJson(row.value_json, "delete"))) {
+          return false;
+        }
+        return deletePluginStateEntry(db, params) > 0;
+      },
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "delete",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to conditionally delete plugin state entry.",
+    );
+  }
+}
+
 export function pluginStateEntries(params: {
   pluginId: string;
   namespace: string;
@@ -871,7 +908,7 @@ export function clearPluginStateDatabaseForTests(): void {
   );
 }
 
-export function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
+function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
   maxPluginStateEntriesPerPluginForTests = value;
 }
 
@@ -889,7 +926,7 @@ export function countPluginStateLiveEntries(pluginId: string): number {
   }
 }
 
-export function seedPluginStateDatabaseEntriesForTests(
+function seedPluginStateDatabaseEntriesForTests(
   entries: readonly PluginStateSeedEntryForTests[],
 ): void {
   if (entries.length === 0) {
@@ -898,8 +935,7 @@ export function seedPluginStateDatabaseEntriesForTests(
 
   const now = Date.now();
   runWriteTransaction("register", (store) => {
-    for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
+    for (const [index, entry] of entries.entries()) {
       upsertPluginStateEntry(
         store.db,
         bindPluginStateEntry({
@@ -915,7 +951,7 @@ export function seedPluginStateDatabaseEntriesForTests(
   });
 }
 
-export function probePluginStateStore(): PluginStateStoreProbeResult {
+function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
   const wasOpen = cachedDatabase !== null;
@@ -1006,3 +1042,12 @@ export function closePluginStateDatabase(): void {
   cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateSqliteTestApi")] = {
+    probePluginStateStore,
+    seedPluginStateDatabaseEntriesForTests,
+    setMaxPluginStateEntriesPerPluginForTests,
+  };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

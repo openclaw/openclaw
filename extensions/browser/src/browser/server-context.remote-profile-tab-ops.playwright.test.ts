@@ -1,4 +1,5 @@
 // Browser tests cover server context.remote profile tab ops.playwright plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   installRemoteProfileTestLifecycle,
@@ -83,6 +84,22 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid labels before Playwright creates a page", async () => {
+    const createPageViaPlaywright = vi.fn(async () => page("NEVER"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
+
+    await expect(remote.openTab("https://example.com", { label: "not allowed" })).rejects.toThrow(
+      /tab label/i,
+    );
+
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.profiles.get("remote")?.tabAliases).toBeUndefined();
+  });
+
   it("assigns stable tab ids and resolves labels", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       page("A", "https://example.com"),
@@ -115,6 +132,14 @@ describe("browser remote profile tab ops via Playwright", () => {
       | { targetId?: unknown }
       | undefined;
     expect(focusCall?.targetId).toBe("B");
+
+    await remote.labelTab("t1", "B");
+    await expect(remote.focusTab("B")).rejects.toThrow("ambiguous browser tab reference");
+    await remote.focusTab("B", { exactTargetId: true });
+    const exactFocusCall = (focusPageByTargetIdViaPlaywright.mock.calls as unknown[][])[1]?.[0] as
+      | { targetId?: unknown }
+      | undefined;
+    expect(exactFocusCall?.targetId).toBe("B");
   });
 
   it("transfers stable aliases across a high-confidence target replacement", async () => {
@@ -179,6 +204,47 @@ describe("browser remote profile tab ops via Playwright", () => {
       ["D", "t4"],
     ]);
     expect(state.profiles.get("remote")?.lastTargetId).toBe("A");
+  });
+
+  it("migrates only unique URL groups alongside ambiguous duplicate groups", async () => {
+    let currentPages = [
+      page("A", "https://unique.example"),
+      page("B", "https://duplicate.example"),
+      page("C", "https://duplicate.example"),
+    ];
+    const listPagesViaPlaywright = vi.fn(async () => currentPages);
+
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+
+    const { state, remote } = deps.createRemoteRouteHarness();
+
+    expect((await remote.listTabs()).map((tab) => [tab.targetId, tab.tabId])).toEqual([
+      ["A", "t1"],
+      ["B", "t2"],
+      ["C", "t3"],
+    ]);
+    await remote.labelTab("t1", "unique");
+    state.profiles.get("remote")!.lastTargetId = "A";
+
+    currentPages = [
+      page("D", "https://unique.example"),
+      page("E", "https://duplicate.example"),
+      page("F", "https://duplicate.example"),
+    ];
+
+    await expect(remote.listTabs()).resolves.toEqual([
+      expect.objectContaining({
+        targetId: "D",
+        tabId: "t1",
+        label: "unique",
+        suggestedTargetId: "unique",
+      }),
+      expect.objectContaining({ targetId: "E", tabId: "t4", suggestedTargetId: "t4" }),
+      expect.objectContaining({ targetId: "F", tabId: "t5", suggestedTargetId: "t5" }),
+    ]);
+    expect(state.profiles.get("remote")?.lastTargetId).toBe("D");
   });
 
   it("prefers lastTargetId for remote profiles when targetId is omitted", async () => {
@@ -322,8 +388,9 @@ describe("browser remote profile tab ops via Playwright", () => {
       dangerouslyAllowPrivateNetwork: false,
       hostnameAllowlist: ["browserless.example.com"],
     };
+    const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
     state.resolved.profiles.remote = {
-      ...state.resolved.profiles.remote,
+      ...remoteProfile,
       cdpUrl: "http://10.0.0.42:9222",
       cdpPort: 9222,
     };

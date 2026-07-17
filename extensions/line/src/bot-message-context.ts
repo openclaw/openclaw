@@ -16,10 +16,11 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -41,8 +42,7 @@ interface BuildLineMessageContextParams {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
-  groupHistories?: Map<string, HistoryEntry[]>;
-  historyLimit?: number;
+  inboundHistory?: HistoryEntry[];
 }
 
 type LineSourceInfo = {
@@ -387,7 +387,7 @@ async function finalizeLineInboundContext(params: {
     sessionKey: params.route.sessionKey,
   });
   if (shouldLogVerbose()) {
-    const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
     const mediaInfo =
       params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
         ? ` mediaCount=${params.verboseLog.mediaCount}`
@@ -441,16 +441,8 @@ async function finalizeLineInboundContext(params: {
 }
 
 export async function buildLineMessageContext(params: BuildLineMessageContextParams) {
-  const {
-    event,
-    allMedia,
-    mediaUnavailable,
-    cfg,
-    account,
-    commandAuthorized,
-    groupHistories,
-    historyLimit,
-  } = params;
+  const { event, allMedia, mediaUnavailable, cfg, account, commandAuthorized, inboundHistory } =
+    params;
 
   const source = event.source;
   const { userId, groupId, roomId, isGroup, peerId, route } = await resolveLineInboundRoute({
@@ -492,15 +484,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
       address: loc.address,
     });
   }
-
-  const historyKey = isGroup ? peerId : undefined;
-  const inboundHistory =
-    historyKey && groupHistories && (historyLimit ?? 0) > 0
-      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
-          historyKey,
-          limit: historyLimit ?? 0,
-        })
-      : undefined;
 
   const finalized = await finalizeLineInboundContext({
     cfg,

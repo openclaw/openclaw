@@ -200,6 +200,7 @@ function createClient(
   }
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
+  // Both OpenAI clients support custom fetch, so sentinels stay opaque until guarded egress.
   const guardedFetch = getAiTransportHost().buildModelFetch({ ...model, baseUrl });
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
@@ -238,6 +239,7 @@ function buildParams(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
+    store: false,
   };
 
   applyCommonResponsesParams(params, model, context, options);

@@ -3,17 +3,22 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage, type PortListener } from "../infra/ports.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
+import {
+  decodeWindowsLauncherScript,
+  encodeWindowsLauncherScript,
+} from "../infra/windows-launcher-encoding.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -248,7 +253,7 @@ export async function readScheduledTaskCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const scriptPath = resolveTaskScriptPath(env);
   try {
-    const content = await fs.readFile(scriptPath, "utf8");
+    const content = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
     let workingDirectory = "";
     let commandLine = "";
     const environment: Record<string, string> = {};
@@ -300,13 +305,13 @@ export async function readScheduledTaskCommand(
   }
 }
 
-export type ScheduledTaskInfo = {
+type ScheduledTaskInfo = {
   status?: string;
   lastRunTime?: string;
   lastRunResult?: string;
 };
 
-export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
   const status = entries.status;
@@ -526,7 +531,7 @@ async function launchFallbackTaskScript(
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
     const [executable, ...args] = command.programArguments;
-    const child = spawn(executable, args, {
+    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
       cwd: command.workingDirectory || undefined,
       detached: true,
       env: {
@@ -554,26 +559,6 @@ function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
 
 function parsePositivePort(raw: string | undefined): number | null {
   return parseTcpPort(raw);
-}
-
-function parsePortFromProgramArguments(programArguments?: string[]): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (!arg) {
-      continue;
-    }
-    const inlineMatch = arg.match(/^--port=(\d+)$/);
-    if (inlineMatch) {
-      return parsePositivePort(inlineMatch[1]);
-    }
-    if (arg === "--port") {
-      return parsePositivePort(programArguments[i + 1]);
-    }
-  }
-  return null;
 }
 
 function isNodeHostArgv(programArguments: string[]): boolean {
@@ -617,7 +602,7 @@ function findInstalledProcessPid(
     const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
     if (
       !matchesProcess(argv) ||
-      parsePortFromProgramArguments(argv) !== port ||
+      parseTcpPortFromArgs(argv) !== port ||
       !matchesInstalledProgramArguments(argv, installedArguments)
     ) {
       continue;
@@ -643,7 +628,7 @@ async function resolveScheduledTaskProcess(
     return null;
   }
   const port =
-    parsePortFromProgramArguments(installedArguments) ??
+    parseTcpPortFromArgs(installedArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -685,7 +670,7 @@ function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   return (
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env)
   );
@@ -833,6 +818,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 async function terminateGatewayProcessTree(pid: number, graceMs: number): Promise<void> {
   if (process.platform !== "win32") {
+    // Use leader-checked default: gateway/listener termination paths resolve PIDs by argv
+    // or port ownership rather than spawn-time process-group creation, so we rely on the
+    // helper's process-group leader verification to avoid signaling the gateway's own group.
     killProcessTree(pid, { graceMs });
     return;
   }
@@ -943,7 +931,7 @@ async function resolveFallbackRuntime(
   if (!shouldManageGatewayListenerPort(env)) {
     const installedArguments = command?.programArguments;
     const port =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(env);
     if (!port) {
@@ -975,7 +963,7 @@ async function resolveFallbackRuntime(
     };
   }
   const port =
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -1073,7 +1061,7 @@ async function assertReplacementPortAvailableForTakeover(params: {
     return;
   }
   const port =
-    parsePortFromProgramArguments(params.programArguments) ??
+    parseTcpPortFromArgs(params.programArguments) ??
     parsePositivePort(params.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(params.env);
   if (!port) {
@@ -1303,13 +1291,16 @@ async function writeScheduledTaskScript({
     workingDirectory,
     environment: scriptEnvironment,
   });
-  await fs.writeFile(scriptPath, script, "utf8");
+  await fs.writeFile(scriptPath, encodeWindowsLauncherScript({ format: "cmd", content: script }));
   if (taskLaunchPath !== scriptPath) {
     const launcher = buildHiddenLauncherScript({
       description: taskDescription,
       scriptPath,
     });
-    await fs.writeFile(taskLaunchPath, launcher, "utf8");
+    await fs.writeFile(
+      taskLaunchPath,
+      encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
+    );
   }
   return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
 }
@@ -1426,7 +1417,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     const command = await readScheduledTaskCommand(params.env).catch(() => null);
     const installedArguments = command?.programArguments;
     const taskPort =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(params.env);
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
@@ -1474,8 +1465,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
       return (
-        isGatewayArgv(argv, { allowGatewayBinary: true }) &&
-        parsePortFromProgramArguments(argv) === taskPort
+        isGatewayArgv(argv, { allowGatewayBinary: true }) && parseTcpPortFromArgs(argv) === taskPort
       );
     });
   };
@@ -1585,7 +1575,8 @@ async function activateScheduledTask(params: {
     if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
       const startupEntryPath = resolveStartupEntryPath(params.env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
-      const launcher = shouldUseHiddenWindowsTaskLauncher(params.env)
+      const useHiddenLauncher = shouldUseHiddenWindowsTaskLauncher(params.env);
+      const launcher = useHiddenLauncher
         ? buildHiddenLauncherScript({
             description: taskDescription,
             scriptPath: params.scriptPath,
@@ -1594,7 +1585,13 @@ async function activateScheduledTask(params: {
             description: taskDescription,
             scriptPath: params.scriptPath,
           });
-      await fs.writeFile(startupEntryPath, launcher, "utf8");
+      await fs.writeFile(
+        startupEntryPath,
+        encodeWindowsLauncherScript({
+          format: useHiddenLauncher ? "vbs" : "cmd",
+          content: launcher,
+        }),
+      );
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
@@ -2059,3 +2056,4 @@ export async function readScheduledTaskRuntime(
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

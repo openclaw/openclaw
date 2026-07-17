@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
@@ -35,7 +36,7 @@ function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.en
   return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
 }
 
-export function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
   if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
     return;
   }
@@ -70,7 +71,7 @@ function createProxyCaptureRecorder(params: {
   };
 }
 
-export function parseConnectTarget(rawTarget: string | undefined): {
+function parseConnectTarget(rawTarget: string | undefined): {
   hostname: string;
   port: number;
 } {
@@ -138,7 +139,9 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   metaJson?: string;
 } {
   return {
-    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    // write(), unlike end(), omits an incomplete trailing code point introduced
+    // by the byte cap instead of injecting a replacement character into the preview.
+    dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,

@@ -1,6 +1,6 @@
-// Zalouser plugin module implements monitor behavior.
 import { mergeAllowlist, summarizeMapping } from "openclaw/plugin-sdk/allow-from";
 import {
+  createChannelInboundEnvelopeBuilder,
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -9,6 +9,8 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+// Zalouser plugin module implements monitor behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -44,6 +46,7 @@ import {
   sendSeenZalouser,
   sendTypingZalouser,
 } from "./send.js";
+import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
   listZaloFriends,
@@ -52,7 +55,7 @@ import {
   startZaloListener,
 } from "./zalo-js.js";
 
-export type ZalouserMonitorOptions = {
+type ZalouserMonitorOptions = {
   account: ResolvedZalouserAccount;
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -60,7 +63,7 @@ export type ZalouserMonitorOptions = {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 };
 
-export type ZalouserMonitorResult = {
+type ZalouserMonitorResult = {
   stop: () => void;
 };
 
@@ -133,11 +136,6 @@ function resolveInboundQueueKey(message: ZaloInboundMessage): string {
   return `direct:${senderId || threadId}`;
 }
 
-function resolveZalouserDmSessionScope(config: OpenClawConfig) {
-  const configured = config.session?.dmScope;
-  return configured === "main" || !configured ? "per-channel-peer" : configured;
-}
-
 function resolveZalouserRouteAccess(params: {
   groupPolicy: "open" | "disabled" | "allowlist";
   configured: boolean;
@@ -170,51 +168,6 @@ function senderScopedZalouserGroupPolicy(params: {
     return "disabled";
   }
   return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
-}
-
-function resolveZalouserInboundSessionKey(params: {
-  core: ZalouserCoreRuntime;
-  config: OpenClawConfig;
-  route: { agentId: string; accountId: string; sessionKey: string };
-  storePath: string;
-  isGroup: boolean;
-  senderId: string;
-}): string {
-  if (params.isGroup) {
-    return params.route.sessionKey;
-  }
-
-  const directSessionKey = normalizeLowercaseStringOrEmpty(
-    params.core.channel.routing.buildAgentSessionKey({
-      agentId: params.route.agentId,
-      channel: "zalouser",
-      accountId: params.route.accountId,
-      peer: { kind: "direct", id: params.senderId },
-      dmScope: resolveZalouserDmSessionScope(params.config),
-      identityLinks: params.config.session?.identityLinks,
-    }),
-  );
-  const legacySessionKey = normalizeLowercaseStringOrEmpty(
-    params.core.channel.routing.buildAgentSessionKey({
-      agentId: params.route.agentId,
-      channel: "zalouser",
-      accountId: params.route.accountId,
-      peer: { kind: "group", id: params.senderId },
-    }),
-  );
-  const hasDirectSession =
-    params.core.channel.session.readSessionUpdatedAt({
-      storePath: params.storePath,
-      sessionKey: directSessionKey,
-    }) !== undefined;
-  const hasLegacySession =
-    params.core.channel.session.readSessionUpdatedAt({
-      storePath: params.storePath,
-      sessionKey: legacySessionKey,
-    }) !== undefined;
-
-  // Keep existing DM history on upgrade, but use canonical direct keys for new sessions.
-  return hasLegacySession && !hasDirectSession ? legacySessionKey : directSessionKey;
 }
 
 function logVerbose(core: ZalouserCoreRuntime, runtime: RuntimeEnv, message: string): void {
@@ -480,8 +433,9 @@ async function processMessage(
     cfg: config,
     channel: "zalouser",
     accountId: account.accountId,
+    dmScope: resolveZalouserDmSessionScope(config),
     peer: {
-      // Keep DM peer kind as "direct" so session keys follow dmScope and UI labels stay DM-shaped.
+      // Doctor migrates retired group-shaped DM keys; runtime consumes only canonical direct keys.
       kind: peer.kind,
       id: peer.id,
     },
@@ -561,28 +515,11 @@ async function processMessage(
   }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
-  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
-    agentId: route.agentId,
-  });
-  const inboundSessionKey = resolveZalouserInboundSessionKey({
-    core,
-    config,
-    route,
-    storePath,
-    isGroup,
-    senderId,
-  });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    storePath,
-    sessionKey: inboundSessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg: config, route });
+  const body = buildEnvelope({
     channel: "Zalo Personal",
     from: fromLabel,
     timestamp: message.timestampMs,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
   const combinedBody =
@@ -592,11 +529,11 @@ async function processMessage(
           limit: historyState.historyLimit,
           currentMessage: body,
           formatEntry: (entry) =>
-            core.channel.reply.formatAgentEnvelope({
+            buildEnvelope({
               channel: "Zalo Personal",
               from: fromLabel,
               timestamp: entry.timestamp,
-              envelope: envelopeOptions,
+              previousTimestamp: null,
               body: `${entry.sender}: ${entry.body}${
                 entry.messageId ? ` [id:${entry.messageId}]` : ""
               }`,
@@ -642,7 +579,7 @@ async function processMessage(
       agentId: route.agentId,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
-      dispatchSessionKey: inboundSessionKey,
+      dispatchSessionKey: route.sessionKey,
     },
     reply: {
       to: normalizedTo,
@@ -685,17 +622,12 @@ async function processMessage(
     },
   };
 
-  await core.channel.inbound.dispatchReply({
+  await core.channel.inbound.dispatch({
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       preparePayload: (payload) => {
         if (payload.text === undefined) {
@@ -891,7 +823,10 @@ export async function monitorZalouserProvider(
         const cleaned = normalizeZalouserAllowEntry(entry);
         if (/^\d+$/.test(cleaned)) {
           if (!nextGroups[cleaned]) {
-            nextGroups[cleaned] = groupsConfig[entry];
+            nextGroups[cleaned] = expectDefined(
+              groupsConfig[entry],
+              "enumerated Zalouser group config",
+            );
           }
           mapping.push(`${entry}→${cleaned}`);
           continue;
@@ -901,7 +836,7 @@ export async function monitorZalouserProvider(
         const id = match?.groupId;
         if (id) {
           if (!nextGroups[id]) {
-            nextGroups[id] = groupsConfig[entry];
+            nextGroups[id] = expectDefined(groupsConfig[entry], "enumerated Zalouser group config");
           }
           mapping.push(`${entry}→${id}`);
         } else {
@@ -1023,35 +958,4 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-export const testing = {
-  processMessage: async (params: {
-    message: ZaloInboundMessage;
-    account: ResolvedZalouserAccount;
-    config: OpenClawConfig;
-    runtime: RuntimeEnv;
-    historyState?: {
-      historyLimit?: number;
-      groupHistories?: Map<string, HistoryEntry[]>;
-    };
-    statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  }) => {
-    const historyLimit = Math.max(
-      0,
-      params.historyState?.historyLimit ??
-        params.account.config.historyLimit ??
-        params.config.messages?.groupChat?.historyLimit ??
-        DEFAULT_GROUP_HISTORY_LIMIT,
-    );
-    const groupHistories = params.historyState?.groupHistories ?? new Map<string, HistoryEntry[]>();
-    await processMessage(
-      params.message,
-      params.account,
-      params.config,
-      getZalouserRuntime(),
-      params.runtime,
-      { historyLimit, groupHistories },
-      params.statusSink,
-    );
-  },
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

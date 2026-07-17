@@ -403,11 +403,6 @@ export function setAgentEffectiveModelPrimary(
   return "defaults";
 }
 
-/** @deprecated Prefer explicit/effective helpers at new call sites. */
-export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentExplicitModelPrimary(cfg, agentId);
-}
-
 export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
@@ -601,8 +596,7 @@ export function resolveAgentIdsByWorkspacePath(
   const ids = listAgentIds(cfg);
   const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
 
-  for (let index = 0; index < ids.length; index += 1) {
-    const id = ids[index];
+  for (const [index, id] of ids.entries()) {
     const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
     if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
       continue;

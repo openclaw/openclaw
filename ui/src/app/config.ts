@@ -4,6 +4,7 @@ import {
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
+  type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { setUiTimeFormatPreference } from "../lib/format.ts";
@@ -38,11 +39,13 @@ type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth: string | null;
   terminalEnabled: boolean;
+  pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
 export type ApplicationConfigCapability = {
@@ -50,7 +53,8 @@ export type ApplicationConfigCapability = {
   refresh: (options?: {
     auth?: ApplicationConfigAuthSource;
     skipWithoutAuthCandidate?: boolean;
-  }) => Promise<void>;
+    signal?: AbortSignal;
+  }) => Promise<ApplicationConfig | null>;
   subscribe: (listener: (config: ApplicationConfig) => void) => () => void;
 };
 
@@ -72,11 +76,13 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
   chatMessageMaxWidth: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  pluginFrameGrants: [],
 };
 
 function normalizeSeamColor(value: unknown): string | null {
@@ -137,6 +143,10 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    devGitBranch:
+      typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
+        ? parsed.devGitBranch.trim()
+        : null,
     localMediaPreviewRoots: Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [],
@@ -152,6 +162,14 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
         ? parsed.chatMessageMaxWidth
         : null,
     terminalEnabled: parsed.terminalEnabled === true,
+    pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
+      ? parsed.pluginFrameGrants.filter(
+          (grant): grant is ControlUiPluginFrameGrantAck =>
+            typeof grant?.pluginId === "string" &&
+            typeof grant.path === "string" &&
+            (grant.match === "exact" || grant.match === "prefix"),
+        )
+      : [],
   };
 }
 
@@ -159,6 +177,7 @@ async function loadApplicationConfig(params: {
   basePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;
+  signal?: AbortSignal;
 }): Promise<ApplicationConfig | null> {
   if (typeof window === "undefined" || typeof fetch !== "function") {
     return null;
@@ -183,7 +202,12 @@ async function loadApplicationConfig(params: {
       if (candidate) {
         headers.Authorization = `Bearer ${candidate}`;
       }
-      res = await fetch(url, { method: "GET", headers, credentials: "same-origin" });
+      res = await fetch(url, {
+        method: "GET",
+        headers,
+        credentials: "same-origin",
+        signal: params.signal,
+      });
       if (res.ok) {
         break;
       }
@@ -208,6 +232,7 @@ export function createApplicationConfigCapability(params: {
   auth?: ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
+  let currentAuth = params.auth;
   let refreshVersion = 0;
   const listeners = new Set<(config: ApplicationConfig) => void>();
 
@@ -223,22 +248,26 @@ export function createApplicationConfigCapability(params: {
       return current;
     },
     async refresh(options) {
+      currentAuth = options?.auth ?? currentAuth;
       const version = ++refreshVersion;
       const next = await loadApplicationConfig({
         basePath: params.basePath,
-        auth: options?.auth ?? params.auth,
+        auth: currentAuth,
         skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
+        signal: options?.signal,
       });
-      if (next && version === refreshVersion) {
-        const documentTerminalEnabled = readDocumentTerminalEnabled();
-        if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
-          // CSP headers cannot change on a live document. Reload in either
-          // direction so the document and accepted terminal state stay aligned.
-          window.location.reload();
-          return;
-        }
-        publish(next);
+      if (!next || version !== refreshVersion) {
+        return null;
       }
+      const documentTerminalEnabled = readDocumentTerminalEnabled();
+      if (documentTerminalEnabled !== null && next.terminalEnabled !== documentTerminalEnabled) {
+        // CSP headers cannot change on a live document. Reload in either
+        // direction so the document and accepted terminal state stay aligned.
+        window.location.reload();
+        return next;
+      }
+      publish(next);
+      return next;
     },
     subscribe(listener) {
       listeners.add(listener);

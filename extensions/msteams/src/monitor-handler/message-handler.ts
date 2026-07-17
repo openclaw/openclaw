@@ -2,9 +2,10 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
   logInboundDrop,
   resolveInboundMentionDecision,
-  resolveInboundSessionEnvelopeContext,
+  resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
@@ -28,26 +29,26 @@ import {
   summarizeMSTeamsHtmlAttachments,
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
-import { isRecord } from "../attachments/shared.js";
+import { extractHtmlFromAttachment } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  fetchChannelMessage,
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
-  resolveTeamGroupId,
   type GraphThreadMessage,
 } from "../graph-thread.js";
-import { resolveGraphChatId } from "../graph-upload.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
   normalizeMSTeamsConversationId,
   parseMSTeamsActivityTimestamp,
   stripMSTeamsMentionTags,
-  translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import { createMSTeamsInboundDeadline, withMSTeamsRequestDeadline } from "../request-timeout.js";
 import {
   fetchParentMessageCached,
   formatParentContextEvent,
@@ -58,18 +59,7 @@ import {
 
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
-    if (attachment.contentType !== "text/html") {
-      continue;
-    }
-    const content = attachment.content;
-    const raw =
-      typeof content === "string"
-        ? content
-        : isRecord(content) && typeof content.text === "string"
-          ? content.text
-          : isRecord(content) && typeof content.body === "string"
-            ? content.body
-            : "";
+    const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
@@ -100,8 +90,13 @@ import {
   recordMSTeamsSentMessage,
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
+import { resolveTeamGroupId } from "../team-identity.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
-import { resolveMSTeamsInboundMedia, resolveMSTeamsInboundMediaBody } from "./inbound-media.js";
+import {
+  resolveMSTeamsInboundMedia,
+  resolveMSTeamsInboundMediaBody,
+  shouldAttemptMSTeamsGraphMediaFallback,
+} from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 function formatMSTeamsSenderReason(params: {
@@ -163,7 +158,6 @@ function buildStoredConversationReference(params: {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent,
-    bot: agent ? { id: agent.id, name: agent.name } : undefined,
     conversation: {
       id: conversationId,
       conversationType,
@@ -272,6 +266,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    const graphChannelId = activity.channelData?.channel?.id?.trim() || conversationId;
     // For channel thread messages, resolve the thread root message ID so outbound
     // replies land in the correct thread. The root ID comes from the `messageid=`
     // portion of conversation.id (preferred) or from activity.replyToId.
@@ -471,7 +466,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    if (!rawBody) {
+    const mayRecoverGraphMedia =
+      Boolean(htmlSummary?.attachmentIds.length) ||
+      shouldAttemptMSTeamsGraphMediaFallback({
+        conversationType,
+        htmlSummary: htmlSummary ?? undefined,
+        graphMediaFallback: msteamsCfg?.graphMediaFallback,
+      });
+    if (!rawBody && !mayRecoverGraphMedia) {
       log.debug?.("skipping empty message after stripping mentions");
       return;
     }
@@ -549,89 +551,124 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
-        enqueuePrimaryMessageSystemEvent();
-        createChannelHistoryWindow({ historyMap: conversationHistories }).record({
-          historyKey: conversationId,
-          limit: historyLimit,
-          entry: {
-            sender: senderName,
-            body: rawBody,
-            timestamp: timestamp?.getTime(),
-            messageId: activity.id ?? undefined,
-          },
-        });
+        if (rawBody) {
+          enqueuePrimaryMessageSystemEvent();
+          createChannelHistoryWindow({ historyMap: conversationHistories }).record({
+            historyKey: conversationId,
+            limit: historyLimit,
+            entry: {
+              sender: senderName,
+              body: rawBody,
+              timestamp: timestamp?.getTime(),
+              messageId: activity.id ?? undefined,
+            },
+          });
+        }
         return;
       }
     }
-    enqueuePrimaryMessageSystemEvent();
-    let graphConversationId = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage,
-      conversationId,
-      aadObjectId: from.aadObjectId,
-      appId,
-    });
-
-    // For personal DMs the Bot Framework conversation ID (`a:...`) and the
-    // synthetic `19:{userId}_{appId}@unq.gbl.spaces` format produced by
-    // translateMSTeamsDmConversationIdForGraph are not always accepted by the
-    // Graph `/chats/{chatId}/messages` endpoint. Resolve the real Graph chat
-    // ID via the API (with conversation store caching) so the Graph media
-    // download fallback works when the direct Bot Framework download fails.
-    if (isDirectMessage && conversationId.startsWith("a:")) {
-      const cached = await conversationStore.get(conversationId);
-      if (cached?.graphChatId) {
-        graphConversationId = cached.graphChatId;
-      } else {
-        try {
-          const resolved = await resolveGraphChatId({
-            botFrameworkConversationId: conversationId,
-            userAadObjectId: from.aadObjectId ?? undefined,
-            tokenProvider,
-          });
-          if (resolved) {
-            graphConversationId = resolved;
-            conversationStore
-              .upsert(conversationId, { ...conversationRef, graphChatId: resolved })
-              .catch(() => {});
-          }
-        } catch {
-          log.debug?.("failed to resolve Graph chat ID for inbound media", { conversationId });
-        }
+    const preprocessingDeadline = createMSTeamsInboundDeadline();
+    let teamAadGroupId = activity.channelData?.team?.aadGroupId?.trim() || undefined;
+    const conversationTeamId = isChannel ? teamId : undefined;
+    let teamGroupIdPromise: Promise<string | undefined> | undefined;
+    const resolveChannelTeamGroupId = async (): Promise<string | undefined> => {
+      if (!conversationTeamId) {
+        return undefined;
       }
+      teamGroupIdPromise ??= resolveTeamGroupId({
+        conversationTeamId,
+        aadGroupId: teamAadGroupId,
+        getTeamDetails: context.getTeamDetails,
+        deadline: preprocessingDeadline,
+      }).catch((err: unknown) => {
+        log.debug?.("failed to resolve Teams AAD group ID", {
+          teamId: conversationTeamId,
+          error: formatUnknownError(err),
+        });
+        return undefined;
+      });
+      teamAadGroupId = await teamGroupIdPromise;
+      return teamAadGroupId;
+    };
+    let mediaList = [] as Awaited<ReturnType<typeof resolveMSTeamsInboundMedia>>;
+    try {
+      mediaList = await withMSTeamsRequestDeadline({
+        deadline: preprocessingDeadline,
+        label: "MS Teams inbound media",
+        work: () =>
+          resolveMSTeamsInboundMedia({
+            attachments,
+            htmlSummary: htmlSummary ?? undefined,
+            maxBytes: mediaMaxBytes,
+            tokenProvider,
+            allowHosts: msteamsCfg?.mediaAllowHosts,
+            authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
+            graphMediaFallback: msteamsCfg?.graphMediaFallback,
+            conversationType,
+            conversationId,
+            conversationMessageId: conversationMessageId ?? undefined,
+            teamAadGroupId,
+            resolveTeamAadGroupId: resolveChannelTeamGroupId,
+            serviceUrl: activity.serviceUrl,
+            activity: {
+              id: activity.id,
+              replyToId: activity.replyToId,
+              channelData: activity.channelData,
+            },
+            log,
+            deadline: preprocessingDeadline,
+            preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
+              ?.preserveFilenames,
+          }),
+      });
+    } catch (err) {
+      log.debug?.("failed to resolve inbound Teams media", {
+        error: formatUnknownError(err),
+      });
     }
-
-    const mediaList = await resolveMSTeamsInboundMedia({
-      attachments,
-      htmlSummary: htmlSummary ?? undefined,
-      maxBytes: mediaMaxBytes,
-      tokenProvider,
-      allowHosts: msteamsCfg?.mediaAllowHosts,
-      authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
-      conversationType,
-      conversationId: graphConversationId,
-      conversationMessageId: conversationMessageId ?? undefined,
-      serviceUrl: activity.serviceUrl,
-      activity: {
-        id: activity.id,
-        replyToId: activity.replyToId,
-        channelData: activity.channelData,
-      },
-      log,
-      preserveFilenames: (cfg as { media?: { preserveFilenames?: boolean } }).media
-        ?.preserveFilenames,
-    });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
     const materializedMediaPlaceholder = resolveMSTeamsInboundAttachmentPresentation(
       mediaList.map((media) => ({ contentType: media.contentType, name: media.path })),
     ).placeholder;
     const agentBody = resolveMSTeamsInboundMediaBody({
-      body: rawBody,
+      body: rawBody || materializedMediaPlaceholder,
       mediaPlaceholder: attachmentPlaceholder,
       materializedMediaPlaceholder,
       expectedMediaCount: attachmentPresentation.expectedMediaCount,
       mediaCount: mediaList.length,
     });
+    if (!agentBody) {
+      log.debug?.("skipping empty message after Graph media recovery");
+      return;
+    }
+    enqueuePrimaryMessageSystemEvent();
+    teamAadGroupId = await resolveChannelTeamGroupId();
+
+    // Media is the primary payload, so optional quote enrichment only gets the
+    // remaining preprocessing budget. DMs alone may fetch the full quote: group
+    // and channel quotes retain their visibility-filtered preview.
+    let quoteBodyFull: string | undefined;
+    const quoteMessageId = quoteInfo?.id;
+    if (quoteMessageId && isDirectMessage && conversationId.startsWith("19:")) {
+      try {
+        const graphToken = await withMSTeamsRequestDeadline({
+          deadline: preprocessingDeadline,
+          label: "MS Teams quote token",
+          work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+        });
+        quoteBodyFull = await withMSTeamsRequestDeadline({
+          deadline: preprocessingDeadline,
+          label: "MS Teams quote lookup",
+          work: () =>
+            fetchChatMessageText(graphToken, conversationId, quoteMessageId, preprocessingDeadline),
+        });
+      } catch (err) {
+        log.debug?.("failed to fetch full quoted message text", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
     // This is a best-effort enhancement; errors are logged and do not block the reply.
@@ -642,16 +679,46 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // Parent fetches are cached (5 min LRU, 100 entries) and per-session deduped so
     // consecutive replies in the same thread do not re-inject identical context.
     let threadContext: string | undefined;
-    if (activity.replyToId && isChannel && teamId) {
+    const threadParentId = activity.replyToId;
+    const channelGroupId = teamAadGroupId;
+    if (threadParentId && isChannel && channelGroupId) {
       try {
-        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
-        const groupId = await resolveTeamGroupId(graphToken, teamId);
+        const graphToken = await withMSTeamsRequestDeadline({
+          deadline: preprocessingDeadline,
+          label: "MS Teams thread token",
+          work: () => tokenProvider.getAccessToken("https://graph.microsoft.com"),
+        });
         // Use allSettled so a failure in one fetch does not discard the other.
         // For example, reply-fetch 403 should not throw away a successful parent fetch.
-        const [parentResult, repliesResult] = await Promise.allSettled([
-          fetchParentMessageCached(graphToken, groupId, conversationId, activity.replyToId),
-          fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
-        ]);
+        const [parentResult, repliesResult] = await withMSTeamsRequestDeadline({
+          deadline: preprocessingDeadline,
+          label: "MS Teams thread history",
+          work: () =>
+            Promise.allSettled([
+              fetchParentMessageCached(
+                graphToken,
+                channelGroupId,
+                conversationId,
+                threadParentId,
+                (token, groupId, requestedChannelId, messageId) =>
+                  fetchChannelMessage(
+                    token,
+                    groupId,
+                    requestedChannelId,
+                    messageId,
+                    preprocessingDeadline,
+                  ),
+              ),
+              fetchThreadReplies(
+                graphToken,
+                channelGroupId,
+                conversationId,
+                threadParentId,
+                50,
+                preprocessingDeadline,
+              ),
+            ]),
+        });
         const parentMsg = parentResult.status === "fulfilled" ? parentResult.value : undefined;
         const replies = repliesResult.status === "fulfilled" ? repliesResult.value : [];
         if (parentResult.status === "rejected") {
@@ -665,14 +732,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           });
         }
         const isThreadSenderAllowed = (msg: GraphThreadMessage) =>
-          groupPolicy === "allowlist"
-            ? resolveMSTeamsAllowlistMatch({
-                allowFrom: effectiveGroupAllowFrom,
+          resolveInboundSupplementalSenderAllowed({
+            isGroup: isChannel,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
                 senderId: msg.from?.user?.id ?? "",
                 senderName: msg.from?.user?.displayName,
                 allowNameMatching,
-              }).allowed
-            : true;
+              }).allowed,
+          });
         const parentSummary = summarizeParentMessage(parentMsg);
         const visibleParentMessages = parentMsg
           ? filterSupplementalContextItems({
@@ -685,13 +756,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         if (
           parentSummary &&
           visibleParentMessages.length > 0 &&
-          shouldInjectParentContext(route.sessionKey, activity.replyToId)
+          shouldInjectParentContext(route.sessionKey, threadParentId)
         ) {
           core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
             sessionKey: route.sessionKey,
-            contextKey: `msteams:thread-parent:${conversationId}:${activity.replyToId}`,
+            contextKey: `msteams:thread-parent:${conversationId}:${threadParentId}`,
           });
-          markParentContextInjected(route.sessionKey, activity.replyToId);
+          markParentContextInjected(route.sessionKey, threadParentId);
         }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
         quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
@@ -717,17 +788,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-      cfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-    });
-    const body = core.channel.reply.formatAgentEnvelope({
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+    const body = buildEnvelope({
       channel: "Teams",
       from: envelopeFrom,
       timestamp,
-      previousTimestamp,
-      envelope: envelopeOptions,
       body: agentBody,
     });
     let combinedBody = body;
@@ -740,12 +805,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
+          buildEnvelope({
             channel: "Teams",
             from: conversationType,
             timestamp: entry.timestamp,
+            previousTimestamp: null,
             body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-            envelope: envelopeOptions,
           }),
       });
     }
@@ -760,14 +825,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const commandBody = text.trim();
     const quoteSenderAllowed =
       quoteInfo && quoteInfo.sender
-        ? !isChannel || groupPolicy !== "allowlist"
-          ? true
-          : resolveMSTeamsAllowlistMatch({
-              allowFrom: effectiveGroupAllowFrom,
-              senderId: quoteSenderId ?? "",
-              senderName: quoteSenderName,
-              allowNameMatching,
-            }).allowed
+        ? resolveInboundSupplementalSenderAllowed({
+            isGroup: !isDirectMessage,
+            groupPolicy,
+            allowFrom: effectiveGroupAllowFrom,
+            isSenderAllowed: (allowFrom) =>
+              resolveMSTeamsAllowlistMatch({
+                allowFrom,
+                senderId: quoteSenderId ?? "",
+                senderName: quoteSenderName,
+                allowNameMatching,
+              }).allowed,
+          })
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
@@ -775,20 +844,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : agentBody;
 
     // For Teams *channel* messages (not group chats / DMs), preserve the
-    // `teamId/channelId` pair on NativeChannelId so downstream action handlers
-    // can route through `/teams/{teamId}/channels/{channelId}` via Graph API.
+    // `aadGroupId/channelId` pair on NativeChannelId so downstream action handlers
+    // can route through `/teams/{aadGroupId}/channels/{channelId}` via Graph API.
     // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
     // own because channel Graph endpoints require the owning team id too.
-    const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
+    const nativeChannelId =
+      isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "msteams",
-      finalize: core.channel.reply.finalizeInboundContext,
       contextVisibility: contextVisibilityMode,
       supplemental: {
         quote: quoteInfo
           ? {
-              id: activity.replyToId ?? undefined,
-              body: quoteInfo.body,
+              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
               isQuote: true,
@@ -832,7 +901,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           wasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
         },
         commands: {
-          authorized: commandAuthorized,
+          authorized: commandAuthorized === true,
         },
       },
       extra: {
@@ -899,12 +968,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
+            cfg,
             channel: "msteams",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
+            route: { agentId: route.agentId, sessionKey: route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             record: {
               onRecordError: (err) => {
                 logVerboseMessage(
@@ -1048,3 +1116,4 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

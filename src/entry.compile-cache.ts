@@ -5,6 +5,7 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
@@ -23,7 +24,7 @@ export function resolveEntryInstallRoot(entryFile: string): string {
   return entryParent === "dist" || entryParent === "src" ? path.dirname(entryDir) : entryDir;
 }
 
-export function isSourceCheckoutInstallRoot(installRoot: string): boolean {
+function isSourceCheckoutInstallRoot(installRoot: string): boolean {
   return (
     existsSync(path.join(installRoot, ".git")) ||
     existsSync(path.join(installRoot, "src", "entry.ts"))
@@ -38,9 +39,7 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
-export function isNodeVersionAffectedByCompileCacheDeadlock(
-  nodeVersion: string | undefined,
-): boolean {
+function isNodeVersionAffectedByCompileCacheDeadlock(nodeVersion: string | undefined): boolean {
   if (!nodeVersion) {
     return false;
   }
@@ -48,15 +47,15 @@ export function isNodeVersionAffectedByCompileCacheDeadlock(
   if (!match) {
     return false;
   }
-  const major = Number.parseInt(match[1], 10);
-  const minor = Number.parseInt(match[2], 10);
+  const major = Number.parseInt(expectDefined(match[1], "compile-cache major version capture"), 10);
+  const minor = Number.parseInt(expectDefined(match[2], "compile-cache minor version capture"), 10);
   if (major !== 24) {
     return false;
   }
   return minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
 }
 
-export function shouldEnableOpenClawCompileCache(params: {
+function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
   nodeVersion?: string;
@@ -97,7 +96,7 @@ function readPackageVersion(packageJsonPath: string): string {
   return "unknown";
 }
 
-export function resolveOpenClawCompileCacheDirectory(params: {
+function resolveOpenClawCompileCacheDirectory(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
 }): string {
@@ -134,7 +133,7 @@ type OpenClawCompileCacheRespawnRuntime = RespawnChildRuntime & {
   writeError: (message: string) => void;
 };
 
-export function buildOpenClawCompileCacheRespawnPlan(params: {
+function buildOpenClawCompileCacheRespawnPlan(params: {
   currentFile: string;
   env?: NodeJS.ProcessEnv;
   execArgv?: string[];
@@ -195,7 +194,7 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   return true;
 }
 
-export function runOpenClawCompileCacheRespawnPlan(
+function runOpenClawCompileCacheRespawnPlan(
   plan: OpenClawCompileCacheRespawnPlan,
   runtime: OpenClawCompileCacheRespawnRuntime = {
     spawn,
@@ -232,4 +231,15 @@ export function enableOpenClawCompileCache(params: {
   } catch {
     // Best-effort only; never block startup.
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
+    buildOpenClawCompileCacheRespawnPlan,
+    isNodeVersionAffectedByCompileCacheDeadlock,
+    isSourceCheckoutInstallRoot,
+    resolveOpenClawCompileCacheDirectory,
+    runOpenClawCompileCacheRespawnPlan,
+    shouldEnableOpenClawCompileCache,
+  };
 }

@@ -1,10 +1,10 @@
 // Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it } from "vitest";
-import { ExtensionRelayBridge, type BridgeSocket } from "./relay-bridge.js";
+import { ExtensionRelayBridge } from "./relay-bridge.js";
 import type { ExtensionToRelayMessage, RelayToExtensionMessage } from "./relay-protocol.js";
 
 /** In-memory socket capturing every frame the bridge sends. */
-class FakeSocket implements BridgeSocket {
+class FakeSocket {
   readonly sent: unknown[] = [];
   closed = false;
   closeCode?: number;
@@ -322,6 +322,34 @@ describe("ExtensionRelayBridge", () => {
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.error).toBeTruthy();
     expect(bridge.extensionConnected).toBe(false);
+  });
+
+  it("reports malformed CDP client JSON instead of leaving the client waiting", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+
+    cdp.onMessage("{");
+
+    expect(client.frames()).toEqual([
+      { id: null, error: { code: -32700, message: "Parse error" } },
+    ]);
+  });
+
+  it("reports invalid CDP client requests instead of leaving the client waiting", () => {
+    const bridge = new ExtensionRelayBridge();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+
+    cdp.onMessage(JSON.stringify({ id: 7, sessionId: "session-1", params: {} }));
+
+    expect(client.frames()).toEqual([
+      {
+        id: 7,
+        sessionId: "session-1",
+        error: { code: -32600, message: "Invalid request" },
+      },
+    ]);
   });
 
   it("reaps child sessions when a tab leaves the group (no stale routing)", async () => {

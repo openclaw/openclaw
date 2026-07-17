@@ -10,7 +10,7 @@ const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 
-export type AgentEventPayload = {
+type AgentEventPayload = {
   runId: string;
   seq: number;
   stream: string;
@@ -38,8 +38,13 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  /** Structured result details (e.g. edit diff) captured from the result event. */
+  details?: unknown;
+  isError?: boolean;
+  /** True once a result event landed, even when the output text is empty. */
+  resultReceived?: boolean;
   startedAt: number;
-  updatedAt: number;
+  receivedAt: number;
   message: Record<string, unknown>;
 };
 
@@ -60,6 +65,8 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  planStatus?: PlanStatus | null;
+  questionStatus?: QuestionStatus | null;
   sessions: Pick<SessionCapability, "setModelOverride">;
 };
 
@@ -248,11 +255,15 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     name: entry.name,
     arguments: entry.args ?? {},
   });
-  if (entry.output) {
+  // Emit the result block whenever a result landed, even with empty output;
+  // otherwise a completed no-stdout command keeps its running state in the UI.
+  if (entry.output || entry.resultReceived) {
     content.push({
       type: "toolresult",
       name: entry.name,
-      text: entry.output,
+      text: entry.output ?? "",
+      ...(entry.details !== undefined ? { details: entry.details } : {}),
+      ...(entry.isError !== undefined ? { isError: entry.isError } : {}),
     });
   }
   return {
@@ -261,6 +272,13 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     runId: entry.runId,
     content,
     timestamp: entry.startedAt,
+    // Running-state markers: only live tool-stream cards may show a spinner,
+    // and completion comes from the result event — partial `update` output
+    // must not end the running state. Transcript messages never carry these,
+    // so historical output-less calls (aborted runs) stay inert.
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: entry.resultReceived === true,
+    __openclawToolStreamReceivedAt: entry.receivedAt,
   };
 }
 
@@ -312,6 +330,8 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   host.chatStreamSegments = [];
+  host.planStatus = null;
+  host.questionStatus = null;
 }
 
 export type CompactionStatus = {
@@ -329,6 +349,39 @@ export type FallbackStatus = {
   reason?: string;
   attempts: string[];
   occurredAt: number;
+};
+
+export type PlanStatus = {
+  /** Owning run: run-scoped terminal cleanup must not clear another run's plan. */
+  runId?: string;
+  explanation?: string;
+  steps: Array<{
+    step: string;
+    status: "pending" | "in_progress" | "completed";
+  }>;
+};
+
+export type QuestionStatus = {
+  runId?: string;
+  itemId: string;
+  actionToken: string;
+  questions: Array<{
+    id: string;
+    header: string;
+    question: string;
+    isOther: boolean;
+    options: Array<{ label: string; description?: string }>;
+  }>;
+};
+
+type PlanHost = ToolStreamHost & {
+  planStatus?: PlanStatus | null;
+  requestUpdate?: () => void;
+};
+
+type QuestionHost = ToolStreamHost & {
+  questionStatus?: QuestionStatus | null;
+  requestUpdate?: () => void;
 };
 
 type CompactionHost = ToolStreamHost & {
@@ -658,6 +711,125 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
+function parsePlanSteps(value: unknown): PlanStatus["steps"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const steps: PlanStatus["steps"] = [];
+  // Plan contract allows at most one in_progress step; demote extras so the
+  // collapsed summary has one unambiguous current step (matches iOS/Android).
+  let hasActiveStep = false;
+  for (const entry of value) {
+    if (typeof entry === "string") {
+      const step = toTrimmedString(entry);
+      if (step) {
+        steps.push({ step, status: "pending" });
+      }
+      continue;
+    }
+    const item = readRecord(entry);
+    const step = toTrimmedString(item?.step);
+    const status = item?.status;
+    if (!step || (status !== "pending" && status !== "in_progress" && status !== "completed")) {
+      continue;
+    }
+    const normalizedStatus = status === "in_progress" && hasActiveStep ? "pending" : status;
+    hasActiveStep ||= status === "in_progress";
+    steps.push({ step, status: normalizedStatus });
+  }
+  return steps;
+}
+
+function handlePlanEvent(host: PlanHost, payload: AgentEventPayload) {
+  // Plan snapshots are run-owned: a stale or spawned-run event in the same
+  // session must not overwrite (or clear) the active run's checklist. Mirrors
+  // the compaction/fallback acceptance policy (session-scoped when idle).
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return;
+  }
+  const data = payload.data ?? {};
+  if (data.phase !== "update") {
+    return;
+  }
+  const steps = parsePlanSteps(data.steps);
+  const explanation = toTrimmedString(data.explanation);
+  const runId = toTrimmedString(payload.runId);
+  host.planStatus =
+    steps.length > 0
+      ? {
+          ...(runId ? { runId } : {}),
+          ...(explanation ? { explanation } : {}),
+          steps,
+        }
+      : null;
+  host.requestUpdate?.();
+}
+
+function parseQuestionStatus(
+  data: Record<string, unknown>,
+  runId: string | null,
+): QuestionStatus | null {
+  const itemId = toTrimmedString(data.itemId);
+  const actionToken = toTrimmedString(data.actionToken);
+  if (!itemId || !actionToken?.match(/^[0-9a-f-]{36}$/u) || !Array.isArray(data.questions)) {
+    return null;
+  }
+  // Sensitive answers cannot use the chat-send seam without becoming transcript content.
+  // Keep the existing warned text prompt until the dedicated question RPC exists.
+  if (data.questions.some((value) => readRecord(value)?.isSecret === true)) {
+    return null;
+  }
+  const questions = data.questions.flatMap((value) => {
+    const question = readRecord(value);
+    const id = typeof question?.id === "string" ? question.id : undefined;
+    const header = toTrimmedString(question?.header);
+    const prompt = toTrimmedString(question?.question);
+    if (!id?.trim() || !header || !prompt) {
+      return [];
+    }
+    const options = Array.isArray(question?.options)
+      ? question.options.flatMap((rawOption) => {
+          const option = readRecord(rawOption);
+          const label = typeof option?.label === "string" ? option.label : undefined;
+          const description = toTrimmedString(option?.description);
+          return label?.trim() ? [{ label, ...(description ? { description } : {}) }] : [];
+        })
+      : [];
+    return [
+      {
+        id,
+        header,
+        question: prompt,
+        isOther: question?.isOther === true,
+        options,
+      },
+    ];
+  });
+  return questions.length > 0
+    ? { ...(runId ? { runId } : {}), itemId, actionToken, questions }
+    : null;
+}
+
+function handleQuestionEvent(host: QuestionHost, payload: AgentEventPayload) {
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return;
+  }
+  const data = payload.data ?? {};
+  const itemId = toTrimmedString(data.itemId);
+  if (data.phase === "resolved") {
+    if (!itemId || host.questionStatus?.itemId === itemId) {
+      host.questionStatus = null;
+      host.requestUpdate?.();
+    }
+    return;
+  }
+  if (data.phase !== "requested") {
+    return;
+  }
+  host.questionStatus = parseQuestionStatus(data, toTrimmedString(payload.runId));
+  host.requestUpdate?.();
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -692,6 +864,16 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  if (payload.stream === "plan") {
+    handlePlanEvent(host as PlanHost, payload);
+    return;
+  }
+
+  if (payload.stream === "question") {
+    handleQuestionEvent(host as QuestionHost, payload);
+    return;
+  }
+
   if (payload.stream !== "tool") {
     return;
   }
@@ -710,6 +892,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
+  const resultDetails = phase === "result" ? readRecord(data.result)?.details : undefined;
+  const resultIsError =
+    phase === "result" && typeof data.isError === "boolean" ? data.isError : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
   }
@@ -739,8 +924,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       args,
       output: output || undefined,
+      ...(resultDetails !== undefined ? { details: resultDetails } : {}),
+      ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
+      ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
-      updatedAt: now,
+      receivedAt: now,
       message: {},
     };
     host.toolStreamById.set(toolCallId, entry);
@@ -753,10 +941,19 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     if (output !== undefined) {
       entry.output = output || undefined;
     }
-    entry.updatedAt = now;
+    if (resultDetails !== undefined) {
+      entry.details = resultDetails;
+    }
+    if (resultIsError !== undefined) {
+      entry.isError = resultIsError;
+    }
+    if (phase === "result") {
+      entry.resultReceived = true;
+    }
   }
 
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

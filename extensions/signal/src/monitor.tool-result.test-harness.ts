@@ -1,7 +1,19 @@
 // Signal plugin module implements monitor.tool result harness behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, vi } from "vitest";
-import type { SignalDaemonExitEvent, SignalDaemonHandle } from "./daemon.js";
+import { afterEach, beforeEach, vi } from "vitest";
+import type { SignalDaemonHandle } from "./daemon.js";
+import { setSignalRuntime } from "./runtime.js";
+import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
+
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 type SignalToolResultTestMocks = {
   waitForTransportReadyMock: MockFn;
@@ -31,6 +43,7 @@ const spawnSignalDaemonMock = vi.hoisted(() => vi.fn()) as unknown as MockFn;
 const signalToolResultSessionStorePath = vi.hoisted(
   () => `/tmp/openclaw-signal-tool-result-sessions-${process.pid}.json`,
 );
+let signalToolResultStateDir: string | undefined;
 
 export function getSignalToolResultTestMocks(): SignalToolResultTestMocks {
   return {
@@ -86,7 +99,7 @@ export function createMockSignalDaemonHandle(
   const exited = overrides.exited ?? new Promise<SignalDaemonExitEvent>(() => {});
   const isExited = overrides.isExited ?? (() => false);
   return {
-    stop: stop as unknown as () => void,
+    stop: stop as unknown as () => Promise<void>,
     exited,
     isExited,
   };
@@ -127,6 +140,9 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
     dispatchInboundMessage: async (params: {
       ctx: unknown;
       cfg: unknown;
+      replyOptions?: {
+        turnAdoptionLifecycle?: { onAdopted?: () => void | Promise<void> };
+      };
       dispatcher: {
         sendFinalReply: (payload: {
           text?: string;
@@ -155,18 +171,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         | TestReplyPayload
         | TestReplyPayload[]
         | undefined;
-      const contextReplyToId =
-        typeof (params.ctx as { ReplyToId?: unknown }).ReplyToId === "string"
-          ? (params.ctx as { ReplyToId: string }).ReplyToId
-          : undefined;
-      const replyThreading = (params.ctx as { ReplyThreading?: unknown }).ReplyThreading;
-      const implicitCurrentMessage =
-        typeof replyThreading === "object" &&
-        replyThreading !== null &&
-        "implicitCurrentMessage" in replyThreading
-          ? (replyThreading as { implicitCurrentMessage?: unknown }).implicitCurrentMessage
-          : undefined;
-      const allowImplicitCurrentMessage = implicitCurrentMessage !== "deny";
       const resolvedPayloads = Array.isArray(resolved)
         ? resolved
         : Array.isArray((resolved as { replies?: unknown })?.replies)
@@ -176,24 +180,18 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
             : [];
       let queuedFinal = false;
       for (const resolvedPayload of resolvedPayloads) {
-        const shouldResolveCurrentMessage =
-          resolvedPayload.replyToCurrent === true ||
-          (resolvedPayload.replyToCurrent !== false && allowImplicitCurrentMessage);
-        const deliverable =
-          !resolvedPayload.replyToId && shouldResolveCurrentMessage && contextReplyToId
-            ? { ...resolvedPayload, replyToId: contextReplyToId }
-            : resolvedPayload;
         const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
         const hasMedia =
           typeof resolvedPayload.mediaUrl === "string" ||
           (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
         if (text || hasMedia) {
           queuedFinal = true;
-          params.dispatcher.sendFinalReply(deliverable);
+          params.dispatcher.sendFinalReply(resolvedPayload);
         }
       }
       params.dispatcher.markComplete?.();
       await params.dispatcher.waitForIdle?.();
+      await params.replyOptions?.turnAdoptionLifecycle?.onAdopted?.();
       return { queuedFinal };
     },
   };
@@ -274,6 +272,36 @@ export function installSignalToolResultTestHooks() {
       import("openclaw/plugin-sdk/system-event-runtime"),
     ]);
     resetInboundDedupe();
+    const createdStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-signal-tool-result-state-"),
+    );
+    const stateDir = await fs.realpath(createdStateDir);
+    signalToolResultStateDir = stateDir;
+    setSignalRuntime({
+      logging: {
+        getChildLogger: () => ({
+          debug: vi.fn(),
+          error: vi.fn(),
+          info: vi.fn(),
+          warn: vi.fn(),
+        }),
+      },
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => {
+          throw new Error("keyed store is not configured in Signal monitor tests");
+        },
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) => {
+          return createChannelIngressQueueForTests({
+            ...options,
+            channelId: "signal",
+            stateDir: options?.stateDir ?? stateDir,
+          });
+        },
+      },
+    } as unknown as PluginRuntime);
     config = {
       messages: { responsePrefix: "PFX" },
       session: { store: signalToolResultSessionStorePath },
@@ -295,5 +323,14 @@ export function installSignalToolResultTestHooks() {
     enqueueSystemEventMock.mockReset();
 
     resetSystemEventsForTest();
+  });
+
+  afterEach(async () => {
+    clearSignalRuntimeForTest();
+    closeOpenClawStateDatabaseForTest();
+    if (signalToolResultStateDir) {
+      await fs.rm(signalToolResultStateDir, { recursive: true, force: true });
+      signalToolResultStateDir = undefined;
+    }
   });
 }

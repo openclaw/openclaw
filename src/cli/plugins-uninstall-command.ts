@@ -12,7 +12,7 @@ import {
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -52,9 +52,9 @@ export async function runPluginUninstallCommand(
     UNINSTALL_ACTION_LABELS,
   } = await import("../plugins/uninstall.js");
   const { commitPluginInstallRecordsWithConfig } =
-    await import("./plugins-install-record-commit.js");
+    await import("../plugins/install-record-commit.js");
   const { refreshPluginRegistryAfterConfigMutation } =
-    await import("./plugins-registry-refresh.js");
+    await import("../plugins/registry-refresh.js");
   const { resolvePluginUninstallId } = await import("./plugins-uninstall-selection.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const snapshot = await tracePluginLifecyclePhaseAsync(
@@ -105,7 +105,7 @@ export async function runPluginUninstallCommand(
     runtime.exit(1);
     return;
   }
-  const hasInstall = pluginId in (cfg.plugins?.installs ?? {});
+  const hasInstall = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
 
   const preview: string[] = [];
   if (plan.actions.entry) {

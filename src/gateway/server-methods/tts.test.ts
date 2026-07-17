@@ -1,8 +1,11 @@
 /**
  * Tests for text-to-speech gateway methods and provider error envelopes.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -67,6 +70,7 @@ vi.mock("../../tts/tts.js", () => ({
 
 describe("ttsHandlers", () => {
   beforeEach(() => {
+    setActiveDegradedSecretOwners([]);
     mocks.getRuntimeConfig.mockReset();
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveExplicitTtsOverrides.mockReset();
@@ -99,7 +103,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.convert"]({
+    await expectDefined(
+      ttsHandlers["tts.convert"],
+      'ttsHandlers["tts.convert"] test invariant',
+    )({
       params: {
         text: "hello",
         provider: "bad",
@@ -119,7 +126,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "Hello there." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -139,7 +149,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "   " },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -158,7 +171,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "This text is definitely too long." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -180,7 +196,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "Hello there." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -190,5 +209,44 @@ describe("ttsHandlers", () => {
       code: ErrorCodes.UNAVAILABLE,
       message: "No TTS provider is configured.",
     });
+  });
+
+  it("tts.speak returns typed unavailable without calling a degraded TTS provider", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "tts",
+        state: "unavailable",
+        paths: ["messages.tts.providers.elevenlabs.apiKey"],
+        refKeys: ["env:default:ELEVENLABS_API_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    const { ttsHandlers } = await import("./tts.js");
+    const respond = vi.fn();
+
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
+      params: { text: "Hello there." },
+      respond,
+      context: { getRuntimeConfig: mocks.getRuntimeConfig },
+    } as never);
+
+    expectGatewayErrorResponse(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message:
+        "SecretSurfaceUnavailableError: Secret owner capability:tts is configured but unavailable (secret reference was not found).: code=SECRET_SURFACE_UNAVAILABLE",
+    });
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      details: {
+        reason: "SECRET_SURFACE_UNAVAILABLE",
+        ownerKind: "capability",
+        ownerId: "tts",
+      },
+    });
+    expect(mocks.synthesizeSpeech).not.toHaveBeenCalled();
   });
 });

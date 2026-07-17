@@ -208,8 +208,12 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
   const result: string[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
+    const line = lines.at(index);
+    if (line === undefined) {
+      break;
+    }
     if (
-      lines[index]?.trim() === UNTRUSTED_CONTEXT_HEADER &&
+      line.trim() === UNTRUSTED_CONTEXT_HEADER &&
       lines[index + 1]?.trim() === ACTIVE_MEMORY_OPEN_TAG
     ) {
       let closeIndex = -1;
@@ -228,7 +232,7 @@ function stripActiveMemoryPromptPrefixBlocks(lines: string[]): string[] {
       }
     }
 
-    result.push(lines[index]);
+    result.push(line);
   }
 
   return result;
@@ -267,8 +271,10 @@ export function stripInboundMetadata(text: string): string {
   let inFencedJson = false;
 
   for (let i = 0; i < strippedLeadingPrefixLines.length; i++) {
-    const line = strippedLeadingPrefixLines[i];
-
+    const line = strippedLeadingPrefixLines.at(i);
+    if (line === undefined) {
+      break;
+    }
     // Channel untrusted context is appended by OpenClaw as a terminal metadata suffix.
     // When this structured header appears, drop it and everything that follows.
     if (!inMetaBlock && shouldStripTrailingUntrustedContext(strippedLeadingPrefixLines, i)) {
@@ -339,25 +345,34 @@ export function stripLeadingInboundMetadata(text: string): string {
   const lines = stripActiveMemoryPromptPrefixBlocks(text.split("\n"));
   let index = 0;
 
-  while (index < lines.length && lines[index] === "") {
+  while (lines.at(index) === "") {
     index++;
   }
-  if (index >= lines.length) {
+  const firstLine = lines.at(index);
+  if (firstLine === undefined) {
     return "";
   }
 
-  const strippedDeliveryHint = isMessageToolDeliveryHintLine(lines[index]);
-  while (index < lines.length && isMessageToolDeliveryHintLine(lines[index])) {
+  const strippedDeliveryHint = isMessageToolDeliveryHintLine(firstLine);
+  while (true) {
+    const line = lines.at(index);
+    if (line === undefined || !isMessageToolDeliveryHintLine(line)) {
+      break;
+    }
     index++;
-    while (index < lines.length && lines[index] === "") {
+    while (lines.at(index) === "") {
       index++;
     }
   }
-  if (index >= lines.length) {
+  const firstContentLine = lines.at(index);
+  if (firstContentLine === undefined) {
     return "";
   }
 
-  if (!isInboundMetaSentinelLine(lines[index]) && !isChatWindowContextHeaderLine(lines[index])) {
+  if (
+    !isInboundMetaSentinelLine(firstContentLine) &&
+    !isChatWindowContextHeaderLine(firstContentLine)
+  ) {
     const strippedNoLeading = stripTrailingUntrustedContextSuffix(
       strippedDeliveryHint ? lines.slice(index) : lines,
     );
@@ -365,7 +380,10 @@ export function stripLeadingInboundMetadata(text: string): string {
   }
 
   while (index < lines.length) {
-    const line = lines[index];
+    const line = lines.at(index);
+    if (line === undefined) {
+      break;
+    }
     if (isChatWindowContextHeaderLine(line)) {
       index = skipChatWindowContextBlock(lines, index);
       continue;
@@ -380,19 +398,19 @@ export function stripLeadingInboundMetadata(text: string): string {
     }
 
     index++;
-    if (index < lines.length && lines[index].trim() === "```json") {
+    if (lines.at(index)?.trim() === "```json") {
       index++;
-      while (index < lines.length && lines[index].trim() !== "```") {
+      while (index < lines.length && lines.at(index)?.trim() !== "```") {
         index++;
       }
-      if (index < lines.length && lines[index].trim() === "```") {
+      if (lines.at(index)?.trim() === "```") {
         index++;
       }
     } else {
       return text;
     }
 
-    while (index < lines.length && lines[index].trim() === "") {
+    while (lines.at(index)?.trim() === "") {
       index++;
     }
   }

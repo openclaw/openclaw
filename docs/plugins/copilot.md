@@ -9,7 +9,7 @@ read_when:
 
 The external `@openclaw/copilot` plugin runs embedded subscription Copilot
 agent turns through the GitHub Copilot CLI (`@github/copilot-sdk`) instead of
-OpenClaw's built-in PI harness. The Copilot CLI session owns the low-level
+OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
@@ -295,7 +295,7 @@ plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
 
-The SDK Tool returned by `convertOpenClawToolToSdkTool` is marked with:
+Each SDK tool returned by the Copilot tool bridge is marked with:
 
 - `overridesBuiltInTool: true` — replaces the Copilot CLI's built-in tool of
   the same name (edit, read, write, bash, ...) so every tool call routes back

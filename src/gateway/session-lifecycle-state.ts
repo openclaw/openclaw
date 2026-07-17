@@ -1,11 +1,14 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
 
@@ -24,6 +27,8 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
+    yielded?: unknown;
+    status?: unknown;
   };
 };
 
@@ -129,7 +134,7 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-export function deriveGatewaySessionLifecycleSnapshot(params: {
+function deriveGatewaySessionLifecycleSnapshot(params: {
   session?: Partial<LifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
@@ -157,9 +162,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   const startedAt = resolveLifecycleStartedAt(existing?.startedAt, params.event);
   const endedAt = resolveLifecycleEndedAt(params.event);
   const updatedAt = endedAt ?? existing?.updatedAt;
+  const status = isAgentLifecycleYieldedWaiting({
+    phase,
+    yielded: params.event.data?.yielded,
+    livenessState: params.event.data?.livenessState,
+    stopReason: params.event.data?.stopReason,
+    aborted: params.event.data?.aborted,
+    status: params.event.data?.status,
+    timeoutPhase: params.event.data?.timeoutPhase,
+    error: params.event.data?.error,
+  })
+    ? "running"
+    : resolveTerminalStatus(params.event);
   return {
     updatedAt,
-    status: resolveTerminalStatus(params.event),
+    status,
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({
@@ -167,11 +184,11 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
       endedAt,
       existingRuntimeMs: existing?.runtimeMs,
     }),
-    abortedLastRun: resolveTerminalStatus(params.event) === "killed",
+    abortedLastRun: status === "killed",
   };
 }
 
-export function derivePersistedSessionLifecyclePatch(params: {
+function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
@@ -254,6 +271,18 @@ export function isStaleLifecycleEventForSession(params: {
   );
 }
 
+function acceptsCronRunContinuationLifecycleEvent(params: {
+  entry: SessionEntry;
+  event: LifecycleEventLike;
+}): boolean {
+  const marker = params.entry.cronRunContinuation;
+  if (marker?.phase === "running") {
+    return true;
+  }
+  const runId = params.event.runId?.trim();
+  return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
+}
+
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
@@ -271,19 +300,26 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   if (!sessionEntry.entry) {
     return;
   }
-
   const owningSessionId =
     typeof params.event.sessionId === "string" && params.event.sessionId
       ? params.event.sessionId
       : undefined;
 
-  await updateSessionStoreEntry({
-    storePath: sessionEntry.storePath,
-    sessionKey: sessionEntry.canonicalKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    requireWriteSuccess: true,
-    update: async (entry) => {
+  const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
+  await updateSessionEntry(
+    {
+      storePath: sessionEntry.storePath,
+      sessionKey: sessionEntry.canonicalKey,
+    },
+    async (entry) => {
+      if (
+        exactCronRun &&
+        !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
+      ) {
+        // Exact cron rows transfer lifecycle ownership from the initial run to
+        // one claimed continuation. Ready or replaced claims reject late events.
+        return null;
+      }
       // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
       // to a new sessionId under the same sessionKey, so an old in-flight run's
       // late start/end/error must not overwrite the fresh row's status (#88538).
@@ -296,5 +332,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       });
       return Object.keys(patch).length > 0 ? patch : null;
     },
-  });
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      requireWriteSuccess: true,
+    },
+  );
 }

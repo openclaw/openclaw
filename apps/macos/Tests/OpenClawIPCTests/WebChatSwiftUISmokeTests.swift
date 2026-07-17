@@ -41,12 +41,25 @@ struct WebChatSwiftUISmokeTests {
         func setActiveSessionKey(_: String) async throws {}
     }
 
-    @Test func `window controller show and close`() {
+    @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             presentation: .window,
             transport: TestTransport())
+        let window = try #require(controller._testWindow)
+
+        #expect(window.styleMask.contains(.fullSizeContentView))
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.titlebarAppearsTransparent)
+        #expect(window.toolbarStyle == .unified)
+        #expect(window.titlebarSeparatorStyle == .none)
+        #expect(window.isMovableByWindowBackground)
+        #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
+        #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
+
         controller.show()
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.toolbar != nil)
         controller.close()
     }
 
@@ -58,5 +71,16 @@ struct WebChatSwiftUISmokeTests {
             transport: TestTransport())
         controller.presentAnchored(anchorProvider: anchor)
         controller.close()
+    }
+
+    @Test func `max and Ultra thinking preferences survive reopen`() throws {
+        let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        for level in ["max", "ultra"] {
+            defaults.set(level, forKey: "openclaw.webchat.thinkingLevel")
+            #expect(WebChatSwiftUIWindowController.persistedThinkingLevel(defaults: defaults) == level)
+        }
     }
 }

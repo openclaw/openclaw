@@ -51,6 +51,8 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
 - Workspace access (`workspaceAccess`) is independent of bind modes.
 
+For a per-agent configuration with several host folders, access modes, and the external-source safety opt-in, see [Multiple folders for one agent](/gateway/sandboxing#multiple-folders-for-one-agent).
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
@@ -99,7 +101,7 @@ Available groups:
 | `group:ui`         | `browser`, `canvas`                                                                                                                                        |
 | `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                     |
 | `group:messaging`  | `message`                                                                                                                                                  |
-| `group:nodes`      | `nodes`                                                                                                                                                    |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                        |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                                   |
 | `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                       |
 | `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins) |

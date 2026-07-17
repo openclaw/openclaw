@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
-  /[\\/]\\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
+  /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
     ? ".release-harness"
     : ".";
@@ -262,15 +262,22 @@ function kitchenSinkRpcLane() {
 }
 
 export const mainLanes = [
-  serviceLane(
-    "compose-setup",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
+  lane(
+    "docker-selected-plugins",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
     {
-      stateScenario: "empty",
-      timeoutMs: 20 * 60 * 1000,
-      weight: 3,
+      e2eImageKind: false,
+      estimateSeconds: 600,
+      resources: ["docker"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
     },
   ),
+  serviceLane("compose-setup", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup", {
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
   npmLane(
     "docker-package-install",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
@@ -449,10 +456,7 @@ export const mainLanes = [
       stateScenario: "empty",
     },
   ),
-  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue", {
-    stateScenario: "empty",
-  }),
-  lane("crestodian-planner", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-planner", {
+  lane("system-agent-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-rescue", {
     stateScenario: "empty",
   }),
   serviceLane(
@@ -519,8 +523,8 @@ export const mainLanes = [
     stateScenario: "empty",
   }),
   lane(
-    "crestodian-first-run",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
+    "system-agent-first-run",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:system-agent-first-run",
     { stateScenario: "empty" },
   ),
   lane(
@@ -737,7 +741,11 @@ const releasePathBundledChannelLanes = [
 const releasePathPackageInstallOpenAiLanes = [
   liveLane(
     "install-e2e-openai",
-    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
+    liveDockerScriptCommand(
+      "test-install-sh-e2e-docker.sh",
+      "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120",
+      { skipBuild: false },
+    ),
     {
       e2eImageKind: "bare",
       needsLiveImage: false,
@@ -760,7 +768,11 @@ const releasePathPackageInstallOpenAiLanes = [
 const releasePathPackageInstallAnthropicLanes = [
   liveLane(
     "install-e2e-anthropic",
-    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
+    liveDockerScriptCommand(
+      "test-install-sh-e2e-docker.sh",
+      "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local",
+      { skipBuild: false },
+    ),
     {
       e2eImageKind: "bare",
       needsLiveImage: false,
@@ -921,8 +933,7 @@ export function releasePathChunkLanes(chunk, options = {}) {
     return options.includeOpenWebUI ? [openWebUILane()] : [];
   }
   if (
-    (chunk !== "plugins-runtime-services" &&
-      chunk !== "plugins-runtime-core" &&
+    (chunk !== "plugins-runtime-core" &&
       chunk !== "plugins-runtime" &&
       chunk !== "plugins-integrations") ||
     !options.includeOpenWebUI
@@ -934,12 +945,10 @@ export function releasePathChunkLanes(chunk, options = {}) {
 
 export function allReleasePathLanes(options = {}) {
   const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
-  return Object.keys(primaryReleasePathChunks)
-    .filter((chunk) => chunk !== "openwebui")
-    .flatMap((chunk) =>
-      releasePathChunkLanes(chunk, {
-        includeOpenWebUI: options.includeOpenWebUI,
-        releaseProfile,
-      }),
-    );
+  return Object.keys(primaryReleasePathChunks).flatMap((chunk) =>
+    releasePathChunkLanes(chunk, {
+      includeOpenWebUI: options.includeOpenWebUI,
+      releaseProfile,
+    }),
+  );
 }

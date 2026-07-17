@@ -30,7 +30,7 @@ export type QaTransportAdapterFactoryResult<
 
 export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 
-export type QaTransportAdapterFactoryRegistry = {
+type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;
 };
 
@@ -67,7 +67,7 @@ function requireQaTransportFactory(
   return factory;
 }
 
-export function createQaTransportAdapterFactoryRegistry(
+function createQaTransportAdapterFactoryRegistry(
   factories: readonly QaTransportAdapterFactory[] = [],
 ): QaTransportAdapterFactoryRegistry {
   return {

@@ -151,6 +151,35 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
   });
 
+  it("keeps sentinel-backed Foundry Authorization headers on bearer routing", async () => {
+    const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    configureAiTransportHost({
+      buildModelFetch: () => async () => new Response(null, { status: 500 }),
+      resolveSecretSentinel: (value) => value.replaceAll(sentinel, "Bearer entra-access-token"),
+    });
+    const model = makeAnthropicModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      headers: { Authorization: sentinel },
+    });
+
+    streamAnthropic(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      {
+        apiKey: sentinel,
+      },
+    );
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+    };
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe(sentinel);
+  });
+
   it("keeps Microsoft Foundry API-key profiles on Anthropic API key auth", async () => {
     const model = makeAnthropicModel({
       provider: "microsoft-foundry",
@@ -858,6 +887,60 @@ describe("Anthropic provider", () => {
       { type: "text", text: expect.stringContaining('{"type":"resource"') },
       { type: "text", text: "after image" },
     ]);
+  });
+
+  it("does not emit Anthropic image blocks or placeholders for payload-less tool media", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "fixture",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result");
+    expect(toolResult?.content).toBe("");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
   });
 
   it.each([
@@ -2344,3 +2427,4 @@ describe("Anthropic provider", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
