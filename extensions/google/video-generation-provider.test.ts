@@ -325,6 +325,59 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
   });
 
+  it("cancels unread response body on non-success download response", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    let bodyCanceled = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new Uint8Array(10));
+              },
+              cancel() {
+                bodyCanceled = true;
+              },
+            }),
+            { status: 403, statusText: "Forbidden", headers: { "content-type": "video/mp4" } },
+          ),
+      ),
+    );
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Failed to download Google generated video: 403 Forbidden");
+
+    expect(bodyCanceled).toBe(true);
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
   it("rejects direct video uri downloads that exceed the configured media cap", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
