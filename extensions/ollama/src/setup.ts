@@ -263,7 +263,6 @@ async function pullOllamaModelCore(params: {
   let streamNoProgressTimeout: ReturnType<typeof setTimeout> | undefined;
   let streamNoProgressTimedOut = false;
   try {
-    params.signal?.throwIfAborted();
     const { response, release } = await fetchWithSsrFGuard({
       url: `${baseUrl}/api/pull`,
       init: {
@@ -271,9 +270,7 @@ async function pullOllamaModelCore(params: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: modelName }),
       },
-      signal: params.signal
-        ? AbortSignal.any([responseController.signal, params.signal])
-        : responseController.signal,
+      signal: responseController.signal,
       policy: buildOllamaBaseUrlSsrFPolicy(baseUrl),
       auditContext: "ollama-setup.pull",
     });
@@ -788,14 +785,7 @@ async function promptAndConfigureHostBackedOllama(params: {
       initialValue: false,
     });
     if (shouldPullRecommended) {
-      if (
-        !(await pullOllamaModel(
-          baseUrl,
-          OLLAMA_RECOMMENDED_TOOLS_MODEL,
-          params.prompter,
-          params.signal,
-        ))
-      ) {
+      if (!(await pullOllamaModel(baseUrl, OLLAMA_RECOMMENDED_TOOLS_MODEL, params.prompter))) {
         throw new WizardCancelledError("Failed to download recommended Ollama model");
       }
       params.signal?.throwIfAborted();
