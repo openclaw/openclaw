@@ -1,4 +1,5 @@
 // Feishu plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
   createChannelSecretTargetRegistryEntries,
@@ -38,7 +39,7 @@ export function collectRuntimeConfigAssignments(params: {
   if (
     hasImplicitDefaultAccount &&
     surface.hasExplicitAccounts &&
-    !surface.accounts.some(({ accountId }) => accountId === "default")
+    !surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
   ) {
     surface.accounts.push({ accountId: "default", account: {}, enabled: true });
   }
