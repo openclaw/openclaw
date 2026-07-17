@@ -154,4 +154,40 @@ describe("native Codex question card", () => {
     await card.updateComplete;
     expect(container.querySelector<HTMLInputElement>(".chat-question__other")?.value).toBe("");
   });
+
+  it("preserves free-form text that begins with an option label", async () => {
+    render(
+      html`<openclaw-chat-question
+        .props=${{
+          disabled: false,
+          onSubmit: vi.fn(),
+          status: {
+            itemId: "item-prefix",
+            actionToken: "test-action-token",
+            questions: [
+              {
+                id: "reason",
+                header: "Decision",
+                question: "Continue?",
+                isOther: true,
+                options: [{ label: "No" }],
+              },
+            ],
+          },
+        }}
+      ></openclaw-chat-question>`,
+      container,
+    );
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    await card.updateComplete;
+    const input = container.querySelector<HTMLInputElement>(".chat-question__other")!;
+    input.value = "No";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await card.updateComplete;
+    input.value = "No, because the proof failed";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await card.updateComplete;
+
+    expect(input.value).toBe("No, because the proof failed");
+  });
 });

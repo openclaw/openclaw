@@ -4150,19 +4150,26 @@ describe("codex command", () => {
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       2,
       undefined,
-      CODEX_CONTROL_METHODS.setThreadGoal,
-      { threadId: "thread-goal", objective: "Ship native goals", status: "active" },
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: "thread-goal" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       3,
       undefined,
       CODEX_CONTROL_METHODS.setThreadGoal,
-      { threadId: "thread-goal", objective: "Refine native goals" },
+      { threadId: "thread-goal", objective: "Ship native goals", status: "active" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       4,
+      undefined,
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Refine native goals" },
+      expect.any(Object),
+    );
+    expect(codexControlRequest).toHaveBeenNthCalledWith(
+      5,
       undefined,
       CODEX_CONTROL_METHODS.clearThreadGoal,
       { threadId: "thread-goal" },

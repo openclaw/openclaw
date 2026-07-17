@@ -16,6 +16,7 @@ class ChatQuestionCard extends LitElement {
 
   @property({ attribute: false }) props?: QuestionCardProps;
   @state() private answers = new Map<string, string>();
+  @state() private freeFormAnswers = new Set<string>();
   @state() private submitted = false;
   private requestKey: string | null = null;
 
@@ -25,12 +26,20 @@ class ChatQuestionCard extends LitElement {
     if (nextRequestKey !== this.requestKey) {
       this.requestKey = nextRequestKey;
       this.answers = new Map();
+      this.freeFormAnswers = new Set();
       this.submitted = false;
     }
   }
 
-  private setAnswer(questionId: string, answer: string): void {
+  private setAnswer(questionId: string, answer: string, source: "option" | "text"): void {
     this.answers = new Map(this.answers).set(questionId, answer);
+    const freeFormAnswers = new Set(this.freeFormAnswers);
+    if (source === "text") {
+      freeFormAnswers.add(questionId);
+    } else {
+      freeFormAnswers.delete(questionId);
+    }
+    this.freeFormAnswers = freeFormAnswers;
   }
 
   private submit(status: QuestionStatus): void {
@@ -70,7 +79,7 @@ class ChatQuestionCard extends LitElement {
                       name=${`${props.status.itemId}-${question.id}`}
                       .checked=${this.answers.get(question.id) === option.label}
                       ?disabled=${props.disabled || this.submitted}
-                      @change=${() => this.setAnswer(question.id, option.label)}
+                      @change=${() => this.setAnswer(question.id, option.label, "option")}
                     />
                     <span>
                       <strong>${option.label}</strong>
@@ -86,14 +95,16 @@ class ChatQuestionCard extends LitElement {
                       type="text"
                       autocomplete="off"
                       placeholder=${t("chat.questions.other")}
-                      .value=${question.options.some(
-                        (option) => option.label === this.answers.get(question.id),
-                      )
-                        ? ""
-                        : (this.answers.get(question.id) ?? "")}
+                      .value=${this.freeFormAnswers.has(question.id)
+                        ? (this.answers.get(question.id) ?? "")
+                        : ""}
                       ?disabled=${props.disabled || this.submitted}
                       @input=${(event: Event) =>
-                        this.setAnswer(question.id, (event.target as HTMLInputElement).value)}
+                        this.setAnswer(
+                          question.id,
+                          (event.target as HTMLInputElement).value,
+                          "text",
+                        )}
                     />
                   `
                 : nothing}

@@ -966,6 +966,16 @@ async function handleNativeGoal(
   if (requestedStatus && args.length > 1) {
     return `Usage: /codex goal ${action}`;
   }
+  if (action === "start" || action === "set") {
+    // Native set is a partial update. Remove the previous goal first so a new
+    // objective cannot inherit its budget, counters, or terminal state.
+    await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: binding.threadId },
+      requestOptions,
+    );
+  }
   const response = await deps.codexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.setThreadGoal,
