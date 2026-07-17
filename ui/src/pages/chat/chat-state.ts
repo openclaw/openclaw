@@ -1961,6 +1961,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     state?.realtimeTalkSession?.stop();
     if (state) {
       state.realtimeTalkSession = null;
+      state.realtimeTalkVideoStream = null;
       state.resetToolStream?.();
     }
   }
