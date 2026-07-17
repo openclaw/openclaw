@@ -67,4 +67,20 @@ describe("azLoginDeviceCodeWithOptions", () => {
       expect(kill).toHaveBeenCalledOnce();
     },
   );
+
+  it("terminates the child once when both output streams fail", async () => {
+    const { child, stdout, stderr, kill } = createChild();
+    spawnMock.mockReturnValue(child);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const login = azLoginDeviceCodeWithOptions({});
+    const firstError = new Error("stdout failed");
+    stdout.emit("error", firstError);
+    stderr.emit("error", new Error("stderr failed"));
+    child.emit("close", null);
+
+    await expect(login).rejects.toBe(firstError);
+    expect(kill).toHaveBeenCalledOnce();
+  });
 });

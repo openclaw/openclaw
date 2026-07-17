@@ -189,7 +189,13 @@ export async function azLoginDeviceCodeWithOptions(params: {
       stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
       process.stderr.write(text);
     });
+    // Both pipes can fail before close; keep child termination one-shot.
+    let streamFailed = false;
     const rejectStreamError = (error: Error) => {
+      if (streamFailed) {
+        return;
+      }
+      streamFailed = true;
       child.kill();
       reject(error);
     };
