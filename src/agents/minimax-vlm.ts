@@ -92,16 +92,22 @@ function isDefaultMiniMaxHost(host: string): boolean {
   return DEFAULT_MINI_MAX_HOSTS.has(host.replace(/\/+$/, "").toLowerCase());
 }
 
-function buildMiniMaxSsrFPolicy(host: string): SsrFPolicy | undefined {
+function buildMiniMaxSsrFPolicy(
+  host: string,
+  allowPrivateNetwork?: boolean,
+): SsrFPolicy | undefined {
   // Always pin the configured hostname so DNS rebinding is detected even for
   // the default public endpoints.
   const fakeIpPolicy = ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(host);
   // Operator-configured origins (apiHost, MINIMAX_API_HOST, modelBaseUrl) can
   // be private/local addresses. Trust the configured origin so existing private
   // MiniMax-compatible endpoints continue to work after the guarded-fetch migration.
-  const originPolicy = isDefaultMiniMaxHost(host)
-    ? undefined
-    : ssrfPolicyFromHttpBaseUrlAllowedOrigin(host);
+  // When the operator has explicitly set allowPrivateNetwork: false, skip origin
+  // trust so the explicit opt-out is authoritative.
+  const originPolicy =
+    isDefaultMiniMaxHost(host) || allowPrivateNetwork === false
+      ? undefined
+      : ssrfPolicyFromHttpBaseUrlAllowedOrigin(host);
   return mergeSsrFPolicies(fakeIpPolicy, originPolicy);
 }
 
@@ -113,6 +119,8 @@ export async function minimaxUnderstandImage(params: {
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
+  /** Operator-configured private-network policy from the provider request config. */
+  allowPrivateNetwork?: boolean;
 }): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
@@ -139,7 +147,7 @@ export async function minimaxUnderstandImage(params: {
 
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
-  const ssrfPolicy = buildMiniMaxSsrFPolicy(host);
+  const ssrfPolicy = buildMiniMaxSsrFPolicy(host, params.allowPrivateNetwork);
 
   const guarded = await fetchWithSsrFGuard(
     withTrustedEnvProxyGuardedFetchMode({

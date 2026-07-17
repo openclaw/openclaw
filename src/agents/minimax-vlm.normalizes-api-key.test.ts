@@ -28,7 +28,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
         status: 200,
         headers: { "Content-Type": "application/json", ...headers },
       }),
-      release: vi.fn<[], Promise<void>>().mockResolvedValue(undefined),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
       finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
     };
   }
@@ -250,6 +250,75 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
+
+    it("drops allowedOrigins when allowPrivateNetwork is explicitly false", async () => {
+      // Operators who set models.providers.<id>.request.allowPrivateNetwork: false
+      // opt out of private-network access. Even custom/loopback origins must not
+      // receive an allowedOrigins exception when the operator denied it.
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://localhost:8080",
+          allowPrivateNetwork: false,
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      expect(opts?.policy).toBeDefined();
+      expect(opts?.policy.hostnameAllowlist).toEqual(["localhost"]);
+      // Explicit opt-out must remove the origin exception.
+      expect(opts?.policy.allowedOrigins).toBeUndefined();
+      // Private-network flags remain absent — the operator denied trust.
+      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
+      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+    });
+
+    it("keeps allowedOrigins for a custom host when allowPrivateNetwork is true", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://custom-minimax.example.com",
+          allowPrivateNetwork: true,
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      expect(opts?.policy).toBeDefined();
+      expect(opts?.policy.hostnameAllowlist).toEqual(["custom-minimax.example.com"]);
+      // Explicit allow keeps the configured origin.
+      expect(opts?.policy.allowedOrigins).toEqual(["https://custom-minimax.example.com"]);
+    });
+
+    it("keeps default-host policy unchanged when allowPrivateNetwork is false", async () => {
+      // Default public hosts should never gain private-network trust, and
+      // allowPrivateNetwork: false must not accidentally widen their policy.
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://api.minimax.io",
+          allowPrivateNetwork: false,
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      expect(opts?.policy).toBeDefined();
+      expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
+      expect(opts?.policy.allowedOrigins).toBeUndefined();
+      expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
+      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+    });
   });
 
   it("bounds large provider error response bodies", async () => {
@@ -270,7 +339,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
         statusText: "Internal Server Error",
         headers: { "Trace-Id": "trace-123" },
       }),
-      release: vi.fn<[], Promise<void>>().mockResolvedValue(undefined),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
       finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
     });
 
@@ -308,7 +377,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
         status: 200,
         headers: { "Content-Type": "application/json", "Trace-Id": "trace-success" },
       }),
-      release: vi.fn<[], Promise<void>>().mockResolvedValue(undefined),
+      release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
       finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
     });
 
