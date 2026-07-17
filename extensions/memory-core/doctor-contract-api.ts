@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { reclaimDefinitelyStaleFileLock } from "openclaw/plugin-sdk/file-lock";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveUserPath, root } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -72,6 +72,8 @@ type LegacySource = {
 type LegacyMemoryHostEventSource = {
   workspaceDir: string;
   filePath: string;
+  relativePath: string;
+  root: Awaited<ReturnType<typeof root>>;
 };
 
 type LegacyMemoryHostEvent = Record<string, unknown> & {
@@ -1235,26 +1237,86 @@ async function migrateSource(source: LegacySource): Promise<number> {
 async function collectLegacyMemoryHostEventSources(
   config: unknown,
   env: NodeJS.ProcessEnv,
+  warnings?: string[],
 ): Promise<LegacyMemoryHostEventSource[]> {
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
   for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
-    const requestedFilePath = resolveMemoryHostEventLogPath(workspaceDir);
-    if (!(await legacyStateFileExists(requestedFilePath))) {
-      continue;
+    try {
+      const workspaceRoot = await root(workspaceDir, {
+        hardlinks: "reject",
+        // Legacy doctor import previously read the complete JSONL source.
+        maxBytes: Number.MAX_SAFE_INTEGER,
+        mkdir: false,
+        symlinks: "reject",
+      });
+      const canonicalWorkspaceDir = workspaceRoot.rootReal;
+      if (seenWorkspaces.has(canonicalWorkspaceDir)) {
+        continue;
+      }
+      const filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
+      const relativePath = path.relative(canonicalWorkspaceDir, filePath);
+      const stat = await workspaceRoot.stat(relativePath);
+      if (!stat.isFile) {
+        continue;
+      }
+      // Doctor normalizes root aliases once, then every descendant operation
+      // stays pinned to the physical workspace and rejects parent symlinks.
+      seenWorkspaces.add(canonicalWorkspaceDir);
+      sources.push({
+        workspaceDir: canonicalWorkspaceDir,
+        filePath,
+        relativePath,
+        root: workspaceRoot,
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (code === "ENOENT" || code === "ENOTDIR" || code === "not-found") {
+        continue;
+      }
+      warnings?.push(
+        `Skipped unsafe Memory Core host event source for ${workspaceDir}: ${String(error)}`,
+      );
     }
-    // Doctor owns alias normalization before runtime. Both the imported key and
-    // the claimed source must use one physical workspace identity. Keep the
-    // logical source path so archival renames a symlink, never its target.
-    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-    if (seenWorkspaces.has(canonicalWorkspaceDir)) {
-      continue;
-    }
-    seenWorkspaces.add(canonicalWorkspaceDir);
-    const filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
-    sources.push({ workspaceDir: canonicalWorkspaceDir, filePath });
   }
   return sources;
+}
+
+async function firstFreeMemoryHostEventArchivePath(
+  source: LegacyMemoryHostEventSource,
+): Promise<string> {
+  for (let index = 2; ; index += 1) {
+    const candidate = `${source.relativePath}.migrated.${index}`;
+    if (!(await source.root.exists(candidate))) {
+      return candidate;
+    }
+  }
+}
+
+async function archiveLegacyMemoryHostEventSource(params: {
+  source: LegacyMemoryHostEventSource;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedRelativePath = `${params.source.relativePath}.migrated`;
+  try {
+    if (await params.source.root.exists(archivedRelativePath)) {
+      const nextRelativePath = await firstFreeMemoryHostEventArchivePath(params.source);
+      await params.source.root.move(params.source.relativePath, nextRelativePath);
+      params.changes.push(
+        `Archived Memory Core host events legacy source -> ${path.join(params.source.workspaceDir, nextRelativePath)}`,
+      );
+      return;
+    }
+    await params.source.root.move(params.source.relativePath, archivedRelativePath);
+    params.changes.push(
+      `Archived Memory Core host events legacy source -> ${params.source.filePath}.migrated`,
+    );
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving Memory Core host events legacy source: ${String(error)}`,
+    );
+  }
 }
 
 async function migrateLegacyMemoryHostEventSource(params: {
@@ -1264,12 +1326,11 @@ async function migrateLegacyMemoryHostEventSource(params: {
   warnings: string[];
 }): Promise<void> {
   const warningStart = params.warnings.length;
-  const raw = await fs.readFile(params.source.filePath, "utf8");
+  const raw = await params.source.root.readText(params.source.relativePath);
   if (!raw.trim()) {
     params.changes.push("Retired empty Memory Core host events legacy source");
-    await archiveLegacyStateSource({
-      filePath: params.source.filePath,
-      label: "Memory Core host events",
+    await archiveLegacyMemoryHostEventSource({
+      source: params.source,
       changes: params.changes,
       warnings: params.warnings,
     });
@@ -1379,9 +1440,8 @@ async function migrateLegacyMemoryHostEventSource(params: {
   params.changes.push(
     `Migrated Memory Core host events -> SQLite plugin state (${missing.length} new row(s))`,
   );
-  await archiveLegacyStateSource({
-    filePath: params.source.filePath,
-    label: "Memory Core host events",
+  await archiveLegacyMemoryHostEventSource({
+    source: params.source,
     changes: params.changes,
     warnings: params.warnings,
   });
@@ -1406,7 +1466,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {
+      for (const source of await collectLegacyMemoryHostEventSources(
+        params.config,
+        params.env,
+        warnings,
+      )) {
         await migrateLegacyMemoryHostEventSource({
           source,
           context: params.context,

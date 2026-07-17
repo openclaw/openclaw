@@ -586,6 +586,47 @@ describe("memory-core doctor dreaming migration", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects legacy host events beneath symlinked workspace parents",
+    async () => {
+      const externalMemoryDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-memory-core-external-events-"),
+      );
+      const externalEventPath = path.join(externalMemoryDir, ".dreams", "events.jsonl");
+      try {
+        await fs.rm(path.join(workspaceDir, "memory"), { recursive: true });
+        await fs.mkdir(path.dirname(externalEventPath), { recursive: true });
+        await fs.writeFile(
+          externalEventPath,
+          `${JSON.stringify({
+            type: "memory.recall.recorded",
+            timestamp: "2026-07-01T00:00:00.000Z",
+            query: "outside workspace",
+            resultCount: 0,
+            results: [],
+          })}\n`,
+          "utf8",
+        );
+        await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
+
+        const result = await hostEventsMigration().migrateLegacyState(migrationParams());
+
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining("Skipped unsafe Memory Core host event source"),
+        ]);
+        await expect(fs.readFile(externalEventPath, "utf8")).resolves.toContain(
+          "outside workspace",
+        );
+        await expect(fs.access(`${externalEventPath}.migrated`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await fs.rm(externalMemoryDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("leaves legacy host events in place when plugin-wide SQLite capacity is exhausted", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
     await fs.writeFile(

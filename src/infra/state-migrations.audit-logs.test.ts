@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CONFIG_AUDIT_MAX_ENTRIES, CONFIG_AUDIT_SCOPE } from "../config/io.audit.js";
@@ -75,6 +76,9 @@ describe("legacy core audit log migration", () => {
       expect(configEntries[0]?.key).not.toContain(unredactedDigest);
       const archivedConfig = await fs.readFile(`${configPath}.migrated`, "utf8");
       expect(archivedConfig).not.toContain("secret-value");
+      if (process.platform !== "win32") {
+        expect((await fs.stat(`${configPath}.migrated`)).mode & 0o777).toBe(0o600);
+      }
       expect(JSON.parse(archivedConfig.trim())).toMatchObject({
         argv: ["openclaw", "config", "set", "token", "***"],
       });
@@ -149,4 +153,49 @@ describe("legacy core audit log migration", () => {
       expect(listSystemAgentAuditEntriesForTests({ env })).toEqual([]);
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects audit sources beneath symlinked state parents",
+    async () => {
+      const externalAuditDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-audit-migration-external-"),
+      );
+      try {
+        await withTempDir({ prefix: "openclaw-audit-migration-symlink-" }, async (stateDir) => {
+          const externalSource = path.join(externalAuditDir, "system-agent.jsonl");
+          await fs.writeFile(
+            externalSource,
+            `${JSON.stringify({
+              timestamp: "2026-07-03T00:00:00.000Z",
+              operation: "gateway.restart",
+              summary: "Outside state root",
+            })}\n`,
+          );
+          await fs.symlink(externalAuditDir, path.join(stateDir, "audit"));
+          const detected = detectLegacyAuditLogs({
+            stateDir,
+            doctorOnlyStateMigrations: true,
+          });
+
+          const result = await migrateLegacyAuditLogs({ detected, stateDir });
+
+          expect(result.changes).toEqual([]);
+          expect(result.warnings.join("\n")).toMatch(/alias|symlink|outside workspace/u);
+          await expect(fs.readFile(externalSource, "utf8")).resolves.toContain(
+            "Outside state root",
+          );
+          await expect(fs.access(`${externalSource}.migrated`)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+          expect(
+            listSystemAgentAuditEntriesForTests({
+              env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+            }),
+          ).toEqual([]);
+        });
+      } finally {
+        await fs.rm(externalAuditDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

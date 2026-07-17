@@ -14,13 +14,13 @@ import {
   SYSTEM_AGENT_AUDIT_SCOPE,
   type SystemAgentAuditEntry,
 } from "../system-agent/audit.js";
+import { root as createFsSafeRoot } from "./fs-safe.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import type {
   LegacyAuditLogSource,
   LegacyAuditLogsDetection,
 } from "./state-migrations.audit-logs.types.js";
-import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 type PreparedAuditRecord = {
@@ -83,10 +83,12 @@ type PreparedLegacyAuditRecords =
       sanitizedJsonl: string;
     };
 
-function prepareLegacyAuditRecords(source: LegacyAuditLogSource): PreparedLegacyAuditRecords {
+function prepareLegacyAuditRecords(
+  source: LegacyAuditLogSource,
+  raw: string,
+): PreparedLegacyAuditRecords {
   const records: PreparedAuditRecord[] = [];
   const warnings: string[] = [];
-  const raw = fs.readFileSync(source.sourcePath, "utf8");
   for (const [index, line] of raw.split(/\r?\n/u).entries()) {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -132,35 +134,34 @@ function prepareLegacyAuditRecords(source: LegacyAuditLogSource): PreparedLegacy
   };
 }
 
-function replaceLegacyAuditSourceWithSanitizedContent(params: {
+type AuditMigrationRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
+
+async function replaceLegacyAuditSourceWithSanitizedContent(params: {
   source: LegacyAuditLogSource;
+  sourceRelativePath: string;
+  root: AuditMigrationRoot;
   sourceRaw: string;
   sanitizedJsonl: string;
   warnings: string[];
-}): boolean {
-  const tempPath = path.join(
-    path.dirname(params.source.sourcePath),
-    `.${path.basename(params.source.sourcePath)}.sanitize-${process.pid}-${randomUUID()}.tmp`,
+}): Promise<boolean> {
+  const tempRelativePath = path.join(
+    path.dirname(params.sourceRelativePath),
+    `.${path.basename(params.sourceRelativePath)}.sanitize-${process.pid}-${randomUUID()}.tmp`,
   );
   try {
-    if (fs.readFileSync(params.source.sourcePath, "utf8") !== params.sourceRaw) {
-      params.warnings.push(
-        `Skipped archiving ${params.source.label} because the legacy source changed after import`,
-      );
-      return false;
-    }
-    fs.writeFileSync(tempPath, params.sanitizedJsonl, {
-      encoding: "utf8",
-      flag: "wx",
+    await params.root.create(tempRelativePath, params.sanitizedJsonl, {
       mode: 0o600,
     });
-    if (fs.readFileSync(params.source.sourcePath, "utf8") !== params.sourceRaw) {
+    if ((await params.root.readText(params.sourceRelativePath)) !== params.sourceRaw) {
       params.warnings.push(
         `Skipped archiving ${params.source.label} because the legacy source changed during sanitization`,
       );
       return false;
     }
-    fs.renameSync(tempPath, params.source.sourcePath);
+    // The caller holds exclusive Gateway/state ownership, so no legitimate
+    // legacy writer can append between this final check and the rooted move.
+    // Both paths stay pinned; move commits the prepared bytes atomically.
+    await params.root.move(tempRelativePath, params.sourceRelativePath, { overwrite: true });
     return true;
   } catch (error) {
     params.warnings.push(
@@ -168,16 +169,112 @@ function replaceLegacyAuditSourceWithSanitizedContent(params: {
     );
     return false;
   } finally {
-    fs.rmSync(tempPath, { force: true });
+    await params.root.remove(tempRelativePath).catch(() => undefined);
   }
 }
 
-function migrateLegacyAuditLogSource(params: {
+async function firstFreeAuditArchiveRelativePath(
+  root: AuditMigrationRoot,
+  sourceRelativePath: string,
+): Promise<string> {
+  for (let index = 2; ; index += 1) {
+    const candidate = `${sourceRelativePath}.migrated.${index}`;
+    if (!(await root.exists(candidate))) {
+      return candidate;
+    }
+  }
+}
+
+async function secureAuditArchiveFile(params: {
+  root: AuditMigrationRoot;
+  relativePath: string;
+  label: string;
+  warnings: string[];
+}): Promise<boolean> {
+  try {
+    const opened = await params.root.open(params.relativePath);
+    try {
+      await opened.handle.chmod(0o600);
+      await opened.handle.sync();
+    } finally {
+      await opened.handle.close();
+    }
+    return true;
+  } catch (error) {
+    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(error)}`);
+    return false;
+  }
+}
+
+async function archiveLegacyAuditSource(params: {
+  source: LegacyAuditLogSource;
+  sourceRelativePath: string;
+  root: AuditMigrationRoot;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const archivedRelativePath = `${params.sourceRelativePath}.migrated`;
+  const archivedPath = `${params.source.sourcePath}.migrated`;
+  try {
+    if (
+      !(await secureAuditArchiveFile({
+        root: params.root,
+        relativePath: params.sourceRelativePath,
+        label: params.source.label,
+        warnings: params.warnings,
+      }))
+    ) {
+      return;
+    }
+    if (await params.root.exists(archivedRelativePath)) {
+      const nextRelativePath = await firstFreeAuditArchiveRelativePath(
+        params.root,
+        params.sourceRelativePath,
+      );
+      await params.root.move(params.sourceRelativePath, nextRelativePath);
+      await secureAuditArchiveFile({
+        root: params.root,
+        relativePath: nextRelativePath,
+        label: `archived ${params.source.label}`,
+        warnings: params.warnings,
+      });
+      params.changes.push(
+        `Archived ${params.source.label} legacy source → ${path.join(path.dirname(params.source.sourcePath), path.basename(nextRelativePath))}`,
+      );
+      return;
+    }
+    await params.root.move(params.sourceRelativePath, archivedRelativePath);
+    await secureAuditArchiveFile({
+      root: params.root,
+      relativePath: archivedRelativePath,
+      label: `archived ${params.source.label}`,
+      warnings: params.warnings,
+    });
+    params.changes.push(`Archived ${params.source.label} legacy source → ${archivedPath}`);
+  } catch (error) {
+    params.warnings.push(
+      `Failed archiving ${params.source.label} ${params.source.sourcePath}: ${String(error)}`,
+    );
+  }
+}
+
+async function migrateLegacyAuditLogSource(params: {
   source: LegacyAuditLogSource;
   stateDir: string;
-}): MigrationMessages {
+}): Promise<MigrationMessages> {
   const changes: string[] = [];
-  const prepared = prepareLegacyAuditRecords(params.source);
+  const root = await createFsSafeRoot(params.stateDir, {
+    hardlinks: "reject",
+    // Doctor previously accepted the complete legacy log; keep that migration
+    // contract while root operations enforce path and symlink boundaries.
+    maxBytes: Number.MAX_SAFE_INTEGER,
+    mkdir: false,
+    mode: 0o600,
+    symlinks: "reject",
+  });
+  const sourceRelativePath = path.relative(path.resolve(params.stateDir), params.source.sourcePath);
+  const sourceRaw = await root.readText(sourceRelativePath);
+  const prepared = prepareLegacyAuditRecords(params.source, sourceRaw);
   if (!prepared.ok) {
     return { changes, warnings: prepared.warnings };
   }
@@ -208,21 +305,24 @@ function migrateLegacyAuditLogSource(params: {
     return { changes, warnings };
   }
   if (
-    !replaceLegacyAuditSourceWithSanitizedContent({
+    !(await replaceLegacyAuditSourceWithSanitizedContent({
       source: params.source,
+      sourceRelativePath,
+      root,
       sourceRaw: prepared.sourceRaw,
       sanitizedJsonl: prepared.sanitizedJsonl,
       warnings,
-    })
+    }))
   ) {
     return { changes, warnings };
   }
   changes.push(
     `Migrated ${params.source.label} -> shared SQLite state (${missing.length} new row(s))`,
   );
-  archiveLegacyImportSource({
-    sourcePath: params.source.sourcePath,
-    label: params.source.label,
+  await archiveLegacyAuditSource({
+    source: params.source,
+    sourceRelativePath,
+    root,
     changes,
     warnings,
   });
@@ -265,7 +365,7 @@ export async function migrateLegacyAuditLogs(params: {
   try {
     for (const source of params.detected.sources) {
       try {
-        const result = migrateLegacyAuditLogSource({ source, stateDir: params.stateDir });
+        const result = await migrateLegacyAuditLogSource({ source, stateDir: params.stateDir });
         changes.push(...result.changes);
         warnings.push(...result.warnings);
       } catch (error) {
