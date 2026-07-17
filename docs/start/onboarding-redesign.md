@@ -255,11 +255,16 @@ restart` from the real environment and verify the plist. Product follow-up:
 - **Agent landing needs exact-head hosted CI.** The heavy `CI` workflow may
   not queue on pushes under org load; the maintainer fallback is a
   release-gate dispatch on the PR branch:
-  `gh workflow run ci.yml --ref <branch> -f target_ref=<head-sha>
--f release_gate=true -f pull_request_number=<pr>` (the run must be on the
+
+  ```bash
+  gh workflow run ci.yml --ref <branch> -f target_ref=<head-sha> -f release_gate=true -f pull_request_number=<pr>
+  ```
+
+  The run must be on the
   branch ref so `head_sha` matches, and the title becomes
   `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
-  accepts). Then `scripts/pr` prepare/merge as usual.
+  accepts. Then `scripts/pr` prepare/merge as usual.
+
 - **Gates that CI enforces beyond focused tests**: docs map
   (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
   `max-lines` — split files, never suppress), `check:test-types`, knip
