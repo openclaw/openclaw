@@ -17,11 +17,6 @@ import {
 } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
-import {
-  abortEmbeddedAgentRun,
-  isEmbeddedAgentRunActive,
-  waitForEmbeddedAgentRunEnd,
-} from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
@@ -341,6 +336,10 @@ async function ensureSessionRuntimeCleanup(params: {
   sessionId?: string;
   assertCurrent?: () => void;
 }) {
+  // Session lifecycle mutation owns this heavy runtime edge; read-only gateway
+  // commands such as status must not load the embedded-agent barrel.
+  const embeddedAgent = await import("../agents/embedded-agent.js");
+  params.assertCurrent?.();
   const closeTrackedBrowserTabs = async () => {
     params.assertCurrent?.();
     const closeKeys = new Set<string>([
@@ -394,10 +393,10 @@ async function ensureSessionRuntimeCleanup(params: {
     }
     const watcherRef: { current?: Promise<void> } = {};
     const watcher = (async () => {
-      while (await waitForEmbeddedAgentRunEnd(sessionId, null)) {
+      while (await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, null)) {
         // A replacement can register after the wait promise settles but before
         // this continuation runs. Keep the required retirement armed for it.
-        if (isEmbeddedAgentRunActive(sessionId)) {
+        if (embeddedAgent.isEmbeddedAgentRunActive(sessionId)) {
           continue;
         }
         if (mcpRunEndWatchers.get(sessionId) === watcherRef.current) {
@@ -422,11 +421,11 @@ async function ensureSessionRuntimeCleanup(params: {
   // Register against the run being stopped before abort or any await allows a
   // later embedded or reply-backed run to replace it in the active registry.
   ensureMcpRetirementWatcher();
-  abortEmbeddedAgentRun(sessionId);
+  embeddedAgent.abortEmbeddedAgentRun(sessionId);
   // Mark cleanup before waiting so the timeout path cannot strand MCP children.
   // Active tool/app leases keep in-flight work alive until their final release.
   await retireMcpRuntime(true);
-  const ended = await waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+  const ended = await embeddedAgent.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   params.assertCurrent?.();
   // A stopping run can create or reuse its runtime while we wait. Retire again
   // after a clean stop; otherwise keep the required marker armed for late work.
