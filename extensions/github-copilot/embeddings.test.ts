@@ -128,11 +128,11 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   beforeEach(() => {
     resolveConfiguredSecretInputStringMock.mockResolvedValue({});
     resolveFirstGithubTokenMock.mockResolvedValue({
-      githubToken: "gh_test_token_123",
+      githubToken: "test-token-placeholder",
       hasProfile: false,
     });
     resolveCopilotApiTokenMock.mockResolvedValue({
-      token: "copilot_test_token_abc",
+      token: "test-token-placeholder",
       expiresAt: Date.now() + 3_600_000,
       source: "test",
       baseUrl: TEST_BASE_URL,
@@ -168,7 +168,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
