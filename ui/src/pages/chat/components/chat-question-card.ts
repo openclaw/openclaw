@@ -38,10 +38,7 @@ class ChatQuestionCard extends LitElement {
       return;
     }
     const answers = Object.fromEntries(
-      status.questions.map((question) => [
-        question.id,
-        this.answers.get(question.id)!.trim().toWellFormed(),
-      ]),
+      status.questions.map((question) => [question.id, this.answers.get(question.id)!.trim()]),
     );
     this.submitted = true;
     this.props?.onSubmit(answers, () => {
