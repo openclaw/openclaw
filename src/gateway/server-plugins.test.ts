@@ -1492,6 +1492,37 @@ describe("loadGatewayPlugins", () => {
     expect(params.deliver).toBe(false);
   });
 
+  test("forwards disableTools: true from subagent.run params to gateway dispatch", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("disable-tools-forward"));
+
+    await runtime.run({
+      sessionKey: "s-disable-tools",
+      message: "write me a haiku",
+      disableTools: true,
+      deliver: false,
+    });
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params.disableTools).toBe(true);
+  });
+
+  test("does not inject disableTools when not set on subagent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    serverPlugins.setFallbackGatewayContext(createTestContext("no-disable-tools-forward"));
+
+    await runtime.run({
+      sessionKey: "s-normal-run",
+      message: "do something useful",
+      deliver: false,
+    });
+
+    const params = getRequiredLastDispatchedParams();
+    expect(params).not.toHaveProperty("disableTools");
+  });
+
   test("generates a non-empty idempotencyKey when the caller omits it", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);

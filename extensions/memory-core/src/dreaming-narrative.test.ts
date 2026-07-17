@@ -433,6 +433,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(runOptions.sessionKey).toBe(expectedSessionKey);
     expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
     expect(runOptions.lightContext).toBe(true);
+    expect(runOptions.disableTools).toBe(true);
     expect(runOptions.deliver).toBe(false);
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
@@ -441,6 +442,25 @@ describe("generateAndAppendDreamNarrative", () => {
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it("passes disableTools: true on all narrative subagent.run calls", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-notools-");
+    const subagent = createMockSubagent("Tools would only get in the way.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["endpoint latency"] },
+      nowMs: Date.parse("2026-04-05T04:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    const runOptions = mockObjectArg(subagent.run, "subagent run");
+    expect(runOptions.disableTools).toBe(true);
   });
 
   it("waits for persisted assistant text before falling back", async () => {

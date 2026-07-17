@@ -337,6 +337,7 @@ export function startAgentRunExecution(params: {
           extraSystemPrompt: params.request.extraSystemPrompt,
           bootstrapContextMode: params.request.bootstrapContextMode,
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
+          disableTools: params.request.disableTools,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
           runtimePluginToolGrant,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,

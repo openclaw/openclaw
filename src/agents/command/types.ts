@@ -149,6 +149,8 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** When true, skip all tool construction for this run. Forwarded from plugin subagent runs. */
+  disableTools?: boolean;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
