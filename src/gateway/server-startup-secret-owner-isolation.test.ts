@@ -269,4 +269,40 @@ describe("Gateway startup SecretRef owner isolation", () => {
       );
     });
   });
+
+  it("reaches /readyz with one skill secret isolated", async () => {
+    await withEnvAsync({ MISSING_SKILL_KEY: undefined }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        skills: {
+          entries: {
+            cold: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_SKILL_KEY",
+              },
+            },
+          },
+        },
+      });
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "skill:cold", state: "unavailable" },
+      ]);
+      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "SECRETS_OWNER_UNAVAILABLE",
+            path: "skills.entries.cold.apiKey",
+          }),
+        ]),
+      );
+    });
+  });
 });

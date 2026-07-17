@@ -34,8 +34,17 @@ import type {
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  hasUnavailableSkillSecretOwners,
+  isSkillSecretOwnerUnavailable,
+  resolveBundledAllowlist,
+  shouldIncludeSkill,
+} from "./config.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
 import {
   loadSkillsFromDirSafe,
   readSkillFrontmatterSafe,
@@ -1502,6 +1511,7 @@ export function buildWorkspaceSkillSnapshot(
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
+      skillKey: resolveSkillKey(entry.skill, entry),
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
@@ -1607,15 +1617,35 @@ export function resolveSkillsPromptForRun(params: {
   eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (snapshotPrompt) {
+  const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
+    (skill) => !skill.skillKey,
+  );
+  const snapshotHasUnavailableSkill =
+    params.skillsSnapshot?.skills.some((skill) =>
+      isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
+    ) ||
+    (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+  if (snapshotPrompt && !snapshotHasUnavailableSkill) {
     return snapshotPrompt;
   }
-  if (params.entries && params.entries.length > 0) {
+  const entries =
+    params.entries && params.entries.length > 0
+      ? params.entries
+      : snapshotHasUnavailableSkill
+        ? loadVisibleWorkspaceSkillEntries(params.workspaceDir, {
+            config: params.config,
+            agentId: params.agentId,
+            eligibility: params.eligibility,
+            skillFilter: params.skillsSnapshot?.skillFilter,
+          })
+        : undefined;
+  if (entries && entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
-      entries: params.entries,
+      entries,
       config: params.config,
       agentId: params.agentId,
       eligibility: params.eligibility,
+      skillFilter: params.skillsSnapshot?.skillFilter,
     });
     return prompt.trim() ? prompt : "";
   }
