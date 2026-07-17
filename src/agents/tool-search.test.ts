@@ -4,12 +4,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   addClientToolsToToolSearchCatalog,
@@ -170,6 +176,8 @@ describe("Tool Search", () => {
     expect(directory).not.toContain("\uD83D");
   });
   afterEach(() => {
+    resetGlobalHookRunner();
+    resetAdjustedParamsByToolCallIdForTests();
     testing.setToolSearchCodeModeSupportedForTest(undefined);
     testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
   });
@@ -356,6 +364,56 @@ describe("Tool Search", () => {
     );
 
     await expect(runtime.callValue("orchard_bad_output")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+  });
+
+  it("preserves policy-blocked results outside a declared success output schema", async () => {
+    const execute = vi.fn(async () => jsonResult({ id: "should-not-run" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: vi.fn(async () => ({ block: true, blockReason: "blocked by orchard policy" })),
+        },
+      ]),
+    );
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_policy_block", "Return an orchard result");
+    target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    target.execute = execute;
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [target],
+      hookContext: { runId: "run-policy-block" },
+    });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef, runId: "run-policy-block" },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_policy_block")).resolves.toEqual({
+      status: "blocked",
+      deniedReason: "plugin-before-tool-call",
+      reason: "blocked by orchard policy",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects a tool-authored blocked lookalike that violates its output schema", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_fake_block", "Return an orchard result");
+    target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    target.execute = vi.fn(async () =>
+      jsonResult({ status: "blocked", reason: "tool-authored lookalike" }),
+    );
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_fake_block")).rejects.toThrow(
       "returned details that do not match its declared outputSchema",
     );
   });

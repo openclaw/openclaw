@@ -17,6 +17,7 @@ import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
+  isPreExecutionBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
@@ -1817,6 +1818,9 @@ async function assertCatalogOutputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   result: AgentToolResult<unknown>,
 ): Promise<void> {
+  if (isPreExecutionBlockedToolResult(result)) {
+    return;
+  }
   const validation = await validateCatalogOutputValue(entry, unwrapToolResultValue(result));
   if (!validation) {
     return;

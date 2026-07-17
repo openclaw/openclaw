@@ -22,8 +22,7 @@ separate implementations:
 - Codex Code Mode runs inside the Codex coding harness. Its `exec` tool is a
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
-  in Codex's V8 Code Mode runtime, either in-process or in a standalone host
-  depending on Codex configuration.
+  in Codex's in-process V8 Code Mode runtime.
 - OpenClaw code mode runs in the generic OpenClaw agent runtime and is
   disabled unless `tools.codeMode.enabled: true` is configured. Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
