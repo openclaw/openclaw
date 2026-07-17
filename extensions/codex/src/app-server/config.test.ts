@@ -159,6 +159,10 @@ describe("Codex app-server config", () => {
     expect(resolveRuntimeForTest().loopDetectionPreToolUseRelay).toBe(true);
   });
 
+  it("keeps the existing assistant completion idle timeout by default", () => {
+    expect(resolveRuntimeForTest().turnAssistantCompletionIdleTimeoutMs).toBe(10_000);
+  });
+
   it("builds Codex permissions-profile config for app-server network proxy", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -278,6 +282,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: 0,
           turnCompletionIdleTimeoutMs: -1,
+          turnAssistantCompletionIdleTimeoutMs: 0,
         },
       },
     });
@@ -285,6 +290,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
+      turnAssistantCompletionIdleTimeoutMs: 10_000,
     });
   });
 
