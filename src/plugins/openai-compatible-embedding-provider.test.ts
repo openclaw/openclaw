@@ -579,11 +579,11 @@ describe("openai-compatible generic embedding provider", () => {
   });
 
   it("resolves env SecretRef API keys on the memory search secret surface", async () => {
-    const token = "env-secret-token";
+    const value = "test-token-placeholder";
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_API_KEY";
-    const server = await startEmbeddingServer({ token });
+    const server = await startEmbeddingServer({ token: value });
 
-    await withEnvAsync({ [envVar]: token }, async () => {
+    await withEnvAsync({ [envVar]: value }, async () => {
       const { provider } = await createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
@@ -595,7 +595,7 @@ describe("openai-compatible generic embedding provider", () => {
       );
 
       await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${value}`);
     });
   });
 
@@ -603,7 +603,7 @@ describe("openai-compatible generic embedding provider", () => {
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_BLOCKED_API_KEY";
     const server = await startEmbeddingServer();
 
-    await withEnvAsync({ [envVar]: "blocked-token" }, async () => {
+    await withEnvAsync({ [envVar]: "test-token-placeholder" }, async () => {
       await expect(
         createOpenAICompatibleEmbeddingProvider(
           createOptions({
@@ -660,28 +660,27 @@ describe("openai-compatible generic embedding provider", () => {
   });
 
   it("resolves env-template API key strings before treating them as inline secrets", async () => {
-    const token = "env-template-token";
+    const value = "test-token-placeholder";
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
-    const server = await startEmbeddingServer({ token });
+    const ref = `\${${envVar}}`;
+    const server = await startEmbeddingServer({ token: value });
 
-    await withEnvAsync({ [envVar]: token }, async () => {
+    await withEnvAsync({ [envVar]: value }, async () => {
       const { provider } = await createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
-          remote: {
-            baseUrl: server.baseUrl,
-            apiKey: `\${${envVar}}`,
-          },
+          remote: { baseUrl: server.baseUrl, apiKey: ref },
         }),
       );
 
       await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
+      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${value}`);
     });
   });
 
   it("does not treat missing env-template API key strings as inline secrets", async () => {
     const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_MISSING_TEMPLATE_KEY";
+    const ref = `\${${envVar}}`;
     const server = await startEmbeddingServer();
 
     await withEnvAsync({ [envVar]: undefined }, async () => {
@@ -689,10 +688,7 @@ describe("openai-compatible generic embedding provider", () => {
         createOpenAICompatibleEmbeddingProvider(
           createOptions({
             model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              apiKey: `\${${envVar}}`,
-            },
+            remote: { baseUrl: server.baseUrl, apiKey: ref },
           }),
         ),
       ).rejects.toThrow(`SecretRef is unresolved (env:default:${envVar})`);
