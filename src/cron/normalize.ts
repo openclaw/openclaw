@@ -525,6 +525,26 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
+/**
+ * Returns true when a cron job's session target implies detached/isolated-agent
+ * delivery semantics, meaning the job should get an announce delivery default
+ * unless the caller explicitly set one.
+ *
+ * All three callers (normalize, delivery-plan, and initial-delivery service)
+ * use this single predicate so the contract stays consistent.
+ */
+export function isDetachedDeliveryTarget(sessionTarget: string, payloadKind: string): boolean {
+  if (payloadKind !== "agentTurn" && payloadKind !== "command") {
+    return false;
+  }
+  return (
+    sessionTarget === "isolated" ||
+    sessionTarget === "current" ||
+    sessionTarget.startsWith("session:") ||
+    sessionTarget === ""
+  );
+}
+
 /** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
@@ -722,11 +742,7 @@ export function normalizeCronJobInput(
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
     // Resolved "current" and custom session ids still use isolated-agent
     // delivery semantics, so they get the same default announce behavior.
-    const isDetachedDeliveryJob =
-      sessionTarget === "isolated" ||
-      sessionTarget === "current" ||
-      sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && (payloadKind === "agentTurn" || payloadKind === "command"));
+    const isDetachedDeliveryJob = isDetachedDeliveryTarget(sessionTarget, payloadKind);
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     if (
       !hasDelivery &&
