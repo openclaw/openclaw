@@ -6,7 +6,7 @@ import type { DiscordMessageRunQueueTestingHooks } from "./message-run-queue.js"
 export const preflightDiscordMessageMock: MockFn = vi.fn();
 export const processDiscordMessageMock: MockFn = vi.fn();
 
-const { createDiscordMessageHandler: createRealDiscordMessageHandler } =
+const { createDiscordMessageDispatcher: createRealDiscordMessageHandler } =
   await import("./message-handler.js");
 type DiscordMessageHandlerParams = Parameters<typeof createRealDiscordMessageHandler>[0];
 type DiscordMessageHandlerTestingHooks = NonNullable<DiscordMessageHandlerParams["testing"]>;
