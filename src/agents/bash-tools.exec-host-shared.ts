@@ -37,7 +37,7 @@ import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 /** Cap for deduplicating repeated follow-up dispatch failure log keys. */
-export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
+const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
 const loggedExecApprovalFollowupFailures = new Set<string>();
 
 function rememberExecApprovalFollowupFailureKey(key: string): boolean {
@@ -56,7 +56,7 @@ function rememberExecApprovalFollowupFailureKey(key: string): boolean {
 }
 
 /** Effective approval policy after caller config and approvals file are merged. */
-export type ExecHostApprovalContext = {
+type ExecHostApprovalContext = {
   approvals: ExecApprovalsResolved;
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -64,31 +64,27 @@ export type ExecHostApprovalContext = {
 };
 
 /** Pending approval state shared by gateway/node exec hosts. */
-export type ExecApprovalPendingState = {
+type ExecApprovalPendingState = {
   warningText: string;
   expiresAtMs: number;
   preResolvedDecision: string | null | undefined;
 };
 
 /** Pending approval state plus human-readable notice timing. */
-export type ExecApprovalRequestState = ExecApprovalPendingState & {
+type ExecApprovalRequestState = ExecApprovalPendingState & {
   noticeSeconds: number;
 };
 
 const EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS = 0;
 
 /** Why an approval request cannot be delivered interactively. */
-export type ExecApprovalUnavailableReason =
+type ExecApprovalUnavailableReason =
   | "no-approval-route"
   | "initiating-platform-disabled"
   | "initiating-platform-unsupported";
 
-function isHeadlessExecTrigger(trigger?: string): boolean {
-  return trigger === "cron";
-}
-
 /** Context returned after a default approval request is registered. */
-export type RegisteredExecApprovalRequestContext = {
+type RegisteredExecApprovalRequestContext = {
   approvalId: string;
   approvalSlug: string;
   warningText: string;
@@ -100,7 +96,7 @@ export type RegisteredExecApprovalRequestContext = {
 };
 
 /** Destination and context for async exec approval follow-up delivery. */
-export type ExecApprovalFollowupTarget = {
+type ExecApprovalFollowupTarget = {
   approvalId: string;
   sessionKey?: string;
   /** Session UUID active when the approval was requested. Lets the followup be
@@ -118,13 +114,13 @@ export type ExecApprovalFollowupTarget = {
 };
 
 /** Test seam for follow-up delivery and warning logging. */
-export type ExecApprovalFollowupResultDeps = {
+type ExecApprovalFollowupResultDeps = {
   sendExecApprovalFollowup?: typeof sendExecApprovalFollowup;
   logWarn?: typeof logWarn;
 };
 
 /** Common arguments used to build default approval request contexts. */
-export type DefaultExecApprovalRequestArgs = {
+type DefaultExecApprovalRequestArgs = {
   warnings: string[];
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;
@@ -133,7 +129,7 @@ export type DefaultExecApprovalRequestArgs = {
 };
 
 /** Builds pending approval state with warnings and a bounded expiry. */
-export function createExecApprovalPendingState(params: {
+function createExecApprovalPendingState(params: {
   warnings: string[];
   timeoutMs: number;
 }): ExecApprovalPendingState {
@@ -202,7 +198,7 @@ function createDefaultExecApprovalRequestContext(params: {
 }
 
 /** Converts a raw approval decision plus fallback policy into execution state. */
-export function resolveBaseExecApprovalDecision(params: {
+function resolveBaseExecApprovalDecision(params: {
   decision: string | null;
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): {
@@ -265,7 +261,7 @@ export async function resolveApprovalDecisionOrUndefined(params: {
 }
 
 /** Resolves approval delivery availability for the initiating channel/account. */
-export function resolveExecApprovalUnavailableState(params: {
+function resolveExecApprovalUnavailableState(params: {
   turnSourceChannel?: string;
   turnSourceAccountId?: string;
   preResolvedDecision: string | null | undefined;
@@ -414,17 +410,14 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   };
 }
 
-/** Returns true when a headless run should resolve an unavailable approval inline. */
+/** Returns true when registration proved no approval decision can arrive later. */
 export function shouldResolveExecApprovalUnavailableInline(params: {
-  trigger?: string;
   unavailableReason: ExecApprovalUnavailableReason | null;
   preResolvedDecision: string | null | undefined;
 }): boolean {
-  return (
-    isHeadlessExecTrigger(params.trigger) &&
-    params.unavailableReason === "no-approval-route" &&
-    params.preResolvedDecision === null
-  );
+  // finalDecision:null is emitted only after the gateway expires a no-route record.
+  // Resolve fallback inline; an async wait can never observe a later decision.
+  return params.unavailableReason === "no-approval-route" && params.preResolvedDecision === null;
 }
 
 /** Builds the denial copy for headless runs that cannot wait for approval. */

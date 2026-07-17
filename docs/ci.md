@@ -9,8 +9,8 @@ read_when:
 ---
 
 OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
-at the trigger), on non-draft pull requests (CHANGELOG-only diffs are ignored),
-and on manual dispatch. Canonical `main` pushes first pass through a 90-second
+at the trigger), on every non-draft pull request, and on manual dispatch.
+Canonical `main` pushes first pass through a 90-second
 hosted-runner admission window; the `CI` concurrency group cancels that waiting
 run when a newer commit lands, so sequential merges do not each register a full
 Blacksmith matrix. Pull requests and manual dispatches skip the wait. The
@@ -33,11 +33,11 @@ dispatch.
 | `pnpm-store-warmup`                | Warm the lockfile-pinned pnpm store cache without blocking Linux Node shards                                                                                                                                          | Node or docs-check lanes selected                   |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                 | Node-relevant changes                               |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                               | Control UI i18n-relevant changes and manual CI      |
-| `checks-fast-core`                 | Fast Linux correctness lanes: bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                                          | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes: suppression-baseline max-lines ratchet, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                  | Node-relevant changes                               |
 | `qa-smoke-ci-profile`              | Two self-contained balanced parts of the bounded automatic QA Smoke representative set; full taxonomy coverage remains available through explicit QA profiles                                                         | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                   | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                  | Node-relevant changes                               |
-| `checks-node-*`                    | Core Node test shards, excluding channel, bundled, contract, and extension lanes                                                                                                                                      | Node-relevant changes                               |
+| `checks-node-*`                    | Changed-target Node tests on pull requests; full core shards on `main`, manual, release, and broad-fallback runs                                                                                                      | Node-relevant changes                               |
 | `check-*`                          | Sharded main local gate equivalent: guards, shrinkwrap, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                   | Node-relevant changes                               |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture | Node-relevant changes                               |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                            | Manual CI dispatch for releases                     |
@@ -49,8 +49,11 @@ dispatch.
 | `macos-swift`                      | Swift lint, build, and tests for the macOS app                                                                                                                                                                        | macOS-relevant changes                              |
 | `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                                                                                                                             | iOS app, shared app kit, or Swabble changes         |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                          | Android-relevant changes                            |
+| `openclaw/ci-gate`                 | Final aggregate: requires admission, preflight, and security; accepts skips only for manifest-disabled downstream lanes                                                                                               | Every non-draft CI run                              |
 | `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                          | Main CI success or manual dispatch                  |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                          | Scheduled and manual dispatch                       |
+
+Standalone Periphery workflows enforce zero dead-code findings for the iOS and macOS apps. The shared OpenClawKit workflow scans both consumers in parallel and reports a declaration only when Periphery emits the same Swift USR from both builds. Its generated `OpenClawProtocol/GatewayModels.swift` schema contract is retained as generator-owned code rather than treated as app-local dead code.
 
 ## Fail-fast order
 
@@ -59,6 +62,14 @@ dispatch.
 3. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 4. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Generated locale drift stays visible while the standalone refresh workflow repairs it in the background.
 5. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
+6. `openclaw/ci-gate` waits for every selected lane. Admission, preflight, and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
+
+The merge coordinator may reuse an authenticated successful `openclaw/ci-gate`
+for the same pull-request head for up to 24 hours. This avoids rewriting a
+contributor branch after unrelated `main` changes. The reusable result does not
+replace the separate strict, App-owned test-merge check against current `main`.
+A later pending or failed rerun does not erase an earlier successful result for
+that unchanged head during the freshness window.
 
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Matrix jobs use `fail-fast: false`, and `build-artifacts` reports embedded channel, core-support-boundary, and gateway-watch failures directly instead of queuing tiny verifier jobs. The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs. The plugin-list startup-memory guard keeps a 350 MiB ceiling on self-hosted Blacksmith Linux and allows 425 MiB on GitHub-hosted Linux, whose RSS baseline is higher for the same built CLI.
 
@@ -84,6 +95,8 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
+Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code policy. Each runs only when a non-draft pull request touches its native scan scope, or when manually dispatched.
+
 - **CI workflow edits** validate the Node CI graph, workflow linting, and the Windows lane (`ci.yml` executes it), but do not force iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
@@ -98,8 +111,11 @@ The slowest Node test families are split or balanced so each job stays small wit
 - Auto-reply runs as balanced workers, with the reply subtree split into agent-runner, commands, dispatch, session, and state-routing shards.
 - Agentic gateway/server (control-plane) configs split across chat, auth, model, HTTP/plugin, runtime, and startup lanes instead of waiting on built artifacts.
 - Normal CI packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites. Heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU.
-- Pull requests on the canonical repository use a compact admission plan: the same per-config groups run in isolated subprocesses, currently 19 Node test jobs instead of the 74-job full matrix. A single whole-config batch is spread across existing same-runner compact jobs while retaining its 120-minute timeout, and the serial tooling config is striped across three PR-only groups; `main` pushes, manual dispatches, and release gates retain the full matrix.
+- Pull requests on the canonical repository reuse the changed-test resolver against the synthetic merged-tree diff. Precise changes run one targeted Node job; each selected test file gets its own process so stateful suite isolation remains intact. The planner combines sibling tests with import-graph dependents and falls back to the existing 14-job compact full-suite plan for workspace package, package/lockfile, shared harness, split-config, renamed, or deleted changes, public extension-contract changes, tests with special shard setup, partially resolved or empty targets, oversized path or target plans, and planner errors. Targeted plans always retain the full built-artifact boundary gate because its repository scanners cannot be derived from imports. `main` pushes, manual dispatches, and release gates retain the full matrix because canceled superseded `main` runs make a single-push diff insufficient as integration proof.
+- The full Node matrix admits the consistently slow serial tooling and auto-reply command shards first. This keeps the 28-job cap while preventing short alphabetical groups from pushing critical-path work into a later wave.
 - Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard.
+- Linux Node shard jobs persist Vitest's experimental filesystem module cache. Trusted Blacksmith jobs use PR-scoped writable overlays seeded from the protected snapshot only when their transform-input generations match; GitHub-hosted and fork jobs use an `actions/cache` fallback with coarse restore prefixes. The planner marks the broad `core-unit-fast` graph as the single writer without coupling cache ownership to matrix order, while every other job restores a private read-only clone. Concurrent Vitest workers retain separate live directories. A transform-input fingerprint clears incompatible lockfile, package, tsconfig, and Vitest-config generations inside stable sticky keys. Only the writer scans and prunes the cache to 75% after it exceeds 2 GiB. A non-cancelling daily or default-branch repository-dispatch warmer prevents rapid `main` pushes from starving the protected seed, and closed PR cache archives are deleted.
+- Node shard and build-artifact jobs also restore Node's portable on-disk compile cache. Independent `test` and `build` namespaces prevent their writers from replacing each other's snapshots: the scheduled test warmer owns the protected test seed, while `build-artifacts` publishes the protected build seed only from trusted `main` pushes. PR jobs read protected snapshots without publishing feature-branch bytecode; fallback archives remain PR-scoped. This reuses V8 bytecode for Node-loaded orchestration, build tooling, and external dependencies across different checkout paths, including when only part of the source graph changes. Vitest child processes disable an inherited compile cache because coverage can be enabled inside dynamic configs and V8 coverage can lose source-position precision when scripts are deserialized from bytecode.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mjs`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
 - Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
@@ -111,7 +127,7 @@ job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
-The `check-dependencies` shard runs `pnpm deadcode:dependencies` (a production Knip dependency-only pass pinned to an exact Knip version, with pnpm's minimum release age disabled for the `dlx` install) and `pnpm deadcode:unused-files`, which compares Knip's production unused-file findings against `scripts/deadcode-unused-files.allowlist.mjs`, plus an advisory `pnpm deadcode:report:ci:ts-unused` report uploaded as the `deadcode-reports` artifact. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically.
+The `check-dependencies` shard runs production Knip dependency, unused-file, and unused-export checks. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically. The unused-export guard excludes test-support files and fails on every unused production export; intentional dynamic consumers must be modeled in `config/knip.config.ts`. Historical targets run the export guard when they provide it and retain their older dead-code fallback otherwise.
 
 ## ClawSweeper activity forwarding
 
@@ -134,7 +150,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 
 Manual CI dispatches run the same job graph as normal CI but force every non-Android scoped lane on: Linux Node shards, bundled-plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, iOS build, and Control UI i18n. Control UI locale parity is advisory on automatic PR and `main` runs because the standalone refresh workflow repairs generated drift in the background; it is blocking on manual CI and therefore on Full Release Validation. Standalone manual CI dispatches run Android only with `include_android=true` (the `release_gate` input also forces Android); the full release umbrella enables Android by passing `include_android=true`. Plugin prerelease static checks, the release-only `agentic-plugins` shard, the full extension batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker prerelease suite runs only when `Full Release Validation` dispatches the separate `Plugin Prerelease` workflow with the release-validation gate enabled.
 
-Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head.
+PR max-lines checks derive the baseline from the checked-out synthetic merge tree and verify its head parent against the event head. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; the max-lines baseline is compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.PATCH
@@ -153,15 +169,15 @@ Release, private dist-tag, or other platform publication.
 
 ## Runners
 
-| Runner                          | Jobs                                                                                                                                                                                                                                                                                               |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                                                                  |
-| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python` |
-| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                              |
-| `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                                   |
-| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                   |
-| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                 |
-| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                  | `runner-admission`, `security-fast`, manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow            |
+| `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                             |
+| `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                  |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                  |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                               |
 
 ## Runner registration budget
 
@@ -180,6 +196,8 @@ workflow must show its worst-case registration count and keep the org-level
 target below about 60% of the live bucket. With the current 10,000-registration
 bucket, that means a 6,000-registration operating target, leaving headroom for
 concurrent repositories, retries, and burst overlap.
+
+The changed-target PR plan reduces the common Node test burst from 14 Blacksmith registrations to one. Broad-risk PRs keep the 14-registration compact fallback, so the worst case does not increase.
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -240,7 +258,7 @@ Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target (including Android), dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, dispatches `OpenClaw Performance` against the target SHA, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes (advisory maturity scorecard rendering is opt-in via `run_maturity_scorecard`). Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target (including Android), dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, dispatches `OpenClaw Performance` against the target SHA, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, Telegram, and gated Discord, WhatsApp, and Slack lanes (advisory maturity scorecard rendering is opt-in via `run_maturity_scorecard`). Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs. Its live agent proof sends visible progress, continues through randomized workspace reads and an exact artifact write, then sends completion.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -298,13 +316,13 @@ intentionally want the broad advisory provider/media matrix. Stable and full
 release checks always run the exhaustive live/E2E and Docker release-path soak;
 the beta profile can opt in with `run_release_soak=true`.
 
-- `minimum` keeps the fastest OpenAI/core release-critical lanes.
+- `beta` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.
 - `full` runs the broad advisory provider/media matrix.
 
 The umbrella records the dispatched child run ids, and the final `Verify full validation` job re-checks current child run conclusions and appends slowest-job tables for each child run. If a child workflow is rerun and turns green, rerun only the parent verifier job to refresh the umbrella result and timing summary.
 
-For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `performance` for only the OpenClaw Performance child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. QA release-check lanes are advisory except the standard runtime tool coverage gate, which blocks when required OpenClaw dynamic tools drift or disappear from the standard tier summary.
+For recovery, both `Full Release Validation` and `OpenClaw Release Checks` accept `rerun_group`. Use `all` for a release candidate, `ci` for only the normal full CI child, `plugin-prerelease` for only the plugin prerelease child, `performance` for only the OpenClaw Performance child, `release-checks` for every release child, or a narrower group: `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, or `npm-telegram` on the umbrella. This keeps a failed release box rerun bounded after a focused fix. For one failed cross-OS lane, combine `rerun_group=cross-os` with `cross_os_suite_filter`, for example `windows/packaged-upgrade`; long cross-OS commands emit heartbeat lines and packaged-upgrade summaries include per-phase timings. Selected Matrix and Telegram QA lanes block normal release validation, as does the standard runtime tool coverage gate. QA parity, runtime parity, and the gated Discord, WhatsApp, and Slack live lanes are advisory.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected ref once into a `release-package-under-test` tarball, then passes that artifact to cross-OS checks and Package Acceptance, plus the live/E2E release-path Docker workflow when soak coverage runs. That keeps the package bytes consistent across release boxes and avoids repacking the same candidate in multiple child jobs. For the Codex npm-plugin live lane, release checks either pass a matching published plugin spec derived from `release_package_spec`, pass the operator-supplied `codex_plugin_spec`, or leave the input blank so the Docker script packs the selected checkout's Codex plugin.
 
@@ -497,7 +515,7 @@ Release Docker coverage runs smaller chunked jobs with `OPENCLAW_SKIP_DOCKER_BUI
 - `OPENCLAW_DOCKER_ALL_PROFILE=release-path`
 - `OPENCLAW_DOCKER_ALL_CHUNK=core | package-update-openai | package-update-anthropic | package-update-core | plugins-runtime-plugins | plugins-runtime-services | plugins-runtime-install-a..h | openwebui`
 
-Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight, then runs multiple same-session OpenClaw agent turns against OpenAI. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
+Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a` through `plugins-runtime-install-h`, and `openwebui`. `package-update-openai` includes the live Codex plugin package lane, which installs the candidate OpenClaw package, installs the Codex plugin from `codex_plugin_spec` or a same-ref tarball with explicit Codex CLI install approval, runs Codex CLI preflight and same-session agent turns, then runs a zero-retry medium-thinking turn that sends progress, reads randomized workspace inputs, writes their exact artifact, and sends completion. `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases. The `install-e2e` lane alias remains the aggregate manual rerun alias for both provider installer lanes.
 
 OpenWebUI runs as a standalone `openwebui` chunk on a dedicated large-disk Blacksmith runner whenever stable or full release-path coverage requests it, even when the reusable workflow routes supported jobs to GitHub-hosted runners. Keeping the external image pull separate prevents the large image from competing with the shared package and plugin images in `plugins-runtime-services`; legacy aggregate plugin/runtime chunks still include OpenWebUI for compatible manual reruns. Bundled-channel update lanes retry once for transient npm network failures.
 
@@ -518,11 +536,11 @@ The scheduled live/E2E workflow runs the full release-path Docker suite daily an
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic parity is nested under the broad QA and release harnesses, not a standalone PR workflow. Use `Full Release Validation` with `rerun_group=qa-parity` when parity should ride with a broad validation run.
 
-- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out the mock parity lane, live Matrix lane, and live Telegram and Discord lanes as parallel jobs. Live jobs use the `qa-live-shared` environment, and Telegram/Discord use Convex leases.
+- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
 
 Release checks run Matrix and Telegram live transport lanes with the deterministic mock provider and mock-qualified models (`mock-openai/gpt-5.6-luna` and `mock-openai/gpt-5.6-luna-alt`) so the channel contract is isolated from live model latency and normal provider-plugin startup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
-Matrix uses `--profile fast` for scheduled and release gates, adding `--fail-fast` only when the checked-out CLI supports it. The CLI default and manual workflow input remain `all`; manual `matrix_profile=all` dispatch always shards full Matrix coverage into `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs.
+Scheduled and release Matrix gates use the shared QA Lab suite host and live adapter with the release scenarios. The CLI default and manual workflow input remain `all`; manual `all` dispatches fan out the `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` profiles so the 93-scenario proof stays within per-job timeouts. Focused manual dispatches select `fast`, `release`, or `transport` in one job.
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
@@ -620,10 +638,11 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
 ## Testbox validation
 
 Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
-sessions use it by default for tests and computationally intensive work,
-including builds, typechecks, lint fan-out, Docker, package lanes, E2E, live
-proof, and CI parity. Trusted maintainer code defaults to
-`blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
+sessions keep one/few focused tests and cheap static checks local only for
+trusted source when the existing dependency install is ready. They use Crabbox for larger suites and
+computationally intensive work, including builds, typechecks, lint fan-out,
+Docker, package lanes, E2E, live proof, and CI parity. Trusted maintainer heavy
+proof defaults to `blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
 workflow hydrates provider and agent credentials, so untrusted contributor or
 fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
@@ -648,14 +667,9 @@ report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
-At the start of a trusted code task likely to need tests or heavy proof, agents
-should pre-warm immediately in a background command session, continue
-inspection and editing while hydration runs, reuse the returned `tbx_...` id,
-sync the current checkout on every run, and stop it before handoff:
-
-```bash
-node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
-```
+Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
+first heavy command is ready, reuse the returned `tbx_...` id for later heavy
+commands, sync the current checkout on every run, and stop it before handoff.
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -702,7 +716,8 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
   "corepack pnpm check:changed"
 ```
 
-Focused test rerun:
+Focused test rerun on Testbox when local dependencies are unavailable or the
+target fans out:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

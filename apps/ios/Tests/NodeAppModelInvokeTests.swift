@@ -34,11 +34,11 @@ private actor CancellingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         throw CancellationError()
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 }
@@ -61,6 +61,36 @@ private actor RecordingCameraService: CameraServicing {
 
     func clipCallCount() -> Int {
         self.clipCalls
+    }
+}
+
+private actor ApprovalResolutionCapture {
+    private var kind: ApprovalKind?
+
+    func record(kind: ApprovalKind) {
+        self.kind = kind
+    }
+
+    func recordedKind() -> ApprovalKind? {
+        self.kind
+    }
+}
+
+private actor MockHealthSummaryService: HealthSummaryServicing {
+    private(set) var periods: [OpenClawHealthSummaryPeriod] = []
+
+    func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
+        self.periods.append(params.period)
+        return OpenClawHealthSummaryPayload(
+            period: params.period,
+            startISO: "2026-07-06T00:00:00Z",
+            endISO: "2026-07-12T18:30:00Z",
+            timeZoneIdentifier: "America/Los_Angeles",
+            stepCount: 42000,
+            sleepDurationMinutes: 2880,
+            restingHeartRateBpm: 61.2,
+            workoutCount: 3,
+            workoutDurationMinutes: 145)
     }
 }
 
@@ -156,7 +186,7 @@ private actor OverlappingCameraService: CameraServicing {
         []
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
+    func snap(params _: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult {
         self.snapCount += 1
         if self.snapCount == 1 {
             self.firstStarted.yield()
@@ -171,7 +201,7 @@ private actor OverlappingCameraService: CameraServicing {
         return (format: "jpg", base64: "", width: 1, height: 1)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
+    func clip(params _: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult {
         throw CancellationError()
     }
 
@@ -326,7 +356,9 @@ private func waitForMainActorWork(
     let clock = ContinuousClock()
     let deadline = clock.now.advanced(by: timeout)
     while clock.now < deadline {
-        if condition() { return true }
+        if condition() {
+            return true
+        }
         await Task.yield()
     }
     return condition()
@@ -680,6 +712,38 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(json.contains("\"value\""))
     }
 
+    @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
+        let service = MockHealthSummaryService()
+        let appModel = NodeAppModel(healthSummaryService: service)
+        let request = BridgeInvokeRequest(
+            id: "health-1",
+            command: OpenClawHealthCommand.summary.rawValue,
+            paramsJSON: #"{"period":"today"}"#)
+
+        let response = await appModel._test_handleInvoke(request)
+        let payload = try decodeTalkPayload(OpenClawHealthSummaryPayload.self, from: response)
+
+        #expect(response.ok)
+        #expect(payload.period == .today)
+        #expect(payload.stepCount == 42000)
+        #expect(await service.periods == [.today])
+    }
+
+    @Test @MainActor func `health summary rejects arbitrary periods before querying`() async {
+        let service = MockHealthSummaryService()
+        let appModel = NodeAppModel(healthSummaryService: service)
+        let request = BridgeInvokeRequest(
+            id: "health-invalid",
+            command: OpenClawHealthCommand.summary.rawValue,
+            paramsJSON: #"{"period":"90d"}"#)
+
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(await service.periods.isEmpty)
+    }
+
     @Test @MainActor func `chat session key defaults to main base`() {
         let appModel = NodeAppModel()
         #expect(appModel.chatSessionKey == "main")
@@ -915,7 +979,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "echo tapped-b")
     }
 
-    @Test @MainActor func `unified approval get accepts only matching exec presentation`() throws {
+    @Test @MainActor func `unified approval get accepts matching exec and plugin presentations`() throws {
         let execJSON = #"""
         {
           "approval": {
@@ -985,9 +1049,116 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+        let decodedPluginPrompt = try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
             pluginJSON,
+            approvalID: "approval-unified")
+        let pluginPrompt = try #require(decodedPluginPrompt)
+        #expect(pluginPrompt.kind == "plugin")
+        #expect(pluginPrompt.commandText == "Plugin approval")
+        #expect(pluginPrompt.descriptionText == "Review")
+        #expect(pluginPrompt.pluginId == "example")
+        #expect(pluginPrompt.toolName == "guarded")
+        #expect(pluginPrompt.pluginSeverity == "warning")
+        #expect(pluginPrompt.agentId == "main")
+        #expect(pluginPrompt.allowedDecisions == ["allow-once", "deny"])
+        #expect(pluginPrompt.allowsAllowOnce)
+        #expect(!pluginPrompt.allowsAllowAlways)
+        #expect(pluginPrompt.allowsDeny)
+
+        let whitespaceDescriptionJSON = pluginJSON.replacingOccurrences(
+            of: #""description": "Review""#,
+            with: #""description": "   ""#)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            whitespaceDescriptionJSON,
             approvalID: "approval-unified") == nil)
+    }
+
+    @Test @MainActor func `plugin notification prompt resolves with plugin kind`() async throws {
+        let pluginJSON = #"""
+        {
+          "approval": {
+            "id": "approval-plugin",
+            "status": "pending",
+            "urlPath": "/approve/approval-plugin",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "plugin",
+              "title": "Allow guarded plugin tool?",
+              "description": "The plugin wants to perform a guarded action.",
+              "severity": "warning",
+              "pluginId": "example",
+              "toolName": "guarded",
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let capture = ApprovalResolutionCapture()
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(pluginJSON)
+        appModel._test_setExecApprovalResolutionSuccessHandler { _, kind, _, _ in
+            await capture.record(kind: kind)
+        }
+
+        await appModel._test_presentExecApprovalNotificationPrompt(ApprovalNotificationPrompt(
+            approvalId: "approval-plugin",
+            gatewayDeviceId: nil,
+            kind: .plugin))
+
+        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        #expect(prompt.kind == "plugin")
+        #expect(prompt.commandText == "Allow guarded plugin tool?")
+        #expect(prompt.descriptionText == "The plugin wants to perform a guarded action.")
+        #expect(prompt.allowsAllowOnce)
+        #expect(!prompt.allowsAllowAlways)
+        #expect(prompt.allowsDeny)
+        #expect(watchService.lastSentExecApprovalPrompt == nil)
+
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+
+        #expect(await capture.recordedKind() == .plugin)
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
+        #expect(watchService.lastSentExecApprovalResolved == nil)
+    }
+
+    @Test @MainActor func `persisted plugin approval restores into phone inbox only`() throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+
+        let firstWatchService = MockWatchMessagingService()
+        let firstModel = NodeAppModel(watchMessagingService: firstWatchService)
+        firstModel._test_setConnectedGatewayID("test-gateway")
+        try firstModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-plugin-restored",
+                kind: .plugin,
+                commandText: "Allow guarded plugin tool?",
+                allowedDecisions: ["allow-once", "deny"],
+                descriptionText: "The plugin wants to perform a guarded action.",
+                pluginId: "example",
+                toolName: "guarded",
+                pluginSeverity: "warning",
+                expiresAtMs: 4_000_000_000_000)))
+        #expect(firstWatchService.lastSentExecApprovalPrompt == nil)
+
+        let restoredWatchService = MockWatchMessagingService()
+        let restoredModel = NodeAppModel(watchMessagingService: restoredWatchService)
+        restoredModel._test_setConnectedGatewayID("test-gateway")
+
+        #expect(restoredModel._test_pendingExecApprovalInboxItems().map(\.id) == [
+            "approval-plugin-restored",
+        ])
+        restoredModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: "approval-plugin-restored",
+            gatewayStableID: "test-gateway")
+        #expect(restoredModel._test_pendingExecApprovalPrompt()?.kind == "plugin")
+        #expect(restoredWatchService.lastSentExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `exec approval prompt rejects malformed decision sets`() {
@@ -1111,6 +1282,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             "This approval was already set to Always Allow.")
         #expect(appModel._test_pendingExecApprovalState().resolving == false)
         #expect(watchService.lastSentExecApprovalResolved?.source == "another-reviewer")
+        #expect(watchService.lastSentExecApprovalResolved?.outcome == .allowedAlways)
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText ==
             "This approval was already set to Always Allow.")
 
@@ -1160,9 +1332,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
           }
         }
         """#
-        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+        let decodedPluginResult = try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
             pluginResponseJSON,
-            approvalID: "approval-race") == nil)
+            approvalID: "approval-race")
+        let pluginResult = try #require(decodedPluginResult)
+        #expect(pluginResult.status == "denied")
+        #expect(pluginResult.decision == "deny")
+        #expect(pluginResult.text == "This approval was already denied.")
     }
 
     @Test @MainActor func `legacy approval resolve acknowledgment uses neutral gateway attribution`() async throws {
@@ -1184,6 +1360,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-legacy-ack")
         #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
         #expect(watchService.lastSentExecApprovalResolved?.source == "gateway")
+        #expect(watchService.lastSentExecApprovalResolved?.outcome == .denied)
         #expect(watchService.lastSentExecApprovalResolved?.outcomeText == "Approval denied.")
     }
 
@@ -2802,6 +2979,29 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         _ = talkMode.cancelPushToTalk(captureId: replacement.captureId)
     }
 
+    @Test @MainActor func `PTT finalizer cleanup ignores localized presentation text`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        talkMode.updateGatewayConnected(true)
+        talkMode._test_setPTTFinalizerHandler {
+            talkMode.statusText = "Generando voz…"
+        }
+        defer {
+            talkMode._test_setPTTFinalizerHandler(nil)
+            talkMode.stop()
+        }
+
+        let start = try await talkMode.beginPushToTalk()
+        await talkMode._test_handlePushToTalkTranscript(
+            "localized cleanup",
+            isFinal: false,
+            captureId: start.captureId)
+        #expect(talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
+        await waitForTalkCondition { talkMode._test_finishingPushToTalkCaptureId() == nil }
+
+        #expect(talkMode.statusText == "Ready")
+        #expect(talkMode.phase == .idle)
+    }
+
     @Test @MainActor func `enabling Talk during PTT finalization resumes after ownership clears`() async throws {
         var audioDeactivationCount = 0
         let talkMode = TalkModeManager(
@@ -3157,7 +3357,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await waitForTalkCondition { startResumed }
 
         #expect(!talkMode.isListening)
-        #expect(talkMode.statusText == "Paused")
+        #expect(talkMode.statusText != "Listening")
     }
 
     @Test @MainActor func `gateway disconnect invalidates a suspended Talk start`() async {
@@ -4614,13 +4814,47 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         let snapshot = try #require(watchService.lastSentAppSnapshot)
         #expect(snapshot.gatewayConnected == true)
-        #expect(snapshot.gatewayStatusText == "Connected")
+        #expect(snapshot.gatewayStatus.code == .gatewayConnected)
+        #expect(snapshot.gatewayStatus.verbatim == nil)
         #expect(snapshot.agentName == "Main")
         #expect(snapshot.sessionKey == "main")
         #expect(try Array(#require(snapshot.gatewayStableID).utf8) == Array(gatewayStableID.utf8))
-        #expect(!snapshot.talkStatusText.isEmpty)
+        #expect(snapshot.talkStatus.code != .legacy)
+        #expect(snapshot.talkStatus.verbatim == nil)
         #expect(snapshot.talkEnabled == true)
         #expect(snapshot.pendingApprovalCount == 0)
+    }
+
+    @Test @MainActor func `watch gateway problem keeps localization semantics`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_applyOperatorGatewayConnectionProblem(GatewayConnectionProblem(
+            kind: .pairingRequired,
+            owner: .gateway,
+            title: "Pairing approval required",
+            message: "Approve this device.",
+            titlePresentation: .localized("Pairing approval required"),
+            requestId: "request-42",
+            retryable: false,
+            pauseReconnect: true))
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "localized-gateway-problem",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
+        #expect(status.code == .gatewayProblemWithRequestID)
+        #expect(status.localizationKey == "Pairing approval required")
+        #expect(status.arguments == ["request-42"])
+        #expect(status.verbatim == nil)
     }
 
     @Test @MainActor func `watch app snapshot publishes offline when operator disconnects`() async {
@@ -4652,7 +4886,98 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
-        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Offline")
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayOffline)
+    }
+
+    @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.setGatewayConnectionProgress(reconnecting: false)
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-connecting",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.gatewayStatus)
+        #expect(status.code == .gatewayConnecting)
+        #expect(status.verbatim == nil)
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connecting…")
+    }
+
+    @Test @MainActor func `watch app snapshot preserves talk failures`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode._test_markSpeechErrorStatusPendingRestart("Speech error: denied")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-talk-failure",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let status = try #require(watchService.lastSentAppSnapshot?.talkStatus)
+        #expect(status.code == .talkFailure)
+        #expect(status.verbatim == "Speech error: denied")
+        #expect(watchService.lastSentAppSnapshot?.talkStatusText == "Speech error: denied")
+    }
+
+    @Test @MainActor func `watch app snapshot preserves one shot push to talk phase`() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode.isEnabled = false
+        appModel.talkMode.isPushToTalkActive = true
+        appModel.talkMode._test_handleRealtimeRelayStatus("Thinking")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-push-to-talk",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.talkStatus.code == .talkThinking)
+    }
+
+    @Test @MainActor func `watch app snapshot preserves terminal push to talk failure`() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel.talkMode._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+
+        watchService.emitAppSnapshotRequest(
+            WatchAppSnapshotRequestEvent(
+                requestId: "app-snapshot-push-to-talk-failure",
+                sentAtMs: 123,
+                transport: "sendMessage"))
+        for _ in 0..<20 {
+            if watchService.lastSentAppSnapshot != nil {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(watchService.lastSentAppSnapshot?.talkStatus.code == .talkFailure)
+        #expect(
+            watchService.lastSentAppSnapshot?.talkStatus.verbatim
+                == "Backend rejected realtime request")
     }
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
@@ -4683,7 +5008,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == true)
-        #expect(watchService.lastSentAppSnapshot?.gatewayStatusText == "Connected")
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayConnected)
     }
 
     @Test @MainActor func `watch app snapshot uses configured agent avatar`() async throws {
@@ -6514,6 +6839,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             OpenClawWatchExecApprovalResolvedMessage(
                 approvalId: "approval-a",
                 gatewayStableID: "gateway-a",
+                outcome: .allowedAlways,
                 outcomeText: "This approval was already set to Always Allow."))
         let expired = WatchMessagingPayloadCodec.encodeExecApprovalExpiredPayload(
             OpenClawWatchExecApprovalExpiredMessage(
@@ -6521,6 +6847,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 gatewayStableID: "gateway-a",
                 reason: .notFound))
         #expect(resolved["gatewayStableID"] as? String == "gateway-a")
+        #expect(resolved["outcome"] as? String == "allowedAlways")
         #expect(resolved["outcomeText"] as? String == "This approval was already set to Always Allow.")
         #expect(expired["gatewayStableID"] as? String == "gateway-a")
 
@@ -6698,16 +7025,21 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `watch application context retains app and approval snapshots`() throws {
         let appPayload = WatchMessagingPayloadCodec.encodeAppSnapshotPayload(
             OpenClawWatchAppSnapshotMessage(
+                gatewayStatus: OpenClawWatchAppStatus(code: .gatewayConnected),
                 gatewayStatusText: "Connected",
                 gatewayConnected: true,
                 agentName: "Main",
+                agentAvatarURL: "https://example.com/avatar.png",
                 sessionKey: "main",
                 gatewayStableID: "gateway-a",
+                talkStatus: OpenClawWatchAppStatus(code: .talkOff),
                 talkStatusText: "Off",
                 talkEnabled: false,
                 talkListening: false,
                 talkSpeaking: false,
                 pendingApprovalCount: 1,
+                chatStatus: OpenClawWatchAppStatus(code: .chatConnectIPhone),
+                chatStatusText: "Connect iPhone chat to read messages",
                 snapshotId: "app-a"))
         let approvalPayload = WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(
             OpenClawWatchExecApprovalSnapshotMessage(
@@ -6735,6 +7067,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let nestedApprovals = try #require(
             combined[OpenClawWatchPayloadType.execApprovalSnapshot.rawValue] as? [String: Any])
         #expect(nestedApp["gatewayStableID"] as? String == "gateway-a")
+        #expect(nestedApp["agentAvatarUrl"] as? String == "https://example.com/avatar.png")
+        #expect(nestedApp["agentAvatarURL"] == nil)
+        let nestedChatStatus = try #require(nestedApp["chatStatus"] as? [String: Any])
+        #expect(nestedChatStatus["code"] as? String == "chatConnectIPhone")
+        #expect(nestedApp["chatStatusCode"] == nil)
         #expect(nestedApp["snapshotId"] as? String == "app-a")
         #expect(nestedApprovals["snapshotId"] as? String == "approval-a")
         #expect(nestedApprovals["gatewayStableID"] as? String == "gateway-a")

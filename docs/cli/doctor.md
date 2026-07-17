@@ -203,7 +203,13 @@ the container normally.
 the canonical shared state database at
 `<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database
 path, is never invoked by normal Gateway operation, and is not part of
-`openclaw doctor --fix`.
+`openclaw doctor --fix`. The command acquires the same state ownership lock as
+Gateway startup and holds it through validation, checkpointing, `VACUUM`, and
+the final integrity checks. It refuses to run while a Gateway or another
+SQLite maintenance command owns that lock. The state lock remains active when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config Gateway singleton, so an
+operator shell does not need to inherit the Gateway service's environment for
+maintenance to detect it.
 
 Stop the Gateway and create a verified backup first:
 
@@ -293,8 +299,16 @@ transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-
 to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
 sizes. Compaction requires a regular file with the current agent schema, the
 selected agent's durable owner metadata, and no open handle in the doctor
-process. This is explicit offline maintenance: stop the Gateway first so normal
-writes cannot race the checkpoint or `VACUUM`.
+process. The destructive `import`, `compact`, `recover`, and `restore` modes
+hold the same state ownership lock as Gateway startup for their full operation;
+`inspect`, `dry-run`, and `validate` remain read-only and do not take it. Stop
+the Gateway first. Destructive modes fail instead of racing live writes or
+racing another maintenance command. A destructive `--session-sqlite-store`
+target must be inside the active state directory; set `OPENCLAW_STATE_DIR` to
+the store's owning state directory before maintaining another installation.
+Existing hard-linked targets are rejected because another path can share the
+same database inode outside the locked state directory. The same ownership
+checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
@@ -366,7 +380,7 @@ compare restored legacy artifacts with the SQLite rows before importing.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 - On Linux, doctor warns when the user's crontab still runs the unmaintained legacy `~/.openclaw/bin/ensure-whatsapp.sh`, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment.
 - When WhatsApp is enabled, doctor checks for a degraded Gateway event loop with local `openclaw-tui` clients still running. `doctor --fix` stops only verified local TUI clients so WhatsApp replies are not queued behind stale TUI refresh loops.
-- Doctor rewrites legacy `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale session route pins. `--fix` also migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
+- Doctor rewrites legacy `codex/*` and `openai-codex/*` model refs to canonical `openai/*` refs across primary models, fallbacks, model allowlists, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, cron payloads, and stale session/transcript route pins. `--fix` also merges legacy `models.providers.codex` and `models.providers.openai-codex` config when safe, migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
 - Doctor reports nonempty `auth.order.<provider>` lists whose referenced profiles are all gone while compatible stored credentials exist. `doctor --fix` deletes only those stale overrides, restoring automatic per-agent credential selection; explicit empty orders, partially live lists, and orders without a compatible stored credential stay unchanged. If an active SQLite auth store is unreadable or malformed, doctor explains why it skipped this repair. Restart a running Gateway before rechecking auth status if its config reload mode does not apply the write automatically.
 - Doctor cleans legacy plugin dependency staging state from older OpenClaw versions and relinks the host `openclaw` package for managed npm plugins that declare it as a peer dependency. It also repairs missing downloadable plugins referenced by config (`plugins.entries`, configured channels, configured provider/search settings, configured agent runtimes). During package updates, doctor skips package-manager plugin repair until the package swap completes; rerun `openclaw doctor --fix` afterward if a configured plugin still needs recovery. If a download fails, doctor reports the install error and preserves the configured plugin entry for the next repair attempt.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.deny`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides, when plugin discovery is healthy.

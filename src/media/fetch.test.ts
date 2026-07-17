@@ -229,7 +229,8 @@ describe("readRemoteMediaBuffer", () => {
     readRemoteMediaBuffer = fetchModule.readRemoteMediaBuffer;
     saveRemoteMedia = fetchModule.saveRemoteMedia;
     saveResponseMedia = fetchModule.saveResponseMedia;
-    defaultFetchMediaMaxBytes = fetchModule.DEFAULT_FETCH_MEDIA_MAX_BYTES;
+    // Default cap mirrors the module-private DEFAULT_FETCH_MEDIA_MAX_BYTES.
+    defaultFetchMediaMaxBytes = (await import("@openclaw/media-core/constants")).MAX_DOCUMENT_BYTES;
   });
 
   beforeEach(() => {
@@ -1282,3 +1283,4 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

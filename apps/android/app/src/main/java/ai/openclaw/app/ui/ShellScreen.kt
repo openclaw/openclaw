@@ -16,6 +16,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.firstGraphemeOrNull
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -191,6 +192,11 @@ fun ShellScreen(
           HomeDestination.Settings -> Tab.Settings
         },
       )
+      // Screenshot scenes can target a settings detail route alongside the tab.
+      viewModel.requestedSettingsRoute.value?.let { route ->
+        nav.openSettingsRoute(route)
+        viewModel.clearRequestedSettingsRoute()
+      }
       viewModel.clearRequestedHomeDestination()
     }
 
@@ -594,7 +600,7 @@ private fun OverviewHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
+    OpenClawMascot(modifier = Modifier.size(25.dp))
     Text(
       text = nativeString("OpenClaw"),
       style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -845,6 +851,12 @@ internal fun localizedUppercase(
   languageTag: String?,
   fallbackLocale: Locale = Locale.getDefault(),
 ): String = value.uppercase(languageTag?.let(Locale::forLanguageTag) ?: fallbackLocale)
+
+internal fun localizedInitial(
+  value: String,
+  languageTag: String?,
+  fallbackLocale: Locale = Locale.getDefault(),
+): String? = value.firstGraphemeOrNull()?.let { localizedUppercase(it, languageTag, fallbackLocale) }
 
 @Composable
 private fun OverviewProgressBar(
@@ -1193,7 +1205,7 @@ private fun agentInitials(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { part -> part.firstOrNull()?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) } }
+    .mapNotNull { part -> localizedInitial(part, currentAppLanguage().languageTag) }
     .joinToString("")
     .ifBlank { "OC" }
 
@@ -1636,7 +1648,7 @@ private fun SettingsShellScreen(
             route = SettingsRoute.ProvidersModels,
           ),
           SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
-          SettingsRow(nativeText("Cron Jobs"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
+          SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
           SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
           SettingsRow(
@@ -1951,10 +1963,7 @@ private fun ProfilePanel(
         Box(contentAlignment = Alignment.Center) {
           Text(
             text =
-              displayName
-                .firstOrNull()
-                ?.let { localizedUppercase(it.toString(), currentAppLanguage().languageTag) }
-                ?: "O",
+              localizedInitial(displayName, currentAppLanguage().languageTag) ?: "O",
             style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 17.sp),
             color = ClawTheme.colors.text,
             textAlign = TextAlign.Center,

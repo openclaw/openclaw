@@ -6,15 +6,12 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
+import { createLocalMeetRealtimeAudioTransport } from "../realtime-local-audio-transport.js";
+import { createNodeMeetRealtimeAudioTransport } from "../realtime-node-audio-transport.js";
 import {
-  startNodeAgentAudioBridge,
-  startNodeRealtimeAudioBridge,
-  type ChromeNodeRealtimeAudioBridgeHandle,
-} from "../realtime-node.js";
-import {
-  startCommandAgentAudioBridge,
-  startCommandRealtimeAudioBridge,
-  type ChromeRealtimeAudioBridgeHandle,
+  startMeetAgentRealtimeEngine,
+  startMeetRealtimeEngine,
+  type MeetRealtimeAudioEngineHandle,
 } from "../realtime.js";
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
@@ -47,24 +44,17 @@ type BrowserRequestParams = {
 
 type BrowserRequestCaller = (params: BrowserRequestParams) => Promise<unknown>;
 
-const chromeTransportDeps: {
-  callGatewayFromCli: typeof callGatewayFromCli;
-} = {
-  callGatewayFromCli,
-};
-
 const GOOGLE_MEET_CAPTION_SETTLE_MS = 1_000;
 
-export const testing = {
-  setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
-    chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
-  },
-  meetStatusScriptForTest: meetStatusScript,
-  meetTranscriptScriptForTest: meetTranscriptScript,
-  meetLeaveScriptForTest: meetLeaveScript,
-  parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
-  resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
-  resolveLocalBrowserRequestForTest: resolveLocalBrowserRequest,
+type ChromeRealtimeAudioBridgeHandle = MeetRealtimeAudioEngineHandle & {
+  inputCommand: string[];
+  outputCommand: string[];
+};
+
+type ChromeNodeRealtimeAudioBridgeHandle = MeetRealtimeAudioEngineHandle & {
+  type: "node-command-pair";
+  nodeId: string;
+  bridgeId: string;
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -182,20 +172,27 @@ export async function launchChromeMeet(params: {
         "Chrome talk-back mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
       );
     }
-    return {
-      type: "command-pair",
-      ...(params.mode === "agent"
-        ? await startCommandAgentAudioBridge({
+    const transport = createLocalMeetRealtimeAudioTransport({
+      inputCommand: params.config.chrome.audioInputCommand,
+      outputCommand: params.config.chrome.audioOutputCommand,
+      bargeInInputCommand: params.config.chrome.bargeInInputCommand,
+      bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
+      bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
+      bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
+      logger: params.logger,
+    });
+    const engine =
+      params.mode === "agent"
+        ? await startMeetAgentRealtimeEngine({
             config: params.config,
             fullConfig: params.fullConfig,
             runtime: params.runtime,
             meetingSessionId: params.meetingSessionId,
             requesterSessionKey: params.requesterSessionKey,
-            inputCommand: params.config.chrome.audioInputCommand,
-            outputCommand: params.config.chrome.audioOutputCommand,
+            transport,
             logger: params.logger,
           })
-        : await startCommandRealtimeAudioBridge({
+        : await startMeetRealtimeEngine({
             config: {
               ...params.config,
               realtime: { ...params.config.realtime, strategy: "bidi" },
@@ -204,10 +201,14 @@ export async function launchChromeMeet(params: {
             runtime: params.runtime,
             meetingSessionId: params.meetingSessionId,
             requesterSessionKey: params.requesterSessionKey,
-            inputCommand: params.config.chrome.audioInputCommand,
-            outputCommand: params.config.chrome.audioOutputCommand,
+            transport,
             logger: params.logger,
-          })),
+          });
+    return {
+      type: "command-pair",
+      inputCommand: params.config.chrome.audioInputCommand,
+      outputCommand: params.config.chrome.audioOutputCommand,
+      ...engine,
     };
   };
 
@@ -315,7 +316,7 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
 }
 
 async function callLocalBrowserRequest(params: BrowserRequestParams) {
-  return await chromeTransportDeps.callGatewayFromCli(
+  return await callGatewayFromCli(
     "browser.request",
     {
       json: true,
@@ -1685,24 +1686,46 @@ export async function launchChromeMeetOnNode(params: {
     if (!result.bridgeId) {
       throw new Error("Google Meet node did not return an audio bridge id.");
     }
-    const bridge = await (
-      params.mode === "agent" ? startNodeAgentAudioBridge : startNodeRealtimeAudioBridge
-    )({
-      config:
-        params.mode === "agent"
-          ? params.config
-          : {
-              ...params.config,
-              realtime: { ...params.config.realtime, strategy: "bidi" },
-            },
-      fullConfig: params.fullConfig,
+    const transport = createNodeMeetRealtimeAudioTransport({
       runtime: params.runtime,
-      meetingSessionId: params.meetingSessionId,
-      requesterSessionKey: params.requesterSessionKey,
       nodeId,
       bridgeId: result.bridgeId,
       logger: params.logger,
+      logPrefix: params.mode === "agent" ? "node agent" : "node",
     });
+    const engine =
+      params.mode === "agent"
+        ? await startMeetAgentRealtimeEngine({
+            config: params.config,
+            fullConfig: params.fullConfig,
+            runtime: params.runtime,
+            meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
+            logPrefix: "node",
+            transport,
+            logger: params.logger,
+          })
+        : await startMeetRealtimeEngine({
+            config: {
+              ...params.config,
+              realtime: { ...params.config.realtime, strategy: "bidi" },
+            },
+            fullConfig: params.fullConfig,
+            runtime: params.runtime,
+            meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
+            logPrefix: "node",
+            talkSessionId: `google-meet:${params.meetingSessionId}:${result.bridgeId}:node-realtime`,
+            talkContext: { nodeId, bridgeId: result.bridgeId },
+            transport,
+            logger: params.logger,
+          });
+    const bridge: ChromeNodeRealtimeAudioBridgeHandle = {
+      type: "node-command-pair",
+      nodeId,
+      bridgeId: result.bridgeId,
+      ...engine,
+    };
     return {
       nodeId,
       launched: browserControl.launched || result.launched === true,
@@ -1727,3 +1750,4 @@ export async function launchChromeMeetOnNode(params: {
     tab: browserControl.tab,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

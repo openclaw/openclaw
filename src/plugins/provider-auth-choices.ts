@@ -29,11 +29,12 @@ export type ProviderAuthChoiceMetadata = {
   cliOption?: string;
   cliDescription?: string;
   appGuidedSecret?: boolean;
+  appGuidedDiscovery?: boolean;
   appGuidedAuth?: "oauth" | "device-code";
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
-export type ProviderOnboardAuthFlag = {
+type ProviderOnboardAuthFlag = {
   optionKey: string;
   authChoice: string;
   cliFlag: string;
@@ -108,6 +109,7 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
     ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
     ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
@@ -317,7 +319,7 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-export function resolveManifestProviderOnboardAuthFlags(
+function resolveManifestProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();

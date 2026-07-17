@@ -152,6 +152,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "sessions",
+    label: "sessions",
+    description: "Session settings and groups",
+    sectionId: "sessions",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "sessions_list",
     label: "sessions_list",
     description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -202,7 +210,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "subagents",
     label: "subagents",
-    description: "Manage sub-agents",
+    description: "Background work: subagents, media gen, cron runs. list/cancel.",
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -240,6 +248,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "screen",
+    label: "screen",
+    description: "Drive operator web UI",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "terminal",
+    label: "terminal",
+    description: "Own visible gateway terminal",
+    sectionId: "ui",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "canvas",
     label: "canvas",
     description: "Control node Canvas surfaces when the Canvas plugin is enabled",
@@ -273,7 +297,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "gateway",
     label: "gateway",
-    description: "Gateway control",
+    description: "Read Gateway config and schema",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,

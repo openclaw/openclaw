@@ -376,6 +376,7 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
     public let runId: String
     public let text: String
 
+    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(runId: String, text: String) {
         self.runId = runId
         self.text = text
@@ -385,6 +386,7 @@ public struct OpenClawChatInFlightRun: Codable, Sendable {
 public struct OpenClawChatSessionInfo: Codable, Sendable {
     public let hasActiveRun: Bool?
 
+    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(hasActiveRun: Bool?) {
         self.hasActiveRun = hasActiveRun
     }
@@ -455,6 +457,7 @@ public struct OpenClawChatEventPayload: Codable, Sendable {
     public let message: AnyCodable?
     public let errorMessage: String?
 
+    // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
         runId: String?,
         sessionKey: String?,
@@ -479,6 +482,7 @@ public struct OpenClawSessionMessageEventPayload: Codable, Sendable {
     public let messageId: String?
     public let messageSeq: Int?
 
+    // periphery:ignore - package tests construct transport events; app consumers decode them.
     public init(
         sessionKey: String?,
         agentId: String? = nil,
@@ -504,6 +508,84 @@ public struct OpenClawAgentEventPayload: Codable, Sendable, Identifiable {
     public let stream: String
     public let ts: Int?
     public let data: [String: AnyCodable]
+}
+
+public struct OpenClawChatPlanStep: Hashable, Sendable {
+    public enum Status: String, Hashable, Sendable {
+        case pending
+        case inProgress = "in_progress"
+        case completed
+    }
+
+    public let step: String
+    public let status: Status
+
+    public init(step: String, status: Status) {
+        self.step = step
+        self.status = status
+    }
+
+    static func parseSteps(_ value: AnyCodable?) -> [Self] {
+        guard let value else { return [] }
+        let rawItems: [Any]
+        switch value.value {
+        case let items as [AnyCodable]:
+            rawItems = items.map(\.value)
+        case let items as [Any]:
+            rawItems = items
+        case let items as NSArray:
+            rawItems = items.map(\.self)
+        default:
+            return []
+        }
+        var hasInProgressStep = false
+        return rawItems.compactMap { rawItem in
+            guard let step = Self.parseStep(rawItem) else { return nil }
+            if step.status == .inProgress {
+                guard !hasInProgressStep else { return nil }
+                hasInProgressStep = true
+            }
+            return step
+        }
+    }
+
+    private static func parseStep(_ rawValue: Any) -> Self? {
+        let value = (rawValue as? AnyCodable)?.value ?? rawValue
+        if let legacyStep = value as? String {
+            return self.makeStep(text: legacyStep, status: .pending)
+        }
+
+        let fields: [String: Any]
+        switch value {
+        case let dictionary as [String: AnyCodable]:
+            fields = dictionary.mapValues(\.value)
+        case let dictionary as [String: String]:
+            fields = dictionary
+        case let dictionary as [String: Any]:
+            fields = dictionary
+        case let dictionary as NSDictionary:
+            fields = dictionary.reduce(into: [:]) { result, entry in
+                guard let key = entry.key as? String else { return }
+                result[key] = (entry.value as? AnyCodable)?.value ?? entry.value
+            }
+        default:
+            return nil
+        }
+
+        guard let text = fields["step"] as? String,
+              let rawStatus = fields["status"] as? String,
+              let status = Status(rawValue: rawStatus)
+        else {
+            return nil
+        }
+        return self.makeStep(text: text, status: status)
+    }
+
+    private static func makeStep(text: String, status: Status) -> Self? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return Self(step: trimmed, status: status)
+    }
 }
 
 public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {

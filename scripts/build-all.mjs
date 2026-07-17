@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import prettyMilliseconds from "pretty-ms";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
@@ -177,8 +178,15 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   },
   ciArtifacts: {
     tsdown: {
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+      // Global declaration emission is ~95% of the tsdown wall clock and PR
+      // CI's dist consumers are runtime JS only; the plugin-sdk gate below
+      // self-builds its scoped declarations instead. Release/package builds
+      // (full profile, docker packaging) keep canonical dts.
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    },
+    "write-plugin-sdk-entry-dts": {
+      OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0",
     },
   },
   gatewayWatch: {
@@ -266,7 +274,17 @@ export function resolveBuildAllSteps(profile = "full") {
       return step;
     }
     const mergedEnv = Object.assign({}, step.env, env);
-    return Object.assign({}, step, { env: mergedEnv });
+    const merged = Object.assign({}, step, { env: mergedEnv });
+    // Self-built plugin-sdk declarations depend on the whole SDK source
+    // graph, which the canonical-mode cache inputs do not cover; a cache hit
+    // here would restore stale declarations after source changes.
+    if (
+      step.label === "write-plugin-sdk-entry-dts" &&
+      mergedEnv.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS !== "1"
+    ) {
+      delete merged.cache;
+    }
+    return merged;
   });
 }
 
@@ -586,13 +604,15 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 
 export function formatBuildAllDuration(durationMs) {
   const clampedMs = Math.max(0, durationMs);
-  if (clampedMs < 1000) {
-    return `${Math.round(clampedMs)}ms`;
-  }
-  if (clampedMs < 10000) {
-    return `${(clampedMs / 1000).toFixed(2)}s`;
-  }
-  return `${(clampedMs / 1000).toFixed(1)}s`;
+  const roundedMs =
+    clampedMs < 1000
+      ? Math.round(clampedMs)
+      : clampedMs < 10_000
+        ? Math.round(clampedMs / 10) * 10
+        : Math.round(clampedMs / 100) * 100;
+  return prettyMilliseconds(roundedMs, {
+    secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
+  });
 }
 
 export function formatBuildAllTimingSummary(timings) {

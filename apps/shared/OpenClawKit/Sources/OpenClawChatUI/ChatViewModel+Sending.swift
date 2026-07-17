@@ -475,6 +475,7 @@ extension OpenClawChatViewModel {
                 + "localRunId=\(runId) pending=\(self.pendingRunCount)")
         self.pendingToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
+        self.clearPlan()
 
         // Production attachment sends enter the durable outbox above. Fixture,
         // preview, and embedded transports may intentionally have no outbox;
@@ -557,7 +558,7 @@ extension OpenClawChatViewModel {
     private func deliverLiveSend(_ attempt: LiveSendAttempt) async {
         let sessionKey = attempt.draft.session.key
         do {
-            await self.waitForPendingModelPatches(in: sessionKey)
+            await self.waitForPendingSessionSettings(in: sessionKey)
             guard self.isCurrentSession(attempt.draft.session) else { return }
             self.logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "

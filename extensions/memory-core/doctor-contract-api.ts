@@ -42,10 +42,10 @@ import {
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   configureMemoryCoreDreamingState,
-  readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./src/dreaming-state.js";
+import { dreamingStateComparison } from "./src/migration/dreaming-state-comparison.js";
 import {
   SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
   SHORT_TERM_STORE_RELATIVE_PATH,
@@ -106,7 +106,7 @@ type LegacyMemorySidecarImportResult = {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-class LegacyMemoryRowsConflictError extends Error {
+class LegacyMemoryDerivedRowsConflictError extends Error {
   constructor(readonly tableName: string) {
     super(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
   }
@@ -211,10 +211,26 @@ function formatLegacyVectorRows(count: number | undefined): string {
   return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
 }
 
-function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
+function assertLegacyDerivedRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
-    throw new LegacyMemoryRowsConflictError(tableName);
+    throw new LegacyMemoryDerivedRowsConflictError(tableName);
+  }
+}
+
+function assertLegacyVectorRowsReferenceChunks(db: DatabaseSync, schema: string): void {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
+         WHERE chunk.id = legacy.id
+       )`,
+    )
+    .get() as { missing?: unknown } | undefined;
+  if (Number(row?.missing ?? 0) > 0) {
+    throw new Error(`legacy memory ${LEGACY_MEMORY_VECTOR_TABLE} rows reference missing chunks`);
   }
 }
 
@@ -340,17 +356,8 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
   if (!tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
     return;
   }
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
-       WHERE chunk.id = legacy.id
-     )`,
-    `${LEGACY_MEMORY_VECTOR_TABLE} chunk references`,
-  );
-  assertLegacyRowsCopied(
+  assertLegacyVectorRowsReferenceChunks(db, schema);
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
@@ -368,7 +375,7 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
       WHERE canonical.id = legacy.id
     );
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
@@ -398,7 +405,7 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
       WHERE canonical.id = legacy.id
     );
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.chunks AS legacy
@@ -435,7 +442,7 @@ function copyLegacyMemoryIndexRows(
     SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
     FROM ${schema}.chunks;
   `);
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.meta AS legacy
@@ -445,7 +452,7 @@ function copyLegacyMemoryIndexRows(
      )`,
     "meta",
   );
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.files AS legacy
@@ -459,7 +466,7 @@ function copyLegacyMemoryIndexRows(
      )`,
     "files",
   );
-  assertLegacyRowsCopied(
+  assertLegacyDerivedRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
      FROM ${schema}.chunks AS legacy
@@ -493,14 +500,16 @@ function copyLegacyMemoryIndexRows(
         dims INTEGER,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (provider, model, provider_key, hash)
-      );
+      ) STRICT;
       INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
         provider, model, provider_key, hash, embedding, dims, updated_at
       )
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
-    assertLegacyRowsCopied(
+    // Matching cache keys are derived rows. Validate shape before deciding whether the
+    // entire stale sidecar should yield to the canonical index.
+    assertLegacyDerivedRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.embedding_cache AS legacy
@@ -510,9 +519,8 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
            AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
+           AND CASE WHEN json_valid(canonical.embedding) AND json_valid(legacy.embedding) THEN json_type(canonical.embedding) = 'array' AND json_array_length(canonical.embedding) = canonical.dims AND json_type(legacy.embedding) = 'array' AND json_array_length(legacy.embedding) = legacy.dims ELSE 0 END
        )`,
       "embedding_cache",
     );
@@ -939,9 +947,9 @@ async function migrateLegacyMemorySidecarSource(params: {
         requireVectorRows: vectorEnabled,
       });
     } catch (err) {
-      if (err instanceof LegacyMemoryRowsConflictError && err.tableName === "files") {
-        // Memory index rows are derived from canonical memory sources. Keep the
-        // current per-agent index and let normal sync rebuild any stale entries.
+      if (err instanceof LegacyMemoryDerivedRowsConflictError) {
+        // Every imported table is a derived search index. A same-identity mismatch means the
+        // current per-agent row wins; normal sync rebuilds any rows skipped with the sidecar.
         params.changes.push(
           `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
         );
@@ -1032,10 +1040,6 @@ async function collectLegacySources(
   return sources;
 }
 
-async function workspaceHasRows(namespace: string, workspaceDir: string): Promise<boolean> {
-  return (await readMemoryCoreWorkspaceEntries({ namespace, workspaceDir })).length > 0;
-}
-
 async function migrateDailyIngestion(source: LegacySource): Promise<number> {
   const state = normalizeDailyIngestionState(await readJsonFile(source.filePath));
   await writeMemoryCoreWorkspaceEntries({
@@ -1117,19 +1121,6 @@ async function migratePhaseSignals(source: LegacySource): Promise<number> {
   return Object.keys(state.entries).length;
 }
 
-function targetNamespacesForSource(label: string): string[] {
-  if (label === "daily ingestion") {
-    return [DREAMING_DAILY_INGESTION_NAMESPACE];
-  }
-  if (label === "session ingestion") {
-    return [DREAMING_SESSION_INGESTION_FILES_NAMESPACE, DREAMING_SESSION_INGESTION_SEEN_NAMESPACE];
-  }
-  if (label === "short-term recall") {
-    return [SHORT_TERM_RECALL_NAMESPACE];
-  }
-  return [SHORT_TERM_PHASE_SIGNAL_NAMESPACE];
-}
-
 async function migrateSource(source: LegacySource): Promise<number> {
   if (source.label === "daily ingestion") {
     return await migrateDailyIngestion(source);
@@ -1163,17 +1154,29 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       configureMemoryCoreDreamingState(params.context.openPluginStateKeyedStore);
       const changes: string[] = [];
       const warnings: string[] = [];
+      const notices: string[] = [];
       for (const source of await collectLegacySources(params.config, params.env)) {
-        const targetHasRows = (
-          await Promise.all(
-            targetNamespacesForSource(source.label).map((namespace) =>
-              workspaceHasRows(namespace, source.workspaceDir),
-            ),
-          )
-        ).some(Boolean);
+        const targetHasRows = await dreamingStateComparison.targetHasRows(source);
         if (targetHasRows) {
+          let sourceAcknowledged: boolean;
+          try {
+            sourceAcknowledged = await dreamingStateComparison.sourceIsAcknowledged(source);
+          } catch (err) {
+            warnings.push(
+              `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because the legacy source could not be compared: ${String(err)}`,
+            );
+            continue;
+          }
+          if (sourceAcknowledged) {
+            // Older releases may rewrite these rollback sources. The stored hash
+            // keeps unchanged sources informational; rewritten sources fail closed.
+            notices.push(
+              `Retained acknowledged Memory Core ${source.label} legacy source for rollback: ${source.filePath}`,
+            );
+            continue;
+          }
           warnings.push(
-            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows already exist; left legacy source in place`,
+            `Skipped Memory Core ${source.label} import for ${source.workspaceDir} because SQLite rows conflict with the legacy source; left legacy source in place`,
           );
           continue;
         }
@@ -1196,7 +1199,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(notices.length > 0 ? { notices } : {}),
+      };
     },
   },
   {
@@ -1260,3 +1267,4 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
   },
 ];
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

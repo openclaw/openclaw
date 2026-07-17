@@ -9,13 +9,8 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
-export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
-export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
-/**
- * @deprecated Use DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS.
- * Periodic checkpoints default to PASSIVE.
- */
-export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
+const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
@@ -65,7 +60,7 @@ function configureSqliteBusyTimeout(db: DatabaseSync, busyTimeoutMs: number): nu
 
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
-export function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
   const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
   if (row?.page_count === 0) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
@@ -305,6 +300,15 @@ function readJournalModeResult(row: unknown): string | null {
   return typeof value === "string" ? value.toLowerCase() : null;
 }
 
+function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
+  const rows = db.prepare("PRAGMA database_list;").all() as Array<{
+    file?: unknown;
+    name?: unknown;
+  }>;
+  const main = rows.find((row) => row.name === "main");
+  return main?.file === "";
+}
+
 function readCheckpointBusyResult(row: unknown): boolean {
   if (!row || typeof row !== "object") {
     return false;
@@ -327,14 +331,31 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
-function enableWalJournalMode(db: DatabaseSync, retryTimeoutMs: number): void {
+function enableWalJournalMode(
+  db: DatabaseSync,
+  retryTimeoutMs: number,
+  options: SqliteWalMaintenanceOptions,
+): boolean {
   const deadline = Date.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
       try {
         db.exec("PRAGMA journal_mode = WAL;");
-        return;
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        if (journalMode === "wal") {
+          return true;
+        }
+        // SQLite's in-memory databases cannot use WAL and correctly retain
+        // journal_mode=memory. They have no sidecars or checkpoint work.
+        if (journalMode === "memory" && hasInMemoryMainDatabase(db)) {
+          return false;
+        }
+        const label = options.databaseLabel ?? "sqlite database";
+        const location = options.databasePath ? ` at ${options.databasePath}` : "";
+        throw new Error(
+          `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
+        );
       } catch (error) {
         const remainingMs = deadline - Date.now();
         if (!isSqliteLockError(error) || remainingMs <= 0) {
@@ -413,7 +434,12 @@ export function configureSqliteWalMaintenance(
       close: () => true,
     };
   }
-  enableWalJournalMode(db, busyTimeoutMs);
+  if (!enableWalJournalMode(db, busyTimeoutMs, options)) {
+    return {
+      checkpoint: () => true,
+      close: () => true,
+    };
+  }
   enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 

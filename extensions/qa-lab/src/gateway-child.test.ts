@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
-  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   resolveQaControlUiRoot,
   startQaGatewayChild,
@@ -98,34 +97,6 @@ function requireAuthProfile(
   }
   return profile;
 }
-
-describe("forced runtime environment", () => {
-  it("pins forced Codex mock runs to the managed provider endpoint", () => {
-    expect(
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-        providerBaseUrl: "http://127.0.0.1:44080/v1/",
-      }),
-    ).toEqual({
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-      OPENCLAW_CODEX_APP_SERVER_ARGS:
-        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
-      OPENAI_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-      CODEX_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
-    });
-  });
-
-  it("fails closed when a forced Codex mock run lacks its managed endpoint", () => {
-    expect(() =>
-      buildQaForcedRuntimeEnvPatch({
-        forcedRuntime: "codex",
-        providerMode: "mock-openai",
-      }),
-    ).toThrow("forced Codex mock QA requires the managed mock provider URL");
-  });
-});
 
 function requireSsrFetchCall(index = 0): SsrFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];
@@ -1258,6 +1229,22 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("allows loaded runners time to reap force-killed gateway process groups", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 5_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when forced gateway process-group shutdown times out",
     async () => {
@@ -2282,3 +2269,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

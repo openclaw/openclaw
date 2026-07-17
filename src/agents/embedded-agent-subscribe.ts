@@ -41,6 +41,7 @@ import {
   readPendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.js";
 import {
+  cleanupRunToolStartData,
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
@@ -158,8 +159,6 @@ function collectPendingMediaFromInternalEvents(
   }
   return pending;
 }
-
-export type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
@@ -1255,7 +1254,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
-    state.lastToolError = undefined;
+    // Compaction retries restart presentation state, not attempt-wide mutation truth.
+    // Retain unresolved side effects so the retry cannot falsely finish as success.
+    if (state.lastToolError?.mutatingAction !== true) {
+      state.lastToolError = undefined;
+    }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
@@ -1342,6 +1345,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    cleanupRunToolStartData(params.runId);
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {
@@ -1510,3 +1514,4 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -194,8 +194,21 @@ export type CronServiceDeps = {
 };
 
 /** Cron deps after optional defaults have been made concrete. */
-export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
   nowMs: () => number;
+};
+
+/** Process-local admission state shared by every execution entry point of one cron service. */
+type CronRunAdmission = {
+  active: number;
+  waiters: Array<(release: (() => void) | null) => void>;
+};
+
+type QueuedCronRunReservation = {
+  identity: object;
+  markerAtMs: number;
+  preserveWhenDisabled: boolean;
+  activationPreviousLastError?: { value: string | undefined };
 };
 
 /** Mutable cron service state shared across store, job, timer, and ops helpers. */
@@ -216,6 +229,10 @@ export type CronServiceState = {
   pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
+  /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
+  runAdmission: CronRunAdmission;
+  /** Durable markers for cron runs that are waiting for the shared admission limit. */
+  queuedRunReservationsByJobId: Map<string, QueuedCronRunReservation>;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -244,6 +261,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
+    runAdmission: { active: 0, waiters: [] },
+    queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
@@ -296,7 +315,7 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-export type CronDeclarativeAddResult = CronJob & {
+type CronDeclarativeAddResult = CronJob & {
   created: boolean;
   updated?: boolean;
   job: CronJob;

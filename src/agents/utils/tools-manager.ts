@@ -103,7 +103,11 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe", timeout: 5_000 });
+    const result = spawnSync(cmd, ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     // Require a clean exit, not just a successful spawn. An installed-but-broken
     // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
     // spawns fine but exits non-zero; without the status check it would be
@@ -115,7 +119,7 @@ function commandExists(cmd: string): boolean {
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg"): string | null {
   const config = TOOLS[tool];
   if (!config) {
     return null;
@@ -417,6 +421,12 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 }
 
-export const testing = {
+const testing = {
   downloadFile,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
+    testing,
+  };
+}

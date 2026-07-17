@@ -5,6 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildPluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,10 +20,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
+
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
-const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
@@ -51,7 +60,6 @@ const {
   setMessageReactionSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
 } = harness;
@@ -60,22 +68,17 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const {
-  createTelegramBotCore: createTelegramBotBase,
-  getTelegramSequentialKey,
-  resolveTelegramScopedGroupConfig,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
+const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
   TelegramSpooledReplayProcessingError,
-  withTelegramSpooledReplayUpdate,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
+const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -84,7 +87,8 @@ const {
   resetTelegramForumFlagCacheForTest,
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
-const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
+  await import("./group-config-helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -153,6 +157,7 @@ function installPerKeySequentializer(): void {
         key,
         current.catch(() => undefined),
       );
+
       try {
         await current;
       } finally {
@@ -162,6 +167,13 @@ function installPerKeySequentializer(): void {
       }
     };
   });
+}
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
 }
 
 function mockTelegramConfigWrites() {
@@ -236,7 +248,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     pluginStateTestRuntime.resetPluginStateStoreForTests();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -250,12 +262,9 @@ describe("createTelegramBot", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
-    pluginRuntime.clearPluginInteractiveHandlers();
-    clearAccountThrottlersForTest();
+    clearPluginInteractiveHandlers();
+    resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -1711,7 +1720,7 @@ describe("createTelegramBot", () => {
       return { handled: true };
     });
     expect(
-      pluginRuntime.registerPluginInteractiveHandler("openclaw-code-agent", {
+      registerPluginInteractiveHandler("openclaw-code-agent", {
         channel: "telegram",
         namespace: "code-agent",
         handler: pluginHandler,
@@ -3974,12 +3983,13 @@ describe("createTelegramBot", () => {
           telegram: {
             groupPolicy: "open",
             groups: {
-              "*": { requireMention: true },
-              "123": { requireMention: false },
+              "*": { requireMention: false },
+              "123": {},
             },
           },
         },
       },
+      botRequireMention: true,
       message: {
         chat: { id: 123, type: "group", title: "Dev Chat" },
         text: "hello",
@@ -3995,6 +4005,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
         text: "hello",
@@ -4010,6 +4021,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 789, type: "group", title: "No Me" },
         text: "hello",
@@ -4023,6 +4035,7 @@ describe("createTelegramBot", () => {
     await dispatchMessage({
       message: testCase.message,
       me: testCase.me,
+      botRequireMention: testCase.botRequireMention,
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
@@ -4260,15 +4273,19 @@ describe("createTelegramBot", () => {
     setMessageReactionSpy.mockClear();
     setMyCommandsSpy.mockClear();
   }
-  function getMessageHandler() {
-    createTelegramBot({ token: "tok" });
+  function getMessageHandler(botRequireMention?: boolean) {
+    createTelegramBot({
+      token: "tok",
+      ...(typeof botRequireMention === "boolean" ? { requireMention: botRequireMention } : {}),
+    });
     return getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
   }
   async function dispatchMessage(params: {
     message: Record<string, unknown>;
     me?: Record<string, unknown>;
+    botRequireMention?: boolean;
   }) {
-    const handler = getMessageHandler();
+    const handler = getMessageHandler(params.botRequireMention);
     await handler({
       message: params.message,
       me: params.me ?? { username: "openclaw_bot" },
@@ -5814,17 +5831,14 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const resolvePluginBindingApprovalSpy = vi.spyOn(
-      conversationRuntime,
-      "resolvePluginConversationBindingApproval",
-    );
+    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = {
       update: { update_id: 888 },
       callbackQuery: {
         id: "cbq-plugin-binding-retry-1",
-        data: conversationRuntime.buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
+        data: buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
@@ -6088,3 +6102,4 @@ describe("createTelegramBot", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
