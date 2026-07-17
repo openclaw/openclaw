@@ -146,7 +146,7 @@ function resolveExpiredExplicitRunDeadlineMs(params: {
 }
 
 /** Masks a subagent run ID for log/error metadata without splitting UTF-16 surrogate pairs. */
-export function maskRunId(runId: string): string {
+function maskRunId(runId: string): string {
   const trimmed = runId.trim();
   if (!trimmed) {
     return "unknown";

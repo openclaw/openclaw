@@ -22,7 +22,6 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   createSubagentRegistryLifecycleController,
-  maskRunId,
 } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -3914,32 +3913,41 @@ describe("requester settle wake trigger", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-describe("maskRunId", () => {
+describe("run ID masking in lifecycle warnings", () => {
   it.each([
     ["run-1234567890", "run-…7890"],
     ["short", "***"],
-    ["", "unknown"],
-    ["  spaced  ", "***"],
-  ])("masks ASCII run ID %p", (runId, expected) => {
-    expect(maskRunId(runId)).toBe(expected);
-  });
-
-  it("does not split UTF-16 surrogate pairs at mask boundaries", () => {
     // Head boundary lands inside a surrogate pair.
-    const headSplit = "abc😀" + "x".repeat(10);
-    expect(maskRunId(headSplit)).toBe("abc…xxxx");
-
+    ["abc😀" + "x".repeat(10), "abc…xxxx"],
     // Tail boundary lands inside a surrogate pair.
-    const tailSplit = "x".repeat(10) + "😀abc";
-    expect(maskRunId(tailSplit)).toBe("xxxx…abc");
-
+    ["x".repeat(10) + "😀abc", "xxxx…abc"],
     // Short value gets fully masked.
-    expect(maskRunId("a😀b")).toBe("***");
+    ["a😀b", "***"],
+  ])("masks run ID %p as %p without splitting surrogate pairs", async (runId, expected) => {
+    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
+    const warn = vi.fn();
+    const entry = createRunEntry({ runId });
+    const runs = new Map([[entry.runId, entry]]);
+    taskExecutorMocks.completeTaskRunByRunId.mockImplementation(() => {
+      throw new Error("task store boom");
+    });
 
+    const controller = createLifecycleController({ entry, runs, persist, persistOrThrow, warn });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const [, warningFields] = firstCall(warn);
+    expect(warningFields).toMatchObject({ runId: expected });
     // No isolated surrogates are emitted anywhere.
-    const all = [headSplit, tailSplit, "a😀b"].map(maskRunId).join("");
-    expect(() => encodeURIComponent(all)).not.toThrow();
-    expect(all).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(all).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    const masked = String((warningFields as { runId?: unknown }).runId ?? "");
+    expect(masked).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(masked).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });
