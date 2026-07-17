@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { sleep as delay } from "../../lib/sleep.mjs";
+import { decodeUtf8Tail } from "../lib/text-file-utils.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
@@ -235,17 +236,6 @@ function appendBoundedOutput(tail: BoundedOutputTail, chunk: Buffer): void {
 
 function readBoundedOutput(tail: BoundedOutputTail): string {
   return decodeUtf8Tail(tail.buffer, tail.truncated);
-}
-
-function decodeUtf8Tail(buffer: Buffer, truncated: boolean): string {
-  if (!truncated) {
-    return buffer.toString("utf8");
-  }
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  return buffer.subarray(start).toString("utf8");
 }
 
 function formatHostServerExit(child: HostServerChild): string {
