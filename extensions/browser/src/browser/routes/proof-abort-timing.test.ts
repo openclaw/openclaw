@@ -77,7 +77,7 @@ function createRouteContext(profileCtx: ReturnType<typeof createProfileContext>)
     state: () => ({ resolved: { actionTimeoutMs: 45_000, extraArgs: [], ssrfPolicy: undefined } }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn((err: unknown) => {
+    mapTabError: vi.fn((_err: unknown) => {
       // Unmapped errors (like non-BrowserError) return null, falling through
       // to jsonError(res, 500, String(err)).
       return null as never;
@@ -143,7 +143,9 @@ describe("PR #109536 — production-route abort timing proof", () => {
     // Wait long enough for the first reachability probe to resolve and the
     // retry delay to start (async fn yields after `await isReachable(...)`),
     // but well before the full 250ms retry window expires.
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     const abortReason = new Error("cancelled");
     abort.abort(abortReason);
@@ -165,7 +167,6 @@ describe("PR #109536 — production-route abort timing proof", () => {
     expect(elapsed).toBeLessThan(150);
 
     // Emit timing for PR body transcript
-    // eslint-disable-next-line no-console
     console.log(
       `\n  === PR #109536 — Production-Route Real-Timer Proof ===` +
         `\n  Status:           ${response.statusCode}` +
