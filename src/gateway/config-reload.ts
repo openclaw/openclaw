@@ -913,12 +913,8 @@ export function startGatewayConfigReloader(opts: {
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       usePolling,
     });
-    // A delivered file event proves the current watcher works, so refill the
-    // re-create budget. Without this, transient errors spread over a long
-    // gateway lifetime accumulate and permanently disable hot-reload even
-    // though every recovery succeeded. Only watcher events refill the budget;
-    // plugin-metadata refreshes route through scheduleExternalRefresh alone,
-    // and errors without any event in between still consume the bounded budget.
+    // A file event proves this watcher recovered. Reset only here so plugin
+    // metadata refreshes and consecutive watcher errors cannot refill the budget.
     const scheduleFromWatcherEvent = () => {
       watcherRecreateRetries = 0;
       scheduleExternalRefresh();

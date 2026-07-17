@@ -3819,14 +3819,19 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       const watchOptions = (index: number) =>
         watchSpy.mock.calls[index]?.[1] as { usePolling?: boolean } | undefined;
 
-      // Four error/recovery rounds — one more than the retry budget. Each
-      // re-created watcher proves it works by delivering a file event before
-      // the next transient error, so the budget must refill every round.
-      for (let round = 0; round < 4; round += 1) {
+      // The initial error consumes one attempt. Every replacement then proves
+      // itself before failing, so each new episode must restart at attempt one.
+      watchers[0]?.emit("error");
+      expect(log.warn).toHaveBeenLastCalledWith(
+        expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
+      );
+      await vi.advanceTimersByTimeAsync(500);
+
+      for (let round = 1; round < 4; round += 1) {
         watchers[round]?.emit("change");
         await vi.advanceTimersByTimeAsync(0);
         watchers[round]?.emit("error");
-        expect(log.warn).toHaveBeenCalledWith(
+        expect(log.warn).toHaveBeenLastCalledWith(
           expect.stringContaining("re-creating watcher (attempt 1/3 in 500ms)"),
         );
         await vi.advanceTimersByTimeAsync(500);
@@ -3835,6 +3840,7 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
 
       // Hot-reload survives in native mode: no polling degradation, no disable.
       expect(reloader.hotReloadStatus()).toBe("active");
+      expect(log.warn).toHaveBeenCalledTimes(4);
       expect(watchOptions(4)?.usePolling).toBe(false);
       expect(log.warn).not.toHaveBeenCalledWith(
         expect.stringContaining("degrading to polling mode"),
