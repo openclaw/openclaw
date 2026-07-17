@@ -11,7 +11,6 @@ import {
   getShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
-  type ShellConfig,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -56,6 +55,8 @@ function createTempCommandDir(
   }
   return dir;
 }
+
+type ShellConfig = ReturnType<typeof getBashShellConfig>;
 
 describe("getShellConfig", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
