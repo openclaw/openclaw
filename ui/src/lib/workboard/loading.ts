@@ -114,6 +114,13 @@ async function loadWorkboardInternal(
         return false;
       }
       const previousTasksByCardId = state.tasksByCardId;
+      if (params.taskRefresh !== "linked" || !shouldDeferWorkboardLiveRefresh(state)) {
+        state.cards = normalized.cards;
+        state.boards = normalized.boards;
+        state.statuses = normalized.statuses;
+        state.tasksByCardId = new Map();
+        params.requestUpdate?.();
+      }
       const taskLinkState: WorkboardTaskLinkState = {
         cards: normalized.cards,
         tasksByCardId: new Map(),

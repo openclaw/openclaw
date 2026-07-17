@@ -2282,6 +2282,44 @@ describe("workboard controller", () => {
     ).toHaveLength(1);
   });
 
+  it("publishes cards before task enrichment settles", async () => {
+    const host = {};
+    const taskList = createDeferred<unknown>();
+    const requestUpdate = vi.fn();
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [sampleCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      return {};
+    });
+
+    const loading = loadWorkboard({
+      host,
+      client: client as never,
+      requestUpdate,
+      force: true,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const state = getWorkboardState(host);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(state.cards).toMatchObject([{ title: "Build board" }]);
+    expect(state.statuses).toEqual(["todo", "done"]);
+    expect(state.loaded).toBe(false);
+    expect(state.loading).toBe(true);
+
+    taskList.resolve({ tasks: [] });
+    await loading;
+    expect(state.loaded).toBe(true);
+    expect(state.loading).toBe(false);
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
   it("does not mark a load successful when task enrichment is invalidated by a write", async () => {
     const host = {};
     const taskList = createDeferred<unknown>();
