@@ -61,6 +61,14 @@ function sortedIds(ids: Set<number>): number[] {
 // cover older ids.
 const ACCEPTED_UPDATE_ID_RETENTION = 10_000;
 
+// Transient failures persisting the Bot API offset are retried with a bounded
+// exponential backoff. Without a retry, a temporary state-store outage would
+// permanently strand the durable offset behind the processed position, so a
+// gateway restart would resume from the stale offset and re-deliver updates
+// that were already handled.
+const PERSIST_RETRY_BASE_DELAY_MS = 250;
+const PERSIST_RETRY_MAX_DELAY_MS = 5_000;
+
 export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOptions = {}) {
   const initialUpdateId =
     typeof options.initialUpdateId === "number" ? options.initialUpdateId : null;
@@ -83,6 +91,15 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
   let highestCompletedUpdateId: number | null = persistenceFloorUpdateId;
   let persistInFlight = false;
   let persistTargetUpdateId: number | null = null;
+  let persistRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let persistRetryAttempts = 0;
+  // Once the owning bot is disposed the tracker must never persist again: account
+  // removal and token changes intentionally clear the stored offset, so a late
+  // retry writing a retired offset back would recreate a stale-offset path.
+  let disposed = false;
+  // Handle to the in-flight drain so `dispose()` can fence a persistence write
+  // that has already been dispatched to the store before shutdown completes.
+  let activeDrain: Promise<void> | undefined;
 
   const skip = (key: string) => {
     options.onSkip?.(key);
@@ -116,18 +133,41 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
   };
 
+  const schedulePersistRetry = () => {
+    if (disposed || persistRetryTimer !== undefined || persistTargetUpdateId === null) {
+      return;
+    }
+    const delay = Math.min(
+      PERSIST_RETRY_MAX_DELAY_MS,
+      PERSIST_RETRY_BASE_DELAY_MS * 2 ** persistRetryAttempts,
+    );
+    persistRetryAttempts += 1;
+    persistRetryTimer = setTimeout(() => {
+      persistRetryTimer = undefined;
+      kickDrain();
+    }, delay);
+    // Retrying a watermark write must not keep the process alive on its own.
+    persistRetryTimer.unref?.();
+  };
+
   const drainPersistQueue = async () => {
     const persist = options.onAcceptedUpdateId;
-    if (persistInFlight || typeof persist !== "function") {
+    if (persistInFlight || disposed || typeof persist !== "function") {
       return;
     }
     persistInFlight = true;
     try {
       while (persistTargetUpdateId !== null) {
+        // `disposed` can flip during the awaited write below; stop promptly so a
+        // retired offset is never persisted after the owning bot has stopped.
+        if (disposed) {
+          break;
+        }
         const updateId = persistTargetUpdateId;
         persistTargetUpdateId = null;
         try {
           await persist(updateId);
+          persistRetryAttempts = 0;
           if (
             highestPersistedAcceptedUpdateId === null ||
             updateId > highestPersistedAcceptedUpdateId
@@ -137,15 +177,49 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
           }
         } catch (err) {
           options.onPersistError?.(err);
+          // A dispose that raced with the in-flight write must win: the offset is
+          // being retired on purpose, so stop instead of re-arming a retry.
+          if (disposed) {
+            break;
+          }
+          // Do not drop the failed offset. Re-arm it (unless a newer coalesced
+          // target already superseded it) and roll the coalescing request
+          // watermark back to the durable floor so the same offset can be
+          // requested and retried. Leaving the request watermark advanced here
+          // is what previously stranded the durable offset: the write was never
+          // retried, and a later higher offset could persist past the gap.
+          if (persistTargetUpdateId === null) {
+            persistTargetUpdateId = updateId;
+          }
+          highestPersistenceRequestedUpdateId = highestPersistedAcceptedUpdateId;
+          break;
         }
       }
     } finally {
       persistInFlight = false;
     }
+    if (!disposed && persistTargetUpdateId !== null) {
+      schedulePersistRetry();
+    }
+  };
+
+  // Start a drain and retain a handle so disposal can await an already-dispatched
+  // write. `activeDrain` is cleared only when the run it started is the current one.
+  const kickDrain = () => {
+    const run = drainPersistQueue()
+      .catch((err: unknown) => {
+        options.onPersistError?.(err);
+      })
+      .finally(() => {
+        if (activeDrain === run) {
+          activeDrain = undefined;
+        }
+      });
+    activeDrain = run;
   };
 
   const requestPersistAcceptedUpdateId = (updateId: number) => {
-    if (typeof options.onAcceptedUpdateId !== "function") {
+    if (disposed || typeof options.onAcceptedUpdateId !== "function") {
       return;
     }
     if (
@@ -156,9 +230,7 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     highestPersistenceRequestedUpdateId = updateId;
     persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch((err: unknown) => {
-      options.onPersistError?.(err);
-    });
+    kickDrain();
   };
 
   const acceptUpdateId = (updateId: number) => {
@@ -322,10 +394,26 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     failedUpdateIds: sortedIds(failedUpdateIds),
   });
 
+  // Release the tracker together with its owning bot. Latching `disposed` and
+  // clearing the pending retry timer stops any scheduled or future write, and
+  // awaiting the in-flight drain fences a write that was already dispatched to
+  // the store. Callers (the bot stop hook) await this before offset cleanup so a
+  // started write can never resurrect an offset that removal/token change retires.
+  const dispose = async () => {
+    disposed = true;
+    if (persistRetryTimer !== undefined) {
+      clearTimeout(persistRetryTimer);
+      persistRetryTimer = undefined;
+    }
+    persistTargetUpdateId = null;
+    await activeDrain;
+  };
+
   return {
     beginUpdate,
     finishUpdate,
     getState,
     shouldSkipHandlerDispatch,
+    dispose,
   };
 }

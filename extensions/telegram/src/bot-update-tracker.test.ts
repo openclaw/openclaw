@@ -404,6 +404,251 @@ describe("createTelegramUpdateTracker", () => {
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
 
+  it("retries a transient offset persistence failure until it succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const onAcceptedUpdateId = vi.fn((_updateId: number) => {
+        attempts += 1;
+        if (attempts === 1) {
+          return Promise.reject(new Error("transient state write failure"));
+        }
+        return Promise.resolve();
+      });
+      const onPersistError = vi.fn();
+      const tracker = createTelegramUpdateTracker({
+        initialUpdateId: 100,
+        ackPolicy: "after_agent_dispatch",
+        onAcceptedUpdateId,
+        onPersistError,
+      });
+
+      const update101 = tracker.beginUpdate(updateCtx(101));
+      if (!update101.accepted) {
+        throw new Error("expected update 101 to be accepted");
+      }
+      tracker.finishUpdate(update101.update, { completed: true });
+      await flushTrackerMicrotasks();
+
+      // First write failed: the durable offset must not advance past the id
+      // whose write failed, and the error must be surfaced.
+      expect(onAcceptedUpdateId).toHaveBeenCalledTimes(1);
+      expect(onPersistError).toHaveBeenCalledTimes(1);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 100,
+      } satisfies Partial<TelegramUpdateTrackerState>);
+
+      // The failed write is retried on a timer even without any new updates, so
+      // a transient storage hiccup cannot permanently strand the offset behind
+      // the processed position and re-deliver handled updates after a restart.
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushTrackerMicrotasks();
+
+      expect(onAcceptedUpdateId).toHaveBeenCalledTimes(2);
+      expect(onAcceptedUpdateId).toHaveBeenLastCalledWith(101);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 101,
+      } satisfies Partial<TelegramUpdateTrackerState>);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps retrying offset persistence across repeated transient failures", async () => {
+    vi.useFakeTimers();
+    try {
+      let attempts = 0;
+      const onAcceptedUpdateId = vi.fn((_updateId: number) => {
+        attempts += 1;
+        if (attempts <= 3) {
+          return Promise.reject(new Error("transient state write failure"));
+        }
+        return Promise.resolve();
+      });
+      const onPersistError = vi.fn();
+      const tracker = createTelegramUpdateTracker({
+        initialUpdateId: 100,
+        ackPolicy: "after_agent_dispatch",
+        onAcceptedUpdateId,
+        onPersistError,
+      });
+
+      const update101 = tracker.beginUpdate(updateCtx(101));
+      if (!update101.accepted) {
+        throw new Error("expected update 101 to be accepted");
+      }
+      tracker.finishUpdate(update101.update, { completed: true });
+      await flushTrackerMicrotasks();
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 100,
+      } satisfies Partial<TelegramUpdateTrackerState>);
+
+      // Drive the bounded backoff retries forward until the write succeeds.
+      for (let i = 0; i < 5; i += 1) {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await flushTrackerMicrotasks();
+      }
+
+      expect(onPersistError).toHaveBeenCalledTimes(3);
+      expect(onAcceptedUpdateId).toHaveBeenLastCalledWith(101);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 101,
+      } satisfies Partial<TelegramUpdateTrackerState>);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not persist a higher offset past an id whose write is still failing", async () => {
+    vi.useFakeTimers();
+    try {
+      const writes: number[] = [];
+      let failLowId = true;
+      const onAcceptedUpdateId = vi.fn((updateId: number) => {
+        writes.push(updateId);
+        if (updateId === 101 && failLowId) {
+          return Promise.reject(new Error("transient state write failure"));
+        }
+        return Promise.resolve();
+      });
+      const onPersistError = vi.fn();
+      const tracker = createTelegramUpdateTracker({
+        initialUpdateId: 100,
+        ackPolicy: "after_agent_dispatch",
+        onAcceptedUpdateId,
+        onPersistError,
+      });
+
+      // 101 completes and its safe-watermark persist fails.
+      const update101 = tracker.beginUpdate(updateCtx(101));
+      // 102 starts but never completes, so the safe watermark cannot advance
+      // past the failed 101 offset.
+      const update102 = tracker.beginUpdate(updateCtx(102));
+      if (!update101.accepted || !update102.accepted) {
+        throw new Error("expected updates to be accepted");
+      }
+      tracker.finishUpdate(update101.update, { completed: true });
+      await flushTrackerMicrotasks();
+
+      expect(onPersistError).toHaveBeenCalledTimes(1);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 100,
+        safeCompletedUpdateId: 101,
+        pendingUpdateIds: [102],
+      } satisfies Partial<TelegramUpdateTrackerState>);
+
+      // Retries never advance the durable offset to 102 while 102 is unfinished;
+      // once the transient failure clears, the offset lands exactly on 101.
+      failLowId = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushTrackerMicrotasks();
+
+      expect(writes).not.toContain(102);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 101,
+        pendingUpdateIds: [102],
+      } satisfies Partial<TelegramUpdateTrackerState>);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a scheduled offset-persistence retry once disposed", async () => {
+    vi.useFakeTimers();
+    try {
+      const onAcceptedUpdateId = vi.fn((_updateId: number) =>
+        Promise.reject(new Error("transient state write failure")),
+      );
+      const onPersistError = vi.fn();
+      const tracker = createTelegramUpdateTracker({
+        initialUpdateId: 100,
+        ackPolicy: "after_agent_dispatch",
+        onAcceptedUpdateId,
+        onPersistError,
+      });
+
+      const update101 = tracker.beginUpdate(updateCtx(101));
+      if (!update101.accepted) {
+        throw new Error("expected update 101 to be accepted");
+      }
+      tracker.finishUpdate(update101.update, { completed: true });
+      await flushTrackerMicrotasks();
+      expect(onAcceptedUpdateId).toHaveBeenCalledTimes(1);
+
+      // Disposing the tracker (as the bot stop hook does) must clear the pending
+      // retry timer so a retired offset is never written back after shutdown —
+      // account removal and token changes intentionally delete the stored offset.
+      await tracker.dispose();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await flushTrackerMicrotasks();
+
+      expect(onAcceptedUpdateId).toHaveBeenCalledTimes(1);
+      expectTrackerState(tracker.getState(), {
+        highestPersistedAcceptedUpdateId: 100,
+      } satisfies Partial<TelegramUpdateTrackerState>);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores new offset-persistence requests after being disposed", async () => {
+    const onAcceptedUpdateId = vi.fn(() => Promise.resolve());
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: 100,
+      ackPolicy: "after_agent_dispatch",
+      onAcceptedUpdateId,
+    });
+
+    await tracker.dispose();
+
+    const update101 = tracker.beginUpdate(updateCtx(101));
+    if (!update101.accepted) {
+      throw new Error("expected update 101 to be accepted");
+    }
+    tracker.finishUpdate(update101.update, { completed: true });
+    await flushTrackerMicrotasks();
+
+    // A disposed tracker must not resurrect persistence for freshly handled
+    // updates; the owning bot is gone and its offset store may be retired.
+    expect(onAcceptedUpdateId).not.toHaveBeenCalled();
+  });
+
+  it("fences an in-flight persistence write before disposal resolves", async () => {
+    const write = deferred();
+    const onAcceptedUpdateId = vi.fn(() => write.promise);
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: 100,
+      ackPolicy: "after_agent_dispatch",
+      onAcceptedUpdateId,
+    });
+
+    const update101 = tracker.beginUpdate(updateCtx(101));
+    if (!update101.accepted) {
+      throw new Error("expected update 101 to be accepted");
+    }
+    tracker.finishUpdate(update101.update, { completed: true });
+    await flushTrackerMicrotasks();
+    // The write has been dispatched to the store but has not settled yet.
+    expect(onAcceptedUpdateId).toHaveBeenCalledTimes(1);
+
+    // dispose() (invoked from the bot stop hook) must not resolve until the
+    // already-started write settles, so shutdown fences offset cleanup behind
+    // it — otherwise a late write could restore a retired offset.
+    let disposed = false;
+    const disposal = tracker.dispose().then(() => {
+      disposed = true;
+    });
+    await flushTrackerMicrotasks();
+    expect(disposed).toBe(false);
+
+    write.resolve();
+    await disposal;
+    expect(disposed).toBe(true);
+    expectTrackerState(tracker.getState(), {
+      highestPersistedAcceptedUpdateId: 101,
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
   it("keeps failed accepted updates retryable in the same process", () => {
     const tracker = createTelegramUpdateTracker({ initialUpdateId: 200 });
     const first = tracker.beginUpdate(updateCtx(201));
