@@ -106,6 +106,7 @@ type MockCallSource = {
 
 type TestNodeSession = {
   nodeId: string;
+  connId?: string;
   commands: string[];
   declaredCommands?: string[];
   platform?: string;
@@ -1357,6 +1358,40 @@ describe("node.invoke APNs wake path", () => {
     expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
     expect(nodeWakeById.has(nodeId)).toBe(false);
     expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe("node not connected");
+  });
+
+  it("does not dispatch an invalidated invoke to a replacement pairing", async () => {
+    vi.useFakeTimers();
+    const nodeId = "ios-node-replacement-after-remove";
+    mockDirectWakeConfig(nodeId);
+    const replacementSession: TestNodeSession = {
+      nodeId,
+      connId: "replacement-conn",
+      commands: ["camera.capture"],
+      platform: "iOS 26.4.0",
+    };
+    let replacementConnected = false;
+    const nodeRegistry = {
+      get: vi.fn(() => (replacementConnected ? replacementSession : undefined)),
+      invoke: vi.fn().mockResolvedValue({ ok: true, payload: { replacement: true } }),
+    };
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-replacement-after-remove" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+
+    invalidateNodeWakeState(nodeId);
+    replacementConnected = true;
+    await vi.advanceTimersByTimeAsync(20_000);
+    const respond = await invokePromise;
+
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);

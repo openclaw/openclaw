@@ -9,6 +9,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { deviceHandlers } from "./devices.js";
+import { captureNodeWakeLifecycle, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const {
@@ -88,6 +89,9 @@ function createOptions(
         info: vi.fn(),
         warn: vi.fn(),
       },
+      nodeRegistry: {
+        updateSurface: vi.fn(),
+      },
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
@@ -148,7 +152,35 @@ function captureSecurityEvents(): {
 describe("deviceHandlers", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    nodeWakeById.clear();
+    nodeWakeNudgeById.clear();
     vi.clearAllMocks();
+  });
+
+  it("clears and invalidates node runtime state after removing a full device pairing", async () => {
+    const nodeId = "disconnected-node-device";
+    removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
+    nodeWakeById.set(nodeId, { lastWakeAtMs: Date.now() });
+    nodeWakeNudgeById.set(nodeId, Date.now());
+    const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+    const opts = createOptions("device.pair.remove", { deviceId: nodeId });
+
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
+
+    expect(nodeWakeById.has(nodeId)).toBe(false);
+    expect(nodeWakeNudgeById.has(nodeId)).toBe(false);
+    expect(wakeLifecycle.aborted).toBe(true);
+    const nodeRegistry = opts.context.nodeRegistry as unknown as {
+      updateSurface: ReturnType<typeof vi.fn>;
+    };
+    expect(nodeRegistry.updateSurface).toHaveBeenCalledWith(nodeId, {
+      caps: [],
+      commands: [],
+      permissions: undefined,
+    });
   });
 
   it("disconnects active clients after removing a paired device", async () => {

@@ -53,11 +53,7 @@ import {
 } from "../../infra/push-apns.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
-import {
-  recordRemoteNodeInfo,
-  refreshRemoteNodeBins,
-  removeRemoteNodeInfo,
-} from "../../skills/runtime/remote.js";
+import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
@@ -86,10 +82,14 @@ import {
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
+import {
+  clearRemovedNodeRuntimeState,
+  pendingNodeActionsById,
+  type PendingNodeAction,
+} from "./node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import {
   captureNodeWakeLifecycle,
-  invalidateNodeWakeState,
   isNodeWakeLifecycleCurrent,
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -142,18 +142,6 @@ type NodeWakeNudgeAttempt = {
   apnsStatus?: number;
   apnsReason?: string;
 };
-
-type PendingNodeAction = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string;
-  idempotencyKey: string;
-
-  enqueuedAtMs: number;
-};
-
-const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -380,20 +368,6 @@ function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeActi
   }
   pendingNodeActionsById.set(nodeId, live);
   return live;
-}
-
-function clearRemovedNodeRuntimeState(params: {
-  nodeId: string;
-  context: Pick<GatewayRequestContext, "nodeRegistry">;
-}) {
-  pendingNodeActionsById.delete(params.nodeId);
-  invalidateNodeWakeState(params.nodeId);
-  params.context.nodeRegistry.updateSurface(params.nodeId, {
-    caps: [],
-    commands: [],
-    permissions: undefined,
-  });
-  removeRemoteNodeInfo(params.nodeId);
 }
 
 function broadcastRemovedNodePairing(params: {
@@ -1547,6 +1521,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
         const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
+        const getCurrentWakeSession = () =>
+          isNodeWakeLifecycleCurrent(nodeId, wakeLifecycle)
+            ? context.nodeRegistry.get(nodeId)
+            : undefined;
         try {
           const wakeReqId = req.id;
           const wakeFlowStartedAtMs = Date.now();
@@ -1576,7 +1554,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
                 `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
             );
           }
-          nodeSession = context.nodeRegistry.get(nodeId);
+          nodeSession = getCurrentWakeSession();
           if (!nodeSession && wake.available) {
             const retryWake = await maybeWakeNodeWithApns(nodeId, {
               force: true,
@@ -1604,7 +1582,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
                   `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
               );
             }
-            nodeSession = context.nodeRegistry.get(nodeId);
+            nodeSession = getCurrentWakeSession();
           }
           if (!nodeSession) {
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);

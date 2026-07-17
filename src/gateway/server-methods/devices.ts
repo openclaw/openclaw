@@ -38,6 +38,7 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
@@ -481,6 +482,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown deviceId"));
       return;
     }
+    clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",
