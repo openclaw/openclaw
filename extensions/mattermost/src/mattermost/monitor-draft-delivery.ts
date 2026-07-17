@@ -49,7 +49,7 @@ export async function deliverMattermostReplyWithDraftPreview(
     kind: params.info.kind,
     payload: params.payload,
     adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
-      // Once the preview is finalized, later warning/media payloads must use durable sends.
+      // Once the preview is finalized, later payloads must use durable sends.
       // Reusing the sealed draft would clear and delete the successful final post.
       ...(params.previewState.finalizedViaPreviewPost
         ? {}
