@@ -389,96 +389,159 @@ describe("sanitizeToolArgs", () => {
   });
 });
 
-describe("normalizeToolErrorText (regression guard for #110222)", () => {
-  // Successful tool outputs that the OLD code classified as failures.
-  // These got rendered as "⚠️ 🛠️ Exec failed:" in Discord and made the bot
-  // stop mid-work despite the underlying tool exiting 0.
-  describe("returns undefined for non-error text", () => {
-    const nonErrorTexts: ReadonlyArray<readonly [string, string]> = [
-      ["shellcheck success", "SYNTAX OK"],
-      ["shellcheck success with notes", "SYNTAX OK\nscript.sh:1:1: note ... rest of body"],
-      ["date -u output", "Thu Jul 17 23:00:00 UTC 2026"],
-      ["pwd output", "/home/desktopuser"],
-      ["true output", "yes"],
-      ["empty stdout", ""],
-      ["literal OK", "OK"],
-      ["build succeeded", "Build succeeded"],
-      ["tests passed", "Tests passed"],
-      ["all good", "All good"],
-      ["ready signal", "ready"],
-      ["multi-line non-error output", "All good\nSecond line of stdout\nThird line"],
+describe("extractToolErrorMessage structured-success gating (regression guard for #110222)", () => {
+  // Structured details explicitly mark success — fallback text must be
+  // suppressed regardless of content. This is the false-positive path:
+  // shellcheck with exitCode 0 emitted "SYNTAX OK", which the OLD code
+  // misclassified as a tool error.
+  describe("suppresses fallback text when details indicate success", () => {
+    const successResults: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ["ok: true", { details: { ok: true }, content: [{ type: "text", text: "SYNTAX OK" }] }],
+      [
+        "success: true",
+        { details: { success: true }, content: [{ type: "text", text: "SYNTAX OK" }] },
+      ],
+      [
+        "exitCode: 0 (no error field)",
+        {
+          details: { exitCode: 0 },
+          content: [{ type: "text", text: "Thu Jul 17 23:00:00 UTC 2026" }],
+        },
+      ],
+      [
+        "exitCode: 0 with arbitrary success text",
+        { details: { exitCode: 0 }, content: [{ type: "text", text: "/home/desktopuser" }] },
+      ],
+      [
+        "ok: true suppresses even error-keyword text (defense in depth)",
+        { details: { ok: true }, content: [{ type: "text", text: "fatal: not a git repository" }] },
+      ],
+      [
+        "exitCode: 0 with shellcheck SYNTAX OK",
+        { details: { exitCode: 0 }, content: [{ type: "text", text: "SYNTAX OK" }] },
+      ],
+      [
+        "exitCode: 0 with multi-line success text",
+        {
+          details: { exitCode: 0 },
+          content: [{ type: "text", text: "All good\nSecond line\nThird line" }],
+        },
+      ],
     ];
-    // extractToolResultText reads result.content (OpenAI/Anthropic content
-    // blocks), not result.text. The path through extractToolErrorMessage
-    // that lands in normalizeToolErrorText walks via these content blocks.
-    for (const [label, text] of nonErrorTexts) {
+    for (const [label, result] of successResults) {
       it(`returns undefined for ${label}`, () => {
-        const result = {
-          content: text === "" ? [] : [{ type: "text", text }],
-        };
         expect(extractToolErrorMessage(result)).toBeUndefined();
       });
     }
   });
 
-  // Genuine error outputs that must still surface to the user.
-  describe("returns the first line when error indicators are present", () => {
-    const errorTexts: ReadonlyArray<readonly [string, string]> = [
-      ["node: bad option", "node: bad option: --foo"],
-      ["ENOENT", "Error: ENOENT: no such file or directory"],
-      ["command not found", "bash: foo: command not found"],
-      ["EACCES", "EACCES: permission denied"],
-      ["git fatal: not a repo", "fatal: not a git repository"],
-      ["timeout", "error: timeout connecting to host"],
-      ["timed out", "request timed out after 5000ms"],
-      ["missing required", "missing required argument: foo"],
-      ["mysql denied", "ERROR 1045 (28000): Access denied"],
-      ["task was canceled (US)", "Task was canceled"],
-      ["task was cancelled (UK)", "Task was cancelled"],
-      ["task was cancelling", "Task was cancelling"],
-      ["task was cancelled gracefully", "Task was cancelled gracefully"],
-      ["panic", "panic: runtime error: invalid memory address"],
-      ["cannot (fatal error)", "fatal error: cannot find module \'foo\'"],
-      ["EPERM", "EPERM: operation not permitted"],
-      ["EPERM phrase form", "EPERM: operation not permitted"],
-      ["npm ELIFECYCLE", "npm error code ELIFECYCLE"],
-      ["spawn ENOENT", "Error: spawn ENOENT"],
-      ["git not a command", "git: \'foo\' is not a git command"],
-      ["git not an option", "git: \'foo\' is not an option"],
+  // Structured details indicate failure — even with arbitrary error wording,
+  // the fallback text must be preserved. The reviewer's specific concern was
+  // that a lexical allowlist would silently drop these. Structured failure
+  // gating avoids that: an unknown-wording real failure is preserved.
+  describe("preserves fallback text when details indicate failure", () => {
+    const failureResults: ReadonlyArray<readonly [string, Record<string, unknown>, string]> = [
       [
-        "python file not found",
-        "python3: can\'t open file \'foo.py\': [Errno 2] No such file or directory",
+        "exitCode: 1 with unknown-wording error",
+        { details: { exitCode: 1 }, content: [{ type: "text", text: "the server said no" }] },
+        "the server said no",
       ],
-      ["grep invalid option", "grep: invalid option"],
-      ["ls cannot access", "ls: cannot access \'foo\': No such file or directory"],
-      ["connection refused", "Connection refused"],
-      ["aborted", "Operation was aborted"],
-      ["killed", "The process was killed"],
-      ["killed phrase", "task was killed by signal"],
-      ["failed (status-like)", "request failed with status code 500"],
-      ["failing", "failing to start service"],
-      ["fails", "check fails"],
+      [
+        "exitCode: 2 with usage diagnostic",
+        {
+          details: { exitCode: 2 },
+          content: [{ type: "text", text: "usage: foo bar baz" }],
+        },
+        "usage: foo bar baz",
+      ],
+      [
+        "exitCode: 1 with tool-specific diagnostic (no keywords)",
+        {
+          details: { exitCode: 1 },
+          content: [{ type: "text", text: "process exited abnormally" }],
+        },
+        "process exited abnormally",
+      ],
+      [
+        "exitCode: 0 WITH error field still surfaces the error",
+        {
+          details: { exitCode: 0, error: "command failed despite exit 0" },
+          content: [{ type: "text", text: "ignored" }],
+        },
+        "command failed despite exit 0",
+      ],
+      [
+        "exitCode: 1 with explicit error field surfaces error field",
+        {
+          details: { exitCode: 1, error: "explicit error message" },
+          content: [{ type: "text", text: "ignored" }],
+        },
+        "explicit error message",
+      ],
     ];
-    for (const [label, text] of errorTexts) {
-      it(`returns the first line for ${label}`, () => {
-        const result = { content: [{ type: "text", text }] };
-        expect(extractToolErrorMessage(result)).toBe(text);
+    for (const [label, result, expected] of failureResults) {
+      it(`returns the text for ${label}`, () => {
+        expect(extractToolErrorMessage(result)).toBe(expected);
       });
     }
   });
 
-  // Existing behavior is preserved: when a non-error tool result is wrapped
-  // in a result with a non-error status, the function still returns undefined
-  // without going through normalizeToolErrorText. This is the upstream guard
-  // against false-positive LAST_CHECK_RESULT for successful results.
-  describe("preserves upstream behavior: non-error status with non-error text", () => {
-    it("returns undefined when status is completed and text is benign", () => {
+  // No structured details available — preserve the fallback text. The
+  // reviewer's recommended policy: "retain arbitrary fallback diagnostics
+  // for failed or unknown states." Without details, we cannot prove success,
+  // so we cannot suppress.
+  describe("preserves fallback text when no structured details exist", () => {
+    const unknownResults: ReadonlyArray<readonly [string, unknown, string]> = [
+      [
+        "no details, arbitrary text",
+        { content: [{ type: "text", text: "anything could be here" }] },
+        "anything could be here",
+      ],
+      [
+        "no details, error-keyword text",
+        { content: [{ type: "text", text: "something failed" }] },
+        "something failed",
+      ],
+      [
+        "no details, success-flavored text",
+        { content: [{ type: "text", text: "SYNTAX OK" }] },
+        "SYNTAX OK",
+      ],
+      [
+        "details is null",
+        { details: null, content: [{ type: "text", text: "real failure" }] },
+        "real failure",
+      ],
+      [
+        "details is empty object (no success signals)",
+        { details: {}, content: [{ type: "text", text: "real failure" }] },
+        "real failure",
+      ],
+    ];
+    for (const [label, result, expected] of unknownResults) {
+      it(`returns the text for ${label}`, () => {
+        expect(extractToolErrorMessage(result)).toBe(expected);
+      });
+    }
+  });
+
+  // The structured-success gate must not regress existing error-keyword
+  // surfacing. These are the cases the existing upstream tests cover; we
+  // include them here as a sanity check that the new code path doesn't
+  // shadow the existing structured-error cascade.
+  describe("regression: existing structured-error paths still surface", () => {
+    it("returns 'failed' for details.status='failed'", () => {
+      expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
+    });
+    it("returns 'timeout' for details.status='timeout'", () => {
+      expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
+    });
+    it("returns the error field when present", () => {
       expect(
         extractToolErrorMessage({
-          details: { status: "completed" },
-          content: [{ type: "text", text: "SYNTAX OK" }],
+          details: { error: { code: "ENOENT", message: "no such file" } },
         }),
-      ).toBeUndefined();
+      ).toBe("no such file");
     });
   });
 });

@@ -39,18 +39,13 @@ function normalizeToolErrorText(text: string): string | undefined {
   if (!firstLine) {
     return undefined;
   }
-  // Require error indicators before treating text as an error message.
-  // Without this, successful tool outputs (shellcheck "SYNTAX OK", `date`,
-  // `true`, `pwd`, grep-no-match with stderr empty, etc.) get classified
-  // as failures and rendered as a false-positive "exec failed" even though
-  // the tool exited 0. Fixes openclaw/openclaw#110222.
-  const hasErrorIndicator =
-    /\b(?:error|fail(?:ed|ing|s)?|timeout(?:s)?|timed[_\s-]?out|den(?:y|ies|ied|ying)|invalid|forbidden?|cancel(?:led|celling|ling|ed|s)?|abort(?:ed|ing|s)?|kill(?:ed|ing|s)?|exception|panic(?:ked|kking|ks)?|wrong|fatal|refus(?:e|es|ed|ing)|reject(?:ed|ing|s)?|undefined|cannot|missing|required|not\s+found|bad\s+option|EACCES|EPERM|ENOENT|EISDIR|ENOTDIR|EBUSY|EAGAIN|ETIMEDOUT|ECONNREFUSED|command\s+not\s+found|no\s+such\s+file|is\s+not\s+(?:a|an))\b/i.test(
-      firstLine,
-    );
-  if (!hasErrorIndicator) {
-    return undefined;
-  }
+  // Note: this helper is a pure string utility. It does NOT decide whether
+  // a tool result is an error — that decision is made by
+  // `extractToolErrorMessage` based on the structured result details
+  // (`details.ok` / `details.success` / `details.exitCode` + `details.error`).
+  // Callers reach this helper only after the structured state has been
+  // checked, so any non-empty first line is returned as-is. Truncation
+  // preserves the upstream contract. See openclaw/openclaw#110222.
   return firstLine.length > TOOL_ERROR_MAX_CHARS
     ? `${truncateUtf16Safe(firstLine, TOOL_ERROR_MAX_CHARS)}…`
     : firstLine;
@@ -641,7 +636,34 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   if (fromRootStatus) {
     return fromRootStatus;
   }
-  return text ? normalizeToolErrorText(text) : undefined;
+  // Final fallback: free-form text from the result. If the structured details
+  // explicitly establish success (ok/success/exitCode=0 with no error
+  // field), suppress the fallback — arbitrary tool output like shellcheck's
+  // "SYNTAX OK" must not be misclassified as a tool error. Otherwise, return
+  // the text as-is so unknown-wording real failures still surface.
+  if (!text) {
+    return undefined;
+  }
+  if (detailsIndicateSuccess(record.details)) {
+    return undefined;
+  }
+  return normalizeToolErrorText(text);
+}
+
+// Returns true when the result details explicitly mark execution as successful:
+// `ok === true`, `success === true`, or `exitCode === 0` with no `error` field.
+function detailsIndicateSuccess(details: unknown): boolean {
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  const record = details as Record<string, unknown>;
+  if (record.ok === true || record.success === true) {
+    return true;
+  }
+  if (record.exitCode === 0 && !("error" in record)) {
+    return true;
+  }
+  return false;
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
