@@ -1,4 +1,5 @@
 import type { ConversationTurnResult } from "../../packages/gateway-protocol/src/schema/agent.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
@@ -14,6 +15,10 @@ import {
   sendGatewayConversationMessage,
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../infra/outbound/outbound-session.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
 import {
   ConversationInputError,
@@ -24,13 +29,28 @@ type ConversationTurnDeps = ConversationDeliveryDeps & {
   registerPendingConversationTurn: typeof registerPendingConversationTurn;
   resolveConversation: typeof resolveConversation;
   resolveOutboundChannelPlugin: typeof resolveOutboundChannelPlugin;
+  ensureOutboundSessionEntry: typeof ensureOutboundSessionEntry;
+  resolveOutboundSessionRoute: typeof resolveOutboundSessionRoute;
 };
+
+type BoundConversationRecord = ConversationRecord & {
+  sessionId: string;
+  sessionKey: string;
+};
+
+function hasConversationSessionBinding(
+  conversation: ConversationRecord,
+): conversation is BoundConversationRecord {
+  return Boolean(conversation.sessionId && conversation.sessionKey);
+}
 
 const defaultDeps: ConversationTurnDeps = {
   ...defaultConversationDeliveryDeps,
   registerPendingConversationTurn,
   resolveConversation,
   resolveOutboundChannelPlugin,
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
 };
 
 function resolveConversationScope(params: {
@@ -121,15 +141,12 @@ function resultForCompletedOperation(params: {
 }
 
 function prepareConversationMessageId(params: {
-  deps: ConversationTurnDeps;
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
   config: OpenClawConfig;
   conversation: ConversationRecord;
   message: string;
 }): string {
-  const prepare = params.deps.resolveOutboundChannelPlugin({
-    channel: params.conversation.channel,
-    cfg: params.config,
-  })?.outbound?.prepareConversationTurnMessageId;
+  const prepare = params.plugin?.outbound?.prepareConversationTurnMessageId;
   if (!prepare) {
     throw new ConversationInputError(
       `Channel ${params.conversation.channel} does not support correlated conversation turns; use conversations_send`,
@@ -153,6 +170,47 @@ function prepareConversationMessageId(params: {
     );
   }
   return preparedMessageId;
+}
+
+async function ensureConversationContextBinding(params: {
+  deps: ConversationTurnDeps;
+  scope: ConversationRegistryScope;
+  config: OpenClawConfig;
+  agentId: string;
+  conversation: ConversationRecord;
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+}): Promise<BoundConversationRecord> {
+  if (hasConversationSessionBinding(params.conversation)) {
+    return params.conversation;
+  }
+  const channel = (params.plugin?.id ?? params.conversation.channel) as ChannelId;
+  const route = await params.deps.resolveOutboundSessionRoute({
+    cfg: params.config,
+    channel,
+    ...(params.plugin ? { plugin: params.plugin } : {}),
+    agentId: params.agentId,
+    accountId: params.conversation.accountId,
+    target: params.conversation.target,
+    ...(params.conversation.threadId ? { threadId: params.conversation.threadId } : {}),
+  });
+  if (!route) {
+    throw new ConversationInputError(
+      `Conversation ${params.conversation.conversationRef} no longer resolves to a channel route`,
+    );
+  }
+  await params.deps.ensureOutboundSessionEntry({
+    cfg: params.config,
+    channel,
+    accountId: params.conversation.accountId,
+    route,
+  });
+  const bound = params.deps.resolveConversation(params.scope, params.conversation.conversationRef);
+  if (!bound || !hasConversationSessionBinding(bound)) {
+    throw new ConversationInputError(
+      `Conversation ${params.conversation.conversationRef} could not create its local context binding`,
+    );
+  }
+  return bound;
 }
 
 /** Owns correlation, delivery, and waiting inside the Gateway process that receives ingress. */
@@ -194,15 +252,27 @@ export async function runGatewayConversationTurn(
     throw error;
   }
 
-  const conversation = deps.resolveConversation(scope, params.conversationRef);
-  if (!conversation) {
+  const discoveredConversation = deps.resolveConversation(scope, params.conversationRef);
+  if (!discoveredConversation) {
     throw new ConversationInputError(
       `Conversation not found: ${params.conversationRef} (use conversations_list)`,
     );
   }
+  const plugin = deps.resolveOutboundChannelPlugin({
+    channel: discoveredConversation.channel,
+    cfg: params.config,
+  });
+  const conversation = await ensureConversationContextBinding({
+    deps,
+    scope,
+    config: params.config,
+    agentId: params.agentId,
+    conversation: discoveredConversation,
+    plugin,
+  });
   if (!begun) {
     const candidatePreparedMessageId = prepareConversationMessageId({
-      deps,
+      plugin,
       config: params.config,
       conversation,
       message: params.message,

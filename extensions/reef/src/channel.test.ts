@@ -1,5 +1,20 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { generateIdentity } from "../protocol/index.js";
+import { reefPlugin } from "./channel.js";
+import { resolveReefConfig } from "./config-schema.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
+import { setReefRuntime } from "./runtime.js";
+import { openReefTrustStore } from "./trust-store.js";
 
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
@@ -39,5 +54,51 @@ describe("Reef inbound dispatch content", () => {
       ReplyToIdFull: "message-1",
       MessageThreadId: "thread-1",
     });
+  });
+});
+
+describe("Reef conversation directory", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-directory-"));
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStoreForTests<T>("reef", {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+    setReefRuntime(runtime);
+    const identity = generateIdentity();
+    openReefTrustStore(runtime, resolveReefConfig({ channels: { reef: { handle: "clawd" } } })).set(
+      "molty",
+      {
+        autonomy: "bounded",
+        ed25519PublicKey: identity.signing.publicKey,
+        x25519PublicKey: identity.encryption.publicKey,
+        keyEpoch: 1,
+        safetyNumberChanged: false,
+        approvedAt: 1_752_537_600_000,
+      },
+    );
+  });
+
+  afterEach(() => {
+    resetPluginStateStoreForTests();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("exposes locally trusted peers as routable directory entries", async () => {
+    const cfg = { channels: { reef: { handle: "clawd" } } };
+    await expect(
+      reefPlugin.directory?.listPeers?.({
+        cfg,
+        accountId: "default",
+        query: "@molty",
+        limit: 10,
+        runtime: defaultRuntime,
+      }),
+    ).resolves.toEqual([{ kind: "user", id: "molty", name: "@molty's agent", handle: "@molty" }]);
   });
 });

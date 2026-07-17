@@ -2,15 +2,10 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import type {
+  ConversationListResult,
   ConversationSendResult,
   ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
-import {
-  listConversations,
-  type ConversationRecord,
-  type ConversationRegistryScope,
-} from "../../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -29,6 +24,7 @@ const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 const ConversationsListSchema = Type.Object(
   {
     channel: Type.Optional(Type.String({ minLength: 1 })),
+    query: Type.Optional(Type.String({ minLength: 1 })),
     limit: optionalPositiveIntegerSchema(),
   },
   { additionalProperties: false },
@@ -61,25 +57,14 @@ type ConversationToolOptions = {
 
 type ConversationToolDeps = {
   callGateway: typeof callGateway;
-  listConversations: typeof listConversations;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway,
-  listConversations,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
   return options.agentId ?? resolveAgentIdFromSessionKey(options.agentSessionKey);
-}
-
-function resolveConversationScope(options: ConversationToolOptions): ConversationRegistryScope {
-  const agentId = resolveToolAgentId(options);
-  const configuredStore = options.config?.session?.store;
-  return {
-    agentId,
-    ...(configuredStore ? { storePath: resolveStorePath(configuredStore, { agentId }) } : {}),
-  };
 }
 
 function requireOwner(options: ConversationToolOptions): void {
@@ -94,20 +79,6 @@ function readConversationRef(value: string): string {
     throw new ToolInputError(`Invalid conversationRef: ${value}`);
   }
   return conversationRef;
-}
-
-function presentConversation(conversation: ConversationRecord) {
-  return {
-    conversationRef: conversation.conversationRef,
-    channel: conversation.channel,
-    accountId: conversation.accountId,
-    kind: conversation.kind,
-    target: conversation.target,
-    ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
-    ...(conversation.label ? { label: conversation.label } : {}),
-    firstSeenAt: conversation.firstSeenAt,
-    lastSeenAt: conversation.lastSeenAt,
-  };
 }
 
 function buildConversationOperationId(params: {
@@ -144,14 +115,18 @@ export function createConversationsListTool(
       const params = args as Record<string, unknown>;
       const limit = Math.min(readPositiveIntegerParam(params, "limit") ?? 50, 100);
       const channel = readStringParam(params, "channel");
-      return jsonResult({
-        conversations: deps
-          .listConversations(resolveConversationScope(options), {
-            limit,
-            ...(channel ? { channel } : {}),
-          })
-          .map(presentConversation),
+      const query = readStringParam(params, "query");
+      const result = await deps.callGateway<ConversationListResult>({
+        method: "conversations.list",
+        params: {
+          agentId: resolveToolAgentId(options),
+          limit,
+          ...(channel ? { channel } : {}),
+          ...(query ? { query } : {}),
+        },
+        ...(options.config ? { config: options.config } : {}),
       });
+      return jsonResult(result);
     },
   };
 }

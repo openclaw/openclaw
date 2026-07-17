@@ -1216,6 +1216,92 @@ public struct ConversationSendResult: Codable, Sendable {
     }
 }
 
+public struct ConversationListItem: Codable, Sendable {
+    public let conversationref: String
+    public let channel: String
+    public let accountid: String
+    public let kind: AnyCodable
+    public let target: String
+    public let threadid: String?
+    public let label: String?
+    public let firstseenat: Int
+    public let lastseenat: Int
+
+    public init(
+        conversationref: String,
+        channel: String,
+        accountid: String,
+        kind: AnyCodable,
+        target: String,
+        threadid: String? = nil,
+        label: String? = nil,
+        firstseenat: Int,
+        lastseenat: Int)
+    {
+        self.conversationref = conversationref
+        self.channel = channel
+        self.accountid = accountid
+        self.kind = kind
+        self.target = target
+        self.threadid = threadid
+        self.label = label
+        self.firstseenat = firstseenat
+        self.lastseenat = lastseenat
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationref = "conversationRef"
+        case channel
+        case accountid = "accountId"
+        case kind
+        case target
+        case threadid = "threadId"
+        case label
+        case firstseenat = "firstSeenAt"
+        case lastseenat = "lastSeenAt"
+    }
+}
+
+public struct ConversationListParams: Codable, Sendable {
+    public let agentid: String
+    public let channel: String?
+    public let query: String?
+    public let limit: Int?
+
+    public init(
+        agentid: String,
+        channel: String? = nil,
+        query: String? = nil,
+        limit: Int? = nil)
+    {
+        self.agentid = agentid
+        self.channel = channel
+        self.query = query
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case channel
+        case query
+        case limit
+    }
+}
+
+public struct ConversationListResult: Codable, Sendable {
+    public let conversations: [ConversationListItem]
+
+    public init(
+        conversations: [ConversationListItem])
+    {
+        self.conversations = conversations
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversations
+    }
+}
+
 public struct ConversationTurnCancelParams: Codable, Sendable {
     public let agentid: String
     public let turnid: String
