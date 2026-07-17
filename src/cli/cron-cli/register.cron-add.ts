@@ -332,7 +332,7 @@ export function registerCronAddCommand(cron: Command) {
               hasThreadId;
 
             if (
-              (optionSource("channel") === "cli" ||
+              (cmd.getOptionValueSource("channel") === "cli" ||
                 typeof opts.to === "string" ||
                 accountId ||
                 hasThreadId) &&

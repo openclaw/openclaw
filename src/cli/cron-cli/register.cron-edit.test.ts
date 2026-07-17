@@ -462,4 +462,184 @@ describe("cron edit command", () => {
     expect(help).toContain("--clear-thread-id");
     expect(help).toContain("--clear-account");
   });
+
+  describe("delivery-option validation for main-session system-event jobs", () => {
+    it.each([
+      { flag: "--channel", value: "telegram" },
+      { flag: "--to", value: "+1234567890" },
+      { flag: "--account", value: "acct-1" },
+      { flag: "--thread-id", value: "42" },
+    ])("rejects $flag for explicit main system-event edit (fast path)", async ({ flag, value }) => {
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+      const program = createCronProgram();
+
+      await program.parseAsync(
+        ["edit", "job-1", "--session", "main", "--system-event", "wakeup", flag, value],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+        ),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it("rejects --channel when editing an existing main systemEvent job", async () => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return {
+            id: "job-1",
+            sessionTarget: "main",
+            payload: { kind: "systemEvent", text: "wakeup" },
+            schedule: { kind: "cron", expr: "0 * * * *" },
+          };
+        }
+        return { ok: true };
+      });
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+      const program = createCronProgram();
+
+      await program.parseAsync(["edit", "job-1", "--channel", "telegram"], { from: "user" });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+        ),
+      );
+      // Must have read the existing job via cron.get.
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      // Must not proceed to Gateway update.
+      expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.anything(),
+      );
+
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it("rejects --to when converting an existing main systemEvent job to explicit main + --to", async () => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return {
+            id: "job-1",
+            sessionTarget: "main",
+            payload: { kind: "systemEvent", text: "wakeup" },
+            schedule: { kind: "cron", expr: "0 * * * *" },
+          };
+        }
+        return { ok: true };
+      });
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(defaultRuntime, "exit")
+        .mockImplementation((() => undefined) as never);
+      const program = createCronProgram();
+
+      await program.parseAsync(["edit", "job-1", "--session", "main", "--to", "+1234567890"], {
+        from: "user",
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+        ),
+      );
+      // Must have read the existing job to resolve the payload kind.
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.anything(),
+      );
+
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    });
+
+    it("allows --channel for explicit isolated session (fast path)", async () => {
+      const program = createCronProgram();
+
+      await program.parseAsync(
+        ["edit", "job-1", "--session", "isolated", "--message", "hello", "--channel", "telegram"],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.objectContaining({
+          id: "job-1",
+          patch: expect.objectContaining({
+            delivery: expect.objectContaining({ channel: "telegram" }),
+          }),
+        }),
+      );
+    });
+
+    it("allows --channel when editing an existing isolated agentTurn job", async () => {
+      callGatewayFromCli.mockImplementation(async (method: string) => {
+        if (method === "cron.get") {
+          return {
+            id: "job-1",
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: "hello" },
+            schedule: { kind: "cron", expr: "0 * * * *" },
+          };
+        }
+        return { ok: true };
+      });
+      const program = createCronProgram();
+
+      await program.parseAsync(["edit", "job-1", "--channel", "telegram"], { from: "user" });
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.objectContaining({
+          id: "job-1",
+          patch: expect.objectContaining({
+            delivery: expect.objectContaining({ channel: "telegram" }),
+          }),
+        }),
+      );
+    });
+
+    it("allows --clear-channel on explicit main systemEvent (clearing is not setting delivery)", async () => {
+      const program = createCronProgram();
+
+      await program.parseAsync(
+        ["edit", "job-1", "--session", "main", "--system-event", "wakeup", "--clear-channel"],
+        { from: "user" },
+      );
+
+      // clear flags are not explicit chat delivery; must reach cron.update.
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "cron.update",
+        expect.anything(),
+        expect.objectContaining({
+          id: "job-1",
+          patch: expect.objectContaining({
+            delivery: expect.objectContaining({ channel: null }),
+          }),
+        }),
+      );
+    });
+  });
 });

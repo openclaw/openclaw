@@ -400,6 +400,42 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.account === "string" && opts.clearAccount) {
             throw new Error("Use --account or --clear-account, not both");
           }
+
+          // Guard: reject explicit chat delivery targets when the resulting job
+          // is a main-session system event, matching the cron-add validation.
+          // Placed after mutual-exclusion checks so --channel + --clear-channel etc.
+          // are caught first, and before delivery patch construction.
+          const hasExplicitChatDelivery =
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            typeof opts.account === "string" ||
+            typeof opts.threadId === "string";
+          if (hasExplicitChatDelivery) {
+            if (sessionTarget && sessionTarget !== "main") {
+              // ok — isolated/current/session:xxx allows chat delivery
+            } else if (sessionTarget === "main" && typeof opts.systemEvent === "string") {
+              // Fast path: explicitly main + systemEvent, no Gateway read needed.
+              throw new Error(
+                "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+              );
+            } else {
+              // Ambiguous: resolve resulting job from existing state.
+              const existing = await readCronJobForEdit(opts, String(id));
+              const finalSessionTarget = sessionTarget ?? existing.sessionTarget;
+              const finalPayloadKind =
+                typeof opts.systemEvent === "string"
+                  ? "systemEvent"
+                  : opts.message || opts.command || opts.commandArgv
+                    ? "changed"
+                    : existing.payload.kind;
+              if (finalSessionTarget === "main" && finalPayloadKind === "systemEvent") {
+                throw new Error(
+                  "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+                );
+              }
+            }
+          }
+
           const hasCommandSpecificPayloadField =
             Boolean(commandShell) ||
             Boolean(commandArgv) ||
