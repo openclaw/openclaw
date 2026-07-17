@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addSafeTimeoutDelayGraceMs,
   getConnectChallengeTimeoutMsFromEnv,
+  getPreauthHandshakeTimeoutMsFromEnv,
   MAX_SAFE_TIMEOUT_DELAY_MS,
   resolveConnectChallengeTimeoutMs,
   resolveFiniteTimeoutDelayMs,
@@ -71,6 +72,11 @@ describe("gateway client handshake timeouts", () => {
 
   it("accepts existing strict timeout env integer forms", () => {
     expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75000 ",
+      }),
+    ).toBe(75_000);
+    expect(
       resolvePreauthHandshakeTimeoutMs({
         env: { OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75000 " },
       }),
@@ -80,6 +86,19 @@ describe("gateway client handshake timeouts", () => {
         OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: " 015000 ",
       }),
     ).toBe(15_000);
+  });
+
+  it("ignores invalid preauth handshake timeout env values", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "0",
+      }),
+    ).toBeUndefined();
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "abc",
+      }),
+    ).toBeUndefined();
   });
 
   it("caps connect challenge timeout env and explicit values to the safe timer range", () => {

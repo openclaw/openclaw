@@ -52,7 +52,10 @@ import {
   type GatewayRemoteCredentialPrecedence,
 } from "./credentials.js";
 import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
-import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
+import {
+  getPreauthHandshakeTimeoutMsFromEnv,
+  resolvePreauthHandshakeTimeoutMs,
+} from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   isGatewayMethodClassified,
@@ -672,13 +675,12 @@ function resolveGatewayCallTimeout(
     typeof configuredHandshakeTimeoutMs === "number" &&
     Number.isFinite(configuredHandshakeTimeoutMs) &&
     configuredHandshakeTimeoutMs > 0;
-  const hasEnvHandshakeTimeout =
-    Boolean(process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS) ||
-    Boolean(process.env.VITEST && process.env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  const envHandshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
   const resolvedHandshakeTimeoutMs =
-    hasConfiguredHandshakeTimeout || hasEnvHandshakeTimeout
+    envHandshakeTimeoutMs ??
+    (hasConfiguredHandshakeTimeout
       ? resolvePreauthHandshakeTimeoutMs({ configuredTimeoutMs: configuredHandshakeTimeoutMs })
-      : undefined;
+      : undefined);
   const defaultTimeoutMs =
     typeof resolvedHandshakeTimeoutMs === "number" && resolvedHandshakeTimeoutMs > 10_000
       ? resolvedHandshakeTimeoutMs

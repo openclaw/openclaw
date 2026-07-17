@@ -1813,6 +1813,28 @@ describe("callGateway error details", () => {
     }
   });
 
+  it("ignores invalid env handshake timeout when choosing the default wrapper timeout", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_HANDSHAKE_TIMEOUT_MS"]);
+    try {
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "0";
+      startMode = "silent";
+      setLocalLoopbackGatewayConfig();
+
+      vi.useFakeTimers();
+      let errMessage = "";
+      const promise = callGateway({ method: "health" }).catch((caught: unknown) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await promise;
+
+      expect(errMessage).toContain("gateway timeout after 10000ms");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("does not overflow very large timeout values", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();

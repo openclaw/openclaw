@@ -82,6 +82,21 @@ export function getConnectChallengeTimeoutMsFromEnv(
   return undefined;
 }
 
+/** Reads the preauth handshake timeout override from the process environment. */
+export function getPreauthHandshakeTimeoutMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw =
+    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  if (raw) {
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return resolveSafeTimeoutDelayMs(parsed);
+    }
+  }
+  return undefined;
+}
+
 function normalizePositiveTimeoutMs(timeoutMs: unknown): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? resolveSafeTimeoutDelayMs(timeoutMs)
@@ -118,14 +133,9 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
   env?: NodeJS.ProcessEnv;
   configuredTimeoutMs?: number | null;
 }): number {
-  const env = params?.env ?? process.env;
-  const configuredTimeout =
-    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
-  if (configuredTimeout) {
-    const parsed = parseStrictPositiveInteger(configuredTimeout);
-    if (parsed !== undefined) {
-      return resolveSafeTimeoutDelayMs(parsed);
-    }
+  const envOverride = getPreauthHandshakeTimeoutMsFromEnv(params?.env);
+  if (envOverride !== undefined) {
+    return envOverride;
   }
   const configured = normalizePositiveTimeoutMs(params?.configuredTimeoutMs);
   if (configured !== undefined) {
