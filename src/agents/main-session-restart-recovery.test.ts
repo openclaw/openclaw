@@ -2112,6 +2112,68 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
+  it("tombstones when the final startup retry consumes the last charge", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-final-startup-attempt",
+          revision: 1,
+          chargedAttempts: 2,
+        },
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "interrupted response",
+      },
+    });
+    vi.mocked(callGateway)
+      .mockImplementationOnce(async () => {
+        await replaceSessionEntry(
+          { sessionKey: "agent:main:fresh", storePath },
+          {
+            sessionId: "fresh-session",
+            updatedAt: Date.now(),
+            status: "running",
+            abortedLastRun: true,
+            mainRestartRecovery: {
+              cycleId: "cycle-fresh-exhausted",
+              revision: 1,
+              chargedAttempts: 3,
+            },
+          },
+        );
+        throw new Error("final ambiguous dispatch failure");
+      })
+      .mockResolvedValueOnce({ runId: "run-resumed" });
+
+    scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      maxRetries: 1,
+      stateDir: tmpDir,
+    });
+
+    await vi.waitFor(() => {
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        status: "failed",
+        mainRestartRecovery: { tombstone: expect.any(Object) },
+      });
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    const freshEntry = loadSessionEntry({ sessionKey: "agent:main:fresh", storePath });
+    expect(freshEntry).toMatchObject({
+      sessionId: "fresh-session",
+      status: "running",
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 3 },
+    });
+    expect(freshEntry?.mainRestartRecovery?.tombstone).toBeUndefined();
+  });
+
   it("fails closed when message-tool-only authority cannot be reconstructed", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

@@ -88,6 +88,10 @@ type ExpectedRestartRecoveryTarget = {
   sessionKey: string;
 };
 
+type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
+  storePath: string;
+};
+
 function loadExpectedRestartRecoveryTarget(params: {
   expected: ExpectedRestartRecoveryTarget;
   storePath: string;
@@ -1545,6 +1549,8 @@ function resolveRecoveryDispatchSessionKey(params: {
 
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
+  observationOnly?: boolean;
+  onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   storePath: string;
   resumedSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
@@ -1674,6 +1680,10 @@ async function recoverStore(params: {
       }
       continue;
     }
+    if (params.observationOnly) {
+      result.skipped++;
+      continue;
+    }
     const recordResumeResult = (resumeResult: Awaited<ReturnType<typeof resumeMainSession>>) => {
       if (resumeResult === "resumed") {
         params.resumedSessionKeys.add(resumeDedupeKey);
@@ -1682,6 +1692,21 @@ async function recoverStore(params: {
         result.skipped++;
       } else {
         result.failed++;
+        const current = loadExpectedRestartRecoveryTarget({
+          expected: { sessionId: entry.sessionId, sessionKey },
+          storePath: params.storePath,
+        });
+        if (
+          current?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
+          !current.mainRestartRecovery.reservation
+        ) {
+          params.onExhaustedTarget?.({
+            canonicalSessionKey: dispatchSessionKey,
+            sessionId: entry.sessionId,
+            sessionKey,
+            storePath: params.storePath,
+          });
+        }
       }
     };
 
@@ -1920,8 +1945,9 @@ async function resolveRestartRecoveryStorePaths(params: {
   return [...storePaths].toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function recoverRestartAbortedMainSessions(params: {
+async function recoverRestartAbortedMainSessionsWithOptions(params: {
   cfg?: OpenClawConfig;
+  onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
   resumedSessionKeys?: Set<string>;
   activeSessionIds?: Iterable<string>;
@@ -1934,6 +1960,7 @@ export async function recoverRestartAbortedMainSessions(params: {
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await recoverStore({
       cfg: params.cfg,
+      onExhaustedTarget: params.onExhaustedTarget,
       storePath,
       resumedSessionKeys,
       activeSessionIds: params.activeSessionIds,
@@ -1951,6 +1978,17 @@ export async function recoverRestartAbortedMainSessions(params: {
     );
   }
   return result;
+}
+
+export async function recoverRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  resumedSessionKeys?: Set<string>;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ recovered: number; failed: number; skipped: number }> {
+  return await recoverRestartAbortedMainSessionsWithOptions(params);
 }
 
 /** Retries one exact durable Control UI row from its owning per-agent SQLite store. */
@@ -2017,7 +2055,20 @@ export async function retryRestartAbortedMainSessionRecoveryAfterOwnerRelease(pa
   storePath: string;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
+  return await recoverExpectedRestartRecoveryTarget(params);
+}
+
+async function recoverExpectedRestartRecoveryTarget(params: {
+  canonicalSessionKey?: string;
+  cfg?: OpenClawConfig;
+  expectedSessionId: string;
+  observationOnly?: boolean;
+  sessionKey: string;
+  storePath: string;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ recovered: number; failed: number; skipped: number }> {
   const expectedTarget: ExpectedRestartRecoveryTarget = {
+    canonicalSessionKey: params.canonicalSessionKey,
     sessionId: params.expectedSessionId,
     sessionKey: params.sessionKey,
   };
@@ -2045,6 +2096,7 @@ export async function retryRestartAbortedMainSessionRecoveryAfterOwnerRelease(pa
       async () =>
         await recoverStore({
           cfg: params.cfg,
+          observationOnly: params.observationOnly,
           storePath: params.storePath,
           resumedSessionKeys: new Set<string>(),
           expectedTarget,
@@ -2124,13 +2176,14 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
   scheduleAttempt(1, 0);
 }
 
-export async function recoverStartupOrphanedMainSessions(params: {
+async function recoverStartupOrphanedMainSessionsWithOptions(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
   updatedBeforeMs?: number;
   resumedSessionKeys?: Set<string>;
+  onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
   const startupRecoveryCutoffMs = params.updatedBeforeMs ?? Date.now();
@@ -2141,8 +2194,9 @@ export async function recoverStartupOrphanedMainSessions(params: {
     activeSessionKeys: params.activeSessionKeys,
     updatedBeforeMs: startupRecoveryCutoffMs,
   });
-  const recovered = await recoverRestartAbortedMainSessions({
+  const recovered = await recoverRestartAbortedMainSessionsWithOptions({
     cfg: params.cfg,
+    onExhaustedTarget: params.onExhaustedTarget,
     stateDir: params.stateDir,
     resumedSessionKeys: params.resumedSessionKeys,
     activeSessionIds: params.activeSessionIds,
@@ -2155,6 +2209,18 @@ export async function recoverStartupOrphanedMainSessions(params: {
     failed: recovered.failed,
     skipped: marked.skipped + recovered.skipped,
   };
+}
+
+export async function recoverStartupOrphanedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+  activeSessionIds?: Iterable<string>;
+  activeSessionKeys?: Iterable<string>;
+  updatedBeforeMs?: number;
+  resumedSessionKeys?: Set<string>;
+  gatewayRuntime: GatewayRecoveryRuntime;
+}): Promise<{ marked: number; recovered: number; failed: number; skipped: number }> {
+  return await recoverStartupOrphanedMainSessionsWithOptions(params);
 }
 
 export function scheduleRestartAbortedMainSessionRecovery(params: {
@@ -2172,29 +2238,60 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   const startupRecoveryCutoffMs = Date.now();
 
   const runRecoveryAttempt = (attempt: number, delay: number) => {
+    const exhaustedTargets = new Map<string, ExhaustedRestartRecoveryTarget>();
+    const reconcileExhaustedTargets = async () => {
+      const outcomes = await Promise.allSettled(
+        [...exhaustedTargets.values()].map((target) =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () =>
+              await recoverExpectedRestartRecoveryTarget({
+                canonicalSessionKey: target.canonicalSessionKey,
+                cfg: params.cfg,
+                expectedSessionId: target.sessionId,
+                observationOnly: true,
+                sessionKey: target.sessionKey,
+                storePath: target.storePath,
+                gatewayRuntime: params.gatewayRuntime,
+              }),
+          ),
+        ),
+      );
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") {
+          log.warn(`main-session exhaustion reconciliation failed: ${String(outcome.reason)}`);
+        }
+      }
+    };
     // Delayed retries outlive startup; each attempt must independently block
     // host suspension while it reads and rewrites recovery session state.
     void runWithGatewayIndependentRootWorkAdmission(
       async () =>
-        await recoverStartupOrphanedMainSessions({
+        await recoverStartupOrphanedMainSessionsWithOptions({
           cfg: params.cfg,
+          onExhaustedTarget: (target) => {
+            exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
+          },
           stateDir: params.stateDir,
           resumedSessionKeys,
           updatedBeforeMs: startupRecoveryCutoffMs,
           gatewayRuntime: params.gatewayRuntime,
         }),
     )
-      .then((result) => {
+      .then(async (result) => {
         if (result.failed > 0 && attempt < maxRetries) {
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
+        } else if (result.failed > 0 && attempt === maxRetries && exhaustedTargets.size > 0) {
+          // Reconcile only exact rows whose final dispatch retained its durable charge.
+          await reconcileExhaustedTargets();
         }
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         if (attempt < maxRetries) {
           log.warn(`main-session restart recovery failed: ${String(err)}`);
           scheduleAttempt(attempt + 1, delay * RETRY_BACKOFF_MULTIPLIER);
         } else {
           log.warn(`main-session restart recovery gave up: ${String(err)}`);
+          await reconcileExhaustedTargets();
         }
       });
   };

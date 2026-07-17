@@ -100,6 +100,7 @@ function currentGenerationRequiredBy(command: MainSessionRecoveryCommand): strin
 
 export async function commitMainSessionRecovery(params: {
   command: MainSessionRecoveryCommand;
+  expectedSessionId?: string;
   requireWriteSuccess?: boolean;
   scanAliases?: boolean;
   target: MainSessionRecoveryStoreTarget;
@@ -119,9 +120,9 @@ export async function commitMainSessionRecovery(params: {
     params.command.kind === "release_foreground" ? params.command.claim : undefined;
   const reservationCleanup = cancellation ?? abandonment;
   const scansAliases = Boolean(
+    params.scanAliases ||
     reservationCleanup ||
     recoveryAdmission ||
-    (ownerClaim && params.scanAliases) ||
     ownerValidation ||
     ownerRelease,
   );
@@ -139,7 +140,10 @@ export async function commitMainSessionRecovery(params: {
         };
       }
       const selected = entries.find(({ sessionKey }) => sessionKey === params.target.sessionKey);
-      let candidate = selected;
+      let candidate =
+        params.expectedSessionId && selected?.entry.sessionId !== params.expectedSessionId
+          ? undefined
+          : selected;
       if (reservationCleanup) {
         candidate =
           entries.find(({ entry }) => matchesReservation(entry, reservationCleanup)) ?? selected;
@@ -154,6 +158,8 @@ export async function commitMainSessionRecovery(params: {
         candidate = entries.find(({ entry }) => matchesOwnerClaim(entry, exactClaim)) ?? selected;
       } else if (ownerClaim && !selected) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
+      } else if (params.scanAliases && params.expectedSessionId) {
+        candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
       }
       if (!candidate) {
         return {
@@ -165,8 +171,9 @@ export async function commitMainSessionRecovery(params: {
       const entry = candidate.entry as SessionEntry;
       const previousRecoveryState = entry.mainRestartRecovery;
       const command =
-        ownerClaim && ownerClaim.sessionKey !== candidate.sessionKey
-          ? { ...ownerClaim, sessionKey: candidate.sessionKey }
+        (ownerClaim || params.command.kind === "observe") &&
+        params.command.sessionKey !== candidate.sessionKey
+          ? { ...params.command, sessionKey: candidate.sessionKey }
           : params.command;
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
@@ -263,19 +270,31 @@ export async function claimMainSessionRecoveryOwner(params: {
 }
 
 export async function inspectMainSessionRecoveryRequired(params: {
+  expectedSessionId: string;
   lifecycleGeneration: string;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryInspectionResult> {
-  const result = await commitMainSessionRecovery({
-    command: {
-      kind: "observe",
-      cycleId: randomUUID(),
-      lifecycleGeneration: params.lifecycleGeneration,
-      sessionKey: params.target.sessionKey,
-    },
+  const command = {
+    kind: "observe" as const,
+    cycleId: randomUUID(),
+    lifecycleGeneration: params.lifecycleGeneration,
+    sessionKey: params.target.sessionKey,
+  };
+  let result = await commitMainSessionRecovery({
+    command,
+    expectedSessionId: params.expectedSessionId,
     requireWriteSuccess: true,
     target: params.target,
   });
+  if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
+    result = await commitMainSessionRecovery({
+      command,
+      expectedSessionId: params.expectedSessionId,
+      requireWriteSuccess: true,
+      scanAliases: true,
+      target: params.target,
+    });
+  }
   if (result.transition.kind === "observed") {
     return result.transition.view.status === "inactive"
       ? { kind: "not_required" }
