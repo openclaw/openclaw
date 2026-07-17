@@ -7,6 +7,8 @@
 // during iMessage config migration. See
 // https://github.com/openclaw/openclaw/issues/78749.
 
+const MAX_STARTUP_WARNED = 64;
+const MAX_PER_CHAT_WARNED = 512;
 const startupWarned = new Set<string>();
 const perChatWarned = new Set<string>();
 
@@ -33,7 +35,7 @@ export function warnGroupAllowlistMisconfigOnce(params: {
     return false;
   }
   const key = `imessage:${params.accountId}`;
-  if (startupWarned.has(key)) {
+  if (startupWarned.has(key) || startupWarned.size >= MAX_STARTUP_WARNED) {
     return false;
   }
   startupWarned.add(key);
@@ -62,7 +64,7 @@ export function warnGroupAllowlistDropPerChatOnce(params: {
     return false;
   }
   const key = `imessage:${params.accountId}:${chat}`;
-  if (perChatWarned.has(key)) {
+  if (perChatWarned.has(key) || perChatWarned.size >= MAX_PER_CHAT_WARNED) {
     return false;
   }
   perChatWarned.add(key);
