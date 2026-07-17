@@ -94,7 +94,7 @@ function normalizeArguments(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function mapContextToLlamaChatHistory(context: Context): ChatHistoryItem[] {
+function mapContextToLlamaChatHistory(context: Context): ChatHistoryItem[] {
   const history: ChatHistoryItem[] = [];
   if (context.systemPrompt?.trim()) {
     history.push({ type: "system", text: context.systemPrompt });
@@ -155,7 +155,7 @@ export function mapContextToLlamaChatHistory(context: Context): ChatHistoryItem[
   return history;
 }
 
-export function mapToolsToLlamaFunctions(context: Context): ChatModelFunctions | undefined {
+function mapToolsToLlamaFunctions(context: Context): ChatModelFunctions | undefined {
   if (!context.tools?.length) {
     return undefined;
   }
@@ -252,7 +252,7 @@ async function serialize(operation: () => Promise<void>): Promise<void> {
   await current;
 }
 
-export async function clearLlamaCppInferenceCacheForTests(): Promise<void> {
+async function clearLlamaCppInferenceCacheForTests(): Promise<void> {
   await serialize(async () => {
     await disposeLoadedModel();
     if (llamaInstance) {
@@ -406,5 +406,13 @@ export function createLlamaCppStreamFn(params: { providerConfig?: ModelProviderC
       queueMicrotask(() => void serialize(run));
     }
     return stream;
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.llamaCppInferenceTestApi")] = {
+    mapContextToLlamaChatHistory,
+    mapToolsToLlamaFunctions,
+    clearLlamaCppInferenceCacheForTests,
   };
 }

@@ -7,8 +7,8 @@ import type {
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "Local model (llama.cpp)";
-export const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
-export const LLAMA_CPP_LOCAL_BASE_URL = "local://llama-cpp";
+const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
+const LLAMA_CPP_LOCAL_BASE_URL = "local://llama-cpp";
 
 export function resolveLlamaCppSyntheticApiKey(): string {
   return LLAMA_CPP_LOCAL_AUTH_MARKER;
@@ -32,7 +32,7 @@ export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): st
     : path.join(os.homedir(), ".node-llama-cpp", "models");
 }
 
-export function resolveHomePath(value: string): string {
+function resolveHomePath(value: string): string {
   if (value === "~") {
     return os.homedir();
   }
@@ -74,7 +74,7 @@ export function resolveCachedLlamaCppModelPath(params: {
   return path.isAbsolute(localPath) ? localPath : path.resolve(cacheDir, localPath);
 }
 
-export function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
+function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
   return {
     id: DEFAULT_LLAMA_CPP_MODEL_ID,
     name: "Qwen3 4B Instruct 2507 (Q4_K_M)",

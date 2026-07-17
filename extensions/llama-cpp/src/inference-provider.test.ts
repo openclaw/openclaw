@@ -52,12 +52,19 @@ vi.mock("node-llama-cpp", () => ({
   },
 }));
 
-import {
+import { createLlamaCppStreamFn } from "./inference-provider.js";
+
+const {
   clearLlamaCppInferenceCacheForTests,
-  createLlamaCppStreamFn,
   mapContextToLlamaChatHistory,
   mapToolsToLlamaFunctions,
-} from "./inference-provider.js";
+} = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.llamaCppInferenceTestApi")
+] as {
+  clearLlamaCppInferenceCacheForTests: () => Promise<void>;
+  mapContextToLlamaChatHistory: (context: Context) => unknown[];
+  mapToolsToLlamaFunctions: (context: Context) => Record<string, unknown> | undefined;
+};
 
 const model: Model = {
   id: "test.gguf",

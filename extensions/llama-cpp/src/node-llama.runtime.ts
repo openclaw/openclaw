@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 export type NodeLlamaCppModule = typeof import("node-llama-cpp");
 
-export function isNodeLlamaCppMissing(error: unknown): boolean {
+function isNodeLlamaCppMissing(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
