@@ -1,9 +1,17 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { canonicalBytes, PipelineError, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
-import { ReefOutboundRejectedError } from "./flow.js";
+import {
+  canonicalBytes,
+  MemoryAuditStore,
+  MemoryReplayStore,
+  PipelineError,
+  REEF_MAX_PLAINTEXT_BYTES,
+} from "../protocol/index.js";
+import { ReefMessageFlow } from "./flow.js";
+import { allow, config, guard, reefKeys, transport, trust } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { setActiveReef } from "./runtime.js";
+import type { ReefTransportClient } from "./transport.js";
 
 describe("reefOutboundAdapter", () => {
   it("delegates delivery to the Gateway that owns the active encrypted flow", () => {
@@ -100,16 +108,14 @@ describe("reefOutboundAdapter", () => {
     expect(error).toMatchObject({ cause, retryable: true });
   });
 
-  it.each([
-    new PipelineError("guard", "guard denied", {
+  it("terminally rejects local Reef policy denials", async () => {
+    const cause = new PipelineError("guard", "guard denied", {
       decision: "deny",
       category: "confidential",
       reason: "Denied.",
       model: "gpt-5.6-sol",
       policyVersion: "reef-v1",
-    }),
-    new ReefOutboundRejectedError("peer trust changed"),
-  ])("terminally rejects local Reef policy and trust denials", async (cause) => {
+    });
     const send = vi.fn(async () => {
       throw cause;
     });
@@ -121,6 +127,36 @@ describe("reefOutboundAdapter", () => {
 
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({ cause, retryable: false });
+  });
+
+  it("terminally rejects unapproved Reef peers", async () => {
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trust({}).store,
+      keys: reefKeys(),
+      transport: transport() as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(9)),
+      replay: new MemoryReplayStore(),
+      reviews: {} as never,
+      delivered: {} as never,
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    setActiveReef({ flow, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({ cfg: {}, to: "reef:Alice", text: "hello" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      cause: {
+        name: "ReefOutboundRejectedError",
+        message: expect.stringContaining("not approved"),
+      },
+      retryable: false,
+    });
   });
 
   it("keeps guard availability failures retryable before dispatch", async () => {

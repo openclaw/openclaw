@@ -257,16 +257,16 @@ describe("ReefMessageFlow outbound", () => {
     cfg.handle = "alice";
     const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();
+    const stores = flowStores();
     const flow = new ReefMessageFlow({
       config: cfg,
       trust: trusted.store,
       keys: alice,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...stores,
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
