@@ -152,10 +152,7 @@ describe("perplexity web search provider", () => {
 
   it("sends official date filter fields in the Search API request body", async () => {
     withTrustedWebSearchEndpointMock.mockImplementationOnce(
-      async (
-        _params: { init: RequestInit },
-        run: (response: Response) => Promise<unknown>,
-      ) =>
+      async (_params: { init: RequestInit }, run: (response: Response) => Promise<unknown>) =>
         await run(
           new Response(JSON.stringify({ results: [] }), {
             status: 200,
@@ -182,9 +179,7 @@ describe("perplexity web search provider", () => {
     );
 
     expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
-    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [
-      { init: RequestInit },
-    ];
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [{ init: RequestInit }];
     expect(JSON.parse(request.init.body as string)).toEqual({
       query: "OpenClaw releases",
       max_results: 5,
