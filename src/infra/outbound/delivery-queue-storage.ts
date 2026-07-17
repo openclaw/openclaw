@@ -6,6 +6,7 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
+  completeDeliveryQueueEntry,
   commitStagedDeliveryQueueEntry,
   commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
@@ -13,9 +14,11 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
+  reserveDeliveryQueueEntryAttempt,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueRowMetadata,
+  type DeliveryQueueCompletionRetention,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
@@ -85,12 +88,17 @@ export type QueuedDeliveryPayload = {
   preparedMessageId?: string;
   /** Serializable owner state finalized by both live delivery and recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** Retain a terminal receipt when the producer may replay this stable intent indefinitely. */
+  completionRetention?: DeliveryQueueCompletionRetention;
+  /** Producer-specific retry budget; omitted entries use the queue default. */
+  maxRetries?: number;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  attemptCount: number;
   lastAttemptAt?: number;
   lastError?: string;
   platformSendStartedAt?: number;
@@ -135,7 +143,10 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
+    completionRetention: params.completionRetention,
+    maxRetries: params.maxRetries,
     retryCount: 0,
+    attemptCount: 0,
   };
 }
 
@@ -224,7 +235,7 @@ type AckDeliveryOptions = {
   retainSpoolArtifacts?: boolean;
 };
 
-/** Remove a successfully delivered entry from the queue. */
+/** Remove a successfully delivered entry, or retain its permanent producer receipt. */
 export async function ackDelivery(
   id: string,
   stateDir?: string,
@@ -233,8 +244,17 @@ export async function ackDelivery(
   // Read the media references before the row goes, then unlink only after the
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
-  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
-  deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  const entry = loadDeliveryQueueEntry(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as QueuedDelivery | null;
+  const spoolPaths = entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
+  if (entry?.completionRetention === "permanent") {
+    completeDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  } else {
+    deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  }
   if (!options?.retainSpoolArtifacts) {
     await releaseSpoolArtifacts(spoolPaths, stateDir);
   }
@@ -281,6 +301,16 @@ export async function failDeliveryAfterPlatformSend(
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     recoveryState: "unknown_after_send",
   }));
+}
+
+/** Reserve one durable delivery call before invoking the provider path. */
+export async function reserveDeliveryAttempt(id: string, maxAttempts: number, stateDir?: string) {
+  return reserveDeliveryQueueEntryAttempt({
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    maxAttempts,
+    stateDir,
+  });
 }
 
 function updateQueuedDelivery(

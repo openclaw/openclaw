@@ -2080,6 +2080,17 @@ describe("ci workflow guards", () => {
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
+    // The exact snapshot fingerprint or successful install already owns
+    // dependency validation. pnpm's redundant check sees intentionally pruned
+    // plugin importers as stale, so it must not mutate during shard fanout.
+    const disableImplicitInstall =
+      'echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"';
+    expect(installStep.run).toContain('if [ "$STICKY_DISK" = "true" ]; then');
+    expect(installStep.run).not.toContain("pnpm_config_verify_deps_before_run=install pnpm exec");
+    expect(installStep.run).toContain(disableImplicitInstall);
+    expect(installStep.run.indexOf('sticky-importers.sh" restore')).toBeLessThan(
+      installStep.run.indexOf(disableImplicitInstall),
+    );
     const cleanupAction = parse(
       readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
     );

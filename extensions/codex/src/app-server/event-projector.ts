@@ -13,6 +13,10 @@ import {
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
+import {
+  CodexProjectionDiagnostics,
+  isKnownNoopCodexNotificationMethod,
+} from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
 import {
   itemName,
@@ -90,6 +94,7 @@ export class CodexAppServerEventProjector {
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
+  private readonly diagnostics: CodexProjectionDiagnostics;
   private readonly generatedMediaProjection: CodexGeneratedMediaProjection;
   private readonly eventProjection: CodexEventProjection;
   private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
@@ -110,6 +115,7 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
+    this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
     this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       params,
       threadId,
@@ -283,6 +289,9 @@ export class CodexAppServerEventProjector {
         this.promptErrorSource = "prompt";
         break;
       default:
+        if (!isKnownNoopCodexNotificationMethod(notification.method)) {
+          this.diagnostics.warnUnknownEvent(notification, params);
+        }
         break;
     }
   }
@@ -515,6 +524,7 @@ export class CodexAppServerEventProjector {
 
   private async handleItemCompleted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
+    this.diagnostics.warnUnknownItemStatus(item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
     const itemId = item?.id ?? readString(params, "itemId");
@@ -626,6 +636,7 @@ export class CodexAppServerEventProjector {
       }
     }
     for (const item of turnItems) {
+      this.diagnostics.warnUnknownItemStatus(item);
       this.assistantProjection.recordSnapshotItem(item);
       this.reasoningProjection.recordItem(item);
       this.generatedMediaProjection.recordNative(item);

@@ -2050,46 +2050,6 @@
       ]
     },
     {
-      "locale": "fa",
-      "source": "Disable",
-      "translations": [
-        "غیرفعال کردن",
-        "غیرفعال‌کردن"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Disable",
-      "translations": [
-        "अक्षम करें",
-        "बंद करें"
-      ]
-    },
-    {
-      "locale": "ru",
-      "source": "Disable",
-      "translations": [
-        "Выключить",
-        "Отключить"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Disable",
-      "translations": [
-        "ปิดใช้",
-        "ปิดใช้งาน"
-      ]
-    },
-    {
-      "locale": "zh-CN",
-      "source": "Disable",
-      "translations": [
-        "停用",
-        "禁用"
-      ]
-    },
-    {
       "locale": "de",
       "source": "Discovered",
       "translations": [

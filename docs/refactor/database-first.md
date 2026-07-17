@@ -1256,8 +1256,12 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Gateway restart sentinel state now uses typed shared SQLite
   `gateway_restart_sentinel` rows instead of `restart-sentinel.json`; runtime
   reads sentinel kind, status, routing, message, continuation, and stats from
-  typed columns. `payload_json` is only a replay/debug copy. Runtime code clears
-  the SQLite row directly and no longer carries file cleanup plumbing.
+  typed columns. Those columns are authoritative; `payload_json` is only a
+  replay/debug shadow. Runtime read, write, and clear paths are SQLite-only.
+  One bounded state-migration module runs during startup and Doctor to import a
+  validated older post-update sentinel before normal restart recovery, verify
+  the typed row, and remove the source file. No steady-state runtime module
+  reads, writes, or cleans up the legacy file.
 - Gateway restart intent and supervisor handoff state now use typed shared
   SQLite `gateway_restart_intent` and `gateway_restart_handoff` rows instead of
   `gateway-restart-intent.json` and

@@ -407,6 +407,15 @@ runs:
           fi
         fi
 
+        if [ "$STICKY_DISK" = "true" ]; then
+          # This step already establishes an exact fingerprint match or finishes
+          # a frozen-lockfile install. pnpm 11's redundant pre-run check treats
+          # our intentionally pruned plugin-local node_modules as stale and can
+          # launch concurrent implicit installs when later CI steps fan out.
+          # zizmor: ignore[github-env] static pnpm policy owned by this action.
+          echo "pnpm_config_verify_deps_before_run=false" >> "$GITHUB_ENV"
+        fi
+
     - name: Restore and save build-all cache
       if: inputs.build-all-cache-scope != ''
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5

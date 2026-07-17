@@ -807,7 +807,7 @@ jobs:
       published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
-      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
       package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
