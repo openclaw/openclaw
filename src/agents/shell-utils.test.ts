@@ -338,10 +338,8 @@ describe("getShellEnv", () => {
 
   it("collapses case-insensitive PATH duplicates before Windows spawn", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    process.env.PATH = "/selected";
-    process.env.Path = "/discarded";
 
-    const env = getShellEnv();
+    const env = getShellEnv({ PATH: "/selected", Path: "/discarded" });
 
     expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
     expect(env.PATH).toContain("/selected");

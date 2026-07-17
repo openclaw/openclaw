@@ -386,19 +386,19 @@ export function sanitizeBinaryOutput(
   return chunks.join("");
 }
 
-export function getShellEnv(): NodeJS.ProcessEnv {
+export function getShellEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const binDir = getBinDir();
-  const pathKeys = Object.keys(process.env).filter((key) => key.toLowerCase() === "path");
+  const pathKeys = Object.keys(sourceEnv).filter((key) => key.toLowerCase() === "path");
   // Node sorts Windows environment keys and passes only the first case-insensitive match.
   // Collapse duplicates before spawning so callers and child processes see the same PATH.
   const sourcePathKey = process.platform === "win32" ? pathKeys.toSorted()[0] : pathKeys[0];
   const pathKey = process.platform === "win32" ? "PATH" : (sourcePathKey ?? "PATH");
-  const currentPath = sourcePathKey ? (process.env[sourcePathKey] ?? "") : "";
+  const currentPath = sourcePathKey ? (sourceEnv[sourcePathKey] ?? "") : "";
   const pathEntries = currentPath.split(path.delimiter).filter(Boolean);
   const updatedPath = pathEntries.includes(binDir)
     ? currentPath
     : [binDir, currentPath].filter(Boolean).join(path.delimiter);
-  const env = { ...process.env };
+  const env = { ...sourceEnv };
   if (process.platform === "win32") {
     for (const key of pathKeys) {
       delete env[key];
