@@ -125,7 +125,7 @@ describe("wakeMode:now main cron with the real heartbeat runner (#105257)", () =
       expect(replyCtx.SessionKey).toContain(`:cron:${job.id}:run:`);
       expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
     } finally {
-      await cron.stop();
+      cron.stop();
       await sandbox.cleanup();
     }
   });
