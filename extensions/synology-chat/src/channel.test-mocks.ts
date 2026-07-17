@@ -14,7 +14,7 @@ export const registerPluginHttpRouteMock: Mock<(params: RegisteredRoute) => () =
 );
 
 export const dispatchReplyWithBufferedBlockDispatcher: Mock<
-  () => Promise<{ counts: Record<string, number> }>
+  (_params: unknown) => Promise<{ counts: Record<string, number> }>
 > = vi.fn().mockResolvedValue({ counts: {} });
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
