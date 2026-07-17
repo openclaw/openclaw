@@ -1,25 +1,18 @@
 // Whatsapp tests cover exclusive auth-backed connection ownership.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   acquireWhatsAppGatewayConnectionOwner,
   acquireWhatsAppStandaloneConnectionOwner,
 } from "./connection-owner.js";
 
 describe("WhatsApp connection owner", () => {
-  const tempDirs: string[] = [];
-
-  afterEach(async () => {
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
-  });
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("rejects a second process-local owner until the first lease is released", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-owner-"));
-    tempDirs.push(parent);
+    const parent = tempDirs.make("openclaw-wa-owner-");
     const authDir = path.join(parent, "auth");
     await fs.mkdir(authDir);
 
@@ -35,8 +28,7 @@ describe("WhatsApp connection owner", () => {
   });
 
   it("lets the gateway wait for a process-local standalone owner", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-owner-"));
-    tempDirs.push(parent);
+    const parent = tempDirs.make("openclaw-wa-owner-");
     const authDir = path.join(parent, "auth");
     await fs.mkdir(authDir);
 
@@ -51,8 +43,7 @@ describe("WhatsApp connection owner", () => {
   it.runIf(process.platform !== "win32")(
     "treats symlink aliases as the same process-local owner",
     async () => {
-      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-owner-"));
-      tempDirs.push(parent);
+      const parent = tempDirs.make("openclaw-wa-owner-");
       const authDir = path.join(parent, "auth");
       const authAlias = path.join(parent, "auth-alias");
       await fs.mkdir(authDir);
@@ -68,8 +59,7 @@ describe("WhatsApp connection owner", () => {
   );
 
   it("recovers an unchanged lock owned by a definitely dead process", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-owner-"));
-    tempDirs.push(parent);
+    const parent = tempDirs.make("openclaw-wa-owner-");
     const authDir = path.join(parent, "auth");
     await fs.mkdir(authDir);
     await fs.writeFile(
@@ -82,8 +72,7 @@ describe("WhatsApp connection owner", () => {
   });
 
   it("cancels cross-process owner retries during shutdown", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-wa-owner-"));
-    tempDirs.push(parent);
+    const parent = tempDirs.make("openclaw-wa-owner-");
     const authDir = path.join(parent, "auth");
     await fs.mkdir(authDir);
     await fs.writeFile(
