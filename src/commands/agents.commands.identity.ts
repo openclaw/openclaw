@@ -114,7 +114,13 @@ export async function agentsSetIdentityCommand(
   let identityFromFile: AgentIdentity | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
-      identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
+      try {
+        identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
+      } catch (error) {
+        runtime.error(String(error instanceof Error ? error.message : error));
+        runtime.exit(1);
+        return;
+      }
     } else if (workspaceDir) {
       identityFromFile = loadAgentIdentity(workspaceDir);
     }
