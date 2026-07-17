@@ -2462,6 +2462,19 @@ export const zh_TW: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "此預覽尚無 URL。",
+        blockedExternal: "您的 Gateway 政策已停用外部預覽。",
+        blockedScheme: "此預覽 URL 使用不支援的通訊協定。",
+        toolbar: "預覽控制項",
+        reload: "重新載入預覽",
+        viewport: {
+          label: "預覽檢視區",
+          desktop: "桌面",
+          tablet: "平板電腦",
+          mobile: "行動裝置",
+        },
+      },
     },
   },
   workboard: {

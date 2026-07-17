@@ -3,7 +3,7 @@
 // separately (empty/populated) to lock the empty/loading/error affordances.
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
 import { renderChart } from "./chart.ts";
@@ -11,6 +11,7 @@ import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { renderPreview } from "./preview.ts";
 import { renderSessions } from "./sessions.ts";
 import { renderStatCard } from "./stat-card.ts";
 import { renderTable } from "./table.ts";
@@ -37,6 +38,7 @@ function renderToContainer(template: unknown): HTMLElement {
 const STRICT_EMBED: BuiltinWidgetContext = {
   basePath: "",
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
+  preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
 
 describe("stat-card mapping", () => {
@@ -278,6 +280,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "scripts", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -293,6 +296,7 @@ describe("iframe-embed render × sandbox mode", () => {
       renderIframeEmbed(widget({ props: { url: "/preview" } }), null, {
         basePath: "",
         embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
       }),
     );
     const frame = container.querySelector<HTMLIFrameElement>(
@@ -308,5 +312,180 @@ describe("iframe-embed render × sandbox mode", () => {
     );
     expect(container.querySelector('[data-test-id="workspace-embed-blocked"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-embed-frame"]')).toBeNull();
+  });
+});
+
+describe("preview widget", () => {
+  it("renders its URL with the workspace embed sandbox ceiling", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, {
+        basePath: "",
+        embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+        preview: STRICT_EMBED.preview,
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame?.getAttribute("src")).toBe("/preview");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("reloads the mounted frame without reading its content window", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), undefined, STRICT_EMBED),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame).not.toBeNull();
+    const setAttribute = vi.spyOn(frame!, "setAttribute");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="workspace-preview-reload"]')
+      ?.click();
+    expect(setAttribute).toHaveBeenCalledWith("src", "/preview");
+  });
+
+  it("exposes labeled controls and updates the selected viewport state", () => {
+    let selected: "desktop" | "tablet" | "mobile" | undefined;
+    const context: BuiltinWidgetContext = {
+      ...STRICT_EMBED,
+      preview: {
+        getViewport: (_widgetId, fallback) => selected ?? fallback,
+        setViewport: (_widgetId, viewport) => {
+          selected = viewport;
+        },
+      },
+    };
+    const previewWidget = widget({ props: { url: "/preview", defaultViewport: "tablet" } });
+    const container = renderToContainer(renderPreview(previewWidget, undefined, context));
+    expect(container.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBeTruthy();
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBeTruthy();
+    const tablet = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-tablet"]',
+    );
+    const mobile = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-mobile"]',
+    );
+    expect(tablet?.getAttribute("aria-pressed")).toBe("true");
+    expect(mobile?.getAttribute("aria-pressed")).toBe("false");
+    mobile?.click();
+    expect(selected).toBe("mobile");
+    render(renderPreview(previewWidget, undefined, context), container);
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-tablet"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(
+      container
+        .querySelector('[data-test-id="workspace-preview-viewport-mobile"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--mobile",
+    );
+  });
+
+  it.each(["bogus", 42])("defaults malformed viewport prop %j to desktop", (defaultViewport) => {
+    const container = renderToContainer(
+      renderPreview(
+        widget({ props: { url: "/preview", defaultViewport } }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--desktop",
+    );
+  });
+
+  it("uses a bound URL instead of props and does not hide malformed binding data", () => {
+    const bound = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/stale" },
+          bindings: { value: { source: "static", value: "/bound" } },
+        }),
+        "/bound",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      bound.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/bound");
+
+    const malformed = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static", value: 42 } },
+        }),
+        42,
+        STRICT_EMBED,
+      ),
+    );
+    expect(malformed.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const missing = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/fallback" },
+          bindings: { value: { source: "static" } },
+        }),
+        undefined,
+        STRICT_EMBED,
+      ),
+    );
+    expect(missing.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+
+    const unrelated = renderToContainer(
+      renderPreview(
+        widget({
+          props: { url: "/configured" },
+          bindings: { other: { source: "static", value: "/ignored" } },
+        }),
+        "/ignored",
+        STRICT_EMBED,
+      ),
+    );
+    expect(
+      unrelated.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("/configured");
+  });
+
+  it("allows policy-approved external URLs and blocks external or unsafe URLs by default", () => {
+    const allowed = renderToContainer(
+      renderPreview(
+        widget({
+          bindings: {
+            value: { source: "static", value: "https://preview.example" },
+          },
+        }),
+        "https://preview.example",
+        {
+          ...STRICT_EMBED,
+          embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
+        },
+      ),
+    );
+    expect(
+      allowed.querySelector('[data-test-id="workspace-preview-frame"]')?.getAttribute("src"),
+    ).toBe("https://preview.example");
+
+    for (const value of [undefined, 42, "https://evil.example", "javascript:alert(1)"]) {
+      const container = renderToContainer(
+        renderPreview(
+          widget({ bindings: { value: { source: "static", value } } }),
+          value,
+          STRICT_EMBED,
+        ),
+      );
+      expect(container.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+      expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+    }
   });
 });

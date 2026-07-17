@@ -2558,6 +2558,19 @@ export const fr: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Cet aperçu n’a pas encore d’URL.",
+        blockedExternal: "Les aperçus externes sont désactivés par la politique de votre Gateway.",
+        blockedScheme: "L’URL de cet aperçu utilise un schéma non pris en charge.",
+        toolbar: "Commandes de l’aperçu",
+        reload: "Recharger l’aperçu",
+        viewport: {
+          label: "Fenêtre d’affichage de l’aperçu",
+          desktop: "Ordinateur",
+          tablet: "Tablette",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

@@ -2500,6 +2500,19 @@ export const ko: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "이 미리보기에는 아직 URL이 없습니다.",
+        blockedExternal: "Gateway 정책에 따라 외부 미리보기가 비활성화되어 있습니다.",
+        blockedScheme: "이 미리보기 URL은 지원되지 않는 스킴을 사용합니다.",
+        toolbar: "미리보기 컨트롤",
+        reload: "미리보기 새로고침",
+        viewport: {
+          label: "미리보기 뷰포트",
+          desktop: "데스크톱",
+          tablet: "태블릿",
+          mobile: "모바일",
+        },
+      },
     },
   },
   workboard: {

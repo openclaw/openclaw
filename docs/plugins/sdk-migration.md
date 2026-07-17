@@ -504,7 +504,7 @@ SDK.
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/speech-settings` | Speech settings | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, audio-energy/speech-onset gates, shared agent talk-back queues, active-run voice control, transcript/event health, echo suppression, consult question matching, forced-consult coordination, turn-context tracking, output activity tracking, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
