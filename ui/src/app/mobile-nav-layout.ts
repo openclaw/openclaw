@@ -20,7 +20,7 @@ export function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false;
 }
 
-export function hasNativeShellClass(): boolean {
+function hasNativeShellClass(): boolean {
   return NATIVE_SHELL_CLASSES.some((className) =>
     document.documentElement.classList.contains(className),
   );
