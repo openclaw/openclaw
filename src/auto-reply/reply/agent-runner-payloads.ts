@@ -15,6 +15,7 @@ import {
   appendReplyMediaFailureWarning,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForMessageToolDeliveryForReplyRoute,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -41,6 +42,17 @@ const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
 
 function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
+}
+
+function shouldMarkHeartbeatMessageToolDelivered(payload: ReplyPayload): boolean {
+  if (payload.isError || payload.isFallbackNotice || payload.isReasoning) {
+    return false;
+  }
+  if (payload.interactive || payload.presentation || payload.channelData) {
+    return false;
+  }
+  const sendable = resolveSendableOutboundReplyParts(payload);
+  return sendable.hasText && !sendable.hasMedia;
 }
 
 async function normalizeReplyPayloadMedia(params: {
@@ -504,6 +516,35 @@ export async function buildReplyPayloads(params: {
   for (const payload of filteredPayloads) {
     if (isRenderablePayload(payload)) {
       replyPayloads.push(payload);
+    }
+  }
+  const visibleReplyPayloads = replyPayloads.filter((payload) => !payload.isReasoning);
+  const onlyVisibleReplyPayload =
+    visibleReplyPayloads.length === 1 ? visibleReplyPayloads[0] : undefined;
+  if (
+    params.isHeartbeat &&
+    shouldCheckMessagingToolDedupe &&
+    onlyVisibleReplyPayload &&
+    shouldMarkHeartbeatMessageToolDelivered(onlyVisibleReplyPayload)
+  ) {
+    const payloadMetadata = getReplyPayloadMetadata(onlyVisibleReplyPayload);
+    const decision = (await loadReplyPayloadsDedupeRuntime()).resolveMessagingToolPayloadDedupe({
+      config: params.config,
+      messageProvider,
+      messagingToolSentTargets,
+      originatingTo: resolveOriginMessageTo({ originatingTo: params.originatingTo }),
+      originatingThreadId: params.originatingThreadId,
+      replyToId: onlyVisibleReplyPayload.replyToId,
+      replyToIsExplicit: Boolean(
+        payloadMetadata?.replyToIdExplicit ||
+        onlyVisibleReplyPayload.replyToTag ||
+        onlyVisibleReplyPayload.replyToCurrent,
+      ),
+      replyDelivery: payloadMetadata?.replyDelivery,
+      accountId,
+    });
+    if (decision.routeHasTerminalDelivery) {
+      markReplyPayloadForMessageToolDeliveryForReplyRoute(onlyVisibleReplyPayload);
     }
   }
 

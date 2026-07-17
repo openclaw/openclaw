@@ -41,7 +41,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
-import { copyReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
@@ -1914,6 +1914,9 @@ export async function runHeartbeatOnce(opts: {
       });
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
     }
+    const messageToolDelivered =
+      replyPayload &&
+      getReplyPayloadMetadata(replyPayload)?.messageToolDeliveredForReplyRoute === true;
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
@@ -1986,6 +1989,11 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    const shouldSuppressMessageToolDeliveredMain =
+      !heartbeatToolResponse &&
+      !heartbeatTerminalToolFailure &&
+      !hasRelayableExecCompletion &&
+      messageToolDelivered;
     const normalized =
       heartbeatTerminalToolFailure && replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
@@ -2028,9 +2036,10 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip = false;
     }
     const shouldSkipMain =
-      normalized.shouldSkip &&
-      !normalized.hasMedia &&
-      (!hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly);
+      shouldSuppressMessageToolDeliveredMain ||
+      (normalized.shouldSkip &&
+        !normalized.hasMedia &&
+        (!hasRelayableExecCompletion || normalized.isInternalPlaceholderOnly));
     if (heartbeatTerminalToolFailure) {
       const failureChannel = delivery.channel;
       const failureTarget = delivery.to;
@@ -2110,6 +2119,31 @@ export async function runHeartbeatOnce(opts: {
           });
         },
       });
+    }
+    if (shouldSuppressMessageToolDeliveredMain) {
+      // Same-route message-tool delivery satisfied this run's final intent even
+      // when fallback narration differs; restart recovery must not resend it.
+      await clearSatisfiedPendingFinalDelivery();
+    }
+    if (shouldSuppressMessageToolDeliveredMain && reasoningPayloads.length === 0) {
+      emitHeartbeatEvent({
+        status: "sent",
+        reason: opts.reason,
+        preview: truncateHeartbeatPreview(replyPayload?.text),
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "sent",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
     }
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
@@ -2287,7 +2321,7 @@ export async function runHeartbeatOnce(opts: {
       await markCommitmentsStatus({
         cfg,
         ids: dueCommitmentIds,
-        status: shouldSkipMain ? "dismissed" : "sent",
+        status: shouldSkipMain && !shouldSuppressMessageToolDeliveredMain ? "dismissed" : "sent",
         nowMs: startedAt,
       });
     }

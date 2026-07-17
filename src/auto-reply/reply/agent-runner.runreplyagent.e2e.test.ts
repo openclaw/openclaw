@@ -1027,6 +1027,38 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
+  it("carries terminal same-route heartbeat delivery evidence to the runner", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Private heartbeat narration." }],
+      messagingToolSentTexts: ["Visible heartbeat summary."],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "268300329",
+          text: "Visible heartbeat summary.",
+          messageToolOnlyFinal: true,
+        },
+      ],
+      meta: {},
+    });
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true, sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "268300329",
+      },
+      runOverrides: { messageProvider: "heartbeat" },
+    });
+
+    const result = await run();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toBe("Private heartbeat narration.");
+    expect(getReplyPayloadMetadata(payload ?? {})?.messageToolDeliveredForReplyRoute).toBe(true);
+  });
+
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
