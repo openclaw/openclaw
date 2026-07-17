@@ -11,12 +11,14 @@ import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -124,7 +126,7 @@ class WearProxyBridgeTest {
 
   @Test
   fun eventSendCancellationDoesNotTerminateRequestActor() =
-    runTest {
+    runBlocking {
       var cancelFirstEvent = true
       val sent = mutableListOf<SentWearMessage>()
       val bridge =
@@ -151,7 +153,7 @@ class WearProxyBridgeTest {
 
   @Test
   fun discoveryTaskCancellationDoesNotTerminateEventActor() =
-    runTest {
+    runBlocking {
       var cancelFirstDiscovery = true
       val sent = mutableListOf<SentWearMessage>()
       val bridge =
@@ -590,7 +592,7 @@ class WearProxyBridgeTest {
 
   @Test
   fun queueOverflowRetainsTerminalEventAndEmitsResync() =
-    runTest {
+    runBlocking {
       val sent = mutableListOf<SentWearMessage>()
       val requestStarted = CompletableDeferred<Unit>()
       val finishRequest = CompletableDeferred<Unit>()
@@ -605,7 +607,6 @@ class WearProxyBridgeTest {
           },
         )
       val requestJob = async { bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1"))) }
-      runCurrent()
       requestStarted.await()
 
       repeat(40) { index ->
@@ -722,7 +723,7 @@ class WearProxyBridgeTest {
 
   @Test
   fun staleEventFailureDoesNotRemoveRefreshedPeer() =
-    runTest {
+    runBlocking {
       val eventStarted = CompletableDeferred<Unit>()
       val releaseEvent = CompletableDeferred<Unit>()
       val sent = mutableListOf<SentWearMessage>()
@@ -746,8 +747,10 @@ class WearProxyBridgeTest {
 
       bridge.publishConnection(connected = true, status = "Connected")
       eventStarted.await()
-      val refreshed = async { bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2"))) }
-      runCurrent()
+      val refreshed =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
+        }
       releaseEvent.complete(Unit)
       assertTrue(refreshed.await())
       bridge.awaitIdleForTests()
