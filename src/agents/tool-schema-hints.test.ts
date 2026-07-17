@@ -52,6 +52,26 @@ describe("tool schema hints", () => {
     );
   });
 
+  it("renders up to eight literal union values", () => {
+    const values = [
+      "env",
+      "agent",
+      "defaults",
+      "model",
+      "provider",
+      "implicit",
+      "session",
+      "session-key",
+    ];
+    const eight = Type.Union(values.map((value) => Type.Literal(value)));
+    const nine = Type.Union([...values, "extra"].map((value) => Type.Literal(value)));
+
+    expect(compactToolOutputHint(eight)).toBe(
+      '"env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key"',
+    );
+    expect(compactToolOutputHint(nine)).toBeUndefined();
+  });
+
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = Type.Object(
       Object.fromEntries(

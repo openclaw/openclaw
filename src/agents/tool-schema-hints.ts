@@ -8,7 +8,9 @@ const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;
 const MAX_COMPACT_INPUT_DEPTH = 4;
 const MAX_COMPACT_OUTPUT_DEPTH = 6;
 const MAX_COMPACT_UNION_TYPES = 4;
-const MAX_COMPACT_ENUM_VALUES = 6;
+// Keeps real literal unions such as agents_list's eight runtime sources renderable,
+// while the combined literal text remains independently capped below.
+const MAX_COMPACT_ENUM_VALUES = 8;
 const MAX_COMPACT_ENUM_CHARS = 96;
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const UNSUPPORTED_SHAPE_KEYWORDS = [
@@ -126,11 +128,7 @@ function compactSchemaUnion(
     return UNKNOWN_HINT;
   }
   const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
-  if (
-    !Array.isArray(variants) ||
-    variants.length === 0 ||
-    variants.length > MAX_COMPACT_UNION_TYPES
-  ) {
+  if (!Array.isArray(variants) || variants.length === 0) {
     return UNKNOWN_HINT;
   }
   // A union plus a base structural shape is an intersection. This compact
@@ -157,6 +155,9 @@ function compactSchemaUnion(
     if (literalUnion) {
       return literalUnion;
     }
+  }
+  if (variants.length > MAX_COMPACT_UNION_TYPES) {
+    return UNKNOWN_HINT;
   }
   const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
   if (rendered.some((hint) => !hint.complete)) {
