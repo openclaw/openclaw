@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   archiveCopilotSession,
-  createCopilotController,
   resolveSidePanelTabId,
   selectCopilotPanelState,
-} from "./copilot-background.js";
+} from "./copilot-background-shared.js";
+import { createCopilotController } from "./copilot-background.js";
 
 function eventHook() {
   return { addListener: vi.fn() };

@@ -12,12 +12,6 @@ import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-s
 import { createCopilotSessionController } from "./copilot-session.js";
 import { gatewayUrlFromPairing } from "./panel-core.js";
 
-export {
-  archiveCopilotSession,
-  resolveSidePanelTabId,
-  selectCopilotPanelState,
-} from "./copilot-background-shared.js";
-
 const PANEL_PORT = "openclaw-copilot-panel";
 
 /** Background-owned session custody for all tab-specific panel documents. */
