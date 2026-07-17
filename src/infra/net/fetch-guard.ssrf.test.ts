@@ -1459,6 +1459,25 @@ describe("fetchWithSsrFGuard hardening", () => {
     },
   );
 
+  it("does not stall when redirect body cancel never settles", async () => {
+    const response = new Response("redirect body", { status: 302 });
+    const cancel = vi
+      .spyOn(response.body!, "cancel")
+      .mockImplementation(() => new Promise<void>(() => {}));
+    const startedAt = Date.now();
+
+    await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [response],
+      expectedError: /missing location header/i,
+      lookupFn: createPublicLookup(),
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    // Bound is 100ms; allow generous headroom without masking a hang.
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("rejects redirect loops that return to the original URL", async () => {
     await expectRedirectFailure({
       url: "https://public.example/start",

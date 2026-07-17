@@ -11,7 +11,43 @@ type RedirectScenario = {
   location?: string;
   maxRedirects?: number;
   expectedError: RegExp;
+  /** Expected body.cancel() calls before rejection (loop/limit cancel each hop). */
+  expectedCancelCount: number;
 };
+
+const REDIRECT_SCENARIOS: RedirectScenario[] = [
+  {
+    path: "/missing-location",
+    expectedError: /Redirect missing location header/u,
+    expectedCancelCount: 1,
+  },
+  {
+    // Location resolves to the same URL as the request, so the second visit key
+    // collides immediately after one hop (one body cancel, then loop error).
+    path: "/loop",
+    location: "/loop",
+    expectedError: /Redirect loop detected/u,
+    expectedCancelCount: 1,
+  },
+  {
+    path: "/limit",
+    location: "/next",
+    maxRedirects: 0,
+    expectedError: /Too many redirects/u,
+    expectedCancelCount: 1,
+  },
+];
+
+function createTrackedOpenBody(onCancel: () => void): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start() {
+      // Leave the body open so rejection must cancel rather than drain it.
+    },
+    cancel() {
+      onCancel();
+    },
+  });
+}
 
 async function listen(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -32,6 +68,69 @@ async function close(server: Server, sockets: Set<Socket>): Promise<void> {
   });
 }
 
+async function raceRejection(run: () => Promise<unknown>, expectedError: RegExp): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      expect(run()).rejects.toThrow(expectedError),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("redirect rejection did not complete promptly")),
+          REJECTION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/**
+ * Instrumented body proof: fails if cancel is not invoked. Socket teardown alone
+ * cannot pass this harness because the open body never drains without cancel.
+ */
+async function expectRejectedRedirectCancelsBody(scenario: RedirectScenario): Promise<void> {
+  let cancelCount = 0;
+  const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const parsed = new URL(url);
+    const location =
+      scenario.location === undefined ? undefined : new URL(scenario.location, parsed).toString();
+    return new Response(
+      createTrackedOpenBody(() => {
+        cancelCount += 1;
+      }),
+      {
+        status: 302,
+        headers: {
+          "content-type": "text/plain",
+          ...(location ? { location } : {}),
+        },
+      },
+    );
+  });
+
+  await raceRejection(
+    () =>
+      fetchWithSsrFGuard({
+        // Mocked fetch stays hermetic (no DNS) while still exercising redirect
+        // rejection and body cancel counting.
+        url: `https://public.example${scenario.path}`,
+        fetchImpl,
+        ...(scenario.maxRedirects === undefined ? {} : { maxRedirects: scenario.maxRedirects }),
+      }),
+    scenario.expectedError,
+  );
+
+  expect(cancelCount).toBe(scenario.expectedCancelCount);
+}
+
+/**
+ * Real Undici + loopback server: prompt rejection and connection release under a
+ * body left open on the wire. Supplemental to the cancel-count harness above.
+ */
 async function expectRejectedRedirectToReleaseDispatcher(
   scenario: RedirectScenario,
 ): Promise<void> {
@@ -41,8 +140,8 @@ async function expectRejectedRedirectToReleaseDispatcher(
       "content-type": "text/plain",
       ...(scenario.location ? { location: scenario.location } : {}),
     });
-    // Keep the redirect body open so rejection must cancel it before the
-    // dispatcher can release its connection promptly.
+    // Keep the redirect body open so rejection must abandon the stream before
+    // the client connection can return to idle promptly.
     response.write("pending redirect body");
   });
   server.on("connection", (socket) => {
@@ -54,28 +153,15 @@ async function expectRejectedRedirectToReleaseDispatcher(
   try {
     const address = server.address() as AddressInfo;
     const origin = `http://127.0.0.1:${address.port}`;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        expect(
-          fetchWithSsrFGuard({
-            url: `${origin}${scenario.path}`,
-            policy: { allowedOrigins: [origin] },
-            ...(scenario.maxRedirects === undefined ? {} : { maxRedirects: scenario.maxRedirects }),
-          }),
-        ).rejects.toThrow(scenario.expectedError),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("redirect rejection did not complete promptly")),
-            REJECTION_TIMEOUT_MS,
-          );
+    await raceRejection(
+      () =>
+        fetchWithSsrFGuard({
+          url: `${origin}${scenario.path}`,
+          policy: { allowedOrigins: [origin] },
+          ...(scenario.maxRedirects === undefined ? {} : { maxRedirects: scenario.maxRedirects }),
         }),
-      ]);
-    } finally {
-      if (timer) {
-        clearTimeout(timer);
-      }
-    }
+      scenario.expectedError,
+    );
 
     await vi.waitFor(() => expect(sockets.size).toBe(0), {
       timeout: SOCKET_RELEASE_TIMEOUT_MS,
@@ -86,23 +172,17 @@ async function expectRejectedRedirectToReleaseDispatcher(
 }
 
 describe("fetchWithSsrFGuard real redirect cleanup", () => {
-  it.each<RedirectScenario>([
-    {
-      path: "/missing-location",
-      expectedError: /Redirect missing location header/u,
+  it.each(REDIRECT_SCENARIOS)(
+    "cancels the open redirect body for $path (instrumented)",
+    async (scenario) => {
+      await expectRejectedRedirectCancelsBody(scenario);
     },
-    {
-      path: "/loop",
-      location: "/loop",
-      expectedError: /Redirect loop detected/u,
+  );
+
+  it.each(REDIRECT_SCENARIOS)(
+    "rejects $path promptly and releases the Undici connection",
+    async (scenario) => {
+      await expectRejectedRedirectToReleaseDispatcher(scenario);
     },
-    {
-      path: "/limit",
-      location: "/next",
-      maxRedirects: 0,
-      expectedError: /Too many redirects/u,
-    },
-  ])("rejects $path promptly and releases the Undici connection", async (scenario) => {
-    await expectRejectedRedirectToReleaseDispatcher(scenario);
-  });
+  );
 });
