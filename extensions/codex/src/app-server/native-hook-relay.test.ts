@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
-  codexNativeHookToolMatcher,
   emitCodexNativePreToolUseFailureDiagnostic,
 } from "./native-hook-relay.js";
 
@@ -449,19 +448,30 @@ function createRelay(options?: {
   };
 }
 
-describe("codexNativeHookToolMatcher", () => {
+describe("Codex tool matcher scoping", () => {
+  function installedPreToolUseMatcher(
+    scope: ReturnType<NativeHookRelayRegistrationHandle["toolScopeForEvent"]>,
+  ): string | undefined {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({ toolScopes: { pre_tool_use: scope } }),
+      events: ["pre_tool_use"],
+      loopDetectionPreToolUseRelay: true,
+    });
+    return (config["hooks.PreToolUse"] as Array<{ matcher?: string }>)[0]?.matcher;
+  }
+
   it("installs match-all as an omitted matcher", () => {
-    expect(codexNativeHookToolMatcher({ matchAll: true })).toBeUndefined();
+    expect(installedPreToolUseMatcher({ matchAll: true })).toBeUndefined();
   });
 
   it("expands exec to the Codex shell spellings", () => {
-    expect(codexNativeHookToolMatcher({ matchAll: false, toolNames: ["exec"] })).toBe(
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: ["exec"] })).toBe(
       "Bash|exec|exec_command",
     );
   });
 
   it("keeps registered spellings for plugin-owned tools", () => {
-    expect(codexNativeHookToolMatcher({ matchAll: false, toolNames: ["message", "myTool"] })).toBe(
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: ["message", "myTool"] })).toBe(
       "message|myTool",
     );
   });
@@ -470,13 +480,13 @@ describe("codexNativeHookToolMatcher", () => {
     // A name outside [A-Za-z0-9_] would be treated as regex source by Codex;
     // an invalid pattern silently disables the hook, losing policy coverage.
     expect(
-      codexNativeHookToolMatcher({ matchAll: false, toolNames: ["message", "my-tool"] }),
+      installedPreToolUseMatcher({ matchAll: false, toolNames: ["message", "my-tool"] }),
     ).toBeUndefined();
   });
 
   it("falls back to match-all for an empty or oversized union", () => {
-    expect(codexNativeHookToolMatcher({ matchAll: false, toolNames: [] })).toBeUndefined();
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: [] })).toBeUndefined();
     const oversized = Array.from({ length: 65 }, (_, index) => `tool_${index}`);
-    expect(codexNativeHookToolMatcher({ matchAll: false, toolNames: oversized })).toBeUndefined();
+    expect(installedPreToolUseMatcher({ matchAll: false, toolNames: oversized })).toBeUndefined();
   });
 });

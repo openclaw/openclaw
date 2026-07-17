@@ -276,7 +276,7 @@ const CODEX_EXACT_MATCHER_SAFE_NAME = /^[A-Za-z0-9_]+$/;
 const CODEX_TOOL_MATCHER_MAX_NAMES = 64;
 
 /** Builds the Codex hook matcher for a relay tool scope; undefined installs match-all. */
-export function codexNativeHookToolMatcher(scope: NativeHookRelayToolScope): string | undefined {
+function codexNativeHookToolMatcher(scope: NativeHookRelayToolScope): string | undefined {
   if (scope.matchAll) {
     return undefined;
   }
