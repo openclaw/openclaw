@@ -185,6 +185,58 @@ describe("main session recovery state", () => {
     expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
   });
 
+  it("rejects foreground work after the automatic recovery budget is exhausted", () => {
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({ chargedAttempts: 3 }),
+    });
+    const before = structuredClone(entry);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toEqual({ kind: "rejected", reason: "recovery_exhausted" });
+    expect(entry).toEqual(before);
+  });
+
+  it("retires a stale reservation before granting foreground ownership", () => {
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({
+        revision: 3,
+        chargedAttempts: 1,
+        reservation: {
+          attempt: 1,
+          lifecycleGeneration: "previous-generation",
+          runId: "stale-recovery",
+        },
+      }),
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "claim_foreground",
+        cycleId: "unused",
+        lifecycleGeneration: "generation-1",
+        sessionId: "session-1",
+        sessionKey,
+        claimId: "foreground-1",
+      }),
+    ).toMatchObject({ kind: "foreground_claimed" });
+    expect(entry.mainRestartRecovery).toMatchObject({
+      chargedAttempts: 1,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-1"],
+      },
+    });
+    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
   it("releases an ambiguous dispatch reservation without refunding its charge", () => {
     const entry = interruptedEntry();
     const prepared = transitionMainSessionRecovery(entry, {

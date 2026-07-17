@@ -422,6 +422,27 @@ describe("main session recovery store", () => {
     ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
   });
 
+  it("does not let foreground work bypass an exhausted predecessor", async () => {
+    await write(
+      interruptedEntry({
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+        },
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "invalidated", reason: "recovery_exhausted" });
+    expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
+  });
+
   it("claims an interrupted legacy predecessor after its canonical key is reused", async () => {
     const legacyKey = "main";
     await seedExact({

@@ -463,6 +463,11 @@ export function transitionMainSessionRecovery(
       if (state.tombstone) {
         return { kind: "rejected", reason: "already_tombstoned" };
       }
+      if (state.chargedAttempts >= MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS) {
+        // The final charge fences foreground work until the scheduler commits
+        // the matching tombstone. Admitting here can race that reconciliation.
+        return { kind: "rejected", reason: "recovery_exhausted" };
+      }
       const currentTokens =
         state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
           ? state.foregroundClaims.tokens
@@ -471,6 +476,10 @@ export function transitionMainSessionRecovery(
       entry.mainRestartRecovery = {
         ...state,
         revision: nextRevision(state),
+        reservation:
+          state.reservation?.lifecycleGeneration === command.lifecycleGeneration
+            ? state.reservation
+            : undefined,
         foregroundClaims: {
           lifecycleGeneration: command.lifecycleGeneration,
           tokens,

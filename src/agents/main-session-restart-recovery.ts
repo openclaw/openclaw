@@ -19,7 +19,7 @@ import {
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import {
   applySessionEntryReplacements,
-  loadSessionEntry,
+  loadExactSessionEntry,
   listSessionEntriesByStatus,
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnExpectedState,
@@ -96,11 +96,12 @@ function loadExpectedRestartRecoveryTarget(params: {
   expected: ExpectedRestartRecoveryTarget;
   storePath: string;
 }): SessionEntry | undefined {
-  const entry = loadSessionEntry({
+  const exact = loadExactSessionEntry({
     sessionKey: params.expected.sessionKey,
     storePath: params.storePath,
     readConsistency: "latest",
   });
+  const entry = exact?.sessionKey === params.expected.sessionKey ? exact.entry : undefined;
   return entry?.sessionId === params.expected.sessionId &&
     entry.status === "running" &&
     entry.abortedLastRun === true &&

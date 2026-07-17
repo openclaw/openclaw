@@ -2086,6 +2086,48 @@ describe("main-session-restart-recovery", () => {
     );
   });
 
+  it("retries an exact legacy row after its canonical alias is reused", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "replacement-session",
+        updatedAt: Date.now(),
+      },
+      main: {
+        sessionId: "legacy-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "legacy-session", [
+      { role: "user", content: "resume the legacy row" },
+    ]);
+
+    const result = await retryRestartAbortedMainSessionRecoveryAfterOwnerRelease({
+      expectedSessionId: "legacy-session",
+      sessionKey: "main",
+      storePath,
+    });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams()).toMatchObject({
+      expectedExistingSessionId: "legacy-session",
+      sessionKey: "main",
+    });
+    expect(
+      sessionAccessor.loadExactSessionEntry({ sessionKey: "main", storePath })?.entry,
+    ).toMatchObject({
+      sessionId: "legacy-session",
+      abortedLastRun: false,
+    });
+    expect(
+      sessionAccessor.loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })?.entry,
+    ).toMatchObject({ sessionId: "replacement-session" });
+  });
+
   it("retries a failed exact owner-release recovery with bounded backoff", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2169,7 +2211,7 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("does not append an exhausted notice after a foreground takeover", async () => {
+  it("rejects foreground takeover while tombstoning exhausted recovery", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:main";
@@ -2201,7 +2243,7 @@ describe("main-session-restart-recovery", () => {
           sessionId: "main-session",
           target: { sessionKey, storePath },
         });
-        expect(owner.kind).toBe("claimed");
+        expect(owner).toEqual({ kind: "invalidated", reason: "recovery_exhausted" });
         return await appendAssistantMessageToSessionTranscript(params);
       },
     );
@@ -2214,11 +2256,10 @@ describe("main-session-restart-recovery", () => {
 
     const entry = loadSessionEntry({ sessionKey, storePath });
     expect(entry).toMatchObject({
-      status: "running",
-      abortedLastRun: true,
-      mainRestartRecovery: { foregroundClaims: { tokens: [expect.any(String)] } },
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: { tombstone: expect.any(Object) },
     });
-    expect(entry?.mainRestartRecovery?.tombstone).toBeUndefined();
     const notices = (
       await loadTranscriptEvents({
         agentId: "main",
@@ -2234,7 +2275,7 @@ describe("main-session-restart-recovery", () => {
         record.message.idempotencyKey.endsWith(":failed-notice")
       );
     });
-    expect(notices).toEqual([]);
+    expect(notices).toHaveLength(1);
   });
 
   it("tombstones when the final owner-release retry consumes the last charge", async () => {

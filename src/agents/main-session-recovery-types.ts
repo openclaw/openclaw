@@ -44,6 +44,7 @@ export type MainSessionRecoveryConflict =
   | "already_tombstoned"
   | "foreground_active"
   | "not_interrupted"
+  | "recovery_exhausted"
   | "reservation_active"
   | "session_replaced"
   | "stale_cycle"
