@@ -2141,6 +2141,32 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("preserves a later silent skip when an earlier queued block fails", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
+
+    options.onSkip?.(
+      { text: "NO_REPLY" },
+      { kind: "block", reason: "silent", assistantMessageIndex: 2 },
+    );
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(
+      options.deliver(
+        { text: "Earlier visible block" },
+        { kind: "block", assistantMessageIndex: 1 },
+      ),
+    ).rejects.toThrow("send failed");
+    await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(result.getVisibleReplyState()).toEqual({
+      visibleReplySent: false,
+      skippedFinalReason: "silent",
+    });
+  });
+
   it("sends no-visible-reply fallback when a final fails after an earlier silent skip", async () => {
     useNonStreamingAutoAccount();
     const runtime = createRuntimeLogger();
@@ -2172,11 +2198,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const runtime = createRuntimeLogger();
     const { result, options } = createDispatcherHarness({ runtime, sessionKey: "main" });
 
-    options.onSkip?.({ text: "NO_REPLY" }, { kind: "block", reason: "silent" });
+    options.onSkip?.(
+      { text: "NO_REPLY" },
+      { kind: "block", reason: "silent", assistantMessageIndex: 1 },
+    );
     sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
 
     await expect(
-      options.deliver({ text: "Later visible block" }, { kind: "block" }),
+      options.deliver({ text: "Later visible block" }, { kind: "block", assistantMessageIndex: 2 }),
     ).rejects.toThrow("send failed");
     await expect(result.ensureNoVisibleReplyFallback("failed-block")).resolves.toBe(true);
 

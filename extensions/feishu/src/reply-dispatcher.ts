@@ -285,6 +285,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingCloseErroredForReply = false;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
+  let skippedFinalAssistantMessageIndex: number | undefined;
   let idleSideEffectsPromise: Promise<void> = Promise.resolve();
   let replyLifecycleStateInitialized = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
@@ -672,6 +673,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     onSkip: (_payload, info) => {
       if (info.kind === "final" || (info.kind === "block" && info.reason === "silent")) {
         skippedFinalReason = info.reason;
+        skippedFinalAssistantMessageIndex = info.assistantMessageIndex;
       }
     },
     onReplyStart: async () => {
@@ -683,6 +685,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         streamingCloseErroredForReply = false;
         visibleReplySent = false;
         skippedFinalReason = null;
+        skippedFinalAssistantMessageIndex = undefined;
       }
       if (streamingEnabled && renderMode === "card") {
         startStreaming();
@@ -690,7 +693,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
     deliver: async (payload: ReplyPayload, info) => {
-      skippedFinalReason = null;
+      // Delivery is serialized after enqueue-time skips. An older queued send
+      // must not erase a silent decision from a later assistant message.
+      if (
+        skippedFinalAssistantMessageIndex === undefined ||
+        info.assistantMessageIndex === undefined ||
+        info.assistantMessageIndex >= skippedFinalAssistantMessageIndex
+      ) {
+        skippedFinalReason = null;
+        skippedFinalAssistantMessageIndex = undefined;
+      }
       const payloadText =
         payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
       const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
