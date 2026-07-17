@@ -1,5 +1,6 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { buildGatewaySessionEventFields } from "../session-event-payload.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -12,6 +13,22 @@ type SessionChangedPayload = {
   compacted?: boolean;
 };
 
+export function resolveSessionMessageSubscriptionKey(params: {
+  canonicalKey: string;
+  agentId?: string;
+  defaultAgentId?: string;
+}): string {
+  const agentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : params.canonicalKey === "global" && params.defaultAgentId
+      ? normalizeAgentId(params.defaultAgentId)
+      : undefined;
+  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
+  return params.canonicalKey === "global" && agentId
+    ? `agent:${agentId}:global`
+    : params.canonicalKey;
+}
+
 export function emitSessionsChanged(
   context: Pick<
     GatewayRequestContext,
@@ -19,10 +36,43 @@ export function emitSessionsChanged(
     | "chatAbortControllers"
     | "getRuntimeConfig"
     | "getSessionEventSubscriberConnIds"
+    | "getSessionMessageSubscriberConnIds"
   >,
   payload: SessionChangedPayload,
 ) {
-  const connIds = context.getSessionEventSubscriberConnIds();
+  const evSubs = context.getSessionEventSubscriberConnIds();
+  const isTeardown =
+    payload.reason === "reset" || payload.reason === "delete" || payload.reason === "new";
+
+  if (isTeardown) {
+    let msgSubs: ReadonlySet<string> = new Set<string>();
+    if (payload.sessionKey) {
+      const subscriptionKey = resolveSessionMessageSubscriptionKey({
+        canonicalKey: payload.sessionKey,
+        agentId: payload.agentId,
+        defaultAgentId: resolveDefaultAgentId(context.getRuntimeConfig()),
+      });
+      msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
+    }
+    const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
+
+    if (drainConnIds.size > 0 && payload.sessionKey) {
+      context.broadcastToConnIds(
+        "socket.drain",
+        {
+          sessionKey: payload.sessionKey,
+          reason: payload.reason,
+          ts: Date.now(),
+          ...(payload.sessionKey === "global" && payload.agentId
+            ? { agentId: payload.agentId }
+            : {}),
+        },
+        drainConnIds,
+      );
+    }
+  }
+
+  const connIds = evSubs;
   if (connIds.size === 0) {
     return;
   }
