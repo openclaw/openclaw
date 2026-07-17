@@ -168,6 +168,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  vcAutoJoin: boolean;
   /** Owning account signal; retrying handlers must propagate it. */
   abortSignal?: AbortSignal;
   /**
@@ -353,6 +354,7 @@ function registerEventHandlers(
       runtime,
       fireAndForget,
       channelRuntime,
+      autoJoin: context.vcAutoJoin,
     }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
@@ -518,6 +520,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      vcAutoJoin: account.config.vcAutoJoin === true,
       abortSignal,
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });

@@ -160,12 +160,19 @@ export function createFeishuVcMeetingInvitedHandler(params: {
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   fireAndForget?: boolean;
+  autoJoin: boolean;
 }): (data: unknown) => Promise<void> {
-  const { cfg, accountId, runtime, fireAndForget } = params;
+  const { cfg, accountId, runtime, fireAndForget, autoJoin } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
   return async (data) => {
+    // Meeting invitations represent remote intent, but joining changes the bot's live presence.
+    // Keep the event inert unless this account explicitly opts into unattended joins.
+    if (!autoJoin) {
+      log(`feishu[${accountId}]: ignoring vc meeting invite (vcAutoJoin=false)`);
+      return;
+    }
     try {
       const turn = resolveVcMeetingInvitedTurn(data as FeishuVcMeetingInvitedEvent);
       if (!turn) {

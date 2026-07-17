@@ -63,7 +63,7 @@ function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   } as ClawdbotConfig;
 }
 
-function buildAccount(): ResolvedFeishuAccount {
+function buildAccount(config?: Partial<ResolvedFeishuAccount["config"]>): ResolvedFeishuAccount {
   return {
     accountId: "default",
     selectionSource: "explicit",
@@ -75,6 +75,7 @@ function buildAccount(): ResolvedFeishuAccount {
     config: {
       enabled: true,
       connectionMode: "websocket",
+      ...config,
     },
   } as ResolvedFeishuAccount;
 }
@@ -128,6 +129,29 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
   });
 
+  it("ignores invitations unless VC auto-join is enabled", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig(),
+      accountId: "default",
+      runtime,
+      channelRuntime: buildChannelRuntime(),
+      fireAndForget: false,
+      autoJoin: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "feishu[default]: ignoring vc meeting invite (vcAutoJoin=false)",
+    );
+  });
+
   it("adapts the VC invite into the normal Feishu DM message ingress", async () => {
     const runtime = {
       log: vi.fn(),
@@ -141,6 +165,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       runtime,
       channelRuntime,
       fireAndForget: false,
+      autoJoin: true,
     });
 
     await handler(vcEvent);
@@ -203,6 +228,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       accountId: "default",
       channelRuntime: buildChannelRuntime(),
       fireAndForget: false,
+      autoJoin: true,
     });
 
     await handler({
@@ -229,6 +255,7 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       accountId: "default",
       channelRuntime: buildChannelRuntime(),
       fireAndForget: false,
+      autoJoin: true,
     });
 
     await handler({ ...vcEvent, meeting: { topic: "Weekly sync" } });
@@ -254,7 +281,7 @@ describe("monitorSingleAccount VC event registration", () => {
     });
   });
 
-  it("registers vc.bot.meeting_invited_v1 with the Feishu event dispatcher", async () => {
+  it("keeps the registered VC invite handler inert by default", async () => {
     await monitorSingleAccount({
       cfg: buildConfig(),
       account: buildAccount(),
@@ -268,5 +295,24 @@ describe("monitorSingleAccount VC event registration", () => {
     });
 
     expect(typeof handlers["vc.bot.meeting_invited_v1"]).toBe("function");
+    await handlers["vc.bot.meeting_invited_v1"]?.(vcEvent);
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("enables VC invite dispatch from the resolved account config", async () => {
+    await monitorSingleAccount({
+      cfg: buildConfig(),
+      account: buildAccount({ vcAutoJoin: true }),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+        botName: "OpenClaw Bot",
+      },
+      fireAndForget: false,
+      channelRuntime: buildChannelRuntime(),
+    });
+
+    await handlers["vc.bot.meeting_invited_v1"]?.(vcEvent);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
   });
 });

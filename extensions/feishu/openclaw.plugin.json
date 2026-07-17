@@ -206,6 +206,7 @@
             "enum": ["disabled", "enabled"]
           },
           "allowBots": { "type": "boolean" },
+          "vcAutoJoin": { "type": "boolean" },
           "typingIndicator": { "type": "boolean" }
         }
       }
@@ -243,6 +244,7 @@
         "enum": ["disabled", "enabled"]
       },
       "allowBots": { "type": "boolean" },
+      "vcAutoJoin": { "type": "boolean" },
       "typingIndicator": { "type": "boolean" },
       "accounts": {
         "type": "object",

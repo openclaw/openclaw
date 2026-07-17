@@ -221,9 +221,25 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 6. Ensure the gateway is running: `openclaw gateway status`
 7. Check logs: `openclaw logs --follow`
 
-Subscribing to `vc.bot.meeting_invited_v1` enables automatic invite-triggered agent turns for
-authorized inviters; there is no separate OpenClaw enable switch. Joining also requires an
-available Feishu VC join tool configured for app identity with the
+Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are
+default-off; enable them globally or for one account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      vcAutoJoin: true,
+      accounts: {
+        meetings: { vcAutoJoin: true },
+      },
+    },
+  },
+}
+```
+
+Inviters still pass through the normal Feishu DM policy, allowlist/pairing, session, and reply
+routing before the agent receives a join turn. Joining also requires an available Feishu VC join
+tool configured for app identity with the
 `vc:meeting.bot.join:write` scope. For example, the official
 [`lark-cli` VC agent skill](https://github.com/larksuite/cli/tree/main/skills/lark-vc-agent)
 provides `vc +meeting-join`.
@@ -618,6 +634,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
+| `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
 | `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
