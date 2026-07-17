@@ -81,14 +81,16 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   /**
-   * Session ownership boundary: URL plus presented credentials. A client swap
-   * with different auth on the same URL is a different operator; keeping the
-   * transcript (or pending sensitive retryParams) would leak across logins.
-   * Transport reconnects reuse the same client object and never hit this.
+   * Session ownership boundary: URL plus every presented credential. A client
+   * swap with different auth on the same URL is a different operator; keeping
+   * the transcript (or pending sensitive retryParams) would leak across logins.
+   * Transport reconnects reuse the same client object and never hit this. The
+   * store clears bootstrapToken on hello before the page sees a connected
+   * client, so including it only resets across re-pairing handshakes.
    */
   private connectionScopeKey(): string {
-    const { gatewayUrl, token, password } = this.context.gateway.connection;
-    return JSON.stringify([gatewayUrl, token, password]);
+    const { gatewayUrl, token, password, bootstrapToken } = this.context.gateway.connection;
+    return JSON.stringify([gatewayUrl, token, password, bootstrapToken]);
   }
 
   private synchronizeClient(): void {

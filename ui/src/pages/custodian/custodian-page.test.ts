@@ -22,6 +22,7 @@ type ContextHarness = {
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayUrl: (gatewayUrl: string) => void;
   setGatewayToken: (token: string) => void;
+  setGatewayBootstrapToken: (bootstrapToken: string) => void;
 };
 
 function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
@@ -76,6 +77,9 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
     },
     setGatewayToken: (token: string) => {
       connection.token = token;
+    },
+    setGatewayBootstrapToken: (bootstrapToken: string) => {
+      connection.bootstrapToken = bootstrapToken;
     },
   };
 }
@@ -278,6 +282,34 @@ describe("custodian page", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+  });
+
+  it("starts a fresh session when a bootstrap token re-pairs the same gateway", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Paired device conversation.",
+        action: "none",
+      })
+      .mockResolvedValue({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Re-paired welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot, setGatewayBootstrapToken } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Paired device conversation."));
+
+    setGatewayBootstrapToken("fresh-pairing-token");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+    });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("Re-paired welcome."));
+    expect(page.textContent).not.toContain("Paired device conversation.");
   });
 
   it("sends skip as a reply and dismisses the question", async () => {
