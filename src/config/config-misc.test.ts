@@ -1106,6 +1106,15 @@ describe("config identity/materialization regressions", () => {
     }
   });
 
+  it("accepts a multiline pairing template", () => {
+    const pairingTemplate = "Approval required.\n{senderIdLine}\n{code}";
+    const res = validateConfigObject({ messages: { pairingTemplate } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.messages?.pairingTemplate).toBe(pairingTemplate);
+    }
+  });
+
   it("accepts blank model provider apiKey values", () => {
     const res = validateConfigObjectRaw({
       models: {

@@ -152,6 +152,7 @@ export const MessagesSchema = z
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    pairingTemplate: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     responseUsage: z
       .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])

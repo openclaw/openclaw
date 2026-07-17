@@ -13,6 +13,7 @@ export { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createScopedPairingAccess } from "./pairing-access.js";
+import { getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
 type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
 
@@ -35,6 +36,8 @@ export function createChannelPairingChallengeIssuer(params: {
   accountId?: string;
   /** Store writer that persists pending pairing requests for the bound channel. */
   upsertPairingRequest: Parameters<typeof issuePairingChallenge>[0]["upsertPairingRequest"];
+  /** Resolve the current global pairing template at challenge time. */
+  resolvePairingTemplate?: () => string | undefined;
 }) {
   return (
     /** Challenge details supplied at message handling time. */
@@ -42,13 +45,19 @@ export function createChannelPairingChallengeIssuer(params: {
       Parameters<typeof issuePairingChallenge>[0],
       "channel" | "accountId" | "upsertPairingRequest"
     >,
-  ) =>
-    issuePairingChallenge({
+  ) => {
+    const pairingTemplate =
+      challenge.pairingTemplate ??
+      params.resolvePairingTemplate?.() ??
+      getRuntimeConfigSnapshot()?.messages?.pairingTemplate;
+    return issuePairingChallenge({
       channel: params.channel,
       accountId: params.accountId,
       upsertPairingRequest: params.upsertPairingRequest,
       ...challenge,
+      pairingTemplate,
     });
+  };
 }
 
 /** Build the full scoped pairing controller used by channel runtime code. */
@@ -67,6 +76,7 @@ export function createChannelPairingController(params: {
       channel: params.channel,
       accountId: access.accountId,
       upsertPairingRequest: access.upsertPairingRequest,
+      resolvePairingTemplate: () => params.core.config?.current?.().messages?.pairingTemplate,
     }),
   };
 }
