@@ -339,6 +339,11 @@ export type MsgContext = {
    */
   ExplicitDeliverRoute?: boolean;
   /**
+   * Internal proof that the channel ingress owner admitted this sender/event.
+   * Correlation interceptors must fail closed when this proof is absent.
+   */
+  InboundAccessAuthorized?: boolean;
+  /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.
    */

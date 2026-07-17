@@ -12,6 +12,7 @@ const APP_ROUTE_DEFINITIONS = {
   profile: { path: "/settings/profile", aliases: ["/profile"] },
   communications: { path: "/settings/communications", aliases: ["/communications"] },
   appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  approvals: { path: "/settings/approvals" },
   automation: { path: "/settings/automation", aliases: ["/automation"] },
   mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },

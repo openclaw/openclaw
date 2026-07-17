@@ -8,7 +8,7 @@ import { buildDiscordComponentMessage } from "../components.js";
 import type { sendDiscordComponentMessage } from "../send.components.js";
 import { createDiscordSendReceipt } from "../send.receipt.js";
 import { createActivityTestRuntime } from "./test-helpers.test-support.js";
-import { createDiscordWidgetTool } from "./tool.js";
+import { createDiscordShowWidgetTool, createDiscordWidgetTool } from "./tool.js";
 
 function discordContext(overrides: Partial<OpenClawPluginToolContext> = {}) {
   return {
@@ -28,10 +28,24 @@ describe("discord_widget", () => {
     ).toBeNull();
   });
 
+  it("marks the legacy name deprecated", () => {
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime: createActivityTestRuntime(),
+    });
+    if (!tool) {
+      throw new Error("expected deprecated Discord widget tool");
+    }
+
+    expect(tool.description).toMatch(/^Deprecated: use show_widget\./);
+    expect((tool.parameters as { properties?: Record<string, unknown> }).properties).toHaveProperty(
+      "html",
+    );
+  });
+
   it("stores a wrapped widget and posts its launch button", async () => {
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -51,13 +65,14 @@ describe("discord_widget", () => {
     const details = result.details as { widgetId: string; messageId: string };
     const stored = await runtime.store.lookupWidget(details.widgetId);
 
-    expect(details.messageId).toBe("message-1");
+    expect(details.messageId).toBe("1000000000000000001");
     expect(details.widgetId).toMatch(/^[A-Za-z0-9_-]{22}$/);
     expect(stored).toMatchObject({
       title: "Status",
       channelId: "987654321",
       accountId: "default",
       createdAt: 7,
+      deliveredMessageId: "1000000000000000001",
     });
     expect(stored?.html).toContain("<!doctype html>");
     expect(stored?.html).toContain("<button");
@@ -93,7 +108,7 @@ describe("discord_widget", () => {
   it("resolves a provider-prefixed forum thread target", async () => {
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -128,7 +143,7 @@ describe("discord_widget", () => {
     const document = "<!doctype html><html><body>full</body></html>";
     const runtime = createActivityTestRuntime();
     const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
-      messageId: "message-1",
+      messageId: "1000000000000000001",
       channelId: "987654321",
       receipt: {},
     }));
@@ -163,6 +178,7 @@ describe("discord_widget", () => {
       accountId: "default",
       createdAt: 1,
     });
+    await runtime.store.markWidgetDelivered(existingId, "1000000000000000000");
     const failure = new Error("send failed");
     const send = vi.fn(async () => {
       throw failure;
@@ -176,8 +192,56 @@ describe("discord_widget", () => {
       tool.execute("failed-send", { html: "<p>temporary</p>", title: "Temporary" }),
     ).rejects.toBe(failure);
     await expect(
-      runtime.store.singleWidgetForChannel("default", "987654321"),
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
     ).resolves.toMatchObject({ id: existingId, widget: { title: "Existing" } });
+  });
+
+  it("orders missing-ID fallback by Discord message snowflake", async () => {
+    const runtime = createActivityTestRuntime();
+    type SendResult = Awaited<ReturnType<typeof sendDiscordComponentMessage>>;
+    const sendResult = (messageId: string): SendResult => ({
+      messageId,
+      channelId: "987654321",
+      receipt: createDiscordSendReceipt({
+        platformMessageIds: [messageId],
+        channelId: "987654321",
+        kind: "text",
+      }),
+    });
+    const pending = new Map<string, (result: SendResult) => void>();
+    const send = vi.fn(
+      async (...args: Parameters<typeof sendDiscordComponentMessage>) =>
+        await new Promise<SendResult>((resolve) => {
+          pending.set(args[1].text ?? "", resolve);
+        }),
+    ) as unknown as typeof sendDiscordComponentMessage;
+    let timestamp = 0;
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send,
+      now: () => ++timestamp,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    const first = tool.execute("first", { html: "<p>first</p>", title: "First" });
+    await vi.waitFor(() => expect(pending.has("First")).toBe(true));
+    const second = tool.execute("second", { html: "<p>second</p>", title: "Second" });
+    await vi.waitFor(() => expect(pending.has("Second")).toBe(true));
+
+    pending.get("Second")?.(sendResult("1000000000000000002"));
+    const secondDetails = (await second).details as { widgetId: string };
+    await expect(
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
+    pending.get("First")?.(sendResult("1000000000000000001"));
+    const firstDetails = (await first).details as { widgetId: string };
+
+    expect(firstDetails.widgetId).not.toBe(secondDetails.widgetId);
+    await expect(
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: secondDetails.widgetId, widget: { title: "Second" } });
   });
 
   it("keeps a widget when component bookkeeping fails after delivery", async () => {
@@ -185,10 +249,10 @@ describe("discord_widget", () => {
     const failure = new Error("registry failed");
     const send = vi.fn(async (...args: Parameters<typeof sendDiscordComponentMessage>) => {
       await args[2].onDeliveryResult?.({
-        messageId: "delivered-message",
+        messageId: "1000000000000000001",
         channelId: "987654321",
         receipt: createDiscordSendReceipt({
-          platformMessageIds: ["delivered-message"],
+          platformMessageIds: ["1000000000000000001"],
           channelId: "987654321",
           kind: "text",
         }),
@@ -206,9 +270,49 @@ describe("discord_widget", () => {
     });
     const details = result.details as { widgetId: string; messageId: string };
 
-    expect(details.messageId).toBe("delivered-message");
+    expect(details.messageId).toBe("1000000000000000001");
     await expect(runtime.store.lookupWidget(details.widgetId)).resolves.toMatchObject({
       title: "Delivered",
+      deliveredMessageId: "1000000000000000001",
+    });
+    await expect(
+      runtime.store.latestPostedWidgetForChannel("default", "987654321"),
+    ).resolves.toMatchObject({ id: details.widgetId });
+  });
+
+  it("surfaces delivery-state failures without deleting the delivered widget", async () => {
+    const runtime = createActivityTestRuntime();
+    const createWidget = vi.spyOn(runtime.store, "createWidget");
+    vi.spyOn(runtime.store, "markWidgetDelivered").mockRejectedValueOnce(
+      new Error("state unavailable"),
+    );
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "1000000000000000001",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected Discord widget tool");
+    }
+
+    await expect(
+      tool.execute("delivery-state-failure", {
+        html: "<p>delivered</p>",
+        title: "Delivered",
+      }),
+    ).rejects.toThrow("Discord widget was delivered, but its delivery state could not be saved");
+    const widgetIdPromise = createWidget.mock.results[0]?.value;
+    if (!widgetIdPromise) {
+      throw new Error("expected widget creation");
+    }
+    const widgetId = await widgetIdPromise;
+    await expect(runtime.store.lookupWidget(widgetId)).resolves.toMatchObject({
+      title: "Delivered",
+      deliveredMessageId: null,
     });
   });
 
@@ -242,5 +346,49 @@ describe("discord_widget", () => {
     await expect(tool.execute("dm-target", { html: "hello", title: "No channel" })).rejects.toThrow(
       "requires a concrete Discord channel",
     );
+  });
+});
+
+describe("show_widget", () => {
+  it("maps widget_code to the Discord Activity document", async () => {
+    const runtime = createActivityTestRuntime();
+    const send = vi.fn(async (..._args: Parameters<typeof sendDiscordComponentMessage>) => ({
+      messageId: "1000000000000000001",
+      channelId: "987654321",
+      receipt: {},
+    }));
+    const tool = createDiscordShowWidgetTool(discordContext(), {
+      runtime,
+      sendComponentMessage: send as unknown as typeof sendDiscordComponentMessage,
+    });
+    if (!tool) {
+      throw new Error("expected unified Discord widget tool");
+    }
+
+    expect(tool.name).toBe("show_widget");
+    expect(tool.description).toMatch(/^Show an interactive, self-contained HTML widget/);
+    expect((tool.parameters as { properties?: Record<string, unknown> }).properties).toMatchObject({
+      title: expect.any(Object),
+      widget_code: expect.any(Object),
+      button_label: expect.any(Object),
+    });
+    expect(
+      (tool.parameters as { properties?: Record<string, unknown> }).properties,
+    ).not.toHaveProperty("html");
+
+    const result = await tool.execute("unified-widget", {
+      title: "Unified",
+      widget_code: "<p>Discord surface</p>",
+      button_label: "Launch",
+    });
+    const details = result.details as { widgetId: string };
+
+    await expect(runtime.store.lookupWidget(details.widgetId)).resolves.toMatchObject({
+      title: "Unified",
+      html: expect.stringContaining("<p>Discord surface</p>"),
+    });
+    expect(send.mock.calls[0]?.[1]).toMatchObject({
+      blocks: [{ buttons: [{ label: "Launch" }] }],
+    });
   });
 });

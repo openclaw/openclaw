@@ -14,6 +14,14 @@ vi.mock("../runtime-api.js", () => ({
   resolveChannelMediaMaxBytes: vi.fn(() => 8 * 1024 * 1024),
 }));
 
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+  };
+});
+
 vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: getMSTeamsRuntimeMock,
 }));

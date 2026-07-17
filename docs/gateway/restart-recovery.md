@@ -107,7 +107,7 @@ approval), the session is not blindly re-run; the agent instead posts a short
 notice asking the user to resend the last request. For WebChat, that notice is
 written directly to the session history so it remains visible after reconnect.
 
-OpenClaw can also reconstruct interrupted read-only [Code Mode](/reference/code-mode)
+OpenClaw can also reconstruct interrupted read-only [Code Mode](/tools/code-mode)
 work. Code Mode marks these runs as restart-safe and rejects side-effecting
 catalog tools or plugin namespaces before they execute. If a restart lands on
 the `wait` control, the new gateway reconstructs the turn from its transcript

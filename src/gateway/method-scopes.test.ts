@@ -105,6 +105,10 @@ describe("method scope resolution", () => {
     ["exec.approvals.set", ["operator.admin"]],
     ["exec.approvals.node.get", ["operator.admin"]],
     ["exec.approvals.node.set", ["operator.admin"]],
+    ["conversations.list", ["operator.admin"]],
+    ["conversations.send", ["operator.admin"]],
+    ["conversations.turn", ["operator.admin"]],
+    ["conversations.turn.cancel", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
@@ -492,6 +496,7 @@ describe("operator scope authorization", () => {
 
   it.each([
     "approval.get",
+    "approval.history",
     "approval.resolve",
     "exec.approval.get",
     "exec.approval.list",

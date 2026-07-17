@@ -4,6 +4,8 @@ import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
+  parseConfigJson5,
+  preserveConfigSnapshotAsClobbered,
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
@@ -225,13 +227,6 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
-    /**
-     * Allows legacy imports whose source lives in the DEFAULT home state dir
-     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
-     * runs opt in; the implicit CLI/gateway preflight must never archive
-     * files that belong to another install's state dir.
-     */
-    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -348,6 +343,21 @@ export async function runDoctorConfigPreflight(
         );
         snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
       }
+      if (
+        !snapshot.valid &&
+        typeof snapshot.raw === "string" &&
+        !parseConfigJson5(snapshot.raw).ok
+      ) {
+        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
+        if (!clobberedPath) {
+          throw new Error(
+            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
+          );
+        }
+        throw new Error(
+          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
+        );
+      }
     }
     const invalidConfigNote =
       options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
@@ -420,7 +430,6 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -433,7 +442,6 @@ export async function runDoctorConfigPreflight(
           noteStartupStateMigrationResult(
             await autoMigrateLegacyTaskStateSidecars({
               env: process.env,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         }
@@ -441,7 +449,6 @@ export async function runDoctorConfigPreflight(
         noteStartupStateMigrationResult(
           await autoMigrateLegacyTaskStateSidecars({
             env: process.env,
-            crossStateDirImports: options.crossStateDirImports,
           }),
         );
       }

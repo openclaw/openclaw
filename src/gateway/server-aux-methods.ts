@@ -12,6 +12,7 @@ export const GATEWAY_AUX_METHODS = [
   "plugin.approval.waitDecision",
   "plugin.approval.resolve",
   "approval.get",
+  "approval.history",
   "approval.resolve",
   "secrets.reload",
   "secrets.resolve",

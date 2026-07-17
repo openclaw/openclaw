@@ -31,6 +31,7 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
   disablePluginTools?: boolean;
+  clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
 };
 
@@ -92,6 +93,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
+    clientCaps: params.options?.clientCaps,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,

@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
     func replaceMessages(_ messages: [OpenClawChatMessage]) {
         guard self.messages != messages else { return }
         self.messages = messages
+        self.seedInputHistory(from: messages)
         markTimelineChanged()
     }
 

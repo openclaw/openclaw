@@ -403,6 +403,12 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.endWaitCalls = [];
+  for (const resolve of embeddedRunMock.endWaiters.values()) {
+    resolve(false);
+  }
+  embeddedRunMock.endWaiters.clear();
+  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
   embeddedRunMock.compactEmbeddedAgentSession.mockReset();
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
@@ -496,6 +502,12 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
+  embeddedRunMock.endWaitCalls = [];
+  for (const resolve of embeddedRunMock.endWaiters.values()) {
+    resolve(false);
+  }
+  embeddedRunMock.endWaiters.clear();
+  embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
   embeddedRunMock.compactEmbeddedAgentSession.mockReset();
   embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,

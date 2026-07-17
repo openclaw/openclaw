@@ -56,9 +56,9 @@ struct GatewayErrorsTests {
 
         let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
 
-        #expect(problem.titlePresentation == .localized("Pairing approval required"))
+        #expect(problem.titlePresentation == .localized("This device is not approved yet"))
         #expect(problem.messagePresentation == .localized(
-            "Approve this device on the gateway, then reconnect."))
+            "The gateway received the connection request, but this device must be approved first."))
         #expect(problem.actionLabelPresentation == .localized("Approve on gateway"))
     }
 

@@ -127,6 +127,31 @@ const {
   sendCardFeishuMock,
 } = feishuLifecycleTestMocks;
 
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return {
+    ...actual,
+    dispatchInboundMessage: (params: {
+      ctx: DispatchReplyContext;
+      dispatcher: DispatchReplyDispatcher;
+      onSettled?: () => unknown;
+    }) => {
+      const ctx = feishuLifecycleTestMocks.finalizeInboundContextMock(params.ctx);
+      return feishuLifecycleTestMocks.withReplyDispatcherMock({
+        dispatcher: params.dispatcher,
+        onSettled: params.onSettled,
+        run: () =>
+          feishuLifecycleTestMocks.dispatchReplyFromConfigMock({
+            ctx,
+            dispatcher: params.dispatcher,
+          }),
+      });
+    },
+  };
+});
+
 vi.mock("./client.js", () => {
   return {
     FEISHU_HTTP_TIMEOUT_ENV_VAR: "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS",

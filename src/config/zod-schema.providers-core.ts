@@ -44,6 +44,7 @@ import {
   DiscordPresenceEventsSchema,
   DiscordSnowflakeStringSchema,
 } from "./zod-schema.discord.js";
+import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 import {
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
@@ -721,6 +722,7 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z.boolean().optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -919,7 +921,6 @@ const SlackThreadSchema = z
     historyScope: z.enum(["thread", "channel"]).optional(),
     inheritParent: z.boolean().optional(),
     initialHistoryLimit: z.number().int().min(0).optional(),
-    requireExplicitMention: z.boolean().optional(),
   })
   .strict();
 
@@ -986,6 +987,7 @@ const SlackAccountSchema = z
     botLoopProtection: BotLoopProtectionSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
     groupPolicy: GroupPolicySchema.optional(),
     mentionPatterns: MentionPatternsPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),

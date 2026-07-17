@@ -366,7 +366,6 @@ describe("watch-node script", () => {
       "--non-interactive",
     ]);
     expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
-    expect(requireSpawnEnv(spawn, 1).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
 
     doctor.emit("exit", 0, null);
     await new Promise((resolve) => {
@@ -378,9 +377,6 @@ describe("watch-node script", () => {
     expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
     expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
     expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
-    expect(
-      requireSpawnEnv(spawn, 2).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS,
-    ).toBeUndefined();
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;

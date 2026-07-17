@@ -6,7 +6,7 @@ export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, cron, wake events.
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
 export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
-export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Message session or configured agent.";
+export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY = "Spawn subagent or ACP session.";
 export const SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY = "Spawn subagent session.";
 export const SESSION_STATUS_TOOL_DISPLAY_SUMMARY = "Show session status/model/usage.";
@@ -41,7 +41,9 @@ export function describeSessionsSearchTool(): string {
 /** Describes the sessions_send tool for model-facing instructions. */
 export function describeSessionsSendTool(): string {
   return [
-    "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label.",
+    "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
+    "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+    "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`, or `message` with an explicit channel and target.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
     "watch:true: notice arrives when others later change target session.",
   ].join(" ");
