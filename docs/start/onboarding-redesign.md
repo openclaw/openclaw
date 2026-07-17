@@ -197,8 +197,8 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   playbooks; the agent collects credentials conversationally and relays config
   writes to the custodian ("asking OpenClaw…" is the canonical idiom).
 - Self-learning is asked, not announced, and doubles as skill-workshop
-  consent; ClawHub is described as "scanned, signed, and verified before
-  install" — nothing stronger.
+  consent; describe ClawHub's release-trust, scan, verification, and integrity
+  checks plus the publisher-code warning — never imply every release is signed.
 - Zero agents on first run auto-hatches with the announcement; zero agents
   after deletion offers instead (the emptiness was intentional).
 
@@ -241,11 +241,13 @@ restart` from the real environment and verify the plist. Product follow-up:
   a spare port with a plain token. That harness proved the phase-3 loop,
   including a real browser connect.
 - **Auth paths differ by client identity, not only credentials.** Presence and
-  other operator reads work token-less as a CLI-mode loopback client from the
-  same config; a Control UI-identified browser client needs device identity or
-  the secure-context loopback grant. A probe authenticating against a gateway
-  that serves a DIFFERENT config (see LaunchAgent pitfall) fails with "token
-  mismatch" — that artifact briefly held phase 3.
+  other operator reads use a CLI-mode loopback client with credentials from the
+  same config. Token-auth gateways require the shared secret; SecretRef/none
+  gateways can fall back to trusted-loopback auth without a token. A Control
+  UI-identified browser client needs device identity or the secure-context
+  loopback grant. A probe authenticating against a gateway that serves a
+  DIFFERENT config (see LaunchAgent pitfall) fails with "token mismatch" — that
+  artifact briefly held phase 3.
 - **Completion probes**: `runSetupInferenceTest` caps the verification probe at
   32 output tokens; custom prompts bypass the cap and are bounded by the
   model's own `maxTokens`. Reasoning models consume that budget with hidden
