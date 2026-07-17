@@ -36,7 +36,7 @@ import {
   writeGatewayRestartIntentSync,
 } from "../../infra/restart-intent.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
@@ -293,7 +293,7 @@ async function requestSafeGatewayRestart(opts: DaemonLifecycleOptions): Promise<
     warnings: formatSafeRestartWarnings(result),
   };
   if (opts.json) {
-    defaultRuntime.log(JSON.stringify(payload, null, 2));
+    writeRuntimeJson(defaultRuntime, payload);
   } else {
     defaultRuntime.log(message);
     if (result.preflight.blockers.length > 0) {
