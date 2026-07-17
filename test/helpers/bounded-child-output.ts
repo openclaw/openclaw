@@ -7,7 +7,7 @@ function decodeUtf8Tail(buffer: Buffer): string {
   while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
     start += 1;
   }
-  return new StringDecoder("utf8").write(buffer.subarray(start));
+  return new StringDecoder("utf8").end(buffer.subarray(start));
 }
 
 export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BYTES) {

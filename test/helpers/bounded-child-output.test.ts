@@ -39,4 +39,12 @@ describe("bounded child output", () => {
 
     expect(output.text()).toBe("tail");
   });
+
+  it("preserves replacement output for incomplete trailing bytes", () => {
+    const output = createBoundedChildOutput(7);
+
+    output.append(Buffer.from([0x61, 0xe2]));
+
+    expect(output.text()).toBe("a�");
+  });
 });
