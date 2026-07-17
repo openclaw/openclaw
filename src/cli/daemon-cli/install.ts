@@ -12,6 +12,7 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
@@ -44,15 +45,12 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-type InstallBindMode = NonNullable<NonNullable<OpenClawConfig["gateway"]>["bind"]>;
-
-function resolveGatewayInstallBindMode(cfg: OpenClawConfig): InstallBindMode {
-  return (cfg.gateway?.bind ??
-    defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off")) as InstallBindMode;
+function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
+  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
 }
 
 function formatNoAuthNonLoopbackInstallBlock(params: {
-  bind: InstallBindMode;
+  bind: GatewayBindMode;
   bindHost: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

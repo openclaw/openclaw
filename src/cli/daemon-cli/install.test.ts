@@ -30,6 +30,7 @@ const resolveGatewayAuthMock = vi.hoisted(() =>
     allowTailscale: false,
   })),
 );
+const resolveGatewayBindHostMock = vi.hoisted(() => vi.fn(async () => "127.0.0.1"));
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const createInstallPlanFixture = vi.hoisted(() => {
@@ -118,6 +119,14 @@ vi.mock("../../config/types.secrets.js", () => ({
 vi.mock("../../gateway/auth.js", () => ({
   resolveGatewayAuth: resolveGatewayAuthMock,
 }));
+
+vi.mock("../../gateway/net.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/net.js")>();
+  return {
+    ...actual,
+    resolveGatewayBindHost: resolveGatewayBindHostMock,
+  };
+});
 
 vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
@@ -267,6 +276,7 @@ describe("runDaemonInstall", () => {
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
     resolveGatewayAuthMock.mockReset();
+    resolveGatewayBindHostMock.mockReset();
     resolveSecretRefValuesMock.mockReset();
     randomTokenMock.mockReset();
     buildGatewayInstallPlanMock.mockReset();
@@ -298,6 +308,7 @@ describe("runDaemonInstall", () => {
       password: undefined,
       allowTailscale: false,
     });
+    resolveGatewayBindHostMock.mockResolvedValue("127.0.0.1");
     resolveSecretRefValuesMock.mockResolvedValue(new Map());
     randomTokenMock.mockReturnValue("generated-token");
     buildGatewayInstallPlanMock.mockImplementation(createInstallPlanFixture);
@@ -518,6 +529,7 @@ describe("runDaemonInstall", () => {
       password: undefined,
       allowTailscale: false,
     });
+    resolveGatewayBindHostMock.mockResolvedValue("0.0.0.0");
 
     await runDaemonInstall({ json: true });
 
@@ -529,14 +541,42 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
-  it("allows managed install when explicit no-auth stays on loopback", async () => {
+  it.each([
+    {
+      name: "custom bind resolving to a network interface",
+      bind: "custom" as const,
+      customBindHost: "192.168.1.20",
+      resolvedHost: "192.168.1.20",
+      blocked: true,
+    },
+    {
+      name: "tailnet bind resolving to a tailnet interface",
+      bind: "tailnet" as const,
+      customBindHost: undefined,
+      resolvedHost: "100.64.0.20",
+      blocked: true,
+    },
+    {
+      name: "tailnet bind falling back to loopback",
+      bind: "tailnet" as const,
+      customBindHost: undefined,
+      resolvedHost: "127.0.0.1",
+      blocked: false,
+    },
+    {
+      name: "loopback bind",
+      bind: "loopback" as const,
+      customBindHost: undefined,
+      resolvedHost: "127.0.0.1",
+      blocked: false,
+    },
+  ])("handles explicit no-auth for $name", async (testCase) => {
     const config = {
       gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: {
-          mode: "none",
-        },
+        mode: "local" as const,
+        bind: testCase.bind,
+        customBindHost: testCase.customBindHost,
+        auth: { mode: "none" as const },
       },
     };
     readConfigFileSnapshotMock.mockResolvedValue({
@@ -551,6 +591,44 @@ describe("runDaemonInstall", () => {
       password: undefined,
       allowTailscale: false,
     });
+    resolveGatewayBindHostMock.mockResolvedValue(testCase.resolvedHost);
+
+    await runDaemonInstall({ json: true });
+
+    expect(resolveGatewayBindHostMock).toHaveBeenCalledWith(testCase.bind, testCase.customBindHost);
+    if (testCase.blocked) {
+      expect(actionState.failed[0]?.message).toContain(`gateway.bind=${testCase.bind}`);
+      expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    } else {
+      expect(actionState.failed).toStrictEqual([]);
+      expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("allows a managed LAN install with trusted-proxy auth", async () => {
+    const config = {
+      gateway: {
+        mode: "local" as const,
+        bind: "lan" as const,
+        trustedProxies: ["127.0.0.1"],
+        auth: { mode: "trusted-proxy" as const },
+      },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    resolveGatewayAuthMock.mockReturnValue({
+      mode: "trusted-proxy",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    });
+    resolveGatewayBindHostMock.mockResolvedValue("0.0.0.0");
 
     await runDaemonInstall({ json: true });
 
