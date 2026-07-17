@@ -183,6 +183,11 @@ export class CustodianPage extends OpenClawLightDomElement {
       if (epoch === this.requestEpoch && client === this.activeClient) {
         this.error = errorMessage(error);
       }
+      // A failed user turn may still have reached the agent and acted; there is
+      // no turn idempotency, so never keep it replayable (or its raw text).
+      if (params.message !== undefined && this.retryParams === params) {
+        this.retryParams = null;
+      }
     } finally {
       if (epoch === this.requestEpoch) {
         this.sending = false;
@@ -191,9 +196,11 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   private send(text = this.input): void {
-    const message = text.trim();
+    // Trim decides emptiness only; sensitive values (credentials) may carry
+    // meaningful whitespace and must reach the agent exactly as entered.
+    const message = this.sensitive ? text : text.trim();
     const client = this.activeClient;
-    if (!message || !client || !this.chatAvailable || this.sending) {
+    if (!message.trim() || !client || !this.chatAvailable || this.sending) {
       return;
     }
     const displayText = this.sensitive ? t("custodian.sensitiveReply") : message;
@@ -242,10 +249,16 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.context.navigate("chat");
   }
 
+  private canRetry(): boolean {
+    // Only the welcome request is safely replayable; a user turn has no
+    // idempotency key and may have already acted on the agent side.
+    return this.retryParams !== null && this.retryParams.message === undefined;
+  }
+
   private retry(): void {
     const client = this.activeClient;
     const params = this.retryParams;
-    if (client && params && this.chatAvailable && !this.sending) {
+    if (client && params && params.message === undefined && this.chatAvailable && !this.sending) {
       void this.requestReply(client, params);
     }
   }
@@ -320,7 +333,7 @@ export class CustodianPage extends OpenClawLightDomElement {
           ${this.error
             ? html`<div class="custodian__error" role="alert">
                 <span>${this.error}</span>
-                ${this.activeClient && this.chatAvailable && this.retryParams
+                ${this.activeClient && this.chatAvailable && this.canRetry()
                   ? html`<button class="btn btn--sm" type="button" @click=${() => this.retry()}>
                       ${t("common.retry")}
                     </button>`

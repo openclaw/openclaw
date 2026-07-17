@@ -312,6 +312,61 @@ describe("custodian page", () => {
     expect(page.textContent).not.toContain("Paired device conversation.");
   });
 
+  it("does not offer replay for a failed user turn", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Welcome.",
+        action: "none",
+      })
+      .mockRejectedValueOnce(new Error("gateway timeout"));
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Welcome."));
+
+    const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    composer.value = "install everything";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("gateway timeout"),
+    );
+    expect(page.querySelector('[role="alert"] button')).toBeNull();
+  });
+
+  it("sends sensitive input verbatim and masks it in the transcript", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Paste your API key.",
+        action: "none",
+        sensitive: true,
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Key accepted.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Paste your API key."));
+
+    const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+    composer.value = " sk-padded-key ";
+    composer.dispatchEvent(new Event("input"));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: " sk-padded-key " });
+    await vi.waitFor(() => expect(page.textContent).toContain("Key accepted."));
+    expect(page.textContent).not.toContain("sk-padded-key");
+  });
+
   it("sends skip as a reply and dismisses the question", async () => {
     const question = {
       id: "access",
