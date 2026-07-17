@@ -127,4 +127,19 @@ describe("QA Lab dashboard HTTP", () => {
 
     await expect(postJson("/api/runner/start", { scenario: "baseline" })).rejects.toThrow("boom");
   });
+
+  it("allows large successful JSON responses", async () => {
+    const body = JSON.stringify({ data: "x".repeat(128 * 1024) });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getJson("/api/snapshot")).resolves.toEqual({ data: "x".repeat(128 * 1024) });
+  });
 });

@@ -1,5 +1,4 @@
 const QA_LAB_API_REQUEST_TIMEOUT_MS = 30_000;
-const QA_LAB_JSON_RESPONSE_MAX_BYTES = 64 * 1024;
 
 function createRequestSignal(): AbortSignal {
   return AbortSignal.timeout(QA_LAB_API_REQUEST_TIMEOUT_MS);
@@ -13,9 +12,6 @@ async function readJsonResponse<T>(response: Response, label: string): Promise<T
   const text = await response.text();
   if (!text.trim()) {
     throw new Error(`${label}: empty JSON response`);
-  }
-  if (new TextEncoder().encode(text).byteLength > QA_LAB_JSON_RESPONSE_MAX_BYTES) {
-    throw new Error(`${label}: JSON response exceeds ${QA_LAB_JSON_RESPONSE_MAX_BYTES} bytes`);
   }
   try {
     return JSON.parse(text) as T;
