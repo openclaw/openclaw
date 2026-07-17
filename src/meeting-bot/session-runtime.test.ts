@@ -114,8 +114,8 @@ function createTestRuntime(params: {
         session.browser.health = health;
       }
     },
-    joinTransport: params.joinTransport,
-    releaseBrowserTab: params.releaseBrowserTab,
+    joinTransport: (input) => params.joinTransport(input),
+    releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
     refreshReusableSession: async () => {},

@@ -16,7 +16,7 @@ export function createGoogleMeetChromeNodeInvokePolicy(
     displayName: "Google Meet",
     deniedCode: "GOOGLE_MEET_NODE_POLICY_DENIED",
     supportedModes: START_MODES,
-    normalizeUrl: GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize,
+    normalizeUrl: (url) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(url),
     start: config.chrome,
   });
 }

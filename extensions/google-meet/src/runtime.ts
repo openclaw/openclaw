@@ -178,8 +178,9 @@ export class GoogleMeetRuntime {
       isBrowserTransport,
       isTalkBackMode: isGoogleMeetTalkBackMode,
       isTranscribeMode: (mode) => mode === "transcribe",
-      sameMeetingUrl: GOOGLE_MEET_PLATFORM_ADAPTER.urls.isSameMeeting,
-      normalizeMeetingUrlForReuse: GOOGLE_MEET_PLATFORM_ADAPTER.urls.normalizeForReuse,
+      sameMeetingUrl: (left, right) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
+      normalizeMeetingUrlForReuse: (url) =>
+        GOOGLE_MEET_PLATFORM_ADAPTER.urls.normalizeForReuse(url),
       getBrowser: (session) =>
         session.chrome
           ? {
@@ -676,7 +677,7 @@ export class GoogleMeetRuntime {
       );
       left = false;
     }
-    if (session.chrome && left !== false) {
+    if (session.chrome && left) {
       session.chrome.browserTab = undefined;
     }
     session.browserLeft = left;

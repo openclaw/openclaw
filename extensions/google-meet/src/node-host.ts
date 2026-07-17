@@ -61,7 +61,7 @@ const googleMeetNodeHost = createMeetingNodeHost({
   defaultAudioOutputCommand: DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
   talkBackModes: new Set(["agent", "bidi", "realtime"]),
   agentMode: "agent",
-  normalizeUrl: GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize,
+  normalizeUrl: (url) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(url),
   normalizeMeetingKey: normalizeMeetKey,
   assertAudioAvailable: assertBlackHoleAvailable,
   browser: {

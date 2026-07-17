@@ -1,4 +1,5 @@
 // Google Meet adapter: platform URL, DOM, wire-value, and manual-action ownership.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
@@ -311,9 +312,7 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingPlatformAdapter<
       }
       if (error) {
         return [
-          `Could not grant Meet media permissions automatically: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Could not grant Meet media permissions automatically: ${formatErrorMessage(error)}`,
         ];
       }
       return parsePermissionGrantNotes(result);

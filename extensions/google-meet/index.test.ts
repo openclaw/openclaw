@@ -16,6 +16,7 @@ import {
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
   type MeetingAgentConsultParams,
+  type MeetingRealtimeAudioEngineHealth,
   type MeetingRealtimeAudioTransport,
   type MeetingRealtimeToolCallParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -72,29 +73,44 @@ type MeetRealtimeAudioSpawn = NonNullable<
   Parameters<typeof createLocalMeetingRealtimeAudioTransport>[0]["spawn"]
 >;
 
-function createTestMeetRealtimeAudioTransport(): {
-  transport: MeetingRealtimeAudioTransport;
-  deliverInput: (audio: Buffer) => void;
-} {
+function createTestMeetRealtimeAudioTransport() {
   let inputHandler: ((audio: Buffer) => void) | undefined;
+  const writeOutput = vi.fn(async () => {});
   const transport: MeetingRealtimeAudioTransport = {
     onFatal: vi.fn(),
     startInput: vi.fn((handler) => {
       inputHandler = handler;
     }),
     stop: vi.fn(async () => {}),
-    writeOutput: vi.fn(async () => {}),
+    writeOutput,
     clearOutput: vi.fn(async () => {}),
     dispose: vi.fn(async () => {}),
   };
   return {
     transport,
-    deliverInput: (audio) => {
+    writeOutput,
+    deliverInput: (audio: Buffer) => {
       if (!inputHandler) {
         throw new Error("Expected Google Meet realtime input to be started");
       }
       inputHandler(audio);
     },
+  };
+}
+
+function createEmptyMeetingRealtimeAudioEngineHealth(): MeetingRealtimeAudioEngineHealth {
+  return {
+    providerConnected: false,
+    realtimeReady: false,
+    audioInputActive: false,
+    audioOutputActive: false,
+    lastInputBytes: 0,
+    lastOutputBytes: 0,
+    suppressedInputBytes: 0,
+    realtimeTranscriptLines: 0,
+    recentRealtimeTranscript: [],
+    recentTalkEvents: [],
+    bridgeClosed: false,
   };
 }
 
@@ -6062,7 +6078,7 @@ describe("google-meet plugin", () => {
           inputCommand: ["capture-meet"],
           outputCommand: ["play-meet"],
           speak: vi.fn(),
-          getHealth: vi.fn(() => ({})),
+          getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
           stop,
         },
       })
@@ -6124,7 +6140,7 @@ describe("google-meet plugin", () => {
           inputCommand: ["capture-meet"],
           outputCommand: ["play-meet"],
           speak: vi.fn(),
-          getHealth: vi.fn(() => ({})),
+          getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
           stop,
         },
       })
@@ -6180,7 +6196,7 @@ describe("google-meet plugin", () => {
           inputCommand: ["capture-meet"],
           outputCommand: ["play-meet"],
           speak: vi.fn(),
-          getHealth: vi.fn(() => ({})),
+          getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
           stop,
         },
       })
@@ -6288,7 +6304,7 @@ describe("google-meet plugin", () => {
           inputCommand: ["capture-meet"],
           outputCommand: ["play-meet"],
           speak: vi.fn(),
-          getHealth: vi.fn(() => ({})),
+          getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
           stop,
         },
       })
@@ -6352,7 +6368,7 @@ describe("google-meet plugin", () => {
           inputCommand: ["capture-meet"],
           outputCommand: ["play-meet"],
           speak: vi.fn(),
-          getHealth: vi.fn(() => ({})),
+          getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
           stop,
         },
       })
@@ -6407,7 +6423,7 @@ describe("google-meet plugin", () => {
       inputCommand: ["capture-meet"],
       outputCommand: ["play-meet"],
       speak: vi.fn(),
-      getHealth: vi.fn(() => ({})),
+      getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
       stop,
     });
     const launchChromeMeet = vi
@@ -6621,7 +6637,7 @@ describe("google-meet plugin", () => {
         inputCommand: ["capture-meet"],
         outputCommand: ["play-meet"],
         speak: vi.fn(),
-        getHealth: vi.fn(() => ({})),
+        getHealth: vi.fn(createEmptyMeetingRealtimeAudioEngineHealth),
         stop,
       },
     });
@@ -7182,9 +7198,9 @@ describe("google-meet plugin", () => {
         return sttSession;
       },
     };
-    const { transport } = createTestMeetRealtimeAudioTransport();
-    vi.mocked(transport.writeOutput).mockRejectedValueOnce(new Error("audio sink failed"));
-    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+    const { transport, writeOutput } = createTestMeetRealtimeAudioTransport();
+    writeOutput.mockRejectedValueOnce(new Error("audio sink failed"));
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const handle = await startMeetingAgentRealtimeEngine({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", agentId: "jay", introMessage: "" },

@@ -86,13 +86,16 @@ describe("local Meet realtime transport process stream errors", () => {
         throw initError;
       },
     };
+    const startInput = vi.fn();
+    const stop = vi.fn(async () => {});
+    const dispose = vi.fn(async () => {});
     const transport: MeetingRealtimeAudioTransport = {
       onFatal: vi.fn(),
-      startInput: vi.fn(),
-      stop: vi.fn(async () => {}),
+      startInput,
+      stop,
       writeOutput: vi.fn(async () => {}),
       clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
+      dispose,
     };
 
     await expect(
@@ -105,15 +108,15 @@ describe("local Meet realtime transport process stream errors", () => {
         runtime: {} as never,
         ...GOOGLE_MEET_ENGINE_BINDINGS,
         meetingSessionId: "meet-create-session-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         providers: [provider],
         transport,
       }),
     ).rejects.toBe(initError);
 
-    expect(transport.startInput).not.toHaveBeenCalled();
-    expect(transport.stop).toHaveBeenCalledOnce();
-    expect(transport.dispose).toHaveBeenCalledOnce();
+    expect(startInput).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("closes the STT session and disposes transport when input startup throws", async () => {
@@ -133,15 +136,18 @@ describe("local Meet realtime transport process stream errors", () => {
       isConfigured: () => true,
       createSession: () => sttSession,
     };
+    const startInput = vi.fn(() => {
+      throw initError;
+    });
+    const stop = vi.fn(async () => {});
+    const dispose = vi.fn(async () => {});
     const transport: MeetingRealtimeAudioTransport = {
       onFatal: vi.fn(),
-      startInput: vi.fn(() => {
-        throw initError;
-      }),
-      stop: vi.fn(async () => {}),
+      startInput,
+      stop,
       writeOutput: vi.fn(async () => {}),
       clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
+      dispose,
     };
 
     await expect(
@@ -154,7 +160,7 @@ describe("local Meet realtime transport process stream errors", () => {
         runtime: {} as never,
         ...GOOGLE_MEET_ENGINE_BINDINGS,
         meetingSessionId: "meet-input-start-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         providers: [provider],
         transport,
       }),
@@ -162,8 +168,8 @@ describe("local Meet realtime transport process stream errors", () => {
 
     expect(sttSession.connect).not.toHaveBeenCalled();
     expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(transport.stop).toHaveBeenCalledOnce();
-    expect(transport.dispose).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("closes the STT session and disposes transport when connect rejects", async () => {
@@ -185,13 +191,15 @@ describe("local Meet realtime transport process stream errors", () => {
       isConfigured: () => true,
       createSession: () => sttSession,
     };
+    const stop = vi.fn(async () => {});
+    const dispose = vi.fn(async () => {});
     const transport: MeetingRealtimeAudioTransport = {
       onFatal: vi.fn(),
       startInput: vi.fn(),
-      stop: vi.fn(async () => {}),
+      stop,
       writeOutput: vi.fn(async () => {}),
       clearOutput: vi.fn(async () => {}),
-      dispose: vi.fn(async () => {}),
+      dispose,
     };
 
     await expect(
@@ -204,15 +212,15 @@ describe("local Meet realtime transport process stream errors", () => {
         runtime: {} as never,
         ...GOOGLE_MEET_ENGINE_BINDINGS,
         meetingSessionId: "meet-connect-failure",
-        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         providers: [provider],
         transport,
       }),
     ).rejects.toBe(connectError);
 
     expect(sttSession.close).toHaveBeenCalledOnce();
-    expect(transport.stop).toHaveBeenCalledOnce();
-    expect(transport.dispose).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("stops the engine when input fails during provider setup", async () => {
