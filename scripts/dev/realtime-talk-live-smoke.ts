@@ -57,6 +57,10 @@ type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
   openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
 };
 
+type GoogleLiveSmokeGlobal = typeof globalThis & {
+  openclawPreviewGoogleLiveDebugMessage?: (text: string) => Promise<string>;
+};
+
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
@@ -95,6 +99,10 @@ function getEnv(name: string): string | undefined {
 
 function shortError(error: unknown): string {
   return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
+}
+
+function previewGoogleLiveDebugMessage(text: string): string {
+  return previewForDevToolLog(text, 300);
 }
 
 async function readBoundedText(
@@ -479,6 +487,10 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
     }
     const page = await browser.newPage();
     await page.evaluate("globalThis.__name = (fn) => fn");
+    await page.exposeFunction(
+      "openclawPreviewGoogleLiveDebugMessage",
+      previewGoogleLiveDebugMessage,
+    );
     const result = await page.evaluate(
       async ({
         initialMessage,
@@ -489,6 +501,11 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
         tokenName: string;
         websocketUrl: string;
       }) => {
+        const previewDebugMessage = (globalThis as GoogleLiveSmokeGlobal)
+          .openclawPreviewGoogleLiveDebugMessage;
+        if (!previewDebugMessage) {
+          throw new Error("Google Live debug preview helper was not installed");
+        }
         const debug: {
           opened: boolean;
           messages: string[];
@@ -526,7 +543,7 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
           ws.addEventListener("message", (event) => {
             void (async () => {
               const text = await dataToText(event.data);
-              debug.messages.push(text.slice(0, 300));
+              debug.messages.push(await previewDebugMessage(text));
               const message = JSON.parse(text) as {
                 setupComplete?: unknown;
                 serverContent?: unknown;
@@ -899,6 +916,7 @@ export const testing = {
   OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
   parseRealtimeSmokeArgs,
+  previewGoogleLiveDebugMessage,
   readOpenAIRealtimeBrowserResponseText,
   readBoundedText,
   resolveOpenAIHttpTimeoutMs,
