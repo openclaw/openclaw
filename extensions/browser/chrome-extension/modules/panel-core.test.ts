@@ -35,7 +35,10 @@ describe("browser copilot panel contracts", () => {
       "ws://127.0.0.1:18789/",
     );
     expect(normalizeGatewayUrl("ws://gateway.example")).toBeNull();
-    expect(normalizeGatewayUrl("wss://user:secret@gateway.example")).toBeNull();
+    const credentialed = new URL("wss://gateway.example");
+    credentialed.username = "fixture-user";
+    credentialed.password = "test-password";
+    expect(normalizeGatewayUrl(credentialed.toString())).toBeNull();
   });
 
   it("builds a local-only delivery with the trusted browser binding", () => {
