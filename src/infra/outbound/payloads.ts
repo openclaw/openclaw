@@ -310,52 +310,6 @@ export function createOutboundPayloadPlan(
   return plan;
 }
 
-/**
- * Builds queue-custody payload copies for the durable delivery queue.
- *
- * Local media carried only in a legacy `MEDIA:` text directive materializes into
- * structured media in the canonical plan (`entry.parts.mediaUrls`) but not in the
- * raw payload, so queue staging (which reads structured fields) would never copy
- * it and a retry would read the vanished producer path. This folds the canonical
- * effective media (respecting directive-vs-structured precedence) into the queue
- * copy's structured fields so the spool takes custody before persistence.
- *
- * Both `mediaUrl` and `mediaUrls` are anchored to the effective set: the raw text
- * (directive included) is preserved verbatim, so recovery re-parses the original
- * producer path — and `createOutboundPayloadPlan`'s singular `mediaUrl` otherwise
- * falls back to that first parsed directive. Anchoring `mediaUrl` to the effective
- * media makes the staged copies fully override the in-text directive on replay.
- * Payload count/order/`sourceIndex` are unchanged and a payload the directive did
- * not contribute media to keeps its original reference (so structured-only queue
- * media stays untouched and the live send stays copy-free).
- */
-export function materializeQueueCustodyMedia(
-  payloads: readonly ReplyPayload[],
-  plan: readonly OutboundPayloadPlan[],
-): ReplyPayload[] {
-  const effectiveBySource = new Map<number, readonly string[]>();
-  for (const entry of plan) {
-    effectiveBySource.set(entry.sourceIndex, entry.parts.mediaUrls);
-  }
-  return payloads.map((payload, index) => {
-    const effective = effectiveBySource.get(index);
-    if (!effective?.length) {
-      return payload;
-    }
-    const structured = new Set(
-      [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
-        .map((url) => url?.trim())
-        .filter((url): url is string => Boolean(url)),
-    );
-    // Only touch payloads whose text directive adds media the structured fields
-    // do not already carry; structured-only media keeps the untouched fast path.
-    if (effective.every((url) => structured.has(url))) {
-      return payload;
-    }
-    return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
-  });
-}
-
 /** Projects a payload plan back to normalized reply payloads for delivery. */
 export function projectOutboundPayloadPlanForDelivery(
   plan: readonly OutboundPayloadPlan[],

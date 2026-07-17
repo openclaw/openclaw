@@ -101,7 +101,6 @@ import {
 } from "./outbound-audit.js";
 import {
   createOutboundPayloadPlan,
-  materializeQueueCustodyMedia,
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
@@ -1373,6 +1372,33 @@ function suppressedPayloadOutcome(params: {
     reason: params.reason,
     ...(params.hookEffect ? { hookEffect: params.hookEffect } : {}),
   };
+}
+
+/** Adds directive-derived media to the queue copy before spool custody. */
+function materializeQueueCustodyMedia(
+  payloads: readonly ReplyPayload[],
+  plan: readonly OutboundPayloadPlan[],
+): ReplyPayload[] {
+  const effectiveBySource = new Map(
+    plan.map((entry) => [entry.sourceIndex, entry.parts.mediaUrls] as const),
+  );
+  return payloads.map((payload, index) => {
+    const effective = effectiveBySource.get(index);
+    if (!effective?.length) {
+      return payload;
+    }
+    const structured = new Set(
+      [payload.mediaUrl, ...(payload.mediaUrls ?? [])]
+        .map((url) => url?.trim())
+        .filter((url): url is string => Boolean(url)),
+    );
+    if (effective.every((url) => structured.has(url))) {
+      return payload;
+    }
+    // Keep raw pre-hook text for deterministic replay. The singular anchor
+    // prevents recovery from re-adding its original MEDIA: path.
+    return { ...payload, mediaUrl: effective[0], mediaUrls: [...effective] };
+  });
 }
 
 /**

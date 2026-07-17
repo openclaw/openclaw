@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -22,7 +21,6 @@ import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
-import { createOutboundPayloadPlan, materializeQueueCustodyMedia } from "./payloads.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
@@ -80,113 +78,6 @@ function recoveryPhaseAdapter(records: RecoveredSend[], spoolRoot: string): Chan
     },
   };
 }
-
-describe("materializeQueueCustodyMedia", () => {
-  const custody = (payloads: ReplyPayload[]): ReplyPayload[] =>
-    materializeQueueCustodyMedia(payloads, createOutboundPayloadPlan(payloads));
-
-  it("materializes a single local MEDIA directive into structured queue media", () => {
-    const payloads: ReplyPayload[] = [{ text: "caption\nMEDIA:/tmp/generated.txt" }];
-    const [out] = custody(payloads);
-    // mediaUrl is anchored to the effective set so the staged copy overrides the
-    // in-text directive on replay; mediaUrls carries the full effective media.
-    expect(out?.mediaUrl).toBe("/tmp/generated.txt");
-    expect(out?.mediaUrls).toEqual(["/tmp/generated.txt"]);
-    // raw pre-hook text (directive included) is preserved
-    expect(out?.text).toBe("caption\nMEDIA:/tmp/generated.txt");
-    // input object is not mutated
-    expect(payloads[0]?.mediaUrls).toBeUndefined();
-    expect(payloads[0]?.mediaUrl).toBeUndefined();
-    expect(payloads[0]?.text).toBe("caption\nMEDIA:/tmp/generated.txt");
-  });
-
-  it("materializes multiple local directives in order", () => {
-    const [out] = custody([{ text: "MEDIA:/tmp/a.png\nMEDIA:/tmp/b.png" }]);
-    expect(out?.mediaUrl).toBe("/tmp/a.png");
-    expect(out?.mediaUrls).toEqual(["/tmp/a.png", "/tmp/b.png"]);
-  });
-
-  it("keeps a mixed local + remote directive set (remote passes through)", () => {
-    const [out] = custody([{ text: "MEDIA:/tmp/a.png\nMEDIA:https://example.com/b.png" }]);
-    expect(out?.mediaUrls).toEqual(["/tmp/a.png", "https://example.com/b.png"]);
-  });
-
-  it("materializes a remote-only directive (staging will skip the copy)", () => {
-    const [out] = custody([{ text: "MEDIA:https://example.com/b.png" }]);
-    expect(out?.mediaUrls).toEqual(["https://example.com/b.png"]);
-  });
-
-  it("does not invent media from an invalid/traversal directive", () => {
-    const payloads: ReplyPayload[] = [{ text: "MEDIA:../../etc/passwd" }];
-    const [out] = custody(payloads);
-    // no valid media parsed → payload reference unchanged
-    expect(out).toBe(payloads[0]);
-    expect(out?.mediaUrls).toBeUndefined();
-  });
-
-  it("mirrors the canonical plan when a directive accompanies structured mediaUrls", () => {
-    const payloads: ReplyPayload[] = [
-      { text: "MEDIA:/tmp/directive.png", mediaUrls: ["/tmp/structured.png"] },
-    ];
-    const [out] = custody(payloads);
-    // The canonical plan merges the directive as additional media, so the live
-    // send delivers both; queue custody mirrors that exact effective media.
-    expect(out?.mediaUrls).toEqual(["/tmp/structured.png", "/tmp/directive.png"]);
-    // input object is not mutated
-    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/structured.png"]);
-    expect(payloads[0]?.mediaUrl).toBeUndefined();
-  });
-
-  it("merges a directive alongside a singular structured mediaUrl (canonical order)", () => {
-    const payloads: ReplyPayload[] = [
-      { text: "MEDIA:/tmp/directive.png", mediaUrl: "/tmp/structured.png" },
-    ];
-    const [out] = custody(payloads);
-    // canonical plan effective order is [directive, structured]
-    expect(out?.mediaUrls).toEqual(["/tmp/directive.png", "/tmp/structured.png"]);
-  });
-
-  it("copies a duplicated directive source only once", () => {
-    const [out] = custody([{ text: "MEDIA:/tmp/a.png\nMEDIA:/tmp/a.png" }]);
-    expect(out?.mediaUrls).toEqual(["/tmp/a.png"]);
-  });
-
-  it("handles a quoted directive path containing spaces", () => {
-    const [out] = custody([{ text: 'MEDIA:"/tmp/my dir/voice file.ogg"' }]);
-    expect(out?.mediaUrls).toEqual(["/tmp/my dir/voice file.ogg"]);
-  });
-
-  it("preserves payload count, order, and sourceIndex across dropped payloads", () => {
-    const payloads: ReplyPayload[] = [
-      { text: "" }, // suppressed/empty → dropped from plan
-      { text: "MEDIA:/tmp/a.png" },
-      { text: "plain text" },
-    ];
-    const out = custody(payloads);
-    expect(out).toHaveLength(3);
-    expect(out[0]).toBe(payloads[0]); // unchanged reference (fast path)
-    expect(out[1]?.mediaUrls).toEqual(["/tmp/a.png"]);
-    expect(out[2]).toBe(payloads[2]);
-  });
-
-  it("leaves payloads without a directive-contributed source untouched (fast path)", () => {
-    const textOnly: ReplyPayload[] = [{ text: "just text" }];
-    expect(custody(textOnly)[0]).toBe(textOnly[0]);
-    // structured-only media (the #108502 path) is not rewritten
-    const structuredOnly: ReplyPayload[] = [{ text: "hi", mediaUrls: ["/tmp/x.png"] }];
-    expect(custody(structuredOnly)[0]).toBe(structuredOnly[0]);
-  });
-
-  it("keeps the rendered-batch media count aligned with the effective fan-out", () => {
-    const payloads: ReplyPayload[] = [{ text: "caption\nMEDIA:/tmp/a.png\nMEDIA:/tmp/b.png" }];
-    const custodyPayload = custody(payloads)[0];
-    // deliver.ts counts the rendered plan from the effective mediaUrls (dropping
-    // the anchor mediaUrl) so the fan-out matches what recovery re-derives.
-    const renderInput: ReplyPayload = { ...custodyPayload, mediaUrl: undefined };
-    const plan = createRenderedMessageBatchPlan([renderInput]);
-    expect(plan.mediaCount).toBe(2);
-  });
-});
 
 describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
