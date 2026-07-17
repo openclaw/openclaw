@@ -203,7 +203,7 @@ vi.mock("./command/types.js", () => ({}));
 // uses an intentionally synthetic session resolver with no durable store path.
 vi.mock("./main-session-recovery-store.js", () => ({
   claimMainSessionRecoveryOwner: vi.fn(async () => ({ kind: "not_required" })),
-  inspectMainSessionRecoveryRequired: vi.fn(async () => false),
+  inspectMainSessionRecoveryRequired: vi.fn(async () => ({ kind: "not_required" })),
   releaseMainSessionRecoveryOwner: vi.fn(async () => undefined),
   validateMainSessionRecoveryOwner: vi.fn(async () => true),
 }));

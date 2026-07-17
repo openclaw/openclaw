@@ -35,6 +35,11 @@ type MainSessionRecoveryOwnerClaimResult =
   | { kind: "invalidated"; reason: string }
   | { kind: "not_required" };
 
+type MainSessionRecoveryInspectionResult =
+  | { kind: "invalidated"; reason: string }
+  | { kind: "not_required" }
+  | { kind: "required" };
+
 function transitionChanged(result: MainSessionRecoveryTransitionResult): boolean {
   return (
     result.kind !== "foreground_validated" &&
@@ -219,9 +224,23 @@ export async function claimMainSessionRecoveryOwner(params: {
       lease: { ...claim.transition.claim, storePath: params.target.storePath },
     };
   }
+  if (claim.transition.kind === "rejected" && claim.transition.reason === "stale_generation") {
+    return { kind: "invalidated", reason: claim.transition.reason };
+  }
   if (!claim.entry && (params.allowMissingSession || params.replacementSessionId)) {
     // A fresh explicit session has no predecessor. An automatic rollover can
     // also lose its predecessor before admission. Either way, no row remains to fence.
+    return { kind: "not_required" };
+  }
+  if (
+    params.replacementSessionId &&
+    claim.entry?.sessionId === params.sessionId &&
+    (claim.entry.status !== "running" ||
+      claim.entry.abortedLastRun !== true ||
+      claim.entry.mainRestartRecovery?.tombstone !== undefined)
+  ) {
+    // An explicit fresh session may replace a terminal predecessor. No
+    // automatic recovery can admit against an inactive or tombstoned row.
     return { kind: "not_required" };
   }
   if (
@@ -257,7 +276,7 @@ export async function claimMainSessionRecoveryOwner(params: {
 export async function inspectMainSessionRecoveryRequired(params: {
   lifecycleGeneration: string;
   target: MainSessionRecoveryStoreTarget;
-}): Promise<boolean> {
+}): Promise<MainSessionRecoveryInspectionResult> {
   const result = await commitMainSessionRecovery({
     command: {
       kind: "observe",
@@ -268,7 +287,18 @@ export async function inspectMainSessionRecoveryRequired(params: {
     requireWriteSuccess: true,
     target: params.target,
   });
-  return result.transition.kind === "observed" && result.transition.view.status !== "inactive";
+  if (result.transition.kind === "observed") {
+    return result.transition.view.status === "inactive"
+      ? { kind: "not_required" }
+      : { kind: "required" };
+  }
+  if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
+    return { kind: "not_required" };
+  }
+  return {
+    kind: "invalidated",
+    reason: result.transition.kind === "rejected" ? result.transition.reason : "state_changed",
+  };
 }
 
 export async function releaseMainSessionRecoveryOwner(

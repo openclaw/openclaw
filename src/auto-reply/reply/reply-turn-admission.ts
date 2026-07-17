@@ -297,14 +297,17 @@ async function admitReplyTurnWithWaitSignal(
           });
         }
       } catch (error) {
-        if (recoveryOwnerLease) {
-          await releaseReplyRecoveryOwner(recoveryOwnerLease);
-        }
+        const pendingRecovery = recoveryOwnerLease
+          ? await releaseReplyRecoveryOwner(recoveryOwnerLease)
+          : undefined;
         if (
           error instanceof ReplyRunAlreadyActiveError &&
           admission &&
           params.retainLifecycleAdmissionOnActive
         ) {
+          void admission.released.then(() => {
+            scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+          });
           return {
             status: "skipped",
             reason: "active-run",
@@ -313,6 +316,7 @@ async function admitReplyTurnWithWaitSignal(
           };
         }
         admission?.release();
+        scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
         throw error;
       }
       if (admission) {

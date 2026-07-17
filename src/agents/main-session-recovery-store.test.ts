@@ -14,6 +14,7 @@ import {
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
+  inspectMainSessionRecoveryRequired,
   releaseMainSessionRecoveryOwner,
   validateMainSessionRecoveryOwner,
 } from "./main-session-recovery-store.js";
@@ -384,6 +385,30 @@ describe("main session recovery store", () => {
     expect(readStore()[subagentKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
   });
 
+  it("lets an explicit fresh session replace a tombstoned predecessor", async () => {
+    await write(
+      interruptedEntry({
+        status: "failed",
+        abortedLastRun: false,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      }),
+    );
+
+    await expect(
+      claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        replacementSessionId: "session-2",
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      }),
+    ).resolves.toEqual({ kind: "not_required" });
+  });
+
   it("validates a transferred owner against the latest durable row", async () => {
     await write(interruptedEntry());
     const claim = await claimMainSessionRecoveryOwner({
@@ -519,6 +544,17 @@ describe("main session recovery store", () => {
       },
       target: { sessionKey, storePath },
     });
+    const staleOwnerClaim = claimMainSessionRecoveryOwner({
+      allowMissingSession: true,
+      lifecycleGeneration,
+      replacementSessionId: "session-2",
+      sessionId: "session-1",
+      target: { sessionKey, storePath },
+    });
+    const staleInspection = inspectMainSessionRecoveryRequired({
+      lifecycleGeneration,
+      target: { sessionKey, storePath },
+    });
     await Promise.resolve();
     const currentGeneration = rotateAgentEventLifecycleGeneration();
     const currentClaim = commitMainSessionRecovery({
@@ -537,6 +573,14 @@ describe("main session recovery store", () => {
     await blocker;
     expect((await staleClaim).transition).toEqual({
       kind: "rejected",
+      reason: "stale_generation",
+    });
+    await expect(staleOwnerClaim).resolves.toEqual({
+      kind: "invalidated",
+      reason: "stale_generation",
+    });
+    await expect(staleInspection).resolves.toEqual({
+      kind: "invalidated",
       reason: "stale_generation",
     });
     expect((await currentClaim).transition).toMatchObject({

@@ -29,6 +29,15 @@ import {
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 
+const recoveryOwnerReleaseMocks = vi.hoisted(() => ({
+  schedulePendingTarget: vi.fn(),
+}));
+
+vi.mock("../../agents/main-session-recovery-owner-release.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/main-session-recovery-owner-release.js")>()),
+  scheduleMainSessionRecoveryPendingTarget: recoveryOwnerReleaseMocks.schedulePendingTarget,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDeferred() {
@@ -61,6 +70,7 @@ describe("reply turn admission", () => {
   afterEach(() => {
     testing.resetReplyRunRegistry();
     resetDiagnosticRunActivityForTest();
+    recoveryOwnerReleaseMocks.schedulePendingTarget.mockClear();
   });
 
   it("rejects a reply when an archive commits before admission", async () => {
@@ -381,6 +391,66 @@ describe("reply turn admission", () => {
       });
     },
   );
+
+  it("schedules released recovery only after retained admission exits", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:recovery-adoption";
+    const sessionKey = "agent:main:telegram:topic:recovery-adoption";
+    const sessionId = "interrupted-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 1,
+          chargedAttempts: 0,
+        },
+      },
+    });
+    const blocker = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    const reservation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "source-session",
+      resetTriggered: false,
+    });
+
+    const result = await admitReplyTurn({
+      sessionKey,
+      sessionId: reservation.sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+      waitForActive: false,
+      retainLifecycleAdmissionOnActive: true,
+      adoptOperation: reservation,
+    });
+
+    expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
+    expect(recoveryOwnerReleaseMocks.schedulePendingTarget).not.toHaveBeenCalled();
+    await expect(readSessionEntry(storePath, sessionKey)).resolves.not.toHaveProperty(
+      "mainRestartRecovery.foregroundClaims",
+    );
+    if (result.status === "skipped") {
+      result.lifecycleAdmission?.release();
+    }
+    await vi.waitFor(() => {
+      expect(recoveryOwnerReleaseMocks.schedulePendingTarget).toHaveBeenCalledWith({
+        sessionId,
+        sessionKey,
+        storePath,
+      });
+    });
+
+    blocker.complete();
+    reservation.complete();
+  });
 
   it("leaves interrupted subagent sessions to the subagent recovery owner", async () => {
     const sessionKey = "agent:main:subagent:child-1";
