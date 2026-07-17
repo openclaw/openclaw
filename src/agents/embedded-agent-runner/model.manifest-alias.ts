@@ -68,6 +68,23 @@ function hasConfiguredModelCatalogProviderEndpointSurface(params: {
   );
 }
 
+function resolveConfiguredModelCatalogProviderApi(params: {
+  provider: string;
+  modelId?: string;
+  cfg?: OpenClawConfig;
+}): ModelCatalogAlias["api"] {
+  const provider = normalizeProviderId(params.provider);
+  const config = findConfiguredModelCatalogProviderConfig({ provider, cfg: params.cfg });
+  const modelId = params.modelId?.trim();
+  const model =
+    provider && modelId && Array.isArray(config?.models)
+      ? config.models.find((candidate) =>
+          staticModelIdMatches({ candidateId: candidate.id, provider, modelId }),
+        )
+      : undefined;
+  return model?.api ?? config?.api;
+}
+
 function hasUnconditionalManifestModelCatalogSuppression(params: {
   provider: string;
   modelId?: string;
@@ -213,6 +230,11 @@ function resolveManifestModelCatalogProviderAlias(params: {
           cfg: params.cfg,
         });
       const transportApi =
+        resolveConfiguredModelCatalogProviderApi({
+          provider,
+          modelId: params.modelId,
+          cfg: params.cfg,
+        }) ??
         alias.api ??
         resolveManifestAliasTargetApi({
           plugin,

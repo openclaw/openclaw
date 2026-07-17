@@ -374,12 +374,18 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       {
         provider: "openai-fixed-endpoint",
         modelId: "gpt-5.5",
-        cfg: {},
+        cfg: {
+          models: {
+            providers: {
+              "openai-fixed-endpoint": { api: "anthropic-messages", models: [] },
+            },
+          },
+        },
       },
       {
         provider: "openai-fixed-endpoint",
         transport: {
-          api: "openai-responses",
+          api: "anthropic-messages",
           baseUrl: "https://manifest-alias.example.com/openai/v1",
         },
       },
