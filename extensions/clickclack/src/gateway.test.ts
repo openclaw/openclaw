@@ -127,12 +127,12 @@ function emitMessageEvent(
 }
 
 function writeExecResolver(filePath: string, values: Record<string, string>) {
+  const payload = JSON.stringify({ protocolVersion: 1, values });
   fs.writeFileSync(
     filePath,
-    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ protocolVersion: 1, values })}'\n`,
+    `let input = "";\nprocess.stdin.setEncoding("utf8");\nprocess.stdin.on("data", (chunk) => {\n  input += chunk;\n});\nprocess.stdin.on("end", () => {\n  process.stdout.write(${JSON.stringify(`${payload}\n`)});\n});\n`,
     "utf8",
   );
-  fs.chmodSync(filePath, 0o700);
 }
 
 describe("ClickClack gateway", () => {
@@ -219,7 +219,7 @@ describe("ClickClack gateway", () => {
 
   it("resolves exec SecretRef tokens before gateway startup", async () => {
     await withTempDir("clickclack-gateway-secretref-", async (tempDir) => {
-      const execResolver = path.join(tempDir, "resolve-clickclack-token");
+      const execResolver = path.join(tempDir, "resolve-clickclack-token.cjs");
       writeExecResolver(execResolver, {
         CLICKCLACK_SERVICE_TOKEN: "  exec-token-placeholder  ",
       });
@@ -243,7 +243,13 @@ describe("ClickClack gateway", () => {
           },
           secrets: {
             providers: {
-              clickclack_exec: { source: "exec", command: execResolver, jsonOnly: true },
+              clickclack_exec: {
+                source: "exec",
+                command: process.execPath,
+                args: [execResolver],
+                jsonOnly: true,
+                allowInsecurePath: true,
+              },
             },
           },
         } as ChannelGatewayContext<ResolvedClickClackAccount>["cfg"],

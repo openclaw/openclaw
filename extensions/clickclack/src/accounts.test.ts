@@ -12,12 +12,12 @@ import {
 import type { CoreConfig } from "./types.js";
 
 function writeExecResolver(filePath: string, values: Record<string, string>) {
+  const payload = JSON.stringify({ protocolVersion: 1, values });
   fs.writeFileSync(
     filePath,
-    `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ protocolVersion: 1, values })}'\n`,
+    `let input = "";\nprocess.stdin.setEncoding("utf8");\nprocess.stdin.on("data", (chunk) => {\n  input += chunk;\n});\nprocess.stdin.on("end", () => {\n  process.stdout.write(${JSON.stringify(`${payload}\n`)});\n});\n`,
     "utf8",
   );
-  fs.chmodSync(filePath, 0o700);
 }
 
 describe("ClickClack account resolution", () => {
@@ -151,7 +151,8 @@ describe("ClickClack account resolution", () => {
         providers: {
           example_exec: {
             source: "exec",
-            command: "/not-run-during-inspection",
+            command: process.execPath,
+            args: ["not-run-during-inspection"],
             jsonOnly: true,
             allowInsecurePath: true,
           },
@@ -170,7 +171,7 @@ describe("ClickClack account resolution", () => {
       const secretFile = path.join(tempDir, "clickclack-token");
       fs.writeFileSync(secretFile, "  file-token-placeholder  \n", "utf8");
       fs.chmodSync(secretFile, 0o600);
-      const execResolver = path.join(tempDir, "resolve-clickclack-token");
+      const execResolver = path.join(tempDir, "resolve-clickclack-token.cjs");
       writeExecResolver(execResolver, {
         CLICKCLACK_SERVICE_TOKEN: "  exec-token-placeholder  ",
       });
@@ -197,7 +198,13 @@ describe("ClickClack account resolution", () => {
         secrets: {
           providers: {
             clickclack_file: { source: "file", path: secretFile, mode: "singleValue" },
-            clickclack_exec: { source: "exec", command: execResolver, jsonOnly: true },
+            clickclack_exec: {
+              source: "exec",
+              command: process.execPath,
+              args: [execResolver],
+              jsonOnly: true,
+              allowInsecurePath: true,
+            },
           },
         },
       } satisfies CoreConfig;
