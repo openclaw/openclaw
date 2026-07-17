@@ -7,13 +7,13 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 
-export type RestartSentinelLog = {
+type RestartSentinelLog = {
   stdoutTail?: string | null;
   stderrTail?: string | null;
   exitCode?: number | null;
 };
 
-export type RestartSentinelStep = {
+type RestartSentinelStep = {
   name: string;
   command: string;
   cwd?: string | null;
@@ -21,7 +21,7 @@ export type RestartSentinelStep = {
   log?: RestartSentinelLog | null;
 };
 
-export type RestartSentinelStats = {
+type RestartSentinelStats = {
   mode?: string;
   root?: string;
   requiresRestart?: boolean;
@@ -70,7 +70,7 @@ export type RestartSentinel = RestartSentinelEnvelope & {
   revision: number;
 };
 
-export type RestartSentinelRowState =
+type RestartSentinelRowState =
   | { kind: "missing" }
   | { kind: "invalid"; revision: number }
   | { kind: "valid"; sentinel: RestartSentinel };
@@ -242,7 +242,7 @@ function parseRestartSentinelContinuation(value: unknown): RestartSentinelContin
   return null;
 }
 
-export function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
+function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | null {
   if (
     !isPlainRecord(value) ||
     !RESTART_SENTINEL_KINDS.has(value.kind as RestartSentinelPayload["kind"]) ||

@@ -20,12 +20,8 @@ import {
 } from "./restart-sentinel-store.js";
 
 export type {
-  RestartSentinel,
   RestartSentinelContinuation,
-  RestartSentinelEnvelope,
   RestartSentinelPayload,
-  RestartSentinelStats,
-  RestartSentinelStep,
 } from "./restart-sentinel-store.js";
 
 const sentinelLog = createSubsystemLogger("restart-sentinel");
@@ -52,27 +48,6 @@ export async function writeRestartSentinel(
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
   return structuredClone(payload);
-}
-
-export async function rewriteRestartSentinelIfRevision(
-  expectedRevision: number,
-  rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<RestartSentinel | null> {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const current = readRestartSentinelRowSync(db);
-      if (current.kind !== "valid" || current.sentinel.revision !== expectedRevision) {
-        return null;
-      }
-      const nextPayload = rewrite(cloneRestartSentinelPayload(current.sentinel.payload));
-      return nextPayload
-        ? writeRestartSentinelRowIfRevisionSync(db, nextPayload, expectedRevision)
-        : null;
-    },
-    { env },
-    { operationLabel: "restart-sentinel.rewrite" },
-  );
 }
 
 async function rewriteRestartSentinel(

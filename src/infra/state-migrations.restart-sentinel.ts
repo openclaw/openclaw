@@ -22,6 +22,7 @@ import {
   writeRestartSentinelRowSync,
   type RestartSentinelEnvelope,
 } from "./restart-sentinel-store.js";
+import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
@@ -36,11 +37,6 @@ type RestartSentinelMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "gateway_restart_sentinel" | "migration_runs" | "migration_sources"
 >;
-
-export type LegacyRestartSentinelDetection = {
-  sourcePath: string;
-  hasLegacy: boolean;
-};
 
 type LegacySourceSnapshot = {
   buffer: Buffer;

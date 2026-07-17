@@ -52,7 +52,6 @@ import {
   hasRestartSentinel,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
-  rewriteRestartSentinelIfRevision,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -310,7 +309,7 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("does not let stale rewrites or deletes replace a newer sentinel", async () => {
+  it("does not let stale deletes remove a newer sentinel", async () => {
     await withRestartSentinelStateDir(async () => {
       const first = await writeRestartSentinel({
         kind: "restart",
@@ -325,12 +324,6 @@ describe("restart sentinel", () => {
         message: "new",
       });
 
-      await expect(
-        rewriteRestartSentinelIfRevision(first.revision, (payload) => ({
-          ...payload,
-          message: "stale rewrite",
-        })),
-      ).resolves.toBeNull();
       await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(false);
       await expect(readRestartSentinel()).resolves.toEqual(newer);
     });
