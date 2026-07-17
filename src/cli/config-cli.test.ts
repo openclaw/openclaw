@@ -3240,6 +3240,7 @@ describe("config cli", () => {
       await expect(runConfigCommand(args)).rejects.toThrow(
         "Invalid path (missing separator after bracket): agents.list[0]id",
       );
+      );
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
