@@ -2273,6 +2273,12 @@ describe("ci workflow guards", () => {
       rmSync(path.join(root, ".pnpmfile.cjs"));
       expect(fingerprint()).toBe(baseline);
 
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(path.join(root, "scripts", "prepare-git-hooks.mjs"), "export {};\n");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, "scripts"), { recursive: true });
+      expect(fingerprint()).toBe(baseline);
+
       // Formatting, key order, and scripts that pnpm install never executes
       // should keep the existing dependency snapshot warm.
       writeManifest({
@@ -2304,39 +2310,31 @@ describe("ci workflow guards", () => {
         scripts: { postinstall: "node install-v2.mjs", test: "vitest run" },
         devDependencies: { vitest: "1.0.0" },
       });
-      expect(fingerprint()).not.toBe(baseline);
-
-      writeManifest({
-        name: "fixture",
-        scripts: { postinstall: "pnpm run build", build: "node build-v1.mjs" },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      const delegatedBaseline = fingerprint();
-      writeManifest({
-        name: "fixture",
-        scripts: { postinstall: "pnpm run build", build: "node build-v2.mjs" },
-        devDependencies: { vitest: "1.0.0" },
-      });
-      expect(fingerprint()).not.toBe(delegatedBaseline);
+      expect(() => fingerprint()).toThrow(/unaudited install lifecycle scripts in package\.json/);
 
       mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
       writeManifest({
         name: "fixture",
-        scripts: { postinstall: "pnpm --filter worker run build" },
+        scripts: {
+          postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+          preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+          prepare: "node scripts/prepare-git-hooks.mjs",
+        },
         devDependencies: { vitest: "1.0.0" },
       });
       const workerManifest = path.join(root, "packages", "worker", "package.json");
       writeFileSync(
         workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { build: "node build-v1.mjs" } })}\n`,
+        `${JSON.stringify({ name: "worker", scripts: { prepare: "node build.mjs" } })}\n`,
       );
       execFileSync("git", ["add", "packages/worker/package.json"], { cwd: root });
-      const crossWorkspaceBaseline = fingerprint();
+      expect(() => fingerprint()).toThrow(
+        /unaudited install lifecycle scripts in packages\/worker\/package\.json/,
+      );
       writeFileSync(
         workerManifest,
-        `${JSON.stringify({ name: "worker", scripts: { build: "node build-v2.mjs" } })}\n`,
+        `${JSON.stringify({ name: "worker", scripts: { build: "node build.mjs" } })}\n`,
       );
-      expect(fingerprint()).not.toBe(crossWorkspaceBaseline);
 
       writeManifest({
         name: "fixture",

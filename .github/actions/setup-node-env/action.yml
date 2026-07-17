@@ -276,8 +276,8 @@ runs:
         workspace_modules="$GITHUB_WORKSPACE/node_modules"
 
         # Compute before mounting node_modules. The helper hashes tracked
-        # manifests canonically. The audited direct root hooks retain only pnpm
-        # install lifecycle scripts; hook drift falls back to hashing all scripts.
+        # manifests canonically. Audited lifecycle hooks retain only install
+        # scripts; unaudited hook drift fails closed instead of risking stale output.
         deps_input_fingerprint="$(node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs" \
           --workspace "$GITHUB_WORKSPACE" --frozen-lockfile "$FROZEN_LOCKFILE")"
 

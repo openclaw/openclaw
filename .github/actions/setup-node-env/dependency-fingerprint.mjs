@@ -17,9 +17,9 @@ const INSTALL_LIFECYCLE_SCRIPTS = new Set([
   "postprepare",
 ]);
 
-// These audited root hooks call the files hashed in INSTALL_INPUT_FILES
-// directly. Any hook drift falls back to hashing every package script, since
-// a lifecycle command could delegate to an otherwise ordinary script name.
+// These audited root hooks call the files hashed in INSTALL_INPUT_FILES.
+// Hook drift fails closed: an arbitrary lifecycle command can read any tracked
+// source, so a semantic dependency fingerprint cannot safely infer its inputs.
 const FILTERED_SCRIPT_CONTRACTS = new Map([
   [
     "package.json",
@@ -72,7 +72,7 @@ function installLifecycleScripts(manifest) {
   );
 }
 
-function canFilterOrdinaryScripts(manifest, relativePath) {
+function hasAuditedLifecycleScripts(manifest, relativePath) {
   const installScripts = installLifecycleScripts(manifest);
   if (Object.keys(installScripts).length === 0) {
     return true;
@@ -83,11 +83,8 @@ function canFilterOrdinaryScripts(manifest, relativePath) {
   );
 }
 
-function normalizeManifest(manifest, filterOrdinaryScripts) {
+function normalizeManifest(manifest) {
   const normalized = { ...manifest };
-  if (!filterOrdinaryScripts) {
-    return canonicalize(normalized);
-  }
   if (
     manifest.scripts &&
     typeof manifest.scripts === "object" &&
@@ -151,18 +148,16 @@ export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     }
     return { manifest, relativePath };
   });
-  // Lifecycle hooks can delegate to ordinary scripts in any workspace package.
-  // One unaudited hook therefore makes every manifest's scripts install inputs.
-  const filterOrdinaryScripts = parsedManifests.every(({ manifest, relativePath }) =>
-    canFilterOrdinaryScripts(manifest, relativePath),
-  );
-  for (const { manifest, relativePath } of parsedManifests) {
-    addRecord(
-      hash,
-      "manifest",
-      relativePath,
-      JSON.stringify(normalizeManifest(manifest, filterOrdinaryScripts)),
+  const unauditedLifecycleManifests = parsedManifests
+    .filter(({ manifest, relativePath }) => !hasAuditedLifecycleScripts(manifest, relativePath))
+    .map(({ relativePath }) => relativePath);
+  if (unauditedLifecycleManifests.length > 0) {
+    throw new Error(
+      `unaudited install lifecycle scripts in ${unauditedLifecycleManifests.join(", ")}; update FILTERED_SCRIPT_CONTRACTS and INSTALL_INPUT_FILES`,
     );
+  }
+  for (const { manifest, relativePath } of parsedManifests) {
+    addRecord(hash, "manifest", relativePath, JSON.stringify(normalizeManifest(manifest)));
   }
 
   for (const relativePath of INSTALL_INPUT_FILES) {
