@@ -49,7 +49,7 @@ actor MacNodeClaudeSessionCatalogWorker {
         operation: @escaping Operation) async throws -> String
     {
         let id = UUID()
-        let result = try await withTaskCancellationHandler {
+        let result: String = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else {
                     continuation.resume(throwing: CancellationError())
