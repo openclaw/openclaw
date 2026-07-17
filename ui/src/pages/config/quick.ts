@@ -9,7 +9,6 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
-import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import type { TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
@@ -40,7 +39,11 @@ import {
 } from "../../components/settings-ui.ts";
 import { t, type Locale } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
+import {
+  assistantAvatarFallbackUrl,
+  resolveAssistantTextAvatar,
+  resolveChatAvatarRenderUrl,
+} from "../../lib/avatar.ts";
 import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -287,12 +290,23 @@ function handleAssistantAvatarPreviewError(event: Event, props: QuickSettingsPro
   if (!(image instanceof HTMLImageElement)) {
     return;
   }
-  const fallbackUrl = controlUiPublicAssetPath("apple-touch-icon.png", props.basePath ?? "");
+  const fallbackUrl = assistantAvatarFallbackUrl(props.basePath ?? "");
   if (image.getAttribute("src") === fallbackUrl) {
     return;
   }
   image.src = fallbackUrl;
   image.classList.add("config-identity__avatar--fallback");
+}
+
+function handleAssistantAvatarPreviewLoad(event: Event, props: QuickSettingsProps) {
+  const image = event.currentTarget;
+  if (!(image instanceof HTMLImageElement)) {
+    return;
+  }
+  // Lit reuses this image across URL rerenders, including classes added after an earlier failure.
+  if (image.getAttribute("src") !== assistantAvatarFallbackUrl(props.basePath ?? "")) {
+    image.classList.remove("config-identity__avatar--fallback");
+  }
 }
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
@@ -306,6 +320,7 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
       src=${assistantAvatarUrl}
       alt=${assistantName}
       @error=${(event: Event) => handleAssistantAvatarPreviewError(event, props)}
+      @load=${(event: Event) => handleAssistantAvatarPreviewLoad(event, props)}
     />`;
   }
   const assistantAvatarText = resolveAssistantTextAvatar(
@@ -322,7 +337,7 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   return html`
     <img
       class="config-identity__avatar config-identity__avatar--fallback"
-      src=${controlUiPublicAssetPath("apple-touch-icon.png", props.basePath ?? "")}
+      src=${assistantAvatarFallbackUrl(props.basePath ?? "")}
       alt=${assistantName}
     />
   `;
