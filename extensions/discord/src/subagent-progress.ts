@@ -524,10 +524,30 @@ async function handleStarted(
     return;
   }
   const account = resolveDiscordAccount({ cfg: api.config, accountId: event.requester?.accountId });
+  const key = `${account.accountId}:${target.channelId}:${target.messageId}`;
   if (!account.enabled || account.config.subagentProgress !== true) {
+    await runQueued(key, async () => {
+      const tracker = trackers.get(key);
+      if (!tracker) {
+        return;
+      }
+      stopTyping(tracker);
+      tracker.reactionsEnabled = false;
+      if (!account.enabled || !tracker.runningEmoji) {
+        return;
+      }
+      const reserved = reservedReactionEmojis(api.config, account.config.ackReaction);
+      if (
+        !reserved.has(tracker.runningEmoji) &&
+        (await clearReaction(api, tracker, tracker.runningEmoji))
+      ) {
+        tracker.runningEmoji = undefined;
+        tracker.runningEmojiConfirmed = false;
+        await persistTrackerRunningEmoji(api, tracker);
+      }
+    });
     return;
   }
-  const key = `${account.accountId}:${target.channelId}:${target.messageId}`;
   await runQueued(key, async () => {
     let tracker = trackers.get(key);
     let restoredCurrentRunWasTerminal = false;
@@ -764,12 +784,18 @@ async function handleEnded(
   cancelTerminalRetryTimer(runId);
   await runQueued(key, async () => {
     const tracker = trackers.get(key);
+    const currentLookup = await lookupProgressRun(api, runId);
+    const currentPersisted =
+      currentLookup.status === "found"
+        ? currentLookup.value
+        : currentLookup.status === "error"
+          ? (persistedHint ?? persisted)
+          : (persistedHint ?? (tracker ? undefined : persisted));
     trackerKeyByRunId.delete(runId);
     const owned =
-      persisted ??
-      (lookup.status === "error" && tracker?.persistedRunIds.has(runId)
+      tracker?.persistedRunIds.has(runId) && currentPersisted?.status !== "cleanup"
         ? persistedProgressRunFromTracker(tracker, "active")
-        : undefined);
+        : currentPersisted;
     const cleanupMarked = owned
       ? owned.status === "cleanup" || (await markProgressRunForCleanup(api, runId, owned))
       : true;

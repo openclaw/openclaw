@@ -135,6 +135,23 @@ describe("Discord subagent progress", () => {
     expect(sendMocks.remove.mock.calls.map((call) => call[2])).toEqual(["1️⃣", "2️⃣", "1️⃣"]);
   });
 
+  it("refreshes reaction ownership inside the source queue for concurrent endings", async () => {
+    await handleDiscordSubagentProgress(api, started("run-one"));
+    await handleDiscordSubagentProgress(api, started("run-two"));
+    sendMocks.remove.mockImplementation(async (_channelId, _messageId, emoji) => ({
+      ok: emoji !== "1️⃣" || sendMocks.remove.mock.calls.length !== 3,
+    }));
+
+    await Promise.all([
+      handleDiscordSubagentProgress(api, { phase: "ended", runId: "run-one", outcome: "ok" }),
+      handleDiscordSubagentProgress(api, { phase: "ended", runId: "run-two", outcome: "ok" }),
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sendMocks.remove).toHaveBeenCalledWith("123", "456", "1️⃣", expect.any(Object));
+    expect(progressStore.values.size).toBe(0);
+  });
+
   it("adds the internal failure marker after clearing the running count", async () => {
     await handleDiscordSubagentProgress(api, started("run-error"));
     await handleDiscordSubagentProgress(api, {
@@ -345,6 +362,23 @@ describe("Discord subagent progress", () => {
     expect(progressStore.values.has("run-false-cleanup")).toBe(false);
   });
 
+  it("preserves cleanup ownership when a retry refresh lookup fails", async () => {
+    await handleDiscordSubagentProgress(api, started("run-refresh-error"));
+    sendMocks.remove.mockResolvedValueOnce({ ok: false });
+
+    await handleDiscordSubagentProgress(api, {
+      phase: "ended",
+      runId: "run-refresh-error",
+      outcome: "ok",
+    });
+    progressStore.store.lookup.mockImplementationOnce(async (key) => progressStore.values.get(key));
+    progressStore.store.lookup.mockRejectedValueOnce(new Error("state store unavailable"));
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sendMocks.remove).toHaveBeenLastCalledWith("123", "456", "1️⃣", expect.any(Object));
+    expect(progressStore.values.has("run-refresh-error")).toBe(false);
+  });
+
   it("bounds permanent terminal reaction retries while retaining ownership", async () => {
     await handleDiscordSubagentProgress(api, started("run-permanent-failure"));
     sendMocks.remove.mockResolvedValue({ ok: false });
@@ -448,6 +482,20 @@ describe("Discord subagent progress", () => {
     expect(sendMocks.remove).toHaveBeenCalledTimes(1);
     expect(sendMocks.react).not.toHaveBeenCalled();
     expect(sendMocks.typing).toHaveBeenCalledTimes(typingCalls);
+  });
+
+  it("tears down live presentation when a disabled start arrives", async () => {
+    await handleDiscordSubagentProgress(api, started("run-active"));
+    api.config.channels!.discord!.subagentProgress = false;
+    sendMocks.remove.mockClear();
+    const typingCalls = sendMocks.typing.mock.calls.length;
+
+    await handleDiscordSubagentProgress(api, started("run-ignored"));
+    await vi.advanceTimersByTimeAsync(8_500);
+
+    expect(sendMocks.remove).toHaveBeenCalledWith("123", "456", "1️⃣", expect.any(Object));
+    expect(sendMocks.typing).toHaveBeenCalledTimes(typingCalls);
+    expect(progressStore.values.has("run-ignored")).toBe(false);
   });
 
   it("retains cleanup ownership while the Discord account is disabled", async () => {
