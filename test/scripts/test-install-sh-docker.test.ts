@@ -286,9 +286,7 @@ function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
 
 function extractInstallSmokeInstallerPipeline(): string {
   const script = readFileSync(SMOKE_RUNNER_PATH, "utf8");
-  const match = script.match(
-    /(run_installer_pipeline\(\) \{[\s\S]*?\n\})\n\nrun_install_smoke/u,
-  );
+  const match = script.match(/(run_installer_pipeline\(\) \{[\s\S]*?\n\})\n\nrun_install_smoke/u);
   if (!match) {
     throw new Error("install smoke installer pipeline helper was not found");
   }
@@ -1136,9 +1134,7 @@ printf 'status=%s\\n' "$status"
 
     expect(runner.match(/^\s*run_installer_pipeline\b/gmu)).toHaveLength(4);
     expect(runner).toContain("bash -o pipefail -c");
-    expect(
-      runner.match(/curl -fsSL --connect-timeout 30 --max-time 300 --/gu),
-    ).toHaveLength(1);
+    expect(runner.match(/curl -fsSL --connect-timeout 30 --max-time 300 --/gu)).toHaveLength(1);
     expect(runner).toContain('run_installer_pipeline "$INSTALL_URL" --no-prompt');
     expect(runner).toContain('--version "$FRESH_TAG_URL"');
     expect(runner).toContain('--version "$FRESHNESS_VERSION"');
