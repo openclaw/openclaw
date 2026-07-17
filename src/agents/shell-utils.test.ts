@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  buildShellCommandInvocation,
   detectRuntimeShell,
   getBashShellConfig,
   getShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
+  type ShellConfig,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
@@ -138,7 +140,11 @@ describe("getShellConfig", () => {
     const binDir = createTempCommandDir(tempDirs, [{ name: "zsh" }]);
     const shellPath = path.join(binDir, "zsh");
 
-    expect(getShellConfig(shellPath)).toEqual({ shell: shellPath, args: ["-f", "-c"] });
+    expect(getShellConfig(shellPath)).toEqual({
+      shell: shellPath,
+      args: ["-f", "-c"],
+      commandTransport: "argv",
+    });
   });
 
   it("rejects a missing explicit custom shell path", () => {
@@ -211,7 +217,52 @@ describe("getBashShellConfig", () => {
     process.env.ProgramFiles = programFiles;
     process.env.PATH = "";
 
-    expect(getBashShellConfig()).toEqual({ shell: bashPath, args: ["-c"] });
+    expect(getBashShellConfig()).toEqual({
+      shell: bashPath,
+      args: ["-c"],
+      commandTransport: "argv",
+    });
+  });
+
+  it.each(["System32", "Sysnative"])(
+    "uses stdin transport for the legacy %s WSL launcher",
+    (systemDirectory) => {
+      const shellPath = `C:\\Windows\\${systemDirectory}\\bash.exe`;
+      vi.spyOn(fs, "existsSync").mockImplementation((candidate) => String(candidate) === shellPath);
+
+      expect(getBashShellConfig(shellPath)).toEqual({
+        shell: shellPath,
+        args: ["-s"],
+        commandTransport: "stdin",
+      });
+    },
+  );
+
+  it("builds a stdin invocation for the legacy WSL launcher", () => {
+    const config: ShellConfig = {
+      shell: "C:\\Windows\\System32\\bash.exe",
+      args: ["-s"],
+      commandTransport: "stdin",
+    };
+
+    expect(buildShellCommandInvocation("printf ready", config)).toEqual({
+      argv: [config.shell, "-s"],
+      input: "printf ready",
+      stdin: "pipe",
+    });
+  });
+
+  it("builds an argv invocation for regular shells", () => {
+    const config: ShellConfig = {
+      shell: "/bin/bash",
+      args: ["-c"],
+      commandTransport: "argv",
+    };
+
+    expect(buildShellCommandInvocation("printf ready", config)).toEqual({
+      argv: [config.shell, "-c", "printf ready"],
+      stdin: "ignore",
+    });
   });
 });
 
