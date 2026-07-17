@@ -207,6 +207,23 @@ describe("ensureConfigReady", () => {
     });
   });
 
+  it.each(["restart-sentinel.json", "restart-sentinel.json.doctor-importing"])(
+    "runs doctor flow when lightweight startup detection finds %s",
+    async (relativePath) => {
+      const root = useTempOpenClawHome();
+      writeStateMarker(root, relativePath);
+
+      await runEnsureConfigReady(["status"]);
+
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+        migrateState: true,
+        migrateLegacyConfig: false,
+        invalidConfigNote: false,
+        observe: false,
+      });
+    },
+  );
+
   it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
     const root = useTempOpenClawHome();
     writePendingTaskSidecarArchiveMarker(root);

@@ -448,7 +448,6 @@ extension OpenClawChatViewModel {
                 // but it is enough to retain the run ID this client already owns.
                 self.pendingToolCallsById = [:]
                 self.updateStreamingAssistantText(nil)
-                self.clearPlan(for: runId)
                 return true
             }
             if let timestamp,
@@ -972,7 +971,8 @@ extension OpenClawChatViewModel {
 
     func clearPendingRuns(
         reason: String?,
-        hapticEvent: OpenClawChatHaptics.Event? = nil)
+        hapticEvent: OpenClawChatHaptics.Event? = nil,
+        preservePlan: Bool = false)
     {
         let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
@@ -981,7 +981,9 @@ extension OpenClawChatViewModel {
         self.pendingRunOwnerTasks.removeAll()
         self.pendingRunOwnerArmIDs.removeAll()
         self.pendingRuns.removeAll()
-        self.clearPlan()
+        if !preservePlan {
+            self.clearPlan()
+        }
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if !runIds.isEmpty, let hapticEvent {
             self.haptics.perform(hapticEvent)

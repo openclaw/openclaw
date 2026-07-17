@@ -5198,6 +5198,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Quick Chat
   - H3: Canvas
   - H2: CLI and SSH alternative
   - H2: Node capabilities
@@ -9313,7 +9314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Implementation notes per phase
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
-  - H3: Phase 3 — browser-first handoff (planned)
+  - H3: Phase 3 — browser-first handoff (implemented; PR pending)
   - H3: Phase 4 — web custodian surface (planned)
   - H3: Phase 5 — hatch and bootstrap (planned)
   - H3: Phase 6 — custodian presence (planned)

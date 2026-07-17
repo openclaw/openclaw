@@ -2766,7 +2766,9 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 20
+    # Release dispatches use the hosted runner and may still be finalizing large
+    # Swift caches after every test passes; keep that post-job work non-blocking.
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && 30 || 20 }}
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -2933,7 +2935,14 @@ jobs:
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
       - name: OpenClawKit tests
-        run: swift test --package-path apps/shared/OpenClawKit --parallel
+        run: |
+          set -euo pipefail
+          openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
+          trap 'rm -rf "$openclawkit_scratch"' EXIT
+          swift test \
+            --package-path apps/shared/OpenClawKit \
+            --scratch-path "$openclawkit_scratch" \
+            --parallel
 
       - name: Swift test
         run: |

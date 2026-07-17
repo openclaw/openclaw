@@ -18769,6 +18769,16 @@
       "translated": "Включить мигания и покачивания значка состояния в режиме ожидания."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Быстрый чат"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Показывать плавающее поле ввода для быстрых сообщений, вызываемое глобальным сочетанием клавиш."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Сочетание клавиш для быстрого чата"
@@ -21104,9 +21114,9 @@
       "translated": "Сообщение для \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "основной сеанс"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Отправить снимок окна"
     },
     {
       "id": "native.apple.136cef9f750d3803",

@@ -18769,6 +18769,16 @@
       "translated": "स्टेटस आइकन पर निष्क्रिय ब्लिंक और विगल सक्षम करें।"
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "त्वरित चैट"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "त्वरित संदेशों के लिए एक फ़्लोटिंग कंपोज़र दिखाएँ, जिसे ग्लोबल शॉर्टकट से खोला जा सकता है।"
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "क्विक चैट शॉर्टकट"
@@ -21104,9 +21114,9 @@
       "translated": "\\(self.model.agentDisplay.name) को संदेश भेजें"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "मुख्य सत्र"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "विंडो का स्क्रीनशॉट भेजें"
     },
     {
       "id": "native.apple.136cef9f750d3803",

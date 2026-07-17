@@ -18769,6 +18769,16 @@
       "translated": "Activar parpadeos y movimientos en reposo en el icono de estado."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Chat rápido"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Muestra un cuadro de redacción flotante para mensajes rápidos, que se abre con un atajo global."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Atajo de Chat rápido"
@@ -21104,9 +21114,9 @@
       "translated": "Enviar mensaje a \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "sesión principal"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Enviar una captura de pantalla de la ventana"
     },
     {
       "id": "native.apple.136cef9f750d3803",

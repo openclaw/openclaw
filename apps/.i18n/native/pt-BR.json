@@ -18769,6 +18769,16 @@
       "translated": "Ativar piscadas e movimentos quando o ícone de status estiver ocioso."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Chat rápido"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Exiba um campo de composição flutuante para mensagens rápidas, acionado por um atalho global."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Atalho do Chat Rápido"
@@ -21104,9 +21114,9 @@
       "translated": "Enviar mensagem para \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "sessão principal"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Enviar uma captura de tela da janela"
     },
     {
       "id": "native.apple.136cef9f750d3803",

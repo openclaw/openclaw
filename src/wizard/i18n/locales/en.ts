@@ -279,6 +279,12 @@ export const en = {
       alreadySetUp: "Everything's already set up here — your AI just passed a fresh check.",
       applyFailedFallback:
         "Something went wrong while applying setup: {detail}\nLet's finish together in chat instead.",
+      browserHandoffContinuing: "Dashboard connected — continuing in your browser.",
+      browserHandoffCopy:
+        "Open this URL in your browser:\n\n{url}\n\nWaiting for the dashboard to connect…",
+      browserHandoffOpening: "Opening the Control UI dashboard and waiting for it to connect…",
+      browserHandoffReady: "Your browser is ready — I'll be in Settings.",
+      browserHandoffTitle: "Continue in your browser",
       codingAgentQuip:
         "I can see {labels} on this machine — good taste. Once your AI works I can bring their memories along too.",
       custodianIntro: "Hi — I'm OpenClaw. I keep this system running. Let's get you set up.",

@@ -18769,6 +18769,16 @@
       "translated": "상태 아이콘의 유휴 상태 깜박임 및 흔들림을 활성화합니다."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "빠른 채팅"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "전역 단축키로 호출하여 빠르게 메시지를 작성할 수 있는 플로팅 작성기를 표시합니다."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "빠른 채팅 단축키"
@@ -21104,9 +21114,9 @@
       "translated": "\\(self.model.agentDisplay.name)에게 메시지 보내기"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "기본 세션"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "창 스크린샷 보내기"
     },
     {
       "id": "native.apple.136cef9f750d3803",

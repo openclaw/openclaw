@@ -712,6 +712,7 @@ async function handleChatHistoryRequest({
   const inFlightRun = resolveInFlightRunSnapshot({
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
+    chatRunPlanSnapshots: context.chatRunPlanSnapshots,
     requestedSessionKey: sessionKey,
     canonicalSessionKey: resolveSessionStoreKey({ cfg, sessionKey }),
     agentId: activeRunAgentId,
