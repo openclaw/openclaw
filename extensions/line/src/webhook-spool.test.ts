@@ -1,9 +1,6 @@
 // Line tests cover durable webhook admission, replay, and dead-lettering.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -11,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import {
   createLineWebhookSpool,
@@ -25,6 +23,7 @@ type SpoolPayload = {
 };
 
 const runtime = (): RuntimeEnv => ({ error: vi.fn(), exit: vi.fn(), log: vi.fn() });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createEvent(eventId: string, userId = "user-1"): webhook.Event {
   return {
@@ -46,7 +45,7 @@ function callback(event: webhook.Event): webhook.CallbackRequest {
 async function withQueue<T>(
   fn: (queue: ReturnType<typeof createChannelIngressQueue<SpoolPayload>>) => Promise<T>,
 ): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-line-spool-"));
+  const stateDir = tempDirs.make("openclaw-line-spool-");
   const queue = createChannelIngressQueue<SpoolPayload>({
     channelId: "line",
     accountId: "default",
@@ -56,7 +55,6 @@ async function withQueue<T>(
     return await fn(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -233,7 +231,7 @@ describe("LINE webhook spool", () => {
       if (duplicate.kind === "failed") {
         expect(duplicate.record.reason).toBe("retry-limit-exceeded");
       }
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -260,7 +258,7 @@ describe("LINE webhook spool", () => {
         reason: "delivery-side-effects-committed",
       });
       expect(deliver).toHaveBeenCalledTimes(1);
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -285,7 +283,7 @@ describe("LINE webhook spool", () => {
       await waitForOutcome(outcomes, "completed");
       expect(complete).toHaveBeenCalledTimes(2);
       expect(deliver).toHaveBeenCalledTimes(1);
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -340,7 +338,7 @@ describe("LINE webhook spool", () => {
       await waitForOutcome(outcomes, "completed");
       expect(deliver).toHaveBeenCalledTimes(1);
       expect((await queue.enqueue("event-adopted", {} as SpoolPayload)).kind).toBe("completed");
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -351,7 +349,7 @@ describe("LINE webhook spool", () => {
         await control.onTurnAdopted();
         adopted();
         await new Promise<void>((_resolve, reject) => {
-          control.abortSignal.addEventListener("abort", () => reject(control.abortSignal.reason), {
+          control.abortSignal.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
           });
         });
@@ -400,7 +398,7 @@ describe("LINE webhook spool", () => {
       await waitForOutcome(outcomes, "dead-lettered");
       expect(fail).toHaveBeenCalledTimes(2);
       expect(deliver).toHaveBeenCalledTimes(1);
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -438,7 +436,7 @@ describe("LINE webhook spool", () => {
         "destination-1",
         expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
       );
-      spool.stop();
+      await spool.stop();
     });
   });
 
@@ -459,13 +457,9 @@ describe("LINE webhook spool", () => {
           control: { abortSignal: AbortSignal },
         ) =>
           await new Promise<void>((_resolve, reject) => {
-            control.abortSignal.addEventListener(
-              "abort",
-              () => reject(control.abortSignal.reason),
-              {
-                once: true,
-              },
-            );
+            control.abortSignal.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
           }),
       );
       const spool = createLineWebhookSpool({
@@ -546,13 +540,9 @@ describe("LINE webhook spool", () => {
           control: { abortSignal: AbortSignal },
         ) =>
           await new Promise<void>((_resolve, reject) => {
-            control.abortSignal.addEventListener(
-              "abort",
-              () => reject(control.abortSignal.reason),
-              {
-                once: true,
-              },
-            );
+            control.abortSignal.addEventListener("abort", () => reject(new Error("aborted")), {
+              once: true,
+            });
           }),
       );
       const spool = createLineWebhookSpool({
@@ -657,7 +647,7 @@ describe("LINE webhook spool", () => {
         "destination-1",
         expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
       );
-      spool.stop();
+      await spool.stop();
     });
   });
 });

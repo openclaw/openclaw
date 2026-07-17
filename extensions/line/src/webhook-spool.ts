@@ -409,10 +409,12 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       }
       let scanned = 0;
       while (
-        running &&
         activeDeliveries.size < LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES &&
         scanned < LINE_WEBHOOK_DRAIN_SCAN_LIMIT
       ) {
+        if (!running) {
+          break;
+        }
         const claim = await queue.claimNext({
           ownerId,
           blockedLaneKeys,
@@ -444,10 +446,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           });
           continue;
         }
-        let delivery: Promise<void>;
         // The scan root may finish immediately after launching work. Reserve a
         // separate admitted continuation for the full delivery lifecycle.
-        delivery = runDetachedWebhookWork(() => finishClaim(claim))
+        const delivery = runDetachedWebhookWork(() => finishClaim(claim))
           .then((outcome) => {
             options.onOutcome?.(outcome);
             if (outcome.kind === "retry-scheduled") {

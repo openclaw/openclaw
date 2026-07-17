@@ -268,7 +268,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(registration.route.pluginId).toBe("line");
     expect(registration.route).not.toHaveProperty("path");
     expect(registration.route).not.toHaveProperty("replaceExisting");
-    monitor.stop();
+    await monitor.stop();
   });
 
   it("stops immediately when signal is already aborted", async () => {
@@ -295,8 +295,8 @@ describe("monitorLineProvider lifecycle", () => {
     });
 
     expect(unregisterHttpMock).not.toHaveBeenCalled();
-    monitor.stop();
-    monitor.stop();
+    await monitor.stop();
+    await monitor.stop();
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
   });
 
@@ -324,7 +324,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(registration.target.accountId).toBe("work");
     expect(registration.route.accountId).toBe("work");
 
-    monitor.stop();
+    await monitor.stop();
   });
 
   it("does not register a webhook when bot startup fails", async () => {
@@ -382,8 +382,8 @@ describe("monitorLineProvider lifecycle", () => {
     expect(firstBot.handleWebhook).not.toHaveBeenCalled();
     expect(secondBot.handleWebhook).toHaveBeenCalledTimes(1);
 
-    firstMonitor.stop();
-    secondMonitor.stop();
+    await firstMonitor.stop();
+    await secondMonitor.stop();
   });
 
   it("dispatches a signed POST to a configured trailing-slash webhook path", async () => {
@@ -416,7 +416,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(res.statusCode).toBe(200);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
 
-    monitor.stop();
+    await monitor.stop();
   });
 
   it("durably admits matched events before acknowledging", async () => {
@@ -446,7 +446,7 @@ describe("monitorLineProvider lifecycle", () => {
     expect(runDetachedWebhookWorkMock).not.toHaveBeenCalled();
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
 
-    monitor.stop();
+    await monitor.stop();
   });
 
   it("waits for shared-path durable admission before acknowledging", async () => {
@@ -491,7 +491,7 @@ describe("monitorLineProvider lifecycle", () => {
     await request;
     expect(res.statusCode).toBe(200);
     expect(res.headersSent).toBe(true);
-    monitor.stop();
+    await monitor.stop();
   });
 
   it("rejects ambiguous shared-path webhook signatures", async () => {
@@ -533,8 +533,8 @@ describe("monitorLineProvider lifecycle", () => {
     expect(firstBot.handleWebhook).not.toHaveBeenCalled();
     expect(secondBot.handleWebhook).not.toHaveBeenCalled();
 
-    firstMonitor.stop();
-    secondMonitor.stop();
+    await firstMonitor.stop();
+    await secondMonitor.stop();
   });
 
   it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
@@ -592,6 +592,6 @@ describe("monitorLineProvider lifecycle", () => {
 
     heldRequests.splice(0).forEach((req) => req.destroy());
     await Promise.allSettled(firstRequests);
-    monitor.stop();
+    await monitor.stop();
   });
 });
