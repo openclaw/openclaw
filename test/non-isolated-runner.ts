@@ -14,8 +14,13 @@ type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
 };
 
+type SerializableMocker = {
+  reset?: () => void;
+  resolveMocks?: () => Promise<void>;
+};
+
 type TestRunnerInternals = {
-  moduleRunner?: { mocker?: { reset?: () => void } };
+  moduleRunner?: { mocker?: SerializableMocker };
   workerState: { evaluatedModules: unknown };
 };
 
@@ -227,9 +232,43 @@ function resetOpenClawGlobalDiagnosticState(): void {
   Reflect.deleteProperty(globalStore, DIAGNOSTIC_EVENTS_STATE);
 }
 
+const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
+
+// Vitest's BareModuleMocker.resolveMocks has no in-flight guard: pendingIds is
+// cleared only after all parallel resolveId RPCs settle, and every registration
+// re-invalidates the mock module node. In a shared isolate:false worker, stray
+// async work from an earlier file (a leaked timer running a dynamic import) can
+// start a second concurrent pass over the same pendingIds while the next file's
+// vi.mock registrations resolve. The slower pass then re-registers and wipes
+// already-evaluated manual mock modules mid-import-chain, so importers before
+// the wipe hold one factory instance and later importers get a fresh one
+// (vi.mocked(...) on the test's binding silently stops reaching prod). Coalesce
+// concurrent callers into one shared pass so registration happens exactly once
+// before any awaiting import proceeds.
+export function serializeMockerResolveMocks(
+  mocker: SerializableMocker & { [SERIALIZED_RESOLVE_MOCKS]?: boolean },
+): void {
+  if (!mocker.resolveMocks || mocker[SERIALIZED_RESOLVE_MOCKS]) {
+    return;
+  }
+  mocker[SERIALIZED_RESOLVE_MOCKS] = true;
+  const original = mocker.resolveMocks.bind(mocker);
+  let inflight: Promise<void> | null = null;
+  mocker.resolveMocks = () => {
+    inflight ??= original().finally(() => {
+      inflight = null;
+    });
+    return inflight;
+  };
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
+    const internals = this as unknown as TestRunnerInternals;
+    if (internals.moduleRunner?.mocker) {
+      serializeMockerResolveMocks(internals.moduleRunner.mocker);
+    }
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
