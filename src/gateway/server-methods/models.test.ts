@@ -415,7 +415,7 @@ describe("models.list", () => {
                 id: "gpt-test",
                 name: "GPT Test",
                 provider: "openai",
-                agentRuntime: { id: "codex", source: "implicit" },
+                agentRuntime: { id: "openclaw", source: "implicit" },
                 available: false,
               },
             ],
@@ -504,20 +504,6 @@ describe("models.list", () => {
             true,
             {
               models: [
-                {
-                  id: "gpt-5.4",
-                  name: "GPT-5.4 Codex",
-                  provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
-                  available: true,
-                },
-                {
-                  id: "gpt-codex-test",
-                  name: "GPT Codex Test",
-                  provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
-                  available: true,
-                },
                 { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
                 { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
               ],
@@ -545,18 +531,18 @@ describe("models.list", () => {
                   available: false,
                 },
                 {
-                  id: "gpt-5.4",
+                  id: "gpt-5.4-codex",
                   name: "GPT-5.4 Codex",
                   provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
-                  available: true,
+                  agentRuntime: { id: "openclaw", source: "implicit" },
+                  available: false,
                 },
                 {
                   id: "gpt-codex-test",
                   name: "GPT Codex Test",
                   provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
-                  available: true,
+                  agentRuntime: { id: "openclaw", source: "implicit" },
+                  available: false,
                 },
                 { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
                 { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
@@ -639,7 +625,7 @@ describe("models.list", () => {
     });
   });
 
-  it("marks legacy OpenAI Codex aliases available through ChatGPT OAuth", async () => {
+  it("keeps legacy OpenAI Codex aliases unavailable without route metadata", async () => {
     await withoutOpenAIEnvAuth(async () => {
       await withOpenClawTestState(
         {
@@ -683,11 +669,11 @@ describe("models.list", () => {
             {
               models: [
                 {
-                  id: "gpt-5.4",
+                  id: "gpt-5.4-codex",
                   name: "GPT-5.4 Codex",
                   provider: "openai",
-                  agentRuntime: { id: "codex", source: "implicit" },
-                  available: true,
+                  agentRuntime: { id: "openclaw", source: "implicit" },
+                  available: false,
                 },
               ],
             },
