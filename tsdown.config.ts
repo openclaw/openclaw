@@ -341,6 +341,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
     "plugins/tools": "src/plugins/tools.ts",
+    "normalization-core/cjk-chars": "packages/normalization-core/src/cjk-chars.ts",
     "normalization-core/string-coerce": "packages/normalization-core/src/string-coerce.ts",
   };
 }
