@@ -221,10 +221,22 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+    const cancel = vi.fn();
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("temporary failure"));
+          },
+          cancel,
+        }),
+        { status: 500 },
+      ),
+    );
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      expect(cancel).toHaveBeenCalledOnce();
     });
   });
 
