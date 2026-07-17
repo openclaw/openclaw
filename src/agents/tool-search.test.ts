@@ -232,6 +232,7 @@ describe("Tool Search", () => {
   it("includes bounded input signatures in compact search hits", async () => {
     const target = pluginTool("fake_update", "Update a fake record");
     const openTarget = pluginTool("fake_open", "Accept constrained open input");
+    const mcpTarget = mcpPluginTool("remote_echo", "Echo through remote MCP");
     target.parameters = {
       type: "object",
       required: ["id"],
@@ -268,6 +269,7 @@ describe("Tool Search", () => {
         fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
         target,
         openTarget,
+        mcpTarget,
       ],
       config,
       sessionId: "session-input-hint",
@@ -294,6 +296,12 @@ describe("Tool Search", () => {
     expect(openResult).toContainEqual(
       expect.objectContaining({ name: "fake_open", input: "{ ... }" }),
     );
+
+    const mcpResult = resultDetails(
+      await search.execute("call-search-mcp", { query: "remote echo" }),
+    );
+    expect(mcpResult).toContainEqual(expect.objectContaining({ name: "remote_echo" }));
+    expect(mcpResult).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
   });
 
   it("compacts plugin tools behind the code surface and can search, describe, and call them", async () => {

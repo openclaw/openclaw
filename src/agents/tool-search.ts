@@ -1270,7 +1270,9 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    input: compactInputHint(entry.parameters),
+    // MCP schemas are server-provided, untrusted metadata. Keep them deferred
+    // until the model explicitly describes or calls the selected tool.
+    ...(entry.source === "mcp" ? {} : { input: compactInputHint(entry.parameters) }),
   };
 }
 
