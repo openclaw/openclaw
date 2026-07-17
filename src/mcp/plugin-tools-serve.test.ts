@@ -419,6 +419,195 @@ describe("plugin tools MCP server", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("rejects callTool with arguments that fail type constraints", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "math_add",
+      description: "Add two numbers",
+      parameters: {
+        type: "object",
+        properties: {
+          a: { type: "integer" },
+          b: { type: "number" },
+        },
+        required: ["a", "b"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "math_add",
+      arguments: { a: "not-a-number", b: true },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("Invalid arguments"),
+      },
+    ]);
+    expect(result.content[0].text).toContain("a: must be integer");
+    expect(result.content[0].text).toContain("b: must be number");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects callTool with unexpected properties when additionalProperties is false", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "greet",
+      description: "Greet someone",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+        },
+        required: ["name"],
+        additionalProperties: false,
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "greet",
+      arguments: { name: "Alice", extra_field: "should not be here" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("additional properties"),
+      },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("passes callTool with valid arguments through to execution", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: "done" });
+    const tool = {
+      name: "echo",
+      description: "Echo a value",
+      parameters: {
+        type: "object",
+        properties: {
+          msg: { type: "string" },
+          count: { type: "integer" },
+        },
+        required: ["msg"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "echo",
+      arguments: { msg: "hello", count: 3 },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects callTool with nested object schema violations", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "set_config",
+      description: "Set a nested config value",
+      parameters: {
+        type: "object",
+        properties: {
+          config: {
+            type: "object",
+            properties: {
+              timeout: { type: "integer", minimum: 1 },
+            },
+            required: ["timeout"],
+          },
+        },
+        required: ["config"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "set_config",
+      arguments: { config: { timeout: -1 } },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("config/timeout"),
+      },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects callTool with enum violations", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "pick_color",
+      description: "Pick a color",
+      parameters: {
+        type: "object",
+        properties: {
+          color: { type: "string", enum: ["red", "green", "blue"] },
+        },
+        required: ["color"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "pick_color",
+      arguments: { color: "purple" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: expect.stringContaining("allowed values"),
+      },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("reports all validation errors when multiple constraints are violated", async () => {
+    const execute = vi.fn();
+    const tool = {
+      name: "complex_tool",
+      description: "Tool with multiple constraints",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          age: { type: "integer", minimum: 0 },
+        },
+        required: ["name", "age"],
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "complex_tool",
+      arguments: { name: 42, age: -1 },
+    });
+
+    expect(result.isError).toBe(true);
+    const text = result.content[0].text;
+    expect(text).toContain("name: must be string");
+    expect(text).toContain("age: must be >= 0");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("reports approval requirements without opening plugin approvals on the MCP bridge", async () => {
     let hookCalls = 0;
     const onResolution = vi.fn();

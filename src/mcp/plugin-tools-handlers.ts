@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Compile } from "typebox/compile";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -8,51 +9,11 @@ import {
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
+
 type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
 };
-
-/** Lightweight JSON Schema runtime for tool parameter validation. */
-type JsonSchema = Record<string, unknown>;
-
-/**
- * Validates a tool-call arguments object against its declared JSON Schema.
- *
- * TypeBox's Compile.Check is a no-op in the custom 1.3.3 fork, so this step
- * provides the required-property and additional-properties checks that MCP
- * clients expect from a declared inputSchema.
- */
-function validateToolArgs(args: unknown, schema: JsonSchema): string | null {
-  if (typeof args !== "object" || args === null || Array.isArray(args)) {
-    return "must be a JSON object";
-  }
-  const argsRecord = args as Record<string, unknown>;
-  const properties = schema.properties as Record<string, JsonSchema> | undefined;
-  const required = schema.required as string[] | undefined;
-  const additionalProperties = schema.additionalProperties;
-
-  // Each declared required property must be present in args.
-  if (Array.isArray(required)) {
-    for (const key of required) {
-      if (!(key in argsRecord)) {
-        return `missing required property "${key}"`;
-      }
-    }
-  }
-
-  // When additionalProperties is false, every key in args must appear in
-  // the declared properties list.
-  if (additionalProperties === false && properties) {
-    for (const key of Object.keys(argsRecord)) {
-      if (!(key in properties)) {
-        return `unexpected property "${key}"`;
-      }
-    }
-  }
-
-  return null;
-}
 
 function toMcpContentBlock(block: unknown): unknown {
   if (!isRecord(block)) {
@@ -105,15 +66,12 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
     toolMap.set(tool.name, tool);
   }
 
-  // Pre-resolve JSON Schema for each tool so callTool can validate arguments
-  // against the same inputSchema it advertises in listTools.
-  const schemaForTool = new Map<string, JsonSchema>();
+  // Pre-compile a TypeBox Validator for each tool so callTool can check
+  // arguments against the same inputSchema it advertises in listTools.
+  const validatorForTool = new Map<string, ReturnType<typeof Compile>>();
   for (const tool of wrappedTools) {
-    const resolved = resolveJsonSchemaForTool(tool);
-    const properties = resolved.properties as Record<string, unknown> | undefined;
-    if (Object.keys(properties ?? {}).length > 0 || Array.isArray(resolved.required)) {
-      schemaForTool.set(tool.name, resolved);
-    }
+    const schema = resolveJsonSchemaForTool(tool);
+    validatorForTool.set(tool.name, Compile(schema));
   }
 
   return {
@@ -132,15 +90,21 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
           isError: true,
         };
       }
-      const schema = schemaForTool.get(params.name);
-      if (schema) {
-        const validationError = validateToolArgs(params.arguments ?? {}, schema);
-        if (validationError) {
+      const validator = validatorForTool.get(params.name);
+      if (validator) {
+        const args = params.arguments ?? {};
+        if (!validator.Check(args)) {
+          const details = [...validator.Errors(args)]
+            .map((e) => {
+              const path = e.instancePath.replace(/^\//, "");
+              return path ? `${path}: ${e.message}` : e.message;
+            })
+            .join("; ");
           return {
             content: [
               {
                 type: "text",
-                text: `Invalid arguments for tool "${params.name}": ${validationError}`,
+                text: `Invalid arguments for tool "${params.name}": ${details}`,
               },
             ],
             isError: true,
