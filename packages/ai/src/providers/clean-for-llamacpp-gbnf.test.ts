@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { cleanSchemaForLlamacppGbnf, isLlamacppGbnfToolSchemaProvider } from "./clean-for-llamacpp-gbnf.js";
+import {
+  cleanSchemaForLlamacppGbnf,
+  isLlamacppGbnfToolSchemaProvider,
+} from "./clean-for-llamacpp-gbnf.js";
 
 describe("cleanSchemaForLlamacppGbnf", () => {
   it("removes pattern and oversized maxLength while preserving other bounds", () => {
