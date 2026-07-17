@@ -6,6 +6,7 @@ import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
+import { getMSTeamsIngressMockState } from "./monitor-ingress-mock.test-support.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
 type FakeServer = EventEmitter & {
@@ -297,6 +298,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
+    getMSTeamsIngressMockState().instances.length = 0;
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
     ssoTokenStore.remove.mockClear();
@@ -761,7 +763,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("acks non-poll card actions before agent dispatch settles", async () => {
+  it("acks non-poll card actions after durable admission, before agent dispatch settles", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -790,24 +792,56 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     if (!registeredHandler) {
       throw new Error("expected registered Teams handler");
     }
-    let releaseDispatch: (() => void) | undefined;
-    const dispatchWork = new Promise<void>((resolve) => {
-      releaseDispatch = resolve;
-    });
+    const dispatchWork = new Promise<void>(() => {});
     const run = vi.spyOn(registeredHandler, "run").mockReturnValueOnce(dispatchWork);
 
-    const response = await cardActionHandler({
+    const ingress = getMSTeamsIngressMockState().instances[0];
+    if (!ingress) {
+      throw new Error("expected Teams ingress");
+    }
+    let releaseAppend: (() => void) | undefined;
+    const appendWork = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    ingress.accept.mockImplementationOnce(async (activity: unknown, context?: unknown) => {
+      await appendWork;
+      void ingress.options
+        .dispatch(
+          activity,
+          {
+            abortSignal: new AbortController().signal,
+            onAdopted: vi.fn(),
+            onDeferred: vi.fn(),
+            onAdoptionFinalizing: vi.fn(),
+            onAbandoned: vi.fn(),
+          },
+          context,
+        )
+        .catch(() => undefined);
+    });
+
+    const responseWork = cardActionHandler({
       activity: {
+        id: "activity-card-action",
         type: "invoke",
         name: "adaptiveCard/action",
+        conversation: { id: "conversation-card-action", conversationType: "personal" },
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
 
+    let responseSettled = false;
+    void responseWork.then(() => {
+      responseSettled = true;
+    });
+    await Promise.resolve();
+    expect(responseSettled).toBe(false);
+
+    releaseAppend?.();
+    const response = await responseWork;
+
     expect(response).toMatchObject({ statusCode: 200, value: "OK" });
     expect(run).toHaveBeenCalledTimes(1);
-    releaseDispatch?.();
-    await dispatchWork;
 
     abort.abort();
     await task;
