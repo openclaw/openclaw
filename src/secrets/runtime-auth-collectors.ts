@@ -1,9 +1,11 @@
 /** Collects auth-profile and OAuth secret refs for runtime preparation. */
+import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
-  pushAssignment,
+  collectRuntimeSecretInputAssignment,
   pushWarning,
   type ResolverContext,
   type SecretDefaults,
@@ -25,6 +27,7 @@ type TokenCredentialLike = AuthProfileCredential & {
 function collectApiKeyProfileAssignment(params: {
   profile: ApiKeyCredentialLike;
   profileId: string;
+  store: AuthProfileStore;
   agentDir: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
@@ -53,14 +56,26 @@ function collectApiKeyProfileAssignment(params: {
       message: `auth-profiles ${params.profileId}: keyRef is set; runtime will ignore plaintext key.`,
     });
   }
-  pushAssignment(params.context, {
-    ref: resolvedKeyRef,
+  const eligibility = resolveAuthProfileEligibility({
+    cfg: params.context.sourceConfig,
+    store: params.store,
+    provider: params.profile.provider,
+    profileId: params.profileId,
+  });
+  collectRuntimeSecretInputAssignment({
+    value: resolvedKeyRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
     expected: "string",
-    ownerKind: "unknown",
-    ownerId: `${params.agentDir}.auth-profiles.${params.profileId}`,
-    requiredForGateway: false,
-    disposition: "isolate",
+    defaults: params.defaults,
+    context: params.context,
+    active: eligibility.eligible,
+    inactiveReason: `auth profile is not eligible (${eligibility.reasonCode}); skipping resolution until it becomes eligible.`,
+    owner: {
+      ownerKind: "account",
+      ownerId: resolveAuthProfileSecretOwnerId(params),
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       params.profile.key = String(value);
     },
@@ -70,6 +85,7 @@ function collectApiKeyProfileAssignment(params: {
 function collectTokenProfileAssignment(params: {
   profile: TokenCredentialLike;
   profileId: string;
+  store: AuthProfileStore;
   agentDir: string;
   defaults: SecretDefaults | undefined;
   context: ResolverContext;
@@ -98,14 +114,26 @@ function collectTokenProfileAssignment(params: {
       message: `auth-profiles ${params.profileId}: tokenRef is set; runtime will ignore plaintext token.`,
     });
   }
-  pushAssignment(params.context, {
-    ref: resolvedTokenRef,
+  const eligibility = resolveAuthProfileEligibility({
+    cfg: params.context.sourceConfig,
+    store: params.store,
+    provider: params.profile.provider,
+    profileId: params.profileId,
+  });
+  collectRuntimeSecretInputAssignment({
+    value: resolvedTokenRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
     expected: "string",
-    ownerKind: "unknown",
-    ownerId: `${params.agentDir}.auth-profiles.${params.profileId}`,
-    requiredForGateway: false,
-    disposition: "isolate",
+    defaults: params.defaults,
+    context: params.context,
+    active: eligibility.eligible,
+    inactiveReason: `auth profile is not eligible (${eligibility.reasonCode}); skipping resolution until it becomes eligible.`,
+    owner: {
+      ownerKind: "account",
+      ownerId: resolveAuthProfileSecretOwnerId(params),
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       params.profile.token = String(value);
     },
@@ -130,6 +158,7 @@ export function collectAuthStoreAssignments(params: {
       collectApiKeyProfileAssignment({
         profile: profile as ApiKeyCredentialLike,
         profileId,
+        store: params.store,
         agentDir: params.agentDir,
         defaults,
         context: params.context,
@@ -140,6 +169,7 @@ export function collectAuthStoreAssignments(params: {
       collectTokenProfileAssignment({
         profile: profile as TokenCredentialLike,
         profileId,
+        store: params.store,
         agentDir: params.agentDir,
         defaults,
         context: params.context,

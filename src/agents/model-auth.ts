@@ -648,6 +648,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       },
     };
   } catch (err) {
+    if (err instanceof SecretSurfaceUnavailableError) {
+      throw err;
+    }
     return { kind: "profile-unresolved", profileId: reference.profileId, error: err };
   }
 }
@@ -1552,6 +1555,9 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (err instanceof SecretSurfaceUnavailableError) {
+        throw err;
+      }
       if (
         !refreshFailure &&
         err instanceof OAuthRefreshFailureError &&

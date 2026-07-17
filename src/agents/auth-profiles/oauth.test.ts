@@ -3,7 +3,7 @@
  * Covers token/api-key/OAuth profile compatibility, SecretRefs, and provider
  * runtime formatting behavior.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
@@ -26,9 +26,13 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./runtime-snapshots.js").clearRuntimeAuthProfileStoreSnapshots;
+let setRuntimeAuthProfileStoreSnapshot: typeof import("./runtime-snapshots.js").setRuntimeAuthProfileStoreSnapshot;
 
 async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+  ({ clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
+    await import("./runtime-snapshots.js"));
 }
 
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
@@ -112,7 +116,48 @@ async function expectResolvedApiKey(params: {
 
 beforeAll(loadOAuthModuleForTest);
 
+beforeEach(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  // SecretRef cases consume the materialized store published by runtime activation.
+  setRuntimeAuthProfileStoreSnapshot({
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: ["sk", "openai", "ref"].join("-"),
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      "openai:inline-env": {
+        type: "api_key",
+        provider: "openai",
+        key: ["sk", "openai", "inline"].join("-"),
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      "github-copilot:default": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "ref", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+      "github-copilot:no-inline-token": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "ref", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+      "github-copilot:inline-env": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "inline", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+    },
+  });
+});
+
 afterAll(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.resetModules();
@@ -492,5 +537,28 @@ describe("resolveApiKeyForProfile secret refs", () => {
         process.env.GITHUB_TOKEN = previous;
       }
     }
+  });
+
+  it("does not materialize an explicit ref at request time", async () => {
+    const profileId = "openai:unpublished";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "api_key"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "UNPUBLISHED_OPENAI_KEY" },
+            },
+          },
+        },
+        profileId,
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "account",
+    });
   });
 });
