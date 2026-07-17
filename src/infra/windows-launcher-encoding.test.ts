@@ -19,10 +19,12 @@ vi.mock("./windows-encoding.js", async () => {
 
 const CJK_SCRIPT_PATH = "C:\\Users\\苗振\\.openclaw\\gateway.cmd";
 const REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
-const GBK_MARKER = "@rem openclaw-launcher-encoding=gbk\r\n";
-const EUC_KR_MARKER = "@rem openclaw-launcher-encoding=euc-kr\r\n";
-const CP857_MARKER = "@rem openclaw-launcher-encoding=cp857\r\n";
-const CP850_MARKER = "@rem openclaw-launcher-encoding=cp850\r\n";
+const marker = (codePage: number, encoding: string) =>
+  `@chcp ${codePage} >nul\r\n@rem openclaw-launcher-encoding=${encoding}\r\n`;
+const GBK_MARKER = marker(936, "gbk");
+const EUC_KR_MARKER = marker(949, "euc-kr");
+const CP857_MARKER = marker(857, "cp857");
+const CP850_MARKER = marker(850, "cp850");
 
 beforeEach(() => {
   resolveWindowsOemEncodingMock.mockReset();
@@ -54,13 +56,16 @@ describe("encodeWindowsLauncherScript", () => {
     expect(resolveWindowsOemEncodingMock).not.toHaveBeenCalled();
   });
 
-  it("encodes non-ASCII cmd scripts with a marker line plus CJK code page bytes", () => {
+  it("encodes non-ASCII cmd scripts with a code-page preamble and marker", () => {
     resolveWindowsOemEncodingMock.mockReturnValue("gbk");
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振\\.openclaw"\r\nnode gateway.js\r\n`;
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(false);
     expect(encoded.equals(iconv.encode(GBK_MARKER + content, "gbk"))).toBe(true);
+    expect(encoded.subarray(0, "@chcp 936 >nul\r\n".length).toString("ascii")).toBe(
+      "@chcp 936 >nul\r\n",
+    );
     expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
@@ -169,6 +174,13 @@ describe("decodeWindowsLauncherScript", () => {
   it("decodes marked code-page scripts with the recorded encoding", () => {
     const content = "@echo off\r\nrem 你好\r\n";
     const buffer = iconv.encode(GBK_MARKER + content, "gbk");
+
+    expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
+  });
+
+  it("decodes pre-preamble marked code-page scripts", () => {
+    const content = "@echo off\r\nrem 你好\r\n";
+    const buffer = iconv.encode(`@rem openclaw-launcher-encoding=gbk\r\n${content}`, "gbk");
 
     expect(decodeWindowsLauncherScript({ buffer })).toBe(content);
   });

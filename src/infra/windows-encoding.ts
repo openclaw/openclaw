@@ -23,9 +23,8 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
 };
 const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
 
-// Fresh consoles (Task Scheduler, Startup, double-click) initialize their code
-// page from the boot-time registry OEMCP; `chcp` only reports the mutable
-// per-session value, so generated launcher scripts must encode against this.
+// Task Scheduler launchers use the system OEM page. Interactive consoles can
+// override it, so generated scripts also declare this page before their body.
 const WINDOWS_NLS_CODEPAGE_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage";
 
 const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
@@ -57,6 +56,12 @@ const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   866: "cp866",
   869: "cp869",
 };
+const WINDOWS_OEM_ENCODING_CODEPAGE_MAP = new Map(
+  Object.entries(WINDOWS_OEM_CODEPAGE_ENCODING_MAP).map(([codePage, encoding]) => [
+    encoding,
+    Number.parseInt(codePage, 10),
+  ]),
+);
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
@@ -147,6 +152,11 @@ export function resolveWindowsOemEncoding(): string | null {
   cachedWindowsOemEncoding =
     codePage !== null ? (WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
   return cachedWindowsOemEncoding;
+}
+
+/** Returns the numeric Windows OEM page for one resolver encoding label. */
+export function resolveWindowsOemCodePageForEncoding(encoding: string): number | null {
+  return WINDOWS_OEM_ENCODING_CODEPAGE_MAP.get(encoding) ?? null;
 }
 
 /** Decodes one complete subprocess output buffer, preferring valid UTF-8 before legacy code pages. */

@@ -292,7 +292,11 @@ describe("relaunchGatewayScheduledTask", () => {
       "[...createdScriptPaths][0] test invariant",
     );
     const raw = fs.readFileSync(scriptPath);
-    expect(raw.toString("latin1").startsWith("@rem openclaw-launcher-encoding=gbk\r\n")).toBe(true);
+    expect(
+      raw
+        .toString("latin1")
+        .startsWith("@chcp 936 >nul\r\n@rem openclaw-launcher-encoding=gbk\r\n"),
+    ).toBe(true);
     // The old raw-UTF-8 writer would have kept the task name readable here.
     expect(raw.toString("utf8")).not.toContain("隆");
     const script = decodeWindowsLauncherScript({ buffer: raw });
