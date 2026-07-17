@@ -135,16 +135,38 @@ describe("slack web client config", () => {
     expect(options.retryConfig).toBe(customRetry);
   });
 
-  it("applies the default web client timeout when none is provided", () => {
+  it("keeps shared client options timeout-free (Bolt safety)", () => {
     const options = resolveSlackWebClientOptions();
 
-    expect(options.timeout).toBe(30_000);
+    expect(options).not.toHaveProperty("timeout");
   });
 
-  it("respects explicit web client timeout overrides", () => {
-    const options = resolveSlackWebClientOptions({ timeout: 5000 });
+  it("applies the default one-shot web client timeout when none is provided", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackWebClient("xoxb-test");
 
-    expect(options.timeout).toBe(5000);
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-test",
+        expect.objectContaining({ timeout: 30_000 }),
+      );
+    } finally {
+      restoreProxyEnvForTest();
+    }
+  });
+
+  it("respects explicit one-shot web client timeout overrides", () => {
+    clearProxyEnvForTest();
+    try {
+      createSlackWebClient("xoxb-test", { timeout: 5000 });
+
+      expect(WebClient).toHaveBeenCalledWith(
+        "xoxb-test",
+        expect.objectContaining({ timeout: 5000 }),
+      );
+    } finally {
+      restoreProxyEnvForTest();
+    }
   });
 
   it("applies the default write client timeout when none is provided", () => {
