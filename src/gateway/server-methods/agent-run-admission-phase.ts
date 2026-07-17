@@ -340,6 +340,7 @@ export async function prepareAgentRunDispatch(params: {
           `Session "${recoverySessionKey}" restart recovery reservation is stale; recovery was skipped.`,
         );
       }
+      const admittedRecoverySessionKey = recoveryAdmission.sessionKey ?? recoverySessionKey;
       let restored = false;
       restoreAdmittedRestartRecoveryInterrupted = async () => {
         if (restored) {
@@ -354,7 +355,7 @@ export async function prepareAgentRunDispatch(params: {
             sessionId: params.request.expectedExistingSessionId ?? params.getAdmittedSessionId(),
           },
           requireWriteSuccess: true,
-          target: { sessionKey: recoverySessionKey, storePath: lifecycleStorePath },
+          target: { sessionKey: admittedRecoverySessionKey, storePath: lifecycleStorePath },
         });
         restored = true;
         const expectedSessionId =

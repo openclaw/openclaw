@@ -52,6 +52,7 @@ import {
   resolveInternalSessionEffectsTarget,
 } from "./internal-session-effects.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery-store.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { createAgentRunRestartAbortError } from "./run-termination.js";
 
@@ -557,6 +558,9 @@ export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  recovery?: {
+    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  },
 ) {
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
@@ -573,6 +577,7 @@ export async function agentCommandFromIngress(
         senderIsOwner: opts.senderIsOwner === true,
       },
       prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
+      restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
       run: async (prepared) => await agentCommandInternal(prepared, prepared.opts, runtime, deps),
     });
 

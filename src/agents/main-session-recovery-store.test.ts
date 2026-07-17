@@ -226,6 +226,19 @@ describe("main session recovery store", () => {
       mainRestartRecovery: { chargedAttempts: 1 },
     });
     expect(readStore()[legacyKey]?.mainRestartRecovery?.reservation).toBeUndefined();
+
+    const restored = await commitMainSessionRecovery({
+      command: {
+        kind: "mark_admitted_recovery_interrupted",
+        lifecycleGeneration,
+        now: 400,
+        runId: "recovery-1",
+        sessionId: "session-1",
+      },
+      target: { sessionKey: admitted.sessionKey!, storePath },
+    });
+    expect(restored.transition).toEqual({ kind: "applied" });
+    expect(readStore()[legacyKey]).toMatchObject({ abortedLastRun: true });
   });
 
   it("rejects an observation after the session is replaced", async () => {

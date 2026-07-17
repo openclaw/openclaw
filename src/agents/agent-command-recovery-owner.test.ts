@@ -183,6 +183,49 @@ describe("agent command restart recovery ownership", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("restores a Gateway-admitted recovery when command preparation fails", async () => {
+    const target = createTarget();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 200,
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    });
+    const restoreAdmittedRecovery = vi.fn(async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+      entry.abortedLastRun = true;
+      await write(target, entry);
+      return { sessionId: target.sessionId, sessionKey, storePath: target.storePath };
+    });
+    const run = vi.fn();
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "claim",
+        opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
+        prepare: async () => {
+          throw new Error("model preparation failed");
+        },
+        restoreAdmittedRecovery,
+        run,
+      }),
+    ).rejects.toThrow("model preparation failed");
+
+    expect(restoreAdmittedRecovery).toHaveBeenCalledOnce();
+    expect(run).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath: target.storePath })).toMatchObject({
+      abortedLastRun: true,
+    });
+  });
+
   it("rejects ordinary work while an admitted recovery is still running", async () => {
     const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

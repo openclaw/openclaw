@@ -412,6 +412,7 @@ export function startAgentRunExecution(params: {
         respond: params.respond,
         context: params.context,
         taskTrackingMode: prepared.dispatchTaskTrackingMode,
+        restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
     } catch (err) {

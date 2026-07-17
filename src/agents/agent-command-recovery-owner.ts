@@ -9,6 +9,7 @@ import {
   releaseMainSessionRecoveryOwner,
   validateMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
+  type MainSessionRecoveryPendingTarget,
 } from "./main-session-recovery-store.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -101,6 +102,7 @@ export async function runWithAgentCommandRecoveryOwner<
   mode: "claim" | "reject_uncoordinated";
   opts: AgentCommandOpts;
   prepare: (opts: AgentCommandOpts) => Promise<TPrepared>;
+  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   run: (prepared: TPrepared) => Promise<TResult>;
 }): Promise<TResult> {
   // Gateway may preclaim before dispatch, so every preparation outcome must release ownership.
@@ -108,7 +110,14 @@ export async function runWithAgentCommandRecoveryOwner<
   let pendingRecovery: Awaited<ReturnType<typeof releaseMainSessionRecoveryOwner>> = undefined;
   let prepared: TPrepared | undefined;
   try {
-    prepared = await params.prepare(params.opts);
+    try {
+      prepared = await params.prepare(params.opts);
+    } catch (error) {
+      // Gateway admission consumes the durable reservation before command
+      // preparation. Restore it when preparation fails before a run exists.
+      pendingRecovery = await params.restoreAdmittedRecovery?.();
+      throw error;
+    }
     lease = await claimAgentCommandRecoveryOwner({ ...params, prepared });
     return await params.run(prepared);
   } finally {
