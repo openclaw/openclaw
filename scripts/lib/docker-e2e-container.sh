@@ -3,7 +3,13 @@
 # Shared helpers for Docker E2E scripts that keep a named container running
 # while polling readiness from the host.
 
-DOCKER_E2E_CONTAINER_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+DOCKER_E2E_CONTAINER_LIB_DIR="${BASH_SOURCE[0]}"
+if [[ "$DOCKER_E2E_CONTAINER_LIB_DIR" == */* ]]; then
+  DOCKER_E2E_CONTAINER_LIB_DIR="${DOCKER_E2E_CONTAINER_LIB_DIR%/*}"
+else
+  DOCKER_E2E_CONTAINER_LIB_DIR=.
+fi
+DOCKER_E2E_CONTAINER_LIB_DIR="$(cd "$DOCKER_E2E_CONTAINER_LIB_DIR" && pwd)"
 source "$DOCKER_E2E_CONTAINER_LIB_DIR/docker-e2e-resource-diagnostics.sh"
 
 docker_e2e_timeout_bin() {

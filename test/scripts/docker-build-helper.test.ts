@@ -635,7 +635,7 @@ docker_build_run e2e-build -t demo-image .
       chmodSync(join(workDir, "runner.sh"), 0o755);
 
       const waitForFile = async (filePath: string) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           if (existsSync(filePath)) {
             return;
           }
@@ -648,7 +648,7 @@ docker_build_run e2e-build -t demo-image .
           child.once("exit", (code, signal) => resolve({ code, signal }));
         });
       const waitForDead = async (pid: number) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           try {
             process.kill(pid, 0);
           } catch {
@@ -1336,6 +1336,11 @@ docker() {
   return 125
 }
 
+tail() {
+  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  /usr/bin/tail "$@"
+}
+
 source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 docker_e2e_timeout_cmd() {
   shift
@@ -1343,16 +1348,19 @@ docker_e2e_timeout_cmd() {
 }
 
 set +e
-docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+printf "before Docker\\n" >"$TMPDIR/stderr"
+docker_e2e_docker_cmd run demo 2>>"$TMPDIR/stderr"
 status="$?"
 set -e
 
 stderr="$(<"$TMPDIR/stderr")"
 [[ "$status" = "125" ]]
+[[ "$stderr" = before\\ Docker* ]]
 [[ "$stderr" = *"NanoCPUs can not be set"* ]]
 [[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
 [[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
 [[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

@@ -49,6 +49,18 @@ docker_e2e_tee_bin() {
   return 1
 }
 
+docker_e2e_tail_bin() {
+  if command -v tail >/dev/null 2>&1; then
+    command -v tail
+    return
+  fi
+  if [ -x /usr/bin/tail ]; then
+    printf '%s\n' /usr/bin/tail
+    return
+  fi
+  return 1
+}
+
 docker_e2e_remove_diagnostic_file() {
   if command -v rm >/dev/null 2>&1; then
     rm -f "$@"
@@ -84,22 +96,33 @@ docker_e2e_docker_run_with_resource_diagnostics() {
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
     return
   fi
-  local stderr_fifo="${stderr_file}.pipe"
+  local tail_bin=""
+  if ! tail_bin="$(docker_e2e_tail_bin)"; then
+    docker_e2e_remove_diagnostic_file "$stderr_file"
+    docker_e2e_timeout_cmd \
+      "$timeout_value" \
+      docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+    return
+  fi
+  local stderr_fifo="${stderr_file}.stderr.pipe"
+  local capture_fifo="${stderr_file}.capture.pipe"
   local mkfifo_bin=""
   if command -v mkfifo >/dev/null 2>&1; then
     mkfifo_bin="$(command -v mkfifo)"
   elif [ -x /usr/bin/mkfifo ]; then
     mkfifo_bin=/usr/bin/mkfifo
   fi
-  if [ -z "$mkfifo_bin" ] || ! "$mkfifo_bin" "$stderr_fifo"; then
-    docker_e2e_remove_diagnostic_file "$stderr_file" "$stderr_fifo"
+  if [ -z "$mkfifo_bin" ] || ! "$mkfifo_bin" "$stderr_fifo" "$capture_fifo"; then
+    docker_e2e_remove_diagnostic_file "$stderr_file" "$stderr_fifo" "$capture_fifo"
     docker_e2e_timeout_cmd \
       "$timeout_value" \
       docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
     return
   fi
 
-  "$tee_bin" "$stderr_file" <"$stderr_fifo" >&2 &
+  "$tail_bin" -c 65536 <"$capture_fifo" >"$stderr_file" &
+  local tail_pid="$!"
+  "$tee_bin" "$capture_fifo" <"$stderr_fifo" >&2 &
   local tee_pid="$!"
   local run_status=0
   if docker_e2e_timeout_cmd \
@@ -111,10 +134,11 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     run_status="$?"
   fi
   wait "$tee_pid" || true
+  wait "$tail_pid" || true
 
   if docker_e2e_resource_limit_error_file "$run_status" "$stderr_file"; then
     docker_e2e_print_resource_limit_error
   fi
-  docker_e2e_remove_diagnostic_file "$stderr_file" "$stderr_fifo"
+  docker_e2e_remove_diagnostic_file "$stderr_file" "$stderr_fifo" "$capture_fifo"
   return "$run_status"
 }
