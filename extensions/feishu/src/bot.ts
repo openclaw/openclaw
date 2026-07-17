@@ -79,6 +79,7 @@ import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
+import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import {
@@ -286,8 +287,6 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
-  /** Override for policy/error replies from synthetic DMs that lack a real chat id. */
-  directPreDispatchTarget?: string;
 }): Promise<void> {
   const {
     cfg,
@@ -300,7 +299,6 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
-    directPreDispatchTarget: directPreDispatchTargetOverride,
   } = params;
 
   // Resolve account with merged config
@@ -328,7 +326,7 @@ export async function handleFeishuMessage(params: {
   const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const directPreDispatchTarget = isDirect
-    ? normalizeOptionalString(directPreDispatchTargetOverride)
+    ? getFeishuSyntheticDirectPreDispatchTarget(event)
     : undefined;
   const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
   const localBotOpenId = botOpenId?.trim();

@@ -15,6 +15,7 @@ import { handleFeishuMessage } from "./bot.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
+import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 type ConfiguredBindingRoute = ReturnType<typeof resolveConfiguredBindingRoute>;
 type BoundConversation = ReturnType<
@@ -499,13 +500,15 @@ async function dispatchMessage(params: {
         } as ClawdbotConfig)
       : params.cfg;
   currentRuntimeConfig = params.currentCfg ?? cfg;
+  if (params.directPreDispatchTarget) {
+    setFeishuSyntheticDirectPreDispatchTarget(params.event, params.directPreDispatchTarget);
+  }
   await handleFeishuMessage({
     cfg,
     event: params.event,
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
-    directPreDispatchTarget: params.directPreDispatchTarget,
   });
   return runtime;
 }

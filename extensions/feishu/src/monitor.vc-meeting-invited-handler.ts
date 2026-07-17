@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
 
@@ -140,15 +141,16 @@ async function dispatchVcMeetingInvitedTurn(params: {
   params.runtime?.log?.(
     `feishu[${params.accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
   );
+  const event = setFeishuSyntheticDirectPreDispatchTarget(
+    buildSyntheticMessageEvent(params.turn),
+    `user:${params.turn.inviter.senderId}`,
+  );
   await handleFeishuMessage({
     cfg: params.cfg,
     accountId: params.accountId,
-    event: buildSyntheticMessageEvent(params.turn),
+    event,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
-    // VC invite callbacks have an inviter identity but no p2p chat id. Keep
-    // pre-dispatch policy/error replies on the canonical user target.
-    directPreDispatchTarget: `user:${params.turn.inviter.senderId}`,
   });
 }
 

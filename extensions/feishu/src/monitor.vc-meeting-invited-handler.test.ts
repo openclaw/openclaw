@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import {
   createFeishuVcMeetingInvitedHandler,
   resolveVcMeetingInvitedTurn,
 } from "./monitor.vc-meeting-invited-handler.js";
+import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
@@ -212,13 +214,14 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       };
       runtime?: unknown;
       channelRuntime?: unknown;
-      directPreDispatchTarget?: string;
     };
 
     expect(params.accountId).toBe("default");
     expect(params.runtime).toBe(runtime);
     expect(params.channelRuntime).toBe(channelRuntime);
-    expect(params.directPreDispatchTarget).toBe("user:ou_inviter_1");
+    expect(getFeishuSyntheticDirectPreDispatchTarget(params.event as FeishuMessageEvent)).toBe(
+      "user:ou_inviter_1",
+    );
     expect(params.event?.sender?.sender_id).toEqual({
       open_id: "ou_inviter_1",
       user_id: "u_inviter_1",
@@ -263,21 +266,6 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     };
     expect(params.event?.message?.chat_id).toBe("u_inviter_1");
     expect(params.event?.sender?.sender_id).toEqual({ user_id: "u_inviter_1" });
-  });
-
-  it("provides the inviter user target for canonical DM policy replies", async () => {
-    const handler = createFeishuVcMeetingInvitedHandler({
-      cfg: { channels: { feishu: { enabled: true } } } as ClawdbotConfig,
-      accountId: "default",
-      channelRuntime: buildChannelRuntime(),
-      fireAndForget: false,
-    });
-
-    await handler(vcEvent);
-
-    expect(handleFeishuMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({ directPreDispatchTarget: "user:ou_inviter_1" }),
-    );
   });
 
   it("does not dispatch malformed invite events", async () => {
