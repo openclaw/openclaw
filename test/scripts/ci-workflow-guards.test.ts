@@ -1844,17 +1844,26 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
-  it("debounces canonical main pushes before Blacksmith admission", () => {
+  it("debounces canonical main fan-out inside preflight", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
-    const admission = workflow.jobs["runner-admission"];
 
-    expect(admission["runs-on"]).toBe("ubuntu-24.04");
-    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
-    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
-    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
-    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
-    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    // The debounce lives at the tail of preflight: heavy jobs all need
+    // preflight, so a superseding main push can cancel the run before fan-out
+    // while only one runner has been spent. No standalone admission job may
+    // reappear on the critical path.
+    expect(workflow.jobs["runner-admission"]).toBeUndefined();
+    const preflight = workflow.jobs.preflight;
+    expect(preflight.needs).toBeUndefined();
+    expect(preflight.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    const steps = preflight.steps as Array<{ if?: string; name?: string; run?: string }>;
+    expect(steps[0]?.name).toBe("Record debounce epoch");
+    expect(steps[0]?.if).toContain("github.ref == 'refs/heads/main'");
+    const gate = steps.at(-1);
+    expect(gate?.name).toBe("Debounce canonical main fan-out");
+    expect(gate?.if).toContain("github.ref == 'refs/heads/main'");
+    expect(gate?.run).toContain('sleep "$remaining"');
+    expect(workflow.jobs["security-fast"].needs).toBeUndefined();
     expect(source).toContain(
       "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
     );
@@ -4019,7 +4028,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   it("emits one final CI gate after every selected lane", () => {
     const workflow = readCiWorkflow();
     const gate = workflow.jobs["ci-gate"];
-    const requiredJobs = ["runner-admission", "preflight", "security-fast"];
+    const requiredJobs = ["preflight", "security-fast"];
     const selectedJobs = [
       "pnpm-store-warmup",
       "build-artifacts",
@@ -4079,20 +4088,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     "accepts only successful required jobs and successful or skipped selected jobs",
     () => {
       const passing = runCiGateFixture(
-        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "preflight=success\nsecurity-fast=success",
         "checks-ui=success\nmacos-swift=skipped",
       );
       expect(passing.status, `${passing.stdout}\n${passing.stderr}`).toBe(0);
 
       const skippedRequired = runCiGateFixture(
-        "runner-admission=success\npreflight=skipped\nsecurity-fast=success",
+        "preflight=skipped\nsecurity-fast=success",
         "checks-ui=skipped",
       );
       expect(skippedRequired.status).not.toBe(0);
       expect(skippedRequired.stdout).toContain("preflight finished with skipped");
 
       const failedSelected = runCiGateFixture(
-        "runner-admission=success\npreflight=success\nsecurity-fast=success",
+        "preflight=success\nsecurity-fast=success",
         "checks-ui=failure\nmacos-swift=cancelled",
       );
       expect(failedSelected.status).not.toBe(0);
