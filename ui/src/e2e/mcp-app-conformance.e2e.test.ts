@@ -84,6 +84,7 @@ function appHtml(appModuleUrl: string): string {
 <button id="request-teardown">Request teardown</button>
 <output id="initialized">pending</output>
 <output id="capabilities"></output>
+<output id="ping"></output>
 <output id="input"></output>
 <output id="result"></output>
 <output id="app-tool"></output>
@@ -91,7 +92,7 @@ function appHtml(appModuleUrl: string): string {
 <output id="resource"></output>
 <output id="isolation"></output>
 <script type="module">
-import { App } from ${JSON.stringify(appModuleUrl)};
+import { App, McpUiResourceTeardownResultSchema } from ${JSON.stringify(appModuleUrl)};
 const write = (id, value) => { document.getElementById(id).textContent = value; };
 try { void window.top.document; write("isolation", "failed"); } catch { write("isolation", "isolated"); }
 const app = new App({ name: "OpenClaw conformance fixture", version: "1.0.0" });
@@ -118,6 +119,10 @@ document.getElementById("read-resource").onclick = async () => {
 document.getElementById("request-teardown").onclick = () => app.requestTeardown();
 await app.connect();
 write("capabilities", JSON.stringify(app.getHostCapabilities() ?? {}));
+write("ping", JSON.stringify(await app.request(
+  { method: "ping", params: {} },
+  McpUiResourceTeardownResultSchema,
+)));
 write("initialized", "ready");
 </script>`;
 }
@@ -440,6 +445,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#result"), "initial-result");
     await waitForTextContaining(app.locator("#capabilities"), "serverTools");
     await waitForTextContaining(app.locator("#capabilities"), "serverResources");
+    await waitForText(app.locator("#ping"), "{}");
     await waitForText(app.locator("#isolation"), "isolated");
     await app.locator("#call-app").click();
     await waitForTextContaining(app.locator("#app-tool"), "companion-called");
@@ -468,6 +474,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await waitForTextContaining(app.locator("#result"), "initial-result");
     await waitForTextContaining(app.locator("#capabilities"), "serverTools", false);
     await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
+    await waitForText(app.locator("#ping"), "{}");
     await waitForText(app.locator("#isolation"), "isolated");
     await app.locator("#call-app").click();
     await waitForTextContaining(app.locator("#app-tool"), "denied:");

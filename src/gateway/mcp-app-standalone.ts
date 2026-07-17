@@ -255,6 +255,10 @@ function standaloneHostHtml(): string {
       notify("ui/notifications/sandbox-resource-ready", { html: payload.html, csp: payload.csp });
       return;
     }
+    if (message.method === "ping" && message.id !== undefined) {
+      respond(message.id, {});
+      return;
+    }
     if (message.method === "ui/initialize" && message.id !== undefined) {
       respond(message.id, {
         protocolVersion: ${JSON.stringify(MCP_APP_STABLE_PROTOCOL_VERSION)},
