@@ -203,7 +203,14 @@ export async function probeDiscord(
     };
   } finally {
     if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
+      const body = res?.body as { cancel?: () => Promise<void> | void } | null | undefined;
+      if (typeof body?.cancel === "function") {
+        try {
+          await body.cancel();
+        } catch {
+          // Best-effort cleanup must not replace the probe result.
+        }
+      }
     }
   }
 }

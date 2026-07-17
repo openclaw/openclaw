@@ -198,6 +198,29 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["returns void", { cancel: () => undefined }],
+    [
+      "throws synchronously",
+      {
+        cancel: () => {
+          throw new Error("cancel failed");
+        },
+      },
+    ],
+    ["is unavailable", {}],
+  ])("accepts failed getMe response bodies when cancel %s", async (_label, body) => {
+    const fetcher = withFetchPreconnect(
+      async () => ({ ok: false, status: 401, body }) as unknown as Response,
+    );
+
+    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+      error: "getMe failed (401)",
+    });
+  });
+
   it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const fetcher = withFetchPreconnect(async () =>
