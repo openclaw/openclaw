@@ -10,6 +10,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
+import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -371,9 +372,40 @@ function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolea
   );
 }
 
-function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+export function hasAsyncStartedToolActivity(
+  toolMetas?: readonly { asyncStarted?: boolean }[],
+): boolean {
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
+
+/** Fields needed to determine whether a yielded turn has future continuation. */
+interface YieldContinuationAttempt {
+  didSendDeterministicApprovalPrompt?: boolean;
+  successfulCronAdds?: number;
+  acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
+  messagingToolSentTexts?: readonly string[];
+  messagingToolSentMediaUrls?: readonly string[];
+  messagingToolSentTargets?: readonly MessagingToolSend[];
+  toolMetas?: readonly { asyncStarted?: boolean }[];
+}
+
+/** Continuation evidence for a yielded turn — sources that will produce future output. */
+export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
+  return (
+    attempt.didSendDeterministicApprovalPrompt ||
+    hasCommittedMessagingToolDeliveryEvidence({
+      messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
+      messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],
+      messagingToolSentTargets: attempt.messagingToolSentTargets ?? [],
+    }) ||
+    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
+    hasAsyncStartedToolActivity(attempt.toolMetas) ||
+    (attempt.successfulCronAdds ?? 0) > 0
+  );
+}
+
+export const YIELD_DIAGNOSTIC_TEXT =
+  "⚠️ Turn yielded without a continuation source. Send a message to resume.";
 
 function isToolResultRole(role: string): boolean {
   return role === "toolresult" || role === "tool_result" || role === "tool";
