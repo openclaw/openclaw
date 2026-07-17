@@ -706,38 +706,19 @@ export async function clickViaPlaywright(
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const signal = opts.signal;
-  let abortListener: (() => void) | undefined;
-  let abortReject: ((reason: unknown) => void) | undefined;
-  let abortPromise: Promise<never> | undefined;
-  if (signal) {
-    abortPromise = new Promise((_, reject) => {
-      abortReject = reject;
-    });
-    void abortPromise.catch(() => {});
-    const disconnect = () => {
-      if (isBrowserObservedDialogBlockedError(signal.reason)) {
-        return;
-      }
-      void forceDisconnectPlaywrightForTarget({
-        cdpUrl: opts.cdpUrl,
-        targetId: opts.targetId,
-        ssrfPolicy: opts.ssrfPolicy,
-        reason: "click aborted",
-      }).catch(() => {});
-    };
-    if (signal.aborted) {
-      disconnect();
-      throw signal.reason ?? new Error("aborted");
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
+    if (isBrowserObservedDialogBlockedError(reason)) {
+      return;
     }
-    abortListener = () => {
-      disconnect();
-      abortReject?.(signal.reason ?? new Error("aborted"));
-    };
-    signal.addEventListener("abort", abortListener, { once: true });
-    if (signal.aborted) {
-      abortListener();
-      throw signal.reason ?? new Error("aborted");
-    }
+    void forceDisconnectPlaywrightForTarget({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
+      reason: "click aborted",
+    }).catch(() => {});
+  });
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
   }
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
   try {
@@ -784,9 +765,7 @@ export async function clickViaPlaywright(
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
+    cleanup();
   }
 }
 
