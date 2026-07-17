@@ -126,7 +126,7 @@ function containsMattermostUnsafePathSegment(path: string): boolean {
   });
 }
 
-function buildMattermostApiUrl(baseUrl: string, path: string): string {
+export function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
     throw new Error("Mattermost baseUrl is required");
