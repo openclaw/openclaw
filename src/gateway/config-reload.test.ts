@@ -464,7 +464,7 @@ describe("buildGatewayReloadPlan", () => {
 });
 
 type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherEvent = "add" | "change" | "unlink" | "ready" | "error";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -734,6 +734,32 @@ describe("startGatewayConfigReloader", () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("reconciles the config after recreating a failed watcher", async () => {
+    const initialConfig = {
+      gateway: { reload: { debounceMs: 0 }, port: 18_789 },
+    } satisfies OpenClawConfig;
+    const updatedConfig = {
+      gateway: { reload: { debounceMs: 0 }, port: 19_001 },
+    } satisfies OpenClawConfig;
+    const readSnapshot = vi.fn(async () => makeSnapshot({ config: updatedConfig }));
+    const harness = createReloaderHarness(readSnapshot, { initialConfig });
+    const replacementWatcher = createWatcherMock();
+    vi.mocked(chokidar.watch).mockReturnValueOnce(replacementWatcher as unknown as never);
+
+    harness.watcher.emit("error");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+
+    replacementWatcher.emit("ready");
+    await vi.runAllTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    const [, nextConfig] = getOnlyRestartCall(harness);
+    expect(nextConfig).toEqual(updatedConfig);
+    await harness.reloader.stop();
   });
 
   it.each([
