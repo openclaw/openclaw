@@ -197,10 +197,3 @@ export async function resolveFeishuBotName(params: {
     inflight.delete(key);
   }
 }
-
-export function resetFeishuBotNameStateForTests(): void {
-  cache.clear();
-  breakerByAccount.clear();
-  permissionBackoffUntilByAccount.clear();
-  inflight.clear();
-}

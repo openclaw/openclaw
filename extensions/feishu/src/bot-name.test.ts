@@ -8,7 +8,9 @@ vi.mock("./client.js", () => ({
   createFeishuClient: vi.fn(() => ({ request: requestMock })),
 }));
 
-import { resetFeishuBotNameStateForTests, resolveFeishuBotName } from "./bot-name.js";
+type ResolveFeishuBotName = typeof import("./bot-name.js").resolveFeishuBotName;
+
+let resolveFeishuBotName: ResolveFeishuBotName;
 
 const account = {
   accountId: "main",
@@ -18,9 +20,10 @@ const account = {
 const log = vi.fn();
 
 describe("resolveFeishuBotName", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    resetFeishuBotNameStateForTests();
+    vi.resetModules();
+    ({ resolveFeishuBotName } = await import("./bot-name.js"));
   });
 
   afterEach(() => {
