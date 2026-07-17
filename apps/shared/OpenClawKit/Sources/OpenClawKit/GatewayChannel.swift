@@ -460,7 +460,15 @@ public actor GatewayChannelActor {
         let includeDeviceIdentity = options.includeDeviceIdentity
         let allowStoredDeviceAuth = options.allowStoredDeviceAuth
         let deviceAuthGatewayID = options.deviceAuthGatewayID
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate(profile: deviceIdentityProfile) : nil
+        let identity = includeDeviceIdentity
+            ? DeviceIdentityStore.loadOrCreatePersisted(profile: deviceIdentityProfile)
+            : nil
+        if includeDeviceIdentity, identity == nil {
+            throw NSError(
+                domain: "Gateway",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
         let selectedAuth = self.selectConnectAuth(
             role: role,
             includeDeviceIdentity: includeDeviceIdentity,

@@ -3918,7 +3918,7 @@ extension NodeAppModel {
     }
 
     private func hasStoredGatewayRoleToken(_ role: String, gatewayID: String) -> Bool {
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return false }
         return DeviceAuthStore.loadToken(
             deviceId: identity.deviceId,
             role: role,
@@ -4788,9 +4788,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorApprovalScope(
             token: token,
@@ -4825,9 +4829,13 @@ extension NodeAppModel {
         password: String?,
         forceTalkPermissionUpgradeRequest: Bool = false) -> Bool
     {
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedOperatorScopes = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        let storedOperatorScopes = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes ?? []
         return Self.shouldRequestOperatorAdminScope(
             token: token,
@@ -4943,9 +4951,13 @@ extension NodeAppModel {
             return
         }
         let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        let identity = DeviceIdentityStore.loadOrCreate()
-        self.hasOperatorAdminScope = DeviceAuthStore
-            .loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+        self.hasOperatorAdminScope = DeviceIdentityStore.loadOrCreatePersisted()
+            .flatMap { identity in
+                DeviceAuthStore.loadToken(
+                    deviceId: identity.deviceId,
+                    role: "operator",
+                    gatewayID: gatewayID)
+            }?
             .scopes
             .contains("operator.admin") == true
     }
