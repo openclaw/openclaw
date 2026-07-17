@@ -409,17 +409,21 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added).toHaveLength(0);
   });
 
-  it("drops matching tool results for aborted assistant messages when requested", () => {
+  it("retains matching tool results for aborted assistant messages (policy removed)", () => {
+    // Note: erroredAssistantResultPolicy option was removed in favor of always
+    // preserving real tool results for aborted messages, while not synthesizing
+    // new ones. See: https://github.com/openclaw/openclaw/pull/107145
     const input = createAbortedAssistantTranscript();
 
-    const result = repairToolUseResultPairing(input, {
-      erroredAssistantResultPolicy: "drop",
-    });
+    const result = repairToolUseResultPairing(input);
 
+    // Real matching tool results are preserved
     expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]?.role).toBe("user");
-    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(3); // assistant, toolResult, user
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect(result.messages[2]?.role).toBe("user");
+    expect(result.added).toHaveLength(0); // No synthetic results added
   });
 });
 

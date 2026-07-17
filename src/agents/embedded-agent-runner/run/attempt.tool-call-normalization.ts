@@ -1120,7 +1120,6 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   const repaired = sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
     missingToolResultText: "aborted",
   });
   return downgradeOpenAIFunctionCallReasoningPairs(
@@ -1170,7 +1169,6 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     const replayInputsChanged = sanitized.messages !== messages;
     let nextMessages = isOpenAIResponsesApi
       ? sanitizeToolUseResultPairing(sanitized.messages, {
-          erroredAssistantResultPolicy: "drop",
           missingToolResultText: "aborted",
         })
       : replayInputsChanged

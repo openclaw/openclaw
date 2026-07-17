@@ -33,10 +33,12 @@ export function repairAttemptToolUseResultPairing(
   messages: AgentMessage[],
   isOpenAIResponsesApi: boolean,
 ): AgentMessage[] {
-  return sanitizeToolUseResultPairing(messages, {
-    erroredAssistantResultPolicy: "drop",
-    ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
-  });
+  // Note: erroredAssistantResultPolicy was removed. Aborted/error messages now
+  // pass through unchanged without synthesizing tool results.
+  return sanitizeToolUseResultPairing(
+    messages,
+    isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : undefined,
+  );
 }
 
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {

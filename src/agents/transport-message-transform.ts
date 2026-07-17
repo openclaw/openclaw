@@ -172,7 +172,6 @@ export function transformTransportMessages(
   // handles both, while preserving the previous transport behavior of dropping
   // aborted/error assistant tool-call turns before replaying strict providers.
   return repairToolUseResultPairing(replayable, {
-    erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,
   }).messages as Context["messages"];
 }
