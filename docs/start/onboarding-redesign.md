@@ -42,15 +42,15 @@ Design principles (decided, do not relitigate casually):
 
 ## Phases
 
-| #   | Phase                                                                                                                                                                     | Surface              | Status                                                                                                          |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | classic + guided CLI | PR [#109668](https://github.com/openclaw/openclaw/pull/109668) — in review                                      |
-| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c)) |
-| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web            | planned                                                                                                         |
-| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI           | planned                                                                                                         |
-| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap      | planned                                                                                                         |
-| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels       | planned                                                                                                         |
-| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway              | follow-up                                                                                                       |
+| #   | Phase                                                                                                                                                                     | Surface              | Status                                                                                                                                                                                                                                                                                                                                                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | classic + guided CLI | merged ([#109668](https://github.com/openclaw/openclaw/pull/109668))                                                                                                                                                                                                                                                                                          |
+| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c))                                                                                                                                                                                                                                               |
+| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web            | PR [#110054](https://github.com/openclaw/openclaw/pull/110054) — proven end-to-end against an isolated same-config gateway (URL print → browser connect → presence detection → clean handoff). An earlier "token mismatch" hold was a test artifact: the isolated probe was authenticating against the machine-global gateway service serving the real config |
+| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI           | planned                                                                                                                                                                                                                                                                                                                                                       |
+| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap      | planned                                                                                                                                                                                                                                                                                                                                                       |
+| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels       | planned                                                                                                                                                                                                                                                                                                                                                       |
+| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway              | follow-up                                                                                                                                                                                                                                                                                                                                                     |
 
 ## Implementation notes per phase
 
@@ -85,13 +85,21 @@ Design principles (decided, do not relitigate casually):
   only — no apply, no Gateway service restart. Apply failure falls back to the
   conversational chat.
 
-### Phase 3 — browser-first handoff (planned)
+### Phase 3 — browser-first handoff (implemented; PR pending)
 
-- Detect a graphical session (macOS Aqua vs `SSH_CONNECTION`); GUI opens the
-  tokened dashboard URL, headless prints it large and waits.
-- The readiness signal is a Control UI client connecting to the gateway — not
-  the `open` exit code. No connect within the window → the same flow renders in
-  the terminal. The TUI stops being a question and becomes plan C.
+- `src/commands/onboard-browser-handoff.ts` owns pure graphical-session
+  detection and the 60-second GUI / 300-second SSH wait. Guided onboarding
+  currently enables the handoff only on macOS; `--tui` and other platforms keep
+  the terminal hatch.
+- Dashboard links use the same `resolveAdvertisedControlUiLinks`,
+  `resolveLocalControlUiProbeLinks`, and `buildOnboardingControlUiUrl` helpers as
+  classic finalize. Browser launch uses the shared `openUrl` helper.
+- Readiness polls the existing `system-presence` RPC through the authorized
+  local-backend `callGateway` seam and accepts only a connected
+  `openclaw-control-ui` presence row that is new or refreshed after the
+  pre-launch baseline. Gateway reachability is checked before any handoff note;
+  loopback SSH sessions also print the shared Control UI forwarding hint.
+  Timeout or disconnect falls through to the existing TUI hatch.
 
 ### Phase 4 — web custodian surface (planned)
 

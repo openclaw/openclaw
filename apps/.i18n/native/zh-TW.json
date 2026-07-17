@@ -18769,6 +18769,16 @@
       "translated": "啟用狀態圖示的閒置眨眼與擺動效果。"
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "快速聊天"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "顯示浮動輸入框以快速傳送訊息，並可使用全域快捷鍵叫出。"
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "快速聊天快捷鍵"
@@ -21104,9 +21114,9 @@
       "translated": "傳訊息給 \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "主工作階段"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "傳送視窗截圖"
     },
     {
       "id": "native.apple.136cef9f750d3803",

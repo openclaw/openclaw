@@ -1,4 +1,5 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
+use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const OPEN_ID: &str = "open-dashboard";
+const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
 const START_AT_LOGIN_ID: &str = "start-at-login";
 const GLOBAL_SHORTCUT_ID: &str = "global-shortcut";
@@ -25,6 +27,7 @@ pub struct TrayHandles {
     _tray: TrayIcon<tauri::Wry>,
     status: MenuItem<tauri::Wry>,
     status_line: Mutex<StatusLine>,
+    _quickchat: MenuItem<tauri::Wry>,
     open: MenuItem<tauri::Wry>,
     _check_updates: MenuItem<tauri::Wry>,
     _start_at_login: CheckMenuItem<tauri::Wry>,
@@ -128,6 +131,7 @@ pub fn build(
         false,
         None::<&str>,
     )?;
+    let quickchat = MenuItem::with_id(app, QUICKCHAT_ID, "Quick Chat", true, None::<&str>)?;
     let open = MenuItem::with_id(app, OPEN_ID, "Open Dashboard", true, None::<&str>)?;
     let check_updates = MenuItem::with_id(
         app,
@@ -182,6 +186,7 @@ pub fn build(
     let menu_builder = MenuBuilder::new(app).items(&[
         &status,
         &separator_one,
+        &quickchat,
         &open,
         &check_updates,
         &start_at_login,
@@ -236,6 +241,17 @@ pub fn build(
     #[cfg(target_os = "macos")]
     let tray_builder = tray_builder.icon_as_template(true);
     let tray = tray_builder.build(app)?;
+    if global_shortcuts_supported {
+        if let Err(error) = app
+            .global_shortcut()
+            .register(quickchat::QUICKCHAT_SHORTCUT)
+        {
+            eprintln!(
+                "Could not register Quick Chat shortcut {}: {error}",
+                quickchat::QUICKCHAT_SHORTCUT
+            );
+        }
+    }
     if let (Some(initial_state), Some(global_shortcut)) =
         (shortcut_initial_state, global_shortcut.as_ref())
     {
@@ -254,6 +270,7 @@ pub fn build(
             gateway: "Checking…".to_string(),
             pending_count: 0,
         }),
+        _quickchat: quickchat,
         open,
         _check_updates: check_updates,
         _start_at_login: start_at_login,
@@ -289,6 +306,7 @@ fn handle_menu(
             state.quit();
             app.exit(0);
         }
+        QUICKCHAT_ID => quickchat::toggle_quickchat(app),
         OPEN_ID => open_dashboard(app, state),
         CHECK_UPDATES_ID => {
             show_window(app);

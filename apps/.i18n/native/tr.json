@@ -18769,6 +18769,16 @@
       "translated": "Durum simgesinde boşta göz kırpmaları ve kıpırdanmaları etkinleştir."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Hızlı Sohbet"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Genel bir klavye kısayoluyla açılan ve hızlı mesajlar göndermenizi sağlayan kayan bir ileti oluşturucu gösterin."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Hızlı Sohbet kestirmesi"
@@ -21104,9 +21114,9 @@
       "translated": "\\(self.model.agentDisplay.name) adlı temsilciye mesaj gönder"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "ana oturum"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Pencere ekran görüntüsü gönder"
     },
     {
       "id": "native.apple.136cef9f750d3803",

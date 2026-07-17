@@ -18769,6 +18769,16 @@
       "translated": "تمكين الومضات والحركات الخفيفة في أيقونة الحالة أثناء الخمول."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "الدردشة السريعة"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "إظهار مربع كتابة عائم للرسائل السريعة، يمكن استدعاؤه باختصار عام."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "اختصار الدردشة السريعة"
@@ -21104,9 +21114,9 @@
       "translated": "مراسلة \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "الجلسة الرئيسية"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "إرسال لقطة شاشة لنافذة"
     },
     {
       "id": "native.apple.136cef9f750d3803",

@@ -2935,7 +2935,14 @@ jobs:
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
       - name: OpenClawKit tests
-        run: swift test --package-path apps/shared/OpenClawKit --parallel
+        run: |
+          set -euo pipefail
+          openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
+          trap 'rm -rf "$openclawkit_scratch"' EXIT
+          swift test \
+            --package-path apps/shared/OpenClawKit \
+            --scratch-path "$openclawkit_scratch" \
+            --parallel
 
       - name: Swift test
         run: |
