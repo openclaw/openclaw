@@ -457,9 +457,22 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     });
     let appliedReleased = false;
     const markApplied = () => {
-      if (!appliedReleased) {
-        appliedReleased = true;
-        releaseApplied();
+      if (appliedReleased) {
+        return;
+      }
+      appliedReleased = true;
+      releaseApplied();
+      if (!isSynchronousBypass) {
+        const remaining = (pendingDecisionCounts.get(key) ?? 1) - 1;
+        if (remaining > 0) {
+          pendingDecisionCounts.set(key, remaining);
+        } else {
+          pendingDecisionCounts.delete(key);
+          const buffer = buffers.get(key);
+          if (buffer && !buffer.timeout) {
+            scheduleFlush(key, buffer);
+          }
+        }
       }
     };
     const task = previous
@@ -467,18 +480,6 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       .then(async () => enqueueResolved(item, key, await decision, markApplied, generation))
       .finally(() => {
         markApplied();
-        if (!isSynchronousBypass) {
-          const remaining = (pendingDecisionCounts.get(key) ?? 1) - 1;
-          if (remaining > 0) {
-            pendingDecisionCounts.set(key, remaining);
-          } else {
-            pendingDecisionCounts.delete(key);
-            const buffer = buffers.get(key);
-            if (buffer && !buffer.timeout) {
-              scheduleFlush(key, buffer);
-            }
-          }
-        }
       });
     decisionChains.set(key, applied);
     void applied.then(() => {
