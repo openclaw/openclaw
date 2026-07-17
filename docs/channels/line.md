@@ -46,8 +46,9 @@ The Gateway answers LINE's webhook verification (GET). For signed inbound events
 (POST), it writes each event to the durable ingress queue before returning `200`;
 agent processing continues asynchronously. Failed delivery is retried from the
 queue, including after a Gateway restart, and poison events become failed queue
-records after bounded retries. If durable persistence fails, the request returns
-`500` instead of acknowledging an event that could be lost.
+records after bounded retries (an attempt floor plus a minimum event age,
+matching Telegram's retry policy). If durable persistence fails, the request
+returns `500` instead of acknowledging an event that could be lost.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 

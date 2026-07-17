@@ -1,10 +1,11 @@
 // Line plugin module owns durable webhook admission and replay.
 import { createHash, randomUUID } from "node:crypto";
 import type { webhook } from "@line/bot-sdk";
-import type {
-  ChannelIngressQueue,
-  ChannelIngressQueueClaim,
-  ChannelIngressQueueRecord,
+import {
+  type ChannelIngressQueue,
+  type ChannelIngressQueueClaim,
+  type ChannelIngressQueueRecord,
+  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { danger, sleepWithAbort, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
@@ -52,6 +53,7 @@ type LineWebhookSpoolOptions = {
   ) => Promise<void>;
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
   maxAttempts?: number;
+  deadLetterMinAgeMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
   claimStaleMs?: number;
@@ -146,6 +148,10 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     });
   const ownerId = `${process.pid}:${randomUUID()}`;
   const maxAttempts = Math.max(1, options.maxAttempts ?? LINE_WEBHOOK_MAX_ATTEMPTS);
+  const deadLetterMinAgeMs = Math.max(
+    0,
+    options.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  );
   const retryBaseMs = Math.max(0, options.retryBaseMs ?? LINE_WEBHOOK_RETRY_BASE_MS);
   const retryMaxMs = Math.max(retryBaseMs, options.retryMaxMs ?? LINE_WEBHOOK_RETRY_MAX_MS);
   const claimStaleMs = Math.max(0, options.claimStaleMs ?? LINE_WEBHOOK_CLAIM_STALE_MS);
@@ -334,7 +340,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           });
           throw error;
         }
-        if (attempt >= maxAttempts) {
+        // Dead-letter needs BOTH the attempt floor and event age; a too-young
+        // over-limit event keeps retrying at the capped delay until age is met.
+        if (attempt >= maxAttempts && Date.now() - claim.receivedAt >= deadLetterMinAgeMs) {
           await persistClaimTransition({
             claim,
             label: "retry-limit dead-letter",

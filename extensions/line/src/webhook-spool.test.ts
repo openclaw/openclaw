@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
+import { DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS } from "openclaw/plugin-sdk/channel-outbound";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests as createChannelIngressQueue,
@@ -102,6 +103,7 @@ describe("LINE webhook spool", () => {
         runtime: runtime(),
         queue,
         maxAttempts: 1,
+        deadLetterMinAgeMs: 0,
         retryBaseMs: 0,
         deliver: async () => {
           throw new Error("dispatch failed");
@@ -212,6 +214,7 @@ describe("LINE webhook spool", () => {
         runtime: runtime(),
         queue,
         maxAttempts: 3,
+        deadLetterMinAgeMs: 0,
         retryBaseMs: 0,
         retryMaxMs: 0,
         deliver,
@@ -234,6 +237,74 @@ describe("LINE webhook spool", () => {
       if (duplicate.kind === "failed") {
         expect(duplicate.record.reason).toBe("retry-limit-exceeded");
       }
+      await spool.stop();
+    });
+  });
+
+  it("keeps retry-limit events pending until they are old enough to dead-letter", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async () => {
+        throw new Error("young poison");
+      });
+      const outcomes: LineWebhookDeliveryOutcome[] = [];
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        maxAttempts: 2,
+        retryBaseMs: 0,
+        retryMaxMs: 0,
+        deliver,
+        onOutcome: (outcome) => outcomes.push(outcome),
+      });
+      spool.start();
+      await spool.accept(callback(createEvent("event-young-poison")));
+
+      await vi.waitFor(() => {
+        expect(
+          outcomes.some((outcome) => outcome.kind === "retry-scheduled" && outcome.attempt > 2),
+        ).toBe(true);
+      });
+      expect(outcomes.some((outcome) => outcome.kind === "dead-lettered")).toBe(false);
+      await spool.stop();
+      expect(await queue.listPending()).toHaveLength(1);
+    });
+  });
+
+  it("dead-letters retry-limit events once they reach the minimum age", async () => {
+    await withQueue(async (queue) => {
+      const event = createEvent("event-old-poison");
+      await queue.enqueue(
+        "event-old-poison",
+        { version: 1, destination: "destination-1", event },
+        {
+          laneKey: "user:user-1",
+          receivedAt: Date.now() - DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+        },
+      );
+      const deliver = vi.fn(async () => {
+        throw new Error("old poison");
+      });
+      const outcomes: LineWebhookDeliveryOutcome[] = [];
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        maxAttempts: 2,
+        retryBaseMs: 0,
+        retryMaxMs: 0,
+        deliver,
+        onOutcome: (outcome) => outcomes.push(outcome),
+      });
+      spool.start();
+
+      const outcome = await waitForOutcome(outcomes, "dead-lettered");
+      expect(outcome).toMatchObject({
+        eventId: "event-old-poison",
+        attempt: 2,
+        reason: "retry-limit-exceeded",
+      });
+      expect(deliver).toHaveBeenCalledTimes(2);
       await spool.stop();
     });
   });
