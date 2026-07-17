@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
   readAuthProfileStoreForTest,
@@ -32,23 +31,23 @@ import {
 import { ensurePluginRegistryLoaded } from "../plugins/runtime/runtime-registry-loader.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  runSystemAgentTurnWithDeps,
-} from "./agent-turn.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
+import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
+  type BoundVerifySetupInferenceResult,
   detectSetupInference,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   resolvePersistentApplyInference,
-  verifySetupInference,
-  verifySetupInferenceConfig,
+  type VerifySetupInferenceResult,
+  verifySetupInference as verifySetupInferenceImpl,
+  verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
@@ -104,7 +103,7 @@ vi.mock("../commands/onboard-inference.js", async (importActual) => {
         kind: "codex-cli",
         modelRef: "openai/gpt-5.5",
         label: "Codex",
-        detail: "installed, not logged in",
+        detail: "installed, not logged in — run `codex login`, then check again",
         credentials: false,
       },
     ]),
@@ -117,14 +116,45 @@ const testCodexRuntimeArtifact = {
   id: "codex-app-server",
   fingerprint: "codex-runtime-v1",
 } as const;
+const suiteTempRootTracker = createSuiteTempRootTracker({
+  prefix: "setup-inference-test-",
+});
+
+beforeAll(async () => {
+  await suiteTempRootTracker.setup();
+});
+
+afterAll(async () => {
+  await suiteTempRootTracker.cleanup();
+});
+
+async function makeTempDir(): Promise<string> {
+  return await suiteTempRootTracker.make("case");
+}
+
+const deferSuiteTempDirCleanup = async () => {};
+
+function withSuiteTempDirs<
+  T extends NonNullable<Parameters<typeof activateSetupInferenceImpl>[0]["deps"]>,
+>(input: T | undefined): T {
+  // Keep operation dirs real and unique; only their routine cleanup moves to suite teardown.
+  const deps = Object.create(
+    Object.getPrototypeOf(input ?? {}),
+    Object.getOwnPropertyDescriptors(input ?? {}),
+  ) as T;
+  if (!deps.createTempDir) {
+    deps.createTempDir = makeTempDir;
+  }
+  if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
+    deps.removeTempDir = deferSuiteTempDirCleanup;
+  }
+  return deps;
+}
 
 async function activateSetupInference(
   params: Parameters<typeof activateSetupInferenceImpl>[0],
 ): ReturnType<typeof activateSetupInferenceImpl> {
-  const deps = Object.create(
-    Object.getPrototypeOf(params.deps ?? {}),
-    Object.getOwnPropertyDescriptors(params.deps ?? {}),
-  ) as NonNullable<typeof params.deps>;
+  const deps = withSuiteTempDirs(params.deps);
   const ownerPluginArtifacts = { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
   const usesRealOwnerBinding =
     params.deps?.createSystemAgentVerifiedInferenceBinding ===
@@ -151,8 +181,30 @@ async function activateSetupInference(
   });
 }
 
-async function makeTempDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "setup-inference-test-"));
+type TestVerifySetupInferenceParams = Omit<
+  Parameters<typeof verifySetupInferenceImpl>[0],
+  "bindSession"
+>;
+
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession: true },
+): Promise<BoundVerifySetupInferenceResult>;
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession?: false },
+): Promise<VerifySetupInferenceResult>;
+function verifySetupInference(
+  params: TestVerifySetupInferenceParams & { bindSession?: boolean },
+): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
+  return verifySetupInferenceImpl({
+    ...params,
+    deps: withSuiteTempDirs(params.deps),
+  } as never);
+}
+
+async function verifySetupInferenceConfig(
+  params: Parameters<typeof verifySetupInferenceConfigImpl>[0],
+): ReturnType<typeof verifySetupInferenceConfigImpl> {
+  return verifySetupInferenceConfigImpl({ ...params, deps: withSuiteTempDirs(params.deps) });
 }
 
 type SuccessfulRunParams = {
@@ -303,7 +355,10 @@ describe("applySystemAgentModelSelection", () => {
 describe("detectSetupInference", () => {
   it("preserves the shared inference candidate order", async () => {
     const resolveManifestProviderAuthChoices = vi.fn(() => []);
-    const detection = await detectSetupInference({ resolveManifestProviderAuthChoices });
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices,
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
     expect(detection.candidates).toHaveLength(2);
     expect(detection.candidates[0]).toMatchObject({ kind: "claude-cli", recommended: false });
     expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
@@ -312,6 +367,77 @@ describe("detectSetupInference", () => {
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),
     );
+  });
+
+  it("discovers provider-owned local inference and reports unsafe CLIs without running them", async () => {
+    const prepare = vi.fn();
+    const detect = vi.fn(async () => ({
+      modelRef: "local/qwen-tool",
+      detail: "qwen-tool at http://127.0.0.1:9999",
+    }));
+    const provider: ProviderPlugin = {
+      id: "local",
+      label: "Local Server",
+      pluginId: "local-plugin",
+      auth: [
+        {
+          id: "ambient",
+          label: "Local Server",
+          kind: "custom",
+          appGuidedSetup: { detect, prepare },
+          run: async () => ({ profiles: [] }),
+        },
+      ],
+    };
+    const detection = await detectSetupInference({
+      detectInferenceBackends: async () => [
+        {
+          kind: "claude-cli",
+          modelRef: "claude-cli/claude-opus-4-8",
+          label: "Claude Code",
+          detail: "logged in",
+          credentials: true,
+        },
+        {
+          kind: "gemini-cli",
+          modelRef: "google-gemini-cli/gemini-3.1-pro-preview",
+          label: "Gemini CLI",
+          detail: "installed",
+          credentials: false,
+        },
+      ],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: command === "agy" })),
+      resolveManifestProviderAuthChoices: () => [
+        {
+          pluginId: "local-plugin",
+          providerId: "local",
+          methodId: "ambient",
+          choiceId: "local-model",
+          choiceLabel: "Local Server",
+          appGuidedDiscovery: true,
+        },
+      ],
+      enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
+      resolvePluginProviders: () => [provider],
+    });
+
+    expect(detection.candidates).toEqual([
+      expect.objectContaining({ kind: "claude-cli" }),
+      {
+        kind: "provider-auto:local-model",
+        label: "Local Server",
+        detail: "qwen-tool at http://127.0.0.1:9999",
+        modelRef: "local/qwen-tool",
+        recommended: false,
+        credentials: true,
+      },
+    ]);
+    expect(detection.unavailableCandidates).toEqual([
+      expect.objectContaining({ id: "gemini-cli" }),
+      expect.objectContaining({ id: "antigravity-cli" }),
+    ]);
+    expect(detect).toHaveBeenCalledOnce();
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it("surfaces an invalid existing config instead of treating it as fresh", async () => {
@@ -510,7 +636,10 @@ describe("detectSetupInference", () => {
       },
     ]);
 
-    const detection = await detectSetupInference({ resolveManifestProviderAuthChoices: () => [] });
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
 
     expect(detection).toMatchObject({
       configuredModel: "openai/gpt-5.5",
@@ -536,10 +665,16 @@ describe("detectSetupInference", () => {
       },
     ]);
 
-    const detection = await detectSetupInference({ resolveManifestProviderAuthChoices: () => [] });
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+    });
 
     expect(detection.candidates).toEqual([
       expect.objectContaining({ kind: "claude-cli", recommended: false }),
+    ]);
+    expect(detection.unavailableCandidates).toEqual([
+      expect.objectContaining({ id: "gemini-cli" }),
     ]);
   });
 });
@@ -1011,6 +1146,92 @@ describe("activateSetupInference", () => {
     expect(persistedConfig.agents?.defaults?.model).toBe("claude-cli/claude-opus-4-8");
     expect(persistedConfig.agents?.defaults?.workspace).toBeUndefined();
     expect(persistedConfig.gateway).toBeUndefined();
+  });
+
+  it("rechecks the exact provider model and activates it without storing credentials", async () => {
+    const modelRef = "lmstudio/qwen-local";
+    const detect = vi.fn(async () => ({ modelRef, detail: "qwen-local at localhost" }));
+    const prepare = vi.fn(async () => ({
+      profiles: [],
+      defaultModel: modelRef,
+      configPatch: {
+        models: {
+          mode: "merge" as const,
+          providers: {
+            lmstudio: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              api: "openai-completions" as const,
+              models: [
+                {
+                  id: "qwen-local",
+                  name: "Qwen Local",
+                  reasoning: false,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32768,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const provider: ProviderPlugin = {
+      id: "lmstudio",
+      label: "LM Studio",
+      pluginId: "lmstudio",
+      auth: [
+        {
+          id: "custom",
+          label: "LM Studio",
+          kind: "custom",
+          appGuidedSetup: { detect, prepare },
+          run: async () => ({ profiles: [] }),
+        },
+      ],
+    };
+    const configHarness = createConfigTransformHarness();
+    const updateAuthStore = vi.fn();
+
+    const result = await activateSetupInference({
+      kind: "provider-auto:lmstudio",
+      modelRef,
+      surface: "gateway",
+      runtime,
+      deps: {
+        resolveManifestProviderAuthChoice: () => ({
+          pluginId: "lmstudio",
+          providerId: "lmstudio",
+          methodId: "custom",
+          choiceId: "lmstudio",
+          choiceLabel: "LM Studio",
+          appGuidedDiscovery: true,
+        }),
+        resolvePluginProviders: () => [provider],
+        runEmbeddedAgent: vi.fn(successfulRunner("lmstudio", "qwen-local")) as never,
+        transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+        updateAuthProfileStoreWithLock: updateAuthStore as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef });
+    expect(detect).not.toHaveBeenCalled();
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(updateAuthStore).not.toHaveBeenCalled();
+    expect(configHarness.current()).toMatchObject({
+      agents: { defaults: { model: modelRef } },
+      models: {
+        providers: {
+          lmstudio: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [expect.objectContaining({ id: "qwen-local" })],
+          },
+        },
+      },
+      plugins: { entries: { lmstudio: { enabled: true } } },
+    });
   });
 
   it("rebases model persistence on concurrent default-agent edits", async () => {
@@ -1712,11 +1933,17 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
   });
 
-  it("runs provider OAuth interactively and persists it only after the live probe", async () => {
+  it("persists provider OAuth when runtime defaults are absent from source config", async () => {
     const stateDir = await makeTempDir();
     const agentDir = path.join(stateDir, "agent");
     const initialConfig = {
       agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        ...initialConfig.agents,
+        defaults: { models: { "openai/gpt-5.4": {} } },
+      },
     } satisfies OpenClawConfig;
     resolveAgentDir(initialConfig, "main");
     const runAuth = vi.fn(async () => ({
@@ -1733,6 +1960,9 @@ describe("activateSetupInference", () => {
         },
       ],
       defaultModel: "openai/gpt-5.5",
+      configPatch: {
+        agents: { defaults: { models: { "openai/gpt-5.5": {} } } },
+      },
     }));
     const provider: ProviderPlugin = {
       id: "openai",
@@ -1744,7 +1974,7 @@ describe("activateSetupInference", () => {
       async (params: SuccessfulRunParams & { authProfileId?: string }) =>
         successfulRun("openai", "gpt-5.5", params),
     );
-    const configHarness = createConfigTransformHarness(initialConfig);
+    const configHarness = createConfigTransformHarness(initialConfig, runtimeConfig);
 
     try {
       const result = await activateSetupInference({
@@ -1762,7 +1992,7 @@ describe("activateSetupInference", () => {
             issues: [],
             config: initialConfig,
             sourceConfig: initialConfig,
-            runtimeConfig: initialConfig,
+            runtimeConfig,
           })) as never,
           resolvePluginProviders: () => [provider],
           resolveManifestProviderAuthChoice: () => ({
@@ -3384,10 +3614,7 @@ describe("activateSetupInference", () => {
     ]);
     expect(transformConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        afterWrite: {
-          mode: "none",
-          reason: "OpenClaw activates verified inference",
-        },
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({

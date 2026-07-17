@@ -180,6 +180,18 @@ describe("official external plugin catalog", () => {
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
   });
 
+  it("keeps Codex installable as a harness without declaring a model provider", () => {
+    const entry = expectCatalogEntry("codex");
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+
+    expect(entry.kind).toBe("plugin");
+    expect(manifest?.providers).toBeUndefined();
+    expect(resolveOfficialExternalPluginInstall(entry)).toMatchObject({
+      npmSpec: "@openclaw/codex",
+      defaultChoice: "npm",
+    });
+  });
+
   it("curates featured external plugins with ClawHub install alternatives", () => {
     const featured = [
       ["diffs", "@openclaw/diffs", 40],
@@ -1016,15 +1028,20 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("resolves external provider aliases beyond the primary provider id", () => {
+  it("resolves current external provider aliases beyond the primary provider id", () => {
     const qwen = expectCatalogEntry("qwen");
 
     expect(getOfficialExternalPluginCatalogEntry("modelstudio")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-oauth")).toBe(qwen);
-    expect(getOfficialExternalPluginCatalogEntry("qwen-portal")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("qwen-token-plan")).toBe(qwen);
     expect(getOfficialExternalPluginCatalogEntry("bailian-token-plan")).toBe(qwen);
   });
+
+  it.each(["qwen-oauth", "qwen-portal", "qwen-cli"])(
+    "does not resolve retired Qwen Portal alias %s",
+    (providerId) => {
+      expect(getOfficialExternalPluginCatalogEntry(providerId)).toBeUndefined();
+    },
+  );
 
   it("maps external speech and web-fetch contracts to plugin owners", () => {
     expect(

@@ -38,6 +38,20 @@ describe("slack config schema", () => {
     }
   });
 
+  it("keeps presence events off by default and accepts account/channel modes", () => {
+    const absent = SlackConfigSchema.safeParse({});
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect(absent.data.presenceEvents).toBeUndefined();
+    }
+    expectSlackConfigValid({ presenceEvents: { mode: "auto" } });
+    expectSlackConfigValid({
+      accounts: { ops: { presenceEvents: { mode: "on" } } },
+      channels: { C123: { presenceEvents: { mode: "off" } } },
+    });
+    expectSlackConfigIssue({ presenceEvents: { mode: "enabled" } }, "presenceEvents.mode");
+  });
+
   it("accepts historyLimit overrides per account", () => {
     const res = SlackConfigSchema.safeParse({
       historyLimit: 7,
@@ -291,5 +305,20 @@ describe("slack config schema", () => {
       },
       "accounts.ops.signingSecret",
     );
+  });
+
+  it("accepts canonical implicit mention policy at root and account scope", () => {
+    expectSlackConfigValid({
+      implicitMentions: { replyToBot: false, threadParticipation: true },
+      accounts: {
+        ops: {
+          implicitMentions: { quotedBot: false },
+        },
+      },
+    });
+  });
+
+  it("rejects the retired thread requireExplicitMention runtime key", () => {
+    expectSlackConfigIssue({ thread: { requireExplicitMention: true } }, "thread");
   });
 });

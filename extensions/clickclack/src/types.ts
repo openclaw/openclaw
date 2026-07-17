@@ -9,6 +9,7 @@ export type ClickClackAccountConfig = {
   enabled?: boolean;
   baseUrl?: string;
   token?: unknown;
+  tokenFile?: string;
   workspace?: string;
   botUserId?: string;
   agentId?: string;
@@ -84,6 +85,27 @@ export type ClickClackBotCommand = {
   args_hint: string;
   created_at: string;
   updated_at: string;
+};
+
+/** One-time bot token and installer context returned by setup-code claim. */
+export type ClickClackSetupCodeClaim = {
+  token: string;
+  bot: {
+    id: string;
+    handle: string;
+    display_name: string;
+  };
+  workspace: {
+    id: string;
+    route_id: string;
+    slug: string;
+    name: string;
+  };
+  defaults: {
+    defaultTo?: string;
+    allowFrom?: string[];
+    agentActivity?: boolean;
+  };
 };
 
 /** Workspace object returned by the ClickClack API. */

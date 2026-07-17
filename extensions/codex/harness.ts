@@ -8,13 +8,10 @@ import type {
   ContextEngineHostCapability,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  CodexAppServerListModelsOptions,
-  CodexAppServerModel,
-  CodexAppServerModelListResult,
-} from "./src/app-server/models.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 
+// `codex` is legacy input only until Part 2 doctor migration rewrites stored refs.
+// New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
@@ -26,9 +23,6 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "runtime-llm-complete",
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
-
-/** Public model-listing types exposed for Codex app-server catalog callers. */
-export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
 
 type CodexAppServerAgentHarness = AgentHarness & {
   compactAfterContextEngine?(
@@ -68,6 +62,7 @@ export function createCodexAppServerAgentHarness(options: {
   const harness: CodexAppServerAgentHarness = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
+    autoSelection: { providerIds: [...providerIds] },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
@@ -87,6 +82,12 @@ export function createCodexAppServerAgentHarness(options: {
           await import("./src/app-server/runtime-artifact.js");
         return validateCodexAppServerRuntimeArtifact(binding);
       },
+    },
+    fetchUsageSnapshot: async (ctx) => {
+      const { fetchCodexAppServerUsageSnapshot } = await import("./src/app-server/usage.js");
+      return await fetchCodexAppServerUsageSnapshot(ctx, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
     },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();

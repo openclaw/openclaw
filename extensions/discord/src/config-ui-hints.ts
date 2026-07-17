@@ -205,11 +205,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
-    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+    help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names used whenever OpenAI agent-proxy Discord realtime voice has an active wake-name gate.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
@@ -372,5 +372,18 @@ export const discordChannelConfigUiHints = {
   applicationId: {
     label: "Discord Application ID",
     help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
+  },
+  activities: {
+    label: "Discord Activities",
+    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+  },
+  "activities.clientSecret": {
+    label: "Discord Activities Client Secret",
+    help: "OAuth2 client secret for the Discord application. DISCORD_CLIENT_SECRET is used when this field is unset.",
+    sensitive: true,
+  },
+  "activities.applicationId": {
+    label: "Discord Activities Application ID",
+    help: "Optional Activity application ID. Defaults to the bot application ID learned at gateway startup.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

@@ -439,7 +439,7 @@ function composeDocsConfig() {
   };
 }
 
-function pruneOrphanLocaleDocs(targetDocsDir) {
+export function pruneOrphanLocaleDocs(targetDocsDir) {
   let pruned = 0;
   for (const locale of GENERATED_LOCALES) {
     const localeDir = path.join(targetDocsDir, locale.dir);
@@ -448,8 +448,9 @@ function pruneOrphanLocaleDocs(targetDocsDir) {
     }
     for (const filePath of walkMarkdownFiles(localeDir)) {
       const relativeToLocale = path.relative(localeDir, filePath);
-      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
-      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+      // Check the assembled publish tree so externally mirrored docs, such as
+      // ClawHub pages, count as valid English sources too.
+      const englishBase = path.join(targetDocsDir, relativeToLocale);
       const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
       const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
       if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {

@@ -15,7 +15,7 @@ import {
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
@@ -413,6 +413,18 @@ const McpServerSchema = z
       .optional(),
   })
   .superRefine((data, ctx) => {
+    if (Object.hasOwn(data, "disabled")) {
+      const disabled = Reflect.get(data, "disabled") as unknown;
+      const replacement =
+        typeof disabled === "boolean"
+          ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
+          : 'the canonical "enabled" boolean instead';
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `unsupported key "disabled"; use ${replacement}`,
+        path: ["disabled"],
+      });
+    }
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
       data.transport === "stdio" &&
@@ -951,7 +963,6 @@ export const OpenClawSchema = z
     security: SecuritySchema,
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
-    audio: AudioSchema,
     media: z
       .strictObject({
         preserveFilenames: z.boolean().optional(),

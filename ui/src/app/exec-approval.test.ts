@@ -3,14 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
-  parseExecApprovalRequested,
-  parsePluginApprovalRequested,
-  parseSystemAgentApprovalRequested,
+  parseApprovalRequestedEvent,
   clearResolvedExecApprovalPrompt,
   refreshPendingApprovalQueue,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
+
+const parseExecApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("exec.approval.requested", payload);
+const parsePluginApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("plugin.approval.requested", payload);
+const parseSystemAgentApprovalRequested = (payload: unknown) =>
+  parseApprovalRequestedEvent("openclaw.approval.requested", payload);
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 

@@ -62,6 +62,48 @@ async function waitForProbeFailure(url: string): Promise<void> {
   }
 }
 
+async function withSpawnReadyHealthProbe<T>(run: () => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    try {
+      return await realFetch(input, init);
+    } catch (initialError) {
+      const requestUrl = input instanceof Request ? input.url : input.toString();
+      const spawned = getManagedProviderLocalServiceDiagnosticsForTest().some(
+        (diagnostics) => diagnostics.healthUrl === requestUrl && diagnostics.pid !== undefined,
+      );
+      if (!spawned || init?.signal?.aborted) {
+        throw initialError;
+      }
+
+      // Production probes before and after spawn. Once diagnostics prove the
+      // fixture child exists, wait for its real socket instead of its 250ms retry.
+      const deadline = Date.now() + 1_000;
+      let latestError = initialError;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5);
+        });
+        try {
+          return await realFetch(input, init);
+        } catch (error) {
+          latestError = error;
+          if (init?.signal?.aborted) {
+            break;
+          }
+        }
+      }
+      throw latestError;
+    }
+  });
+
+  try {
+    return await run();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+}
+
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -109,7 +151,7 @@ describe("provider local service", () => {
       },
     );
 
-    const lease = await ensureModelProviderLocalService(model);
+    const lease = await withSpawnReadyHealthProbe(() => ensureModelProviderLocalService(model));
 
     if (!lease) {
       throw new Error("Expected provider local service lease");
@@ -147,11 +189,13 @@ describe("provider local service", () => {
         }) as OpenClawConfig,
     );
 
-    const lease = await acquire({
-      providerId: "gpu-spark",
-      baseUrl: `http://127.0.0.1:${port}`,
-      service: { command: "caller-controlled" },
-    } as Parameters<typeof acquire>[0]);
+    const lease = await withSpawnReadyHealthProbe(() =>
+      acquire({
+        providerId: "gpu-spark",
+        baseUrl: `http://127.0.0.1:${port}`,
+        service: { command: "caller-controlled" },
+      } as Parameters<typeof acquire>[0]),
+    );
 
     expect(lease).toBeDefined();
     expect((await fetch(healthUrl)).ok).toBe(true);
@@ -183,10 +227,12 @@ describe("provider local service", () => {
       },
     }));
 
-    const lease = await acquire({
-      providerId: "gpu-default",
-      baseUrl: `http://127.0.0.1:${port}/v1`,
-    });
+    const lease = await withSpawnReadyHealthProbe(() =>
+      acquire({
+        providerId: "gpu-default",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      }),
+    );
 
     expect(lease).toBeDefined();
     lease?.release();
@@ -265,7 +311,7 @@ describe("provider local service", () => {
     );
 
     try {
-      const lease = await ensureModelProviderLocalService(model);
+      const lease = await withSpawnReadyHealthProbe(() => ensureModelProviderLocalService(model));
 
       if (!lease) {
         throw new Error("Expected provider local service lease");
@@ -300,10 +346,12 @@ describe("provider local service", () => {
     );
 
     const sentinel = mintSecretSentinel("health-secret", { label: "local-health-probe" });
-    const lease = await ensureModelProviderLocalService(model, {
-      Authorization: `Bearer ${sentinel}`,
-      "X-Tenant": "acme",
-    });
+    const lease = await withSpawnReadyHealthProbe(() =>
+      ensureModelProviderLocalService(model, {
+        Authorization: `Bearer ${sentinel}`,
+        "X-Tenant": "acme",
+      }),
+    );
 
     if (!lease) {
       throw new Error("Expected provider local service lease");
@@ -426,14 +474,16 @@ describe("provider local service", () => {
     );
 
     try {
-      const [chatLease, embeddingLease] = await Promise.all([
-        ensureModelProviderLocalService(model),
-        ensureProviderLocalService({
-          providerId: "local-concurrent",
-          baseUrl: `http://127.0.0.1:${port}/v1`,
-          service,
-        }),
-      ]);
+      const [chatLease, embeddingLease] = await withSpawnReadyHealthProbe(() =>
+        Promise.all([
+          ensureModelProviderLocalService(model),
+          ensureProviderLocalService({
+            providerId: "local-concurrent",
+            baseUrl: `http://127.0.0.1:${port}/v1`,
+            service,
+          }),
+        ]),
+      );
 
       expect(chatLease).toBeDefined();
       expect(embeddingLease).toBeDefined();
@@ -476,18 +526,20 @@ describe("provider local service", () => {
     };
 
     try {
-      const leases = await Promise.all([
-        ensureProviderLocalService({
-          providerId: "ollama-spark",
-          baseUrl: `http://127.0.0.1:${firstPort}/v1`,
-          service: firstService,
-        }),
-        ensureProviderLocalService({
-          providerId: "ollama-studio",
-          baseUrl: `http://127.0.0.1:${secondPort}/v1`,
-          service: secondService,
-        }),
-      ]);
+      const leases = await withSpawnReadyHealthProbe(() =>
+        Promise.all([
+          ensureProviderLocalService({
+            providerId: "ollama-spark",
+            baseUrl: `http://127.0.0.1:${firstPort}/v1`,
+            service: firstService,
+          }),
+          ensureProviderLocalService({
+            providerId: "ollama-studio",
+            baseUrl: `http://127.0.0.1:${secondPort}/v1`,
+            service: secondService,
+          }),
+        ]),
+      );
 
       expect((await fetch(firstHealthUrl)).ok).toBe(true);
       expect((await fetch(secondHealthUrl)).ok).toBe(true);
@@ -541,7 +593,9 @@ describe("provider local service", () => {
     );
 
     try {
-      const firstLease = await ensureModelProviderLocalService(model);
+      const firstLease = await withSpawnReadyHealthProbe(() =>
+        ensureModelProviderLocalService(model),
+      );
       firstLease?.release();
       expect((await fetch(healthUrl)).ok).toBe(true);
       firstForkedPid = await readPidFile(forkedPidPath);
@@ -582,6 +636,30 @@ describe("provider local service", () => {
       "local-fast-exit local service exited before readiness with code 17",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("preserves UTF-8 split across local service startup diagnostic chunks", async () => {
+    const port = await freePort();
+    const expected = "startup-😀-failure";
+    const serviceScript = [
+      `const bytes=Buffer.from(${JSON.stringify(expected)},"utf8");`,
+      `const split=Buffer.byteLength("startup-","utf8")+2;`,
+      `process.stderr.write(bytes.subarray(0,split));`,
+      `setTimeout(()=>process.stderr.write(bytes.subarray(split),()=>process.exit(17)),75);`,
+    ].join("");
+    const target = {
+      providerId: "local-utf8-exit",
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      service: {
+        command: process.execPath,
+        args: ["-e", serviceScript],
+        readyTimeoutMs: 60_000,
+      },
+    };
+
+    await expect(ensureProviderLocalService(target)).rejects.toThrow(
+      `local-utf8-exit local service exited before readiness with code 17; stderr: ${expected}`,
+    );
   });
 
   it("reports a local service startup signal exit without waiting for readiness timeout", async () => {

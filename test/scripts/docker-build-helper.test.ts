@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
 const DOCKER_ALL_SCHEDULER_PATH = "scripts/test-docker-all.mjs";
@@ -47,6 +51,8 @@ const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scena
 const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
+const CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH =
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs";
 const LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH = "scripts/e2e/live-plugin-tool-docker.sh";
 const NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const SKILL_INSTALL_DOCKER_E2E_PATH = "scripts/e2e/skill-install-docker.sh";
@@ -2731,6 +2737,7 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
   it("bounds Codex npm plugin live assertion file and transcript reads", () => {
     const assertions = readFileSync(CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_PATH, "utf8");
+    const followthrough = readFileSync(CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH, "utf8");
     const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
 
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES");
@@ -2738,6 +2745,11 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES");
     expect(assertions).toContain("OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES");
+    expect(assertions).toContain(
+      "COALESCE(SUM(length(CAST(event_json AS BLOB))), 0) AS transcript_bytes",
+    );
+    expect(assertions).toContain('db.exec("BEGIN")');
+    expect(assertions).toContain('db.exec("ROLLBACK")');
     expect(assertions).toContain("const AGENT_TURN_TIMEOUT_SECONDS = readPositiveIntEnv(");
     expect(assertions).toContain('"OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS"');
     expect(assertions).toContain("requestTimeoutMs: AGENT_TURN_TIMEOUT_SECONDS * 1000");
@@ -2754,7 +2766,24 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     expect(assertions).not.toContain('const content = fs.readFileSync(filePath, "utf8")');
     expect(runner).toContain("docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-plugin-pack.log");
-    expect(runner).toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
+    expect(assertions).toContain(
+      'readTextFileTail(\n        "/tmp/openclaw-codex-agent-after-uninstall.err",',
+    );
+    expect(runner).toContain('assert-agent-error "$post_uninstall_status"');
+    expect(runner).toContain("assert-followthrough");
+    expect(runner).toContain("followthrough-turn.mjs");
+    expect(followthrough).toContain('"dist",\n  "plugin-sdk",\n  "agent-runtime.js"');
+    expect(followthrough).toContain("agentCommandFromIngress");
+    expect(followthrough).toContain('sourceReplyDeliveryMode: "message_tool_only"');
+    expect(followthrough).toContain('thinking: "medium"');
+    expect(runner).toContain("without passing final");
+    expect(runner).toContain("omitted, not false");
+    expect(runner).not.toContain("final=false");
+    expect(runner).toContain("final=true");
+    expect(assertions).toContain('"assert-followthrough": assertFollowthrough');
+    expect(assertions).toContain("expected exact progress and completion replies");
+    expect(assertions).toContain("unexpected Codex follow-through artifact");
+    expect(runner).not.toContain("tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err");
     expect(runner).not.toContain("cat /tmp/openclaw-codex-agent-after-uninstall.err");
     const earlyAgentTimeoutEnvIndex = runner.indexOf(
       "docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420",
@@ -2789,6 +2818,59 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
     expect(runner).toContain('--timeout "$AGENT_TURN_TIMEOUT_SECONDS"');
     expect(runner).not.toContain("--timeout 420");
+  });
+
+  it("writes the packaged Codex follow-through result independently of stdout logs", () => {
+    const workDir = tempDirs.make("openclaw-codex-followthrough-");
+    const packageRoot = join(workDir, "package");
+    const runtimeDir = join(packageRoot, "dist", "plugin-sdk");
+    const outputPath = join(workDir, "result.json");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(packageRoot, "package.json"), '{"type":"module"}\n');
+    writeFileSync(
+      join(runtimeDir, "agent-runtime.js"),
+      [
+        "export async function agentCommandFromIngress(opts, runtime) {",
+        '  runtime.log("unexpected runtime output");',
+        '  console.log("unexpected subsystem output");',
+        "  return { captured: opts };",
+        "}",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        CODEX_NPM_PLUGIN_LIVE_FOLLOWTHROUGH_PATH,
+        packageRoot,
+        "followthrough-session",
+        "openai/gpt-5.4",
+        "90",
+        outputPath,
+        "follow through",
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("unexpected subsystem output");
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      captured: expect.objectContaining({
+        sessionId: "followthrough-session",
+        model: "openai/gpt-5.4",
+        message: "follow through",
+        thinking: "medium",
+        timeout: "90",
+        json: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        senderIsOwner: true,
+        allowModelOverride: true,
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+        oneShotCliRun: true,
+      }),
+    });
   });
 
   it.each([
@@ -3404,6 +3486,14 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(dockerfile).toContain("procps");
   });
 
+  it("caches package downloads across prepared Docker E2E image builds", () => {
+    const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
+
+    expect(dockerfile).toContain(
+      "--mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked",
+    );
+  });
+
   it("keeps onboarding Docker E2E resource-guarded", () => {
     const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
 
@@ -3929,11 +4019,13 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120"',
     );
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local"',
     );
+    expect(scenarios).toContain('"test-install-sh-e2e-docker.sh"');
+    expect(scenarios).not.toContain("pnpm test:install:e2e");
     expect(scenarios).toContain(
       '"OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui"',
     );
@@ -4023,13 +4115,68 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain('if [ "$UPDATE_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_START_FAILED" -ne 0 ]; then');
     expect(runner).toContain('if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then');
-    expect(runner).toContain("ActiveState=active");
+    expect(runner).toContain('printf "%s\\n" "\\$!" >"$GATEWAY_PID_FILE"');
+    expect(runner).toContain('printf "ActiveState=active\\nSubState=running');
+    expect(runner).toContain('status.service?.runtime?.status !== "running"');
+    expect(runner).toContain("FAIL: gateway service was not running before update");
     expect(runner).toContain("OPENCLAW_NO_RESPAWN=1");
     expect(runner).toContain("is-enabled)");
     expect(runner).toContain("/healthz");
     expect(runner).toContain("FAIL: gateway install failed before update");
     expect(runner).not.toContain('gateway-install.err" || true');
     expect(runner).not.toContain("WARNING: Gateway status probe failed");
+  });
+
+  it("keeps a stalled multi-node health request inside the probe deadline", () => {
+    const runner = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const startMarker = "if PORT=18789 node <<NODE\n";
+    const endMarker = "\nNODE\n  then";
+    const start = runner.indexOf(startMarker);
+    const end = runner.indexOf(endMarker, start + startMarker.length);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const probe = runner.slice(start + startMarker.length, end);
+    const workDir = tempDirs.make("openclaw-multi-node-health-timeout-");
+    const preloadPath = join(workDir, "stalling-fetch.mjs");
+
+    writeFileSync(
+      preloadPath,
+      [
+        "// Advance the deadline when the request aborts without waiting 30 wall-clock seconds.",
+        "const realSetTimeout = globalThis.setTimeout;",
+        "let now = 0;",
+        "Date.now = () => now;",
+        "Object.defineProperty(AbortSignal, 'timeout', { value(delayMs) {",
+        "  const controller = new AbortController();",
+        "  realSetTimeout(() => {",
+        "    now += delayMs;",
+        "    controller.abort(new DOMException('health deadline elapsed', 'TimeoutError'));",
+        "  }, 0);",
+        "  return controller.signal;",
+        "} });",
+        "globalThis.fetch = async (_url, init = {}) => await new Promise((_resolve, reject) => {",
+        "  init.signal.addEventListener('abort', () => {",
+        "    process.stderr.write('hung fetch aborted\\n');",
+        "    reject(init.signal.reason);",
+        "  }, { once: true });",
+        "});",
+      ].join("\n"),
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preloadPath).href, "--input-type=module", "--eval", probe],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PORT: "18789" },
+        timeout: 5_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr.match(/hung fetch aborted/gu)).toHaveLength(1);
+    expect(result.stderr).toContain("health deadline elapsed");
   });
 
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
@@ -4275,8 +4422,8 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
   it("passes installer tag env to bash, not curl", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_BETA=1 bash');
-    expect(runner).toContain('curl -fsSL "$INSTALL_URL" | OPENCLAW_VERSION="$INSTALL_TAG" bash');
+    expect(runner).toContain('OPENCLAW_BETA=1 bash "$installer"');
+    expect(runner).toContain('OPENCLAW_VERSION="$INSTALL_TAG" bash "$installer"');
     expect(runner).not.toContain('OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash');
     expect(runner).not.toContain(
       'OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash',
@@ -4319,6 +4466,23 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(helper).not.toContain('require("node:readline")');
     expect(helper).not.toContain("fs.readFileSync");
     expect(helper).not.toContain('.split("\\n")');
+  });
+
+  it("exports SQLite-backed installer E2E sessions before scanning tools", () => {
+    const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
+    const start = runner.indexOf("assert_session_used_tools() {");
+    const end = runner.indexOf("\nsession_jsonl_path()", start);
+    const helper = runner.slice(start, end);
+
+    expect(helper).toContain('jsonl="$(session_jsonl_path "$profile" "$session_id")"');
+    expect(helper).toContain('if [[ ! -f "$jsonl" ]]');
+    expect(helper).toContain('openclaw --profile "$profile" sessions export-trajectory');
+    expect(helper).toContain('--session-key "agent:main:explicit:${session_id}"');
+    expect(helper).toContain('--workspace "$export_workspace"');
+    expect(helper).toContain(
+      'jsonl="$export_workspace/.openclaw/trajectory-exports/scan/events.jsonl"',
+    );
+    expect(helper).toContain('rm -rf "$export_workspace"');
   });
 
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {

@@ -4,7 +4,6 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   buildBackupArchiveBasename,
@@ -16,6 +15,7 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
@@ -27,6 +27,7 @@ import {
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { formatErrorMessage } from "./errors.js";
+import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { writeJson } from "./json-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
@@ -363,17 +364,35 @@ function normalizeBackupFilterPath(value: string): string {
   return value.replaceAll("\\", "/").replace(/\/+$/u, "");
 }
 
-function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+const REINSTALLABLE_STATE_ROOTS = new Set(["dev", "git", "npm", "npm-runtime", "tools"]);
+
+function buildStateBackupFilter(
+  stateDir: string,
+  preservedStatePaths: readonly string[] = [],
+): (filePath: string) => boolean {
   const normalizedStateDir = normalizeBackupFilterPath(stateDir);
-  const extensionsPrefix = `${normalizedStateDir}/extensions/`;
+  const statePrefix = `${normalizedStateDir}/`;
+  const resolvedPreservedPaths = preservedStatePaths.map((entry) => path.resolve(entry));
 
   return (filePath: string): boolean => {
     const normalizedFilePath = normalizeBackupFilterPath(filePath);
-    if (!normalizedFilePath.startsWith(extensionsPrefix)) {
+    if (!normalizedFilePath.startsWith(statePrefix)) {
       return true;
     }
 
-    return !normalizedFilePath.slice(extensionsPrefix.length).split("/").includes("node_modules");
+    const segments = normalizedFilePath.slice(statePrefix.length).split("/");
+    if (REINSTALLABLE_STATE_ROOTS.has(segments[0] ?? "")) {
+      const resolvedFilePath = path.resolve(filePath);
+      // Configured workspaces nested under a managed root remain authoritative
+      // user state. Keep their ancestors traversable without admitting siblings.
+      return resolvedPreservedPaths.some(
+        (preservedPath) =>
+          isPathWithin(resolvedFilePath, preservedPath) ||
+          isPathWithin(preservedPath, resolvedFilePath),
+      );
+    }
+
+    return segments[0] !== "extensions" || !segments.includes("node_modules");
   };
 }
 
@@ -474,26 +493,14 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
-function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
-
-function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
-  if (tableExistsSql(db, "delivery_queue_entries")) {
-    db.prepare("DELETE FROM delivery_queue_entries").run();
-  }
-}
-
 async function listStateSqlitePaths(params: {
   stateDir: string;
   globalStateSqlitePath: string;
+  preservedStatePaths?: readonly string[];
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
-  const extensionsFilter = buildExtensionsNodeModulesFilter(params.stateDir);
+  const stateFilter = buildStateBackupFilter(params.stateDir, params.preservedStatePaths);
   async function visit(dir: string): Promise<void> {
     let entries: import("node:fs").Dirent[];
     try {
@@ -509,12 +516,12 @@ async function listStateSqlitePaths(params: {
         continue;
       }
       if (entry.isDirectory()) {
-        if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
+        if (stateFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
           await visit(entryPath);
         }
       } else if (
         entry.isFile() &&
-        extensionsFilter(entryPath) &&
+        stateFilter(entryPath) &&
         !isStatePackageContentPath(entryPath, params.stateDir)
       ) {
         const resolvedEntryPath = path.resolve(entryPath);
@@ -576,6 +583,7 @@ async function listStateSqlitePaths(params: {
 async function createStateSqliteBackupPlan(params: {
   stateDir: string;
   tempDir: string;
+  preservedStatePaths?: readonly string[];
 }): Promise<StateSqliteBackupPlan> {
   // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
   // tempDir outside stateDir, and this ordering prevents future overlap from
@@ -589,26 +597,38 @@ async function createStateSqliteBackupPlan(params: {
   const discovery = await listStateSqlitePaths({
     stateDir: params.stateDir,
     globalStateSqlitePath,
+    preservedStatePaths: params.preservedStatePaths,
   });
+  const globalStateIdentity = await fs.stat(globalStateSqlitePath).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  const canonicalGlobalSourcePath = globalStateIdentity
+    ? await fs.realpath(globalStateSqlitePath)
+    : globalStateSqlitePath;
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
     // Raw-copying malformed or unreadable databases would restore unsafe state.
     // Resolve the canonical global path so a symlinked DB reads the target's
     // live WAL/SHM state instead of looking for sidecars beside the symlink.
-    const sourceDatabasePath =
-      path.resolve(archiveSourcePath) === globalStateSqlitePath
-        ? await fs.realpath(archiveSourcePath)
-        : archiveSourcePath;
+    const archiveSourceIdentity = await fs.stat(archiveSourcePath);
+    const isGlobalStateDatabase =
+      globalStateIdentity !== undefined &&
+      sameFileIdentity(globalStateIdentity, archiveSourceIdentity);
+    // Every hardlink/symlink alias of the canonical global DB must read its
+    // canonical WAL and receive the same transient-row sanitizer.
+    const sourceDatabasePath = isGlobalStateDatabase
+      ? canonicalGlobalSourcePath
+      : archiveSourcePath;
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       await createVerifiedSqliteSnapshot({
         sourcePath: sourceDatabasePath,
         targetPath: sourcePath,
-        transform:
-          path.resolve(archiveSourcePath) === globalStateSqlitePath
-            ? sanitizeGlobalStateSqliteSnapshot
-            : undefined,
+        transform: isGlobalStateDatabase ? sanitizeOpenClawGlobalStateSnapshot : undefined,
       });
     } catch (err) {
       throw new Error(
@@ -692,11 +712,19 @@ export async function createBackupArchive(
   const tempArchivePath = buildTempArchivePath(outputPath);
   const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
+  const preservedStatePaths = [
+    plan.configPath,
+    plan.oauthDir,
+    ...plan.skipped
+      .filter((asset) => asset.kind === "workspace" && asset.reason === "covered")
+      .map((asset) => asset.sourcePath),
+  ].filter((entry) => stateAsset && isPathWithin(entry, stateAsset.sourcePath));
   try {
     const stateSqliteBackup = stateAsset
       ? await createStateSqliteBackupPlan({
           stateDir: stateAsset.sourcePath,
           tempDir,
+          preservedStatePaths,
         })
       : { snapshots: [], discoveredSourcePaths: new Set<string>() };
     const sourcePathRemaps = new Map<string, string>();
@@ -722,8 +750,8 @@ export async function createBackupArchive(
     await writeJson(manifestPath, manifest, { trailingNewline: true });
 
     const tar = await loadTarRuntime();
-    const extensionsFilter = stateAsset
-      ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
+    const stateFilter = stateAsset
+      ? buildStateBackupFilter(stateAsset.sourcePath, preservedStatePaths)
       : undefined;
     const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
     let skippedVolatileCount = 0;
@@ -740,7 +768,7 @@ export async function createBackupArchive(
       if (resolvedEntryPath === manifestPath) {
         return true;
       }
-      if (extensionsFilter && !extensionsFilter(entryPath)) {
+      if (stateFilter && !stateFilter(entryPath)) {
         return false;
       }
       const sqliteSourceKind = stateAsset

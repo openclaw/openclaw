@@ -132,6 +132,10 @@ const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
 );
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -345,6 +349,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
     loadHandlers: loadVoicewakeHandlers,
   }),
@@ -514,6 +522,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
       "openclaw.setup.activate",
@@ -642,6 +651,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.rename",
       "sessions.groups.delete",
       "sessions.dispatch",
+      "sessions.reclaim",
     ],
     loadHandlers: loadSessionsHandlers,
   }),

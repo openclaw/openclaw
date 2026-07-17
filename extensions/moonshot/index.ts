@@ -1,7 +1,7 @@
 // Moonshot plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
-import { MOONSHOT_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -10,11 +10,11 @@ import {
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildMoonshotProvider } from "./provider-catalog.js";
-import { KIMI_K2_7_CODE_MODEL_ID, resolveThinkingProfile } from "./provider-policy-api.js";
+import { isMoonshotAlwaysThinkingModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
-const moonshotThinkingStreamHooks = MOONSHOT_THINKING_STREAM_HOOKS;
+const moonshotThinkingStreamHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -70,11 +70,11 @@ export default defineSingleProviderPluginEntry({
       }),
     ...moonshotThinkingStreamHooks,
     wrapSimpleCompletionStreamFn: (ctx) =>
-      ctx.modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID
+      isMoonshotAlwaysThinkingModelId(ctx.modelId)
         ? moonshotThinkingStreamHooks.wrapStreamFn?.(ctx)
         : ctx.streamFn,
     resolveThinkingProfile,
-    isModernModelRef: ({ modelId }) => modelId.trim().toLowerCase() === KIMI_K2_7_CODE_MODEL_ID,
+    isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

@@ -16,11 +16,15 @@ because it does not provide `node:sqlite`.
 
 The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing
+- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens their Control UI from the resolved service endpoint
 - opens the Gateway-served Control UI with its resolved authentication URL
+- opens the Control UI in onboarding mode after its first-run install, which
+  offers to import detected Claude Code, Codex, or Hermes memories into the
+  agent workspace (the same import stays available later under
+  Settings → Import Memory)
 - renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
 - remains available from the system tray when its window is closed
 

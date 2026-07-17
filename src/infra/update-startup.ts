@@ -20,6 +20,10 @@ import {
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "./gateway-supervision.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -422,6 +426,13 @@ async function runAutoUpdateCommand(params: {
   restartDrainTimeoutMs: number | undefined;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
+  if (isGatewayExternallySupervised()) {
+    return {
+      ok: false,
+      code: null,
+      reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+    };
+  }
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
     includeLinuxOpenClawGatewayServiceMarker: true,
   });
@@ -537,8 +548,10 @@ export async function runGatewayUpdateCheck(params: {
     normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const auto = resolveAutoUpdatePolicy(params.cfg);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
+  const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
   const isAutoUpdateChannel = configuredChannel === "stable" || configuredChannel === "beta";
-  const shouldRunAutoUpdate = isAutoUpdateChannel && auto.enabled && !autoDisabledByEnv;
+  const shouldRunAutoUpdate =
+    isAutoUpdateChannel && auto.enabled && !autoDisabledByEnv && !autoDisabledByExternalSupervisor;
   const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
   if (!shouldRunUpdateHints && !shouldRunAutoUpdate) {
     if (configuredChannel === "extended-stable") {
@@ -664,6 +677,13 @@ export async function runGatewayUpdateCheck(params: {
       params.log.info("auto-update disabled by OPENCLAW_NO_AUTO_UPDATE", {
         version: resolved.version,
         tag,
+      });
+    }
+    if (channel !== "extended-stable" && auto.enabled && autoDisabledByExternalSupervisor) {
+      params.log.info("auto-update delegated to external supervisor", {
+        version: resolved.version,
+        tag,
+        reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
       });
     }
 
