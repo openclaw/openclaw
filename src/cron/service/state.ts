@@ -199,12 +199,12 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 };
 
 /** Process-local admission state shared by every execution entry point of one cron service. */
-export type CronRunAdmission = {
+type CronRunAdmission = {
   active: number;
   waiters: Array<(release: (() => void) | null) => void>;
 };
 
-export type QueuedCronRunReservation = {
+type QueuedCronRunReservation = {
   identity: object;
   markerAtMs: number;
   preserveWhenDisabled: boolean;
