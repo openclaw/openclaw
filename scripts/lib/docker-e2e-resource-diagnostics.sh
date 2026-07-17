@@ -112,7 +112,15 @@ docker_e2e_docker_run_with_resource_diagnostics() {
   elif [ -x /usr/bin/mkfifo ]; then
     mkfifo_bin=/usr/bin/mkfifo
   fi
-  if [ -z "$mkfifo_bin" ] || ! "$mkfifo_bin" "$stderr_fifo" "$capture_fifo"; then
+  local fifo_status=1
+  if [ -n "$mkfifo_bin" ]; then
+    local previous_umask=""
+    previous_umask="$(umask)"
+    umask 077
+    "$mkfifo_bin" "$stderr_fifo" "$capture_fifo" && fifo_status=0 || fifo_status="$?"
+    umask "$previous_umask"
+  fi
+  if [ "$fifo_status" -ne 0 ]; then
     docker_e2e_remove_diagnostic_file "$stderr_file" "$stderr_fifo" "$capture_fifo"
     docker_e2e_timeout_cmd \
       "$timeout_value" \
