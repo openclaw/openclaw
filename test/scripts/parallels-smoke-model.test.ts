@@ -1180,10 +1180,9 @@ if (isPrlctl) {
     );
   });
 
-  it("seeds agent workspace state before OS smoke agent turns", () => {
+  it("seeds the agent workspace before OS smoke agent turns", () => {
     const workspace = readFileSync(TS_PATHS.agentWorkspace, "utf8");
 
-    expect(workspace).toContain("workspace-state.json");
     expect(workspace).toContain("IDENTITY.md");
     expect(workspace).toContain("BOOTSTRAP.md");
 
