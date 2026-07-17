@@ -1392,6 +1392,15 @@ describe("channel turn kernel", () => {
     expect(result.dispatched).toBe(true);
     expect(events).toEqual(["record", "dispatch"]);
     expect(deliver).not.toHaveBeenCalled();
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
     expect(onFinalize).toHaveBeenCalledTimes(1);
     const [finalized] = requireFirstMockCall(onFinalize, "finalize");
     const finalizedResult = finalizeResult(finalized);

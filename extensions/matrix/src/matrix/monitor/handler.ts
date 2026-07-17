@@ -2494,10 +2494,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             },
             replyOptions: {
               skillFilter: roomConfig?.skills,
-              // Keep block streaming enabled when explicitly requested, even
-              // with draft previews on. The draft remains the live preview
-              // for the current assistant block, while block deliveries
-              // finalize completed blocks into their own preserved events.
+              // Preserve explicit block streaming with draft previews: drafts update the live
+              // block, while block deliveries finalize completed blocks as separate events.
               disableBlockStreaming: !blockStreamingEnabled,
               onPartialReply: draftStream
                 ? (payload) => {

@@ -217,8 +217,11 @@ async function runPreparedChannelTurnCoreInTrace<
   });
   let dispatchResult: TDispatchResult;
   try {
+    if (admission.kind === "observeOnly" && !options.suppressObserveOnlyDispatch) {
+      await params.runDispatch();
+    }
     dispatchResult =
-      options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
+      admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
         : await params.runDispatch();
     maybeWarnZeroCountVisibleDispatch({
