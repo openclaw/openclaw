@@ -18,6 +18,7 @@ import {
   resolveMemoryWikiConfig,
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
+import { ensureMemoryWikiVaultGeneration } from "./log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
@@ -59,7 +60,10 @@ async function seedCompiledDigest(params: {
     fs.writeFile(path.join(params.config.vault.path, "WIKI.md"), "# Memory Wiki\n", "utf8"),
     fs.writeFile(path.join(params.config.vault.path, ".openclaw-wiki", "log.jsonl"), "", "utf8"),
   ]);
-  activateMemoryWikiCompiledCacheOwner(params.config, `test:${params.config.vault.path}`);
+  activateMemoryWikiCompiledCacheOwner(
+    params.config,
+    await ensureMemoryWikiVaultGeneration(params.config.vault.path),
+  );
   await writeMemoryWikiCompiledCache(params.config, {
     digest: {
       claimCount: params.claimCount,
