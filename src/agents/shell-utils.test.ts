@@ -10,7 +10,6 @@ import {
   detectRuntimeShell,
   getBashShellConfig,
   getBashShellEnv,
-  getShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
@@ -316,7 +315,7 @@ describe("getBashShellConfig", () => {
   });
 });
 
-describe("getShellEnv", () => {
+describe("getBashShellEnv", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
@@ -330,7 +329,7 @@ describe("getShellEnv", () => {
 
   it("returns an env object with the OpenClaw bin dir on PATH", () => {
     process.env.PATH = "/usr/bin";
-    const env = getShellEnv();
+    const env = getBashShellEnv();
 
     expect(env.PATH).toContain("/usr/bin");
     expect(env.PATH).toContain(".openclaw");
@@ -339,7 +338,7 @@ describe("getShellEnv", () => {
   it("collapses case-insensitive PATH duplicates before Windows spawn", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    const env = getShellEnv({ PATH: "/selected", Path: "/discarded" });
+    const env = getBashShellEnv(undefined, { PATH: "/selected", Path: "/discarded" });
 
     expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
     expect(env.PATH).toContain("/selected");
@@ -353,7 +352,7 @@ describe("getShellEnv", () => {
         "-e",
         "process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => key.toLowerCase() === 'path')))",
       ],
-      { encoding: "utf8", env: getShellEnv() },
+      { encoding: "utf8", env: getBashShellEnv() },
     );
 
     expect(result.status).toBe(0);

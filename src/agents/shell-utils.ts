@@ -386,7 +386,7 @@ export function sanitizeBinaryOutput(
   return chunks.join("");
 }
 
-export function getShellEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function getShellEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const binDir = getBinDir();
   const pathKeys = Object.keys(sourceEnv).filter((key) => key.toLowerCase() === "path");
   // Node sorts Windows environment keys and passes only the first case-insensitive match.
@@ -408,8 +408,11 @@ export function getShellEnv(sourceEnv: NodeJS.ProcessEnv = process.env): NodeJS.
   return env;
 }
 
-export function getBashShellEnv(shellPath?: string): NodeJS.ProcessEnv {
-  const env = getShellEnv();
+export function getBashShellEnv(
+  shellPath?: string,
+  sourceEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = getShellEnv(sourceEnv);
   const usrBin = getWindowsGitBashUsrBin(shellPath);
   if (!usrBin) {
     return env;
