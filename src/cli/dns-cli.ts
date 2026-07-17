@@ -15,12 +15,19 @@ import {
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 
-type RunOpts = { allowFailure?: boolean; inherit?: boolean };
+type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeout?: number };
+
+// Quick system probes (brew --prefix, brew list, sudo mkdir, sudo tee) resolve
+// in well under a second on healthy hosts. Bound every spawned command so a
+// stuck NFS mount, unresponsive daemon, or hung sudo prompt does not block the
+// CLI indefinitely.
+const DEFAULT_SYSTEM_CMD_TIMEOUT_MS = 10_000;
 
 function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
   });
   if (res.error) {
     throw res.error;
@@ -51,6 +58,7 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
+    timeout: DEFAULT_SYSTEM_CMD_TIMEOUT_MS,
   });
   if (res.error) {
     throw res.error;
@@ -87,7 +95,7 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
 }
 
 function detectBrewPrefix(): string {
-  const out = run("brew", ["--prefix"]);
+  const out = run("brew", ["--prefix"], { timeout: DEFAULT_SYSTEM_CMD_TIMEOUT_MS });
   const prefix = out.trim();
   if (!prefix) {
     throw new Error("failed to resolve Homebrew prefix");
@@ -201,7 +209,10 @@ export function registerDnsCli(program: Command) {
       const importGlob = path.join(confDir, "*.server");
       const serverPath = path.join(confDir, `${wideAreaDomain.replace(/\.$/, "")}.server`);
 
-      run("brew", ["list", "coredns"], { allowFailure: true });
+      run("brew", ["list", "coredns"], {
+        allowFailure: true,
+        timeout: DEFAULT_SYSTEM_CMD_TIMEOUT_MS,
+      });
       run("brew", ["install", "coredns"], {
         inherit: true,
         allowFailure: true,
