@@ -249,8 +249,8 @@ async function rollbackRestartRecoveryReservation(params: {
   reservation: MainSessionRecoveryReservation;
   sessionKey: string;
   storePath: string;
-}): Promise<void> {
-  await retryAsync(
+}) {
+  return await retryAsync(
     async () =>
       await commitMainSessionRecovery({
         command: { kind: params.kind, reservation: params.reservation },
@@ -346,14 +346,21 @@ export async function resumeMainSession(params: {
       },
     });
     if (!recoveryStatePrepared) {
-      await rollbackRestartRecoveryReservation({
+      const rollback = await rollbackRestartRecoveryReservation({
         kind: "cancel_reservation",
         reservation,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
       reservation = undefined;
-      return "skipped";
+      const current = rollback.entry;
+      return current?.sessionId === params.entry.sessionId &&
+        current.status === "running" &&
+        current.abortedLastRun === true &&
+        !current.mainRestartRecovery?.reservation &&
+        !current.mainRestartRecovery?.tombstone
+        ? "failed"
+        : "skipped";
     }
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(sanitizedPendingText),

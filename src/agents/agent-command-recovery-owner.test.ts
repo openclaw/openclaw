@@ -10,6 +10,7 @@ import {
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
+import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 
 const recoveryOwnerMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
@@ -325,6 +326,43 @@ describe("agent command restart recovery ownership", () => {
       }),
     ).resolves.toBe("successor");
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("binds a transferred rollover lease to its exact predecessor", async () => {
+    const base = createTarget();
+    await write(base, {
+      sessionId: base.sessionId,
+      updatedAt: 100,
+      status: "running",
+      abortedLastRun: true,
+    });
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId: base.sessionId,
+      target: { sessionKey, storePath: base.storePath },
+    });
+    if (claim.kind !== "claimed") {
+      throw new Error("expected recovery owner claim");
+    }
+    const target = {
+      ...base,
+      isNewSession: true,
+      previousSessionId: "different-predecessor",
+      sessionId: "successor-session",
+    };
+    const run = vi.fn();
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "claim",
+        opts: { mainRestartRecoveryOwnerLease: claim.lease } as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).rejects.toThrow("recovery owner changed during ingress preparation");
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("allows an explicitly requested fresh session without a predecessor", async () => {

@@ -1131,7 +1131,7 @@ describe("main-session-restart-recovery", () => {
     try {
       await expect(
         recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir }),
-      ).resolves.toEqual({ recovered: 0, failed: 0, skipped: 1 });
+      ).resolves.toEqual({ recovered: 0, failed: 1, skipped: 0 });
     } finally {
       replacementSpy.mockRestore();
     }

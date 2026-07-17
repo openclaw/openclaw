@@ -31,9 +31,13 @@ async function claimAgentCommandRecoveryOwner(params: {
 }): Promise<MainSessionRecoveryOwnerLease | undefined> {
   const transferredLease = params.opts.mainRestartRecoveryOwnerLease;
   if (transferredLease) {
+    const expectedLeaseSessionId = params.prepared.isNewSession
+      ? params.prepared.previousSessionId
+      : params.prepared.sessionId;
     const matchesPreparedTarget =
+      expectedLeaseSessionId !== undefined &&
       transferredLease.lifecycleGeneration === params.lifecycleGeneration &&
-      (transferredLease.sessionId === params.prepared.sessionId || params.prepared.isNewSession) &&
+      transferredLease.sessionId === expectedLeaseSessionId &&
       transferredLease.sessionKey === params.prepared.sessionKey &&
       path.resolve(transferredLease.storePath) === path.resolve(params.prepared.storePath);
     if (!matchesPreparedTarget || !(await validateMainSessionRecoveryOwner(transferredLease))) {
