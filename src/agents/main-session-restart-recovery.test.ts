@@ -1140,21 +1140,19 @@ describe("main-session-restart-recovery", () => {
           (request.params as { idempotencyKey?: unknown }).idempotencyKey,
         );
         const current = loadSessionEntry({ sessionKey: "agent:main:main", storePath })!;
-        await replaceSessionEntry(
-          { sessionKey: "agent:main:main", storePath },
-          {
-            ...current,
-            status: "done",
-            abortedLastRun: false,
-            restartRecoveryDeliveryRunId: undefined,
-            restartRecoveryDeliverySourceRunId: undefined,
-            restartRecoveryRuns: undefined,
-            restartRecoveryTerminalRunIds: [recoveryRunId],
-            mainRestartRecovery: current.mainRestartRecovery
-              ? { ...current.mainRestartRecovery, reservation: undefined }
-              : undefined,
-          },
-        );
+        const completed: SessionEntry = {
+          ...current,
+          status: "done",
+          abortedLastRun: false,
+          restartRecoveryDeliveryRunId: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
+          restartRecoveryRuns: undefined,
+          restartRecoveryTerminalRunIds: [recoveryRunId],
+          mainRestartRecovery: current.mainRestartRecovery
+            ? { ...current.mainRestartRecovery, reservation: undefined }
+            : undefined,
+        };
+        await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, completed);
         throw new Error("accepted response was lost after completion");
       }
       return { runId: "recovery-run", status: "ok", endedAt: Date.now() };
