@@ -501,7 +501,7 @@ export function updateDeliveryQueueEntry(
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
 }
 
-export type ReserveDeliveryQueueAttemptResult =
+type ReserveDeliveryQueueAttemptResult =
   | { status: "reserved"; attemptCount: number }
   | { status: "exhausted"; attemptCount: number };
 
