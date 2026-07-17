@@ -170,11 +170,20 @@ export async function commitMainSessionRecovery(params: {
       }
       const entry = candidate.entry as SessionEntry;
       const previousRecoveryState = entry.mainRestartRecovery;
-      const command =
-        (ownerClaim || params.command.kind === "observe") &&
+      let command: MainSessionRecoveryCommand;
+      if (ownerClaim) {
+        command =
+          ownerClaim.sessionKey === candidate.sessionKey
+            ? ownerClaim
+            : { ...ownerClaim, sessionKey: candidate.sessionKey };
+      } else if (
+        params.command.kind === "observe" &&
         params.command.sessionKey !== candidate.sessionKey
-          ? { ...params.command, sessionKey: candidate.sessionKey }
-          : params.command;
+      ) {
+        command = { ...params.command, sessionKey: candidate.sessionKey };
+      } else {
+        command = params.command;
+      }
       const transition = transitionMainSessionRecovery(entry, command);
       const changed =
         transitionChanged(transition) || previousRecoveryState !== entry.mainRestartRecovery;
