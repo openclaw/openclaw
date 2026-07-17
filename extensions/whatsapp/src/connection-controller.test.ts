@@ -85,7 +85,7 @@ function createSocketWithTransportEmitter() {
     closed = true;
   });
   return {
-    end: vi.fn(async () => {
+    end: vi.fn(async (_error?: Error) => {
       closed = true;
     }),
     ws,
