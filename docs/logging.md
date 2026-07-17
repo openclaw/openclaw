@@ -31,7 +31,7 @@ Each file rotates when the next write would exceed `logging.maxFileBytes`
 active file, such as `openclaw-YYYY-MM-DD.1.log`, and keeps writing to a fresh
 active log instead of suppressing diagnostics.
 
-You can override the path in `~/.openclaw/openclaw.json`:
+You can override the path in `~/.openclaw/openclaw.json` with a nonblank path:
 
 ```json
 {
@@ -40,6 +40,9 @@ You can override the path in `~/.openclaw/openclaw.json`:
   }
 }
 ```
+
+If an older config contains an empty or whitespace-only `logging.file`, run
+`openclaw doctor --fix` to remove it and restore the default log path.
 
 ## How to read logs
 
