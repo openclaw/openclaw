@@ -180,6 +180,36 @@ describe("delivery-queue storage", () => {
       });
     });
 
+    it("keeps permanent completion ownership after ack", async () => {
+      const id = "restart-sentinel-notice:agent:main:main:123";
+      await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "restart complete" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      await ackDelivery(id, tmpDir());
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "must not replay" }],
+          completionRetention: "permanent",
+        },
+        id,
+        tmpDir(),
+      );
+
+      expect(repeated).toEqual({ id, created: false });
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+      expect(readStatus(id)).toBe("completed");
+    });
+
     it("ack is idempotent (no error on missing file)", async () => {
       await expect(ackDelivery("nonexistent-id", tmpDir())).resolves.toBeUndefined();
     });

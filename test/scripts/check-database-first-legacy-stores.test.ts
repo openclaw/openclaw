@@ -128,6 +128,44 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
   });
 
+  it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {
+    const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { readFile } from "node:fs/promises";
+        import path from "node:path";
+        const legacyFilename = "restart-sentinel.json";
+      `,
+      "src/infra/restart-sentinel.ts",
+    );
+    const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { readFile } from "node:fs/promises";
+        import path from "node:path";
+        const legacyFilename = "restart-sentinel.json";
+      `,
+      "src/infra/state-migrations.restart-sentinel.ts",
+    );
+
+    expect(runtimeViolations).toEqual([
+      { kind: "legacy restart sentinel filesystem import", line: 2 },
+      { kind: "legacy restart sentinel filesystem import", line: 3 },
+      { kind: "legacy restart sentinel reference", line: 4 },
+    ]);
+    expect(migrationViolations).toEqual([]);
+  });
+
+  it("flags legacy restart sentinel references outside the migration owner", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        const legacyPath = path.join(stateDir, "restart-sentinel.json");
+        await readFile(legacyPath, "utf8");
+      `,
+      "src/commands/doctor/state-migrations.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy restart sentinel reference", line: 2 }]);
+  });
+
   it("flags retired Diffs viewer sidecar writes", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
@@ -1819,6 +1857,7 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([
+      { kind: "legacy restart sentinel reference", line: 5 },
       { kind: "legacy store filesystem write", line: 5 },
       { kind: "legacy store filesystem write", line: 6 },
       { kind: "legacy store filesystem write", line: 7 },

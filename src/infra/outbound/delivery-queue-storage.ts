@@ -6,6 +6,7 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
+  completeDeliveryQueueEntry,
   commitStagedDeliveryQueueEntry,
   commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
@@ -16,6 +17,7 @@ import {
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueRowMetadata,
+  type DeliveryQueueCompletionRetention,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
@@ -85,6 +87,8 @@ export type QueuedDeliveryPayload = {
   preparedMessageId?: string;
   /** Serializable owner state finalized by both live delivery and recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** Retain a terminal receipt when the producer may replay this stable intent indefinitely. */
+  completionRetention?: DeliveryQueueCompletionRetention;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -135,6 +139,7 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
+    completionRetention: params.completionRetention,
     retryCount: 0,
   };
 }
@@ -224,7 +229,7 @@ type AckDeliveryOptions = {
   retainSpoolArtifacts?: boolean;
 };
 
-/** Remove a successfully delivered entry from the queue. */
+/** Remove a successfully delivered entry, or retain its permanent producer receipt. */
 export async function ackDelivery(
   id: string,
   stateDir?: string,
@@ -233,8 +238,17 @@ export async function ackDelivery(
   // Read the media references before the row goes, then unlink only after the
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
-  const spoolPaths = loadEntrySpoolPaths(id, stateDir);
-  deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  const entry = loadDeliveryQueueEntry(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    stateDir,
+  ) as QueuedDelivery | null;
+  const spoolPaths = entry ? collectEntrySpoolPaths(entry.payloads, stateDir) : [];
+  if (entry?.completionRetention === "permanent") {
+    completeDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  } else {
+    deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+  }
   if (!options?.retainSpoolArtifacts) {
     await releaseSpoolArtifacts(spoolPaths, stateDir);
   }

@@ -13,6 +13,9 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 type QueueStatus = "pending" | "failed" | "completed";
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 const COMPLETED_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const PERMANENT_COMPLETION_RECOVERY_STATE = "completed_permanent";
+
+export type DeliveryQueueCompletionRetention = "permanent";
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
 export type DeliveryQueueRowMetadata = {
@@ -28,6 +31,7 @@ export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  completionRetention?: DeliveryQueueCompletionRetention;
   acknowledgedAt?: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -433,11 +437,19 @@ export function deleteDeliveryQueueEntry(queueName: string, id: string, stateDir
 /** Retain a delivered row as a durable idempotency tombstone. */
 export function completeDeliveryQueueEntry(queueName: string, id: string, stateDir?: string): void {
   const now = Date.now();
+  const current = loadDeliveryQueueEntry(queueName, id, stateDir);
+  const retainPermanently = current?.completionRetention === "permanent";
   const tombstone = {
     id,
     enqueuedAt: now,
     retryCount: 0,
     acknowledgedAt: now,
+    ...(retainPermanently
+      ? {
+          completionRetention: "permanent" as const,
+          recoveryState: PERMANENT_COMPLETION_RECOVERY_STATE,
+        }
+      : {}),
   };
   const completed = upsertDeliveryQueueEntry({
     queueName,
@@ -453,7 +465,8 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
     }
     throw enoent(queueName, id);
   }
-  // Thirty days covers delayed producer replays while bounding successful-row growth.
+  // Ordinary receipts expire after thirty days. Permanent producer receipts
+  // survive because their source intent can outlive any bounded retry window.
   const database = openStateDatabase(stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   executeSqliteQuerySync(
@@ -462,7 +475,13 @@ export function completeDeliveryQueueEntry(queueName: string, id: string, stateD
       .deleteFrom("delivery_queue_entries")
       .where("queue_name", "=", queueName)
       .where("status", "=", "completed")
-      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+      .where("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS)
+      .where((eb) =>
+        eb.or([
+          eb("recovery_state", "is", null),
+          eb("recovery_state", "!=", PERMANENT_COMPLETION_RECOVERY_STATE),
+        ]),
+      ),
   );
 }
 

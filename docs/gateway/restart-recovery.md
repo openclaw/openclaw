@@ -159,6 +159,14 @@ SQLite before the process exits. After boot the gateway posts the outcome back
 to the originating chat and dispatches a one-shot continuation turn so the
 agent picks up exactly where it left off, on the same channel and thread.
 
+The sentinel's typed SQLite columns are authoritative for restart handling;
+its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
+and clears SQLite state without a file fallback. During the storage cutover, a
+bounded state migration runs at startup and through Doctor to preserve a
+validated `restart-sentinel.json` left by the older process after an update.
+The migration verifies the typed row and removes the source file before normal
+restart handling continues.
+
 ## Safety valves and observability
 
 - **Crash-loop breaker:** 3 unclean boots within 5 minutes trip a breaker that

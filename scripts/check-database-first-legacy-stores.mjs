@@ -84,6 +84,20 @@ const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
 
+// The restart handoff must survive its one cutover migration without leaving
+// filesystem fallback imports in the steady-state runtime owner.
+const legacyRestartSentinelMigrationPath = "src/infra/state-migrations.restart-sentinel.ts";
+const legacyRestartSentinelRuntimePath = "src/infra/restart-sentinel.ts";
+const legacyRestartSentinelFilenamePattern = /(?:^|[/\\])restart-sentinel\.json$/u;
+const legacyRestartSentinelRuntimeImportSpecifiers = new Set([
+  "fs",
+  "fs/promises",
+  "node:fs",
+  "node:fs/promises",
+  "node:path",
+  "path",
+]);
+
 const legacyStorePatterns = [
   /\bsessions\.json\b/u,
   /\.trajectory\.jsonl\b/u,
@@ -129,6 +143,7 @@ const allowedRuntimeMigrationPaths = [
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
   "src/infra/state-migrations.mcp-oauth.ts",
+  legacyRestartSentinelMigrationPath,
   "src/infra/state-migrations.workspace-setup.ts",
   "src/infra/state-migrations.web-push.ts",
   "src/infra/state-migrations.node-host.ts",
@@ -325,6 +340,40 @@ export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
 function importSource(node) {
   const moduleSpecifier = node.moduleSpecifier;
   return ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : "";
+}
+
+function collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath) {
+  if (relativePath === legacyRestartSentinelMigrationPath) {
+    return [];
+  }
+
+  const violations = [];
+  const seen = new Set();
+  function add(node, kind) {
+    const line = toLine(sourceFile, node);
+    const key = `${line}:${kind}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    violations.push({ kind, line });
+  }
+
+  function visit(node) {
+    if (ts.isStringLiteralLike(node) && legacyRestartSentinelFilenamePattern.test(node.text)) {
+      add(node, "legacy restart sentinel reference");
+    }
+    if (
+      relativePath === legacyRestartSentinelRuntimePath &&
+      ts.isImportDeclaration(node) &&
+      legacyRestartSentinelRuntimeImportSpecifiers.has(importSource(node))
+    ) {
+      add(node, "legacy restart sentinel filesystem import");
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return violations;
 }
 
 function isHelperWriteModuleSource(source) {
@@ -526,21 +575,28 @@ function legacyCandidateTexts(sourceFile, node) {
  */
 export function collectDatabaseFirstLegacyStoreViolations(
   content,
-  relativePath = "source.ts",
+  inputRelativePath = "source.ts",
   scanOptions = {},
 ) {
+  const relativePath = inputRelativePath.replaceAll("\\", "/");
+  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+  const boundaryViolations = collectLegacyRestartSentinelBoundaryViolations(
+    sourceFile,
+    relativePath,
+  );
   if (isAllowedLegacyOwnerPath(relativePath)) {
-    return [];
+    return boundaryViolations;
   }
 
-  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const currentLegacyWriteAllowances =
     scanOptions.currentLegacyWriteAllowances ?? currentLegacyWriteViolationAllowances(relativePath);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
-  const violations = [];
-  const seenViolations = new Set();
+  const violations = [...boundaryViolations];
+  const seenViolations = new Set(
+    boundaryViolations.map((violation) => `${violation.line}:${violation.kind}`),
+  );
   const fsModuleBindingScopes = [new Map([...fsModuleBindings].map((name) => [name, true]))];
   const fsModulePropertyScopes = [new Map()];
   const fsWriteAliasScopes = [fsWriteAliases];
