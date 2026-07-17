@@ -112,7 +112,17 @@ function shouldPreserveBoundaryDroppedText(params: {
 export class TuiStreamAssembler {
   private runs = new Map<string, RunStreamState>();
 
-  private getOrCreateRun(runId: string): RunStreamState {
+  private createEmptyRunState(): RunStreamState {
+    return {
+      thinkingText: "",
+      contentText: "",
+      contentBlocks: [],
+      sawNonTextContentBlocks: false,
+      displayText: "",
+    };
+  }
+
+  private getTrackedRun(runId: string): RunStreamState {
     let state = this.runs.get(runId);
     if (state) {
       // Refresh insertion order so an active older run survives eviction when newer runs arrive.
@@ -121,16 +131,14 @@ export class TuiStreamAssembler {
       return state;
     }
 
-    state = {
-      thinkingText: "",
-      contentText: "",
-      contentBlocks: [],
-      sawNonTextContentBlocks: false,
-      displayText: "",
-    };
+    state = this.createEmptyRunState();
     this.runs.set(runId, state);
     pruneMapToMaxSize(this.runs, MAX_TRACKED_STREAM_RUNS);
     return state;
+  }
+
+  private getRunForFinalize(runId: string): RunStreamState {
+    return this.runs.get(runId) ?? this.createEmptyRunState();
   }
 
   private updateRunState(
@@ -177,7 +185,7 @@ export class TuiStreamAssembler {
 
   /** Ingests a streaming delta and returns updated display text only when it changed. */
   ingestDelta(runId: string, message: unknown, showThinking: boolean): string | null {
-    const state = this.getOrCreateRun(runId);
+    const state = this.getTrackedRun(runId);
     const previousDisplayText = state.displayText;
     this.updateRunState(state, message, showThinking, {
       boundaryDropMode: "streamed-or-incoming",
@@ -192,7 +200,7 @@ export class TuiStreamAssembler {
 
   /** Finalizes a run, combines any error text, and drops stored stream state. */
   finalize(runId: string, message: unknown, showThinking: boolean, errorMessage?: string): string {
-    const state = this.getOrCreateRun(runId);
+    const state = this.getRunForFinalize(runId);
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;

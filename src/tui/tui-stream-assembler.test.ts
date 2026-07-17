@@ -125,6 +125,20 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBeNull();
   });
 
+  it("does not evict another run when finalizing an already-evicted run id", () => {
+    const assembler = new TuiStreamAssembler();
+    for (let index = 0; index < 200; index += 1) {
+      assembler.ingestDelta(`run-${index}`, messageWithContent([text(`Draft ${index}`)]), false);
+    }
+
+    assembler.ingestDelta("run-200", messageWithContent([text("Newest")]), false);
+
+    expect(assembler.finalize("run-0", messageWithContent([text("Late final")]), false)).toBe(
+      "Late final",
+    );
+    expect(assembler.finalize("run-1", { role: "assistant", content: [] }, false)).toBe("Draft 1");
+  });
+
   it("bounds orphaned run state while retaining recently active runs", () => {
     const assembler = new TuiStreamAssembler();
     for (let index = 0; index < 200; index += 1) {
