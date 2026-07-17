@@ -1,3 +1,4 @@
+import { createCopilotController } from "./modules/copilot-background.js";
 // OpenClaw extension service worker.
 //
 // Thin transport between the OpenClaw extension relay (loopback WebSocket) and
@@ -41,9 +42,10 @@ function setBadge(kind) {
 }
 
 async function getConfig() {
-  const stored = await chrome.storage.local.get(["relayUrl", "token", "groupColor"]);
+  const stored = await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token", "groupColor"]);
   return {
     relayUrl: typeof stored.relayUrl === "string" ? stored.relayUrl : "",
+    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
     token: typeof stored.token === "string" ? stored.token : "",
     groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
   };
@@ -329,6 +331,14 @@ async function connectRelay() {
   // onclose follows onerror and drives the reconnect, so no error handler needed.
 }
 
+const copilot = createCopilotController({
+  getConfig,
+  isTabShared,
+  addTabToOpenClawGroup,
+  attachDebugger,
+  scheduleTabsSync,
+});
+
 function scheduleReconnect() {
   if (reconnectTimer) {
     return;
@@ -366,6 +376,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         await chrome.storage.local.set({
           relayUrl: parsed.relayUrl,
+          gatewayUrl: parsed.gatewayUrl ?? "",
           token: parsed.token,
           groupColor: nearestGroupColor(msg.groupColor),
         });
@@ -373,14 +384,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         relayWs?.close();
         relayWs = null;
         await connectRelay();
+        await copilot.refreshConfig();
         sendResponse({ ok: true });
         return;
       }
       case "unpair": {
-        await chrome.storage.local.remove(["relayUrl", "token"]);
+        await chrome.storage.local.remove(["relayUrl", "gatewayUrl", "token"]);
         relayWs?.close();
         relayWs = null;
         setBadge("off");
+        await copilot.refreshConfig();
         sendResponse({ ok: true });
         return;
       }
@@ -400,10 +413,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           scheduleTabsSync();
           sendResponse({ ok: true, shared: true });
         }
+        await copilot.onConsentChanged();
         return;
       }
       case "isTabShared": {
         sendResponse({ shared: await isTabShared(msg.tabId) });
+        return;
+      }
+      case "prepareCopilotPanel": {
+        const options = await copilot.preparePanel(msg.tabId);
+        sendResponse({ ok: true, ...options });
         return;
       }
       default:
@@ -416,18 +435,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   attachedTabs.delete(tabId);
   scheduleTabsSync();
+  void copilot.onTabRemoved(tabId);
 });
-chrome.tabs.onUpdated.addListener(() => scheduleTabsSync());
-chrome.tabGroups.onUpdated.addListener(() => scheduleTabsSync());
-chrome.tabGroups.onRemoved.addListener(() => scheduleTabsSync());
+chrome.tabs.onUpdated.addListener(() => {
+  scheduleTabsSync();
+  void copilot.onConsentChanged();
+});
+chrome.tabGroups.onUpdated.addListener(() => {
+  scheduleTabsSync();
+  void copilot.onConsentChanged();
+});
+chrome.tabGroups.onRemoved.addListener(() => {
+  scheduleTabsSync();
+  void copilot.onConsentChanged();
+});
 
 // Watchdog: MV3 can stop this worker; the alarm revives it and re-connects.
 chrome.alarms.create("openclaw-relay-watchdog", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "openclaw-relay-watchdog") {
     void connectRelay();
+    void copilot.drainArchives();
   }
 });
 chrome.runtime.onStartup.addListener(() => void connectRelay());
 chrome.runtime.onInstalled.addListener(() => void connectRelay());
 void connectRelay();
+void copilot.initialize();
