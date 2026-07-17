@@ -701,18 +701,24 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
-                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
+                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
                     },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
+                      : []),
                     {
                       check_name: "android-build-play",
                       task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
                     },
                     ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      ? [
+                          { check_name: "android-build-wear", task: "build-wear" },
+                          { check_name: "android-ktlint", task: "ktlint" },
+                        ]
                       : []),
                   ]
                 : [],
@@ -2999,6 +3005,40 @@ jobs:
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
+      # Same-repo runs carry the Gradle user home (dependency, wrapper, and
+      # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
+      # above is evicted so quickly under the repo quota that it rarely
+      # restores, leaving every run to re-resolve the full dependency graph.
+      # Fork PRs and manual dispatches must never produce writable
+      # repository-global snapshots, so they keep the GitHub cache path (their
+      # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
+      - name: Mount Gradle sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # Task-scoped keys keep one semantic writer per snapshot: each matrix
+          # task resolves a different dependency set, and a shared if-missing
+          # key would let a light task (ktlint) win the cold-key race and pin a
+          # thin snapshot the heavy build lanes can never repair. Gradle's own
+          # caches are content-addressed, so stale restored entries are ignored
+          # and dependency-file changes mint a fresh key/snapshot.
+          key: ${{ github.repository }}-gradle-v1-${{ matrix.task }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
+          path: /var/tmp/openclaw-gradle
+          # on-change keeps the snapshot learning: Gradle's build cache
+          # accumulates across runs (if-missing would freeze the first
+          # hydration forever). Entries are content-addressed, task-scoped
+          # keys give one semantic writer, and v1.4.0 still skips commit
+          # after failed/cancelled steps.
+          commit: on-change
+
+      - name: Point Gradle at the sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /var/tmp/openclaw-gradle/gradle-user-home
+          echo "GRADLE_USER_HOME=/var/tmp/openclaw-gradle/gradle-user-home" >> "$GITHUB_ENV"
+
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
@@ -3020,6 +3060,9 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
                 :app:assemblePlayDebug \
@@ -3029,6 +3072,11 @@ jobs:
                 :benchmark:assembleDebug \
                 :wear-shared:assembleDebug \
                 :wear-shared:lintDebug
+              ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache \
+                :wear:assembleDebug \
+                :wear:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -3040,6 +3088,7 @@ jobs:
               ./gradlew --no-daemon --build-cache \
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
+                :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
               ;;
             *)

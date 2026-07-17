@@ -8737,6 +8737,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick troubleshooting
   - H2: Related
 
+## reference/pull-request-review-flow.md
+
+- Route: /reference/pull-request-review-flow
+- Headings:
+  - H2: Barnacle
+  - H2: ClawSweeper
+  - H2: Improve a PR during review
+  - H2: When automation stays quiet
+  - H2: Troubleshooting
+  - H2: Forking the automation
+  - H2: Related
+
 ## reference/release-performance-sweep.md
 
 - Route: /reference/release-performance-sweep

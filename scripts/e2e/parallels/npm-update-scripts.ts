@@ -168,9 +168,7 @@ function windowsAssertAgentOkScript(input: NpmUpdateScriptInput): string {
 ${windowsCodexPlatformPackageRepairFunction()}
 $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.", {
-  legacySetupState: false,
-})}
+${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
 $agentOk = $false
 for ($attempt = 1; $attempt -le 2; $attempt++) {
@@ -277,9 +275,7 @@ wait_for_gateway
 ${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
 "$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
 "$OPENCLAW_BIN" config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.", {
-  legacySetupState: false,
-})}
+${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 ${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
 }
 
@@ -419,9 +415,7 @@ openclaw models set ${shellQuote(input.auth.modelId)}
 ${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.", {
-  legacySetupState: false,
-})}
+${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 ${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
 }
 

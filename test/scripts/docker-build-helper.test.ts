@@ -635,7 +635,7 @@ docker_build_run e2e-build -t demo-image .
       chmodSync(join(workDir, "runner.sh"), 0o755);
 
       const waitForFile = async (filePath: string) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           if (existsSync(filePath)) {
             return;
           }
@@ -648,7 +648,7 @@ docker_build_run e2e-build -t demo-image .
           child.once("exit", (code, signal) => resolve({ code, signal }));
         });
       const waitForDead = async (pid: number) => {
-        for (let attempt = 0; attempt < 100; attempt += 1) {
+        for (let attempt = 0; attempt < 500; attempt += 1) {
           try {
             process.kill(pid, 0);
           } catch {
@@ -1316,6 +1316,150 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     }
   });
 
+  it("explains how to opt out when Docker rejects default resource limits", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-diagnostic-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: NanoCPUs can not be set, as the cgroup is not mounted" >&2
+  return 125
+}
+
+mkfifo() {
+  umask >"$TMPDIR/mkfifo-umask"
+  /usr/bin/mkfifo "$@"
+}
+
+tail() {
+  printf "%s\\n" "$*" >"$TMPDIR/tail-seen"
+  /usr/bin/tail "$@"
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+printf "before Docker\\n" >"$TMPDIR/stderr"
+docker_e2e_docker_cmd run demo 2>>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = before\\ Docker* ]]
+[[ "$stderr" = *"NanoCPUs can not be set"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+[[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
+[[ "$(<"$TMPDIR/mkfifo-umask")" = "0077" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suggest resource opt-out for other Docker failures", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-unrelated-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "docker: Error response from daemon: No such image: cgroup-helper" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"No such image: cgroup-helper"* ]]
+[[ "$stderr" != *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("runs Docker when resource diagnostic capture is unavailable", () => {
+    const workDir = tempDirs.make("openclaw-docker-resource-no-temp-");
+
+    try {
+      const rootDir = process.cwd();
+      const missingTmpDir = join(workDir, "missing");
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(missingTmpDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+docker() {
+  printf "%s\\n" "$*" >>${shellQuote(join(workDir, "docker-seen"))}
+  return 7
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+docker_e2e_timeout_cmd() {
+  shift
+  "$@"
+}
+
+set +e
+docker_e2e_docker_cmd run demo 2>/dev/null
+status="$?"
+set -e
+
+[[ "$status" = "7" ]]
+[[ "$(grep -c '^run ' ${shellQuote(join(workDir, "docker-seen"))})" = "1" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid Docker run pids limits before invoking docker", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-pids-"));
 
@@ -1652,6 +1796,59 @@ docker_e2e_docker_run_cmd run demo
 
 [[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
 [[ "$(<"$TMPDIR/docker-seen")" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("diagnoses rejected resource limits in the package-backed fallback", () => {
+    const workDir = tempDirs.make("openclaw-docker-package-diagnostic-");
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+timeout() {
+  if [[ "$1" = "--kill-after=1s" ]]; then
+    return 0
+  fi
+  shift 2
+  "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "OCI runtime create failed: crun: controller pids is not available" >&2
+  return 125
+}
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+set +e
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$status" = "125" ]]
+[[ "$stderr" = *"controller pids is not available"* ]]
+[[ "$stderr" = *"Docker E2E resource limits are incompatible with this Docker runtime"* ]]
+[[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
+[[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

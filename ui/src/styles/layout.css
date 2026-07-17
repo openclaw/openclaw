@@ -1455,7 +1455,8 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-sort:hover,
-.sidebar-session-sort[aria-expanded="true"] {
+.sidebar-session-sort[aria-expanded="true"],
+.sidebar-session-sort[aria-pressed="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
 }
@@ -1624,6 +1625,35 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-session-catalog-project__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+  padding: 2px 12px 0 28px;
+  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+}
+
+.sidebar-session-catalog-project__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.sidebar-session-catalog-project__count {
+  width: 20px;
+  flex: 0 0 20px;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.58;
+  text-align: center;
 }
 
 .sidebar-session-catalog-host__sessions .sidebar-recent-session__link {

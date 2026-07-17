@@ -109,6 +109,7 @@ export type OfficialExternalPluginCatalogEntry = {
   description?: string;
   source?: string;
   kind?: string;
+  featured?: boolean;
   install?: {
     candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
   };

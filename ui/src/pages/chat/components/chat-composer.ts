@@ -5,11 +5,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import {
-  normalizeChatSendShortcut,
-  type ChatFollowUpMode,
-  type ChatSendShortcut,
-} from "../../../app/settings.ts";
+import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
@@ -24,6 +20,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -102,7 +99,7 @@ type ChatComposerProps = {
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
@@ -1677,7 +1674,7 @@ type ChatRunControlsProps = {
   hasAttachments?: boolean;
   hasMessages: boolean;
   isBusy: boolean;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   sending: boolean;
   voiceActive?: boolean;
   voiceStatus?: RealtimeTalkStatus;
@@ -1695,13 +1692,24 @@ type ChatRunControlsProps = {
 
 function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
-  const steersActiveRun = props.followUpMode !== "queue";
-  const activeRunActionLabel = steersActiveRun
-    ? t("chat.queue.steer")
-    : t("chat.runControls.queue");
-  const activeRunActionDescription = steersActiveRun
-    ? t("chat.followUpModeSteer")
-    : t("chat.runControls.queueMessage");
+  const steersActiveRun = props.followUpMode === "steer";
+  const interruptsActiveRun = props.followUpMode === "interrupt";
+  const activeRunActionLabel =
+    props.followUpMode === undefined
+      ? t("chat.runControls.send")
+      : steersActiveRun
+        ? t("chat.queue.steer")
+        : interruptsActiveRun
+          ? t("chat.runControls.send")
+          : t("chat.runControls.queue");
+  const activeRunActionDescription =
+    props.followUpMode === undefined
+      ? t("chat.runControls.sendMessage")
+      : steersActiveRun
+        ? t("chat.followUpModeSteer")
+        : interruptsActiveRun
+          ? t("chat.runControls.sendMessage")
+          : t("chat.runControls.queueMessage");
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {
       props.onStoreDraft(props.draft);

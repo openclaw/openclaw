@@ -526,6 +526,31 @@ button.workspace-tab:hover {
   white-space: nowrap;
 }
 
+.workspace-custom-widget-approvals__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-custom-widget-approvals__actions {
+  display: flex;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  gap: 6px;
+}
+
+.workspace-custom-widget-approvals__requested-by,
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  white-space: normal;
+}
+
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 /* Live-run / health status dot. */
 .workspace-dot {
   flex: none;

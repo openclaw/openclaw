@@ -203,6 +203,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
