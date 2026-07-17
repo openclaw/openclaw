@@ -357,6 +357,9 @@ export function createHostRegistrars(state: PluginRegistryState) {
     const description = normalizeOptionalHostHookString(descriptor.description);
     const placement = normalizeOptionalHostHookString(descriptor.placement);
     const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
+    const rawSessionActions = normalizeHostHookStringList(descriptor.sessionActions);
+    const sessionActions = rawSessionActions?.map((actionId) => normalizeHostHookString(actionId));
+    const allowChatNavigation = descriptor.allowChatNavigation;
     // The flat API predates required surface/label; preserve shipped JS-plugin behavior.
     const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
     if (
@@ -365,7 +368,10 @@ export function createHostRegistrars(state: PluginRegistryState) {
       !controlUiSurfaces.has(surface) ||
       description === "" ||
       placement === "" ||
-      requiredScopes === null
+      requiredScopes === null ||
+      rawSessionActions === null ||
+      sessionActions?.some((actionId) => !actionId) ||
+      (allowChatNavigation !== undefined && typeof allowChatNavigation !== "boolean")
     ) {
       pushDiagnostic({
         level: "error",
@@ -373,6 +379,18 @@ export function createHostRegistrars(state: PluginRegistryState) {
         source: record.source,
         message:
           "control UI descriptor registration requires id, surface, label, and valid optional fields",
+      });
+      return;
+    }
+    if (
+      surface !== "tab" &&
+      ((sessionActions?.length ?? 0) > 0 || allowChatNavigation !== undefined)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `control UI descriptor bridge capabilities require tab surface: ${id}`,
       });
       return;
     }
@@ -447,6 +465,8 @@ export function createHostRegistrars(state: PluginRegistryState) {
         path: tabPath,
         group,
         order,
+        ...(sessionActions !== undefined ? { sessionActions: [...new Set(sessionActions)] } : {}),
+        ...(allowChatNavigation !== undefined ? { allowChatNavigation } : {}),
       },
       source: record.source,
       rootDir: record.rootDir,
