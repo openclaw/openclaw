@@ -1407,6 +1407,45 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const pending = provider.list({ hostIds: ["node:slow-node"] });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          connected: true,
+          sessions: [],
+          error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+        }),
+      ]);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts paired-node discovery while the local catalog is still reading", async () => {
     const home = await createHome();
     process.env.HOME = home;

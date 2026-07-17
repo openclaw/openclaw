@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import type {
   SessionCatalogHost,
   SessionCatalogProvider,
@@ -66,6 +67,9 @@ const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
+// Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
+// The node invoke keeps running so cold native discovery can warm the next poll.
+const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
@@ -1061,17 +1065,21 @@ async function listClaudeSessionCatalog(params: {
         });
       }
       try {
-        const raw = await params.runtime.nodes.invoke({
-          nodeId: node.nodeId,
-          command: CLAUDE_SESSIONS_LIST_COMMAND,
-          params: {
-            limit: query.limitPerHost,
-            ...(query.search ? { searchTerm: query.search } : {}),
-            ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
-          },
-          timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-          scopes: ["operator.write"],
-        });
+        const raw = await withTimeout(
+          params.runtime.nodes.invoke({
+            nodeId: node.nodeId,
+            command: CLAUDE_SESSIONS_LIST_COMMAND,
+            params: {
+              limit: query.limitPerHost,
+              ...(query.search ? { searchTerm: query.search } : {}),
+              ...(query.cursors?.[hostId] ? { cursor: query.cursors[hostId] } : {}),
+            },
+            timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+            scopes: ["operator.write"],
+          }),
+          NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+          { message: "paired node Claude session catalog timed out" },
+        );
         return Object.assign(common, parseCatalogPage(unwrapNodePayload(raw)));
       } catch {
         return Object.assign(common, {
