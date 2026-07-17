@@ -6574,6 +6574,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H1: Llama Cpp plugin
   - H2: Distribution
   - H2: Surface
+  - H2: Default text model
   - H2: Related docs
 
 ## plugins/reference/llm-task.md

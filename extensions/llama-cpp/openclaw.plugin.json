@@ -30,7 +30,7 @@
       "choiceId": "llama-cpp",
       "appGuidedDiscovery": true,
       "choiceLabel": "Local model (llama.cpp)",
-      "choiceHint": "Downloads an approximately 2.5 GB local model",
+      "choiceHint": "Downloads an approximately 5.0 GB local model; requires 16 GB RAM",
       "groupId": "llama-cpp",
       "groupLabel": "Local llama.cpp",
       "groupHint": "No API key required"
