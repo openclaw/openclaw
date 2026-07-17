@@ -124,9 +124,9 @@ function validateOptions(pluginId: string, options: PluginStateLeaseOptions) {
 }
 
 function readBusyTimeout(database: DatabaseSync): number {
-  const row = database.prepare("PRAGMA busy_timeout").get() as
-    | { busy_timeout?: unknown; timeout?: unknown }
-    | undefined; // sqlite-allow-raw -- Narrow connection primitive for bounded lease admission.
+  const row = database // sqlite-allow-raw -- Narrow connection primitive for bounded lease admission.
+    .prepare("PRAGMA busy_timeout")
+    .get() as { busy_timeout?: unknown; timeout?: unknown } | undefined;
   const value = row?.busy_timeout ?? row?.timeout;
   return typeof value === "bigint" ? Number(value) : Number(value ?? 0);
 }
