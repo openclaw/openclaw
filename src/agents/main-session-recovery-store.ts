@@ -142,7 +142,8 @@ export async function commitMainSessionRecovery(params: {
       }
       const selected = entries.find(({ sessionKey }) => sessionKey === params.target.sessionKey);
       let candidate =
-        params.expectedSessionId && selected?.entry.sessionId !== params.expectedSessionId
+        (params.expectedSessionId && selected?.entry.sessionId !== params.expectedSessionId) ||
+        (ownerClaim && selected?.entry.sessionId !== ownerClaim.sessionId)
           ? undefined
           : selected;
       if (reservationCleanup) {
@@ -157,7 +158,7 @@ export async function commitMainSessionRecovery(params: {
       } else if (ownerValidation || ownerRelease) {
         const exactClaim = ownerValidation ?? ownerRelease!;
         candidate = entries.find(({ entry }) => matchesOwnerClaim(entry, exactClaim)) ?? selected;
-      } else if (ownerClaim && !selected) {
+      } else if (ownerClaim && (!selected || selected.entry.sessionId !== ownerClaim.sessionId)) {
         candidate = entries.find(({ entry }) => entry.sessionId === ownerClaim.sessionId);
       } else if (params.scanAliases && params.expectedSessionId) {
         candidate = entries.find(({ entry }) => entry.sessionId === params.expectedSessionId);
@@ -165,6 +166,8 @@ export async function commitMainSessionRecovery(params: {
       if (!candidate) {
         return {
           result: {
+            entry: selected?.entry,
+            sessionKey: selected?.sessionKey,
             transition: { kind: "rejected", reason: "session_replaced" },
           },
         };
@@ -280,6 +283,7 @@ export async function claimMainSessionRecoveryOwner(params: {
 }
 
 export async function inspectMainSessionRecoveryRequired(params: {
+  allowMissingSession?: boolean;
   expectedSessionId: string;
   lifecycleGeneration: string;
   target: MainSessionRecoveryStoreTarget;
@@ -310,7 +314,9 @@ export async function inspectMainSessionRecoveryRequired(params: {
       : { kind: "required" };
   }
   if (result.transition.kind === "rejected" && result.transition.reason === "session_replaced") {
-    return { kind: "not_required" };
+    return !result.entry && params.allowMissingSession
+      ? { kind: "not_required" }
+      : { kind: "invalidated", reason: result.transition.reason };
   }
   return {
     kind: "invalidated",

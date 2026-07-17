@@ -177,16 +177,19 @@ export function projectSessionSnapshotChanges(params: {
     params.initial,
     params.current,
   );
-  if (
-    mainRecoveryChanged &&
-    !mainRecoveryChangedConcurrently &&
-    (!mainRecoveryOwnershipChangedConcurrently || isCanonicalMainSessionRecoveryClear(params.next))
-  ) {
+  if (mainRecoveryChanged && !mainRecoveryChangedConcurrently) {
     // Apply all three fields together: a stale healthy flag can otherwise hide a newer marker.
-    // A healthy run may clear its own later claim, but no partial snapshot update may
-    // overwrite a concurrently advanced revision or foreground owner.
-    for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
-      patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
+    // A healthy run first marks its claim non-interrupted; token-scoped release
+    // removes the aggregate only after the final concurrent owner exits.
+    if (
+      mainRecoveryOwnershipChangedConcurrently &&
+      isCanonicalMainSessionRecoveryClear(params.next)
+    ) {
+      patch.abortedLastRun = false;
+    } else if (!mainRecoveryOwnershipChangedConcurrently) {
+      for (const field of MAIN_SESSION_RECOVERY_TRANSACTION_FIELDS) {
+        patchRecord[field] = Object.hasOwn(params.next, field) ? next[field] : undefined;
+      }
     }
   }
 

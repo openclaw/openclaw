@@ -182,6 +182,7 @@ describe("main session recovery state", () => {
       },
     });
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
+    expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
   });
 
   it("releases an ambiguous dispatch reservation without refunding its charge", () => {
@@ -330,6 +331,37 @@ describe("main session recovery state", () => {
       }),
     ).toEqual({ kind: "rejected", reason: "foreground_active" });
     expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
+  });
+
+  it("clears a healthy recovery aggregate when its final foreground owner releases", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
+      mainRestartRecovery: recoveryState({
+        revision: 3,
+        chargedAttempts: 1,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["foreground-1"],
+        },
+      }),
+    });
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "release_foreground",
+        claim: {
+          cycleId: "cycle-1",
+          lifecycleGeneration: "generation-1",
+          claimId: "foreground-1",
+          sessionId: "session-1",
+          sessionKey,
+        },
+      }),
+    ).toEqual({ kind: "applied" });
+    expect(entry).toMatchObject({ abortedLastRun: false });
+    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
   });
 
   it("expires foreground claims from an older lifecycle generation", () => {

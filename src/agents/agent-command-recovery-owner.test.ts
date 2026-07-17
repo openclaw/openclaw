@@ -183,6 +183,35 @@ describe("agent command restart recovery ownership", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("rejects ordinary work while an admitted recovery is still running", async () => {
+    const target = createTarget();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 200,
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    });
+    const run = vi.fn();
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "reject_uncoordinated",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).rejects.toThrow("interrupted work pending restart recovery");
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("fences the durable predecessor during an automatic freshness rollover", async () => {
     const base = createTarget();
     const target = {
@@ -248,6 +277,26 @@ describe("agent command restart recovery ownership", () => {
       }),
     ).resolves.toBe("fresh");
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates an explicit session replaced during preparation", async () => {
+    const target = createTarget();
+    await write(target, { sessionId: target.sessionId, updatedAt: 100 });
+    const run = vi.fn();
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "reject_uncoordinated",
+        opts: { sessionId: target.sessionId } as AgentCommandOpts,
+        prepare: async () => {
+          await write(target, { sessionId: "replacement-session", updatedAt: 200 });
+          return target;
+        },
+        run,
+      }),
+    ).rejects.toThrow("changed while starting work");
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("rejects a synthetic explicit replacement from a standalone process", async () => {

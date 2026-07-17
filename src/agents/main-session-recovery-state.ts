@@ -157,6 +157,16 @@ function inspectMainSessionRecovery(params: {
     return { status: "tombstoned" };
   }
   if (
+    entry.status === "running" &&
+    entry.abortedLastRun !== true &&
+    state &&
+    entry.restartRecoveryRuns?.some((run) => run.lifecycleGeneration === params.lifecycleGeneration)
+  ) {
+    // Admission clears the interruption flag before the recovery run settles.
+    // Keep ordinary work fenced until that run clears its lifecycle metadata.
+    return { status: "blocked" };
+  }
+  if (
     entry.status !== "running" ||
     entry.abortedLastRun !== true ||
     !isMainRestartRecoveryCandidate(entry, params.sessionKey)
@@ -472,6 +482,10 @@ export function transitionMainSessionRecovery(
         return { kind: "no_change" };
       }
       const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
+      if (tokens.length === 0 && entry.abortedLastRun !== true) {
+        Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+        return { kind: "applied" };
+      }
       entry.mainRestartRecovery = {
         ...state,
         revision: nextRevision(state),

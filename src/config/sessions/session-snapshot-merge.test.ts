@@ -379,7 +379,7 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("allows a healthy clear after the same run acquires its foreground claim", () => {
+  it("marks a claimed recovery healthy without erasing its owner aggregate", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
@@ -412,7 +412,42 @@ describe("session snapshot merge", () => {
 
     expect(merged.abortedLastRun).toBe(false);
     expect(merged.restartRecoveryRuns).toBeUndefined();
-    expect(merged.mainRestartRecovery).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves every concurrent owner while marking a recovered session healthy", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 3,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 3,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1", "owner-2"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 
   it("preserves a concurrent foreground claim over a partial recovery update", () => {

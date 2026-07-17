@@ -54,6 +54,9 @@ async function claimAgentCommandRecoveryOwner(params: {
   }
   if (params.mode === "reject_uncoordinated") {
     const recoveryInspection = await inspectMainSessionRecoveryRequired({
+      allowMissingSession:
+        (params.prepared.isNewSession && !params.prepared.previousSessionId) ||
+        params.opts.sessionId?.trim() === params.prepared.sessionId,
       expectedSessionId: params.prepared.previousSessionId ?? params.prepared.sessionId,
       lifecycleGeneration: params.lifecycleGeneration,
       target: { sessionKey, storePath: params.prepared.storePath },

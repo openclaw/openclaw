@@ -409,6 +409,31 @@ describe("main session recovery store", () => {
     ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
   });
 
+  it("claims an interrupted legacy predecessor after its canonical key is reused", async () => {
+    const legacyKey = "main";
+    await seedExact({
+      [sessionKey]: { sessionId: "session-2", updatedAt: 200 },
+      [legacyKey]: interruptedEntry(),
+    });
+
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      replacementSessionId: "session-2",
+      sessionId: "session-1",
+      target: { sessionKey, storePath },
+    });
+
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    expect(claim.lease.sessionKey).toBe(legacyKey);
+    expect(readStore()[legacyKey]?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
+      claim.lease.claimId,
+    ]);
+    expect(readStore()[sessionKey]?.mainRestartRecovery).toBeUndefined();
+  });
+
   it("validates a transferred owner against the latest durable row", async () => {
     await write(interruptedEntry());
     const claim = await claimMainSessionRecoveryOwner({
