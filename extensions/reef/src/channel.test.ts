@@ -62,6 +62,7 @@ describe("Reef conversation directory", () => {
 
   beforeEach(() => {
     resetPluginStateStoreForTests();
+    // openclaw-temp-dir: allow Reef directory tests need an on-disk state root; afterEach removes it.
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "reef-directory-"));
     const runtime = createPluginRuntimeMock();
     runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
