@@ -21,14 +21,12 @@ function signedEnvelope(key: SigningKey, payloadType: string, payload: unknown) 
     payloadBytes,
   ]);
   return {
-    schemaVersion: 1,
     payloadType,
     payload: payloadBytes.toString("base64url"),
     signatures: [
       {
-        keyId: key.keyId,
-        algorithm: "ed25519",
-        signature: crypto.sign(null, signingInput, key.privateKey).toString("base64url"),
+        keyid: key.keyId,
+        sig: crypto.sign(null, signingInput, key.privateKey).toString("base64url"),
       },
     ],
   };
