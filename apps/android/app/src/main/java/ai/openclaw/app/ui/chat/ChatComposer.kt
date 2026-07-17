@@ -366,8 +366,10 @@ internal fun shouldMigrateComposerDraft(
   val unboundGatewayClaimed = previous.gatewayStableId == null && current.gatewayStableId != null
   if (previous.gatewayStableId != current.gatewayStableId && !unboundGatewayClaimed) return false
   // Content captured before gateway startup belongs to the gateway the user subsequently
-  // selects. Session identity still must match; an unverified agent id is only a placeholder.
+  // selects once routing is verified. Session identity still must match; an unverified agent
+  // id is only a placeholder and cannot claim the draft for another gateway.
   if (unboundGatewayClaimed) {
+    if (!current.routingVerified) return false
     if (previous.routingVerified && previous.agentId != current.agentId) return false
     return previous.sessionKey == current.sessionKey || mainAliasResolved
   }

@@ -428,8 +428,8 @@ class ChatControllerCommandControlsTest {
       val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(create.contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.contains("\"fork\":true"))
-      // Unqualified parent keys leave agent resolution to the gateway.
-      assertEquals(false, create.contains("\"agentId\""))
+      // The active unqualified parent keeps the captured default-agent owner.
+      assertTrue(create.contains("\"agentId\":\"main\""))
 
       // Agent-qualified parents keep the fork under the parent's agent.
       controller.forkSession("agent:ops:dashboard:abc")

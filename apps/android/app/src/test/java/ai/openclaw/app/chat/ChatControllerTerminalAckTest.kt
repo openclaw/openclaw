@@ -25,14 +25,14 @@ class ChatControllerTerminalAckTest {
   @OptIn(ExperimentalCoroutinesApi::class)
   fun composerOwnerMustMatchBeforeSendAdmission() =
     runTest {
-      var requestCount = 0
+      val requestedMethods = mutableListOf<String>()
       var defaultAgentId: String? = "main"
       val controller =
         ChatController(
           scope = this,
           json = json,
-          requestGateway = { _, _ ->
-            requestCount += 1
+          requestGateway = { method, _ ->
+            requestedMethods += method
             """{"runId":"run-started","status":"started"}"""
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -78,7 +78,7 @@ class ChatControllerTerminalAckTest {
           expectedOwner = owner,
         ),
       )
-      assertEquals(1, requestCount)
+      assertEquals(1, requestedMethods.count { it == "chat.send" })
     }
 
   @Test

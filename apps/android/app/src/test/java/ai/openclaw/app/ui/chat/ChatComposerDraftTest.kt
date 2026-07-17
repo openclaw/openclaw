@@ -348,9 +348,22 @@ class ChatComposerDraftTest {
         agentId = "main",
         sessionKey = "custom",
       )
-    val resolvedGateway = unresolvedGateway.copy(gatewayStableId = "gateway-a")
+    val resolvedGateway = unresolvedGateway.copy(gatewayStableId = "gateway-a", routingVerified = true)
 
     assertTrue(shouldMigrateComposerDraft(unresolvedGateway, resolvedGateway, "agent:main:device"))
+  }
+
+  @Test
+  fun ownerlessProvisionalDraftWaitsForVerifiedGatewayRouting() {
+    val unresolvedGateway =
+      ChatComposerOwner(
+        gatewayStableId = null,
+        agentId = "main",
+        sessionKey = "custom",
+      )
+    val selectedGateway = unresolvedGateway.copy(gatewayStableId = "gateway-a", agentId = "other")
+
+    assertFalse(shouldMigrateComposerDraft(unresolvedGateway, selectedGateway, "agent:other:device"))
   }
 
   @Test

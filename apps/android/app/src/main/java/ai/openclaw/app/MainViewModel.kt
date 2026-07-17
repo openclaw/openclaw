@@ -1609,7 +1609,10 @@ class MainViewModel private constructor(
         mainSessionKey = mainSessionKey.value,
       )
 
-  internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean = currentChatComposerOwner() == expected
+  internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
+    (
+      currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
+    ) == expected
 
   internal fun beginChatComposerMediaAcquisition(owner: ChatComposerOwner): String? {
     owner.gatewayStableId?.trim()?.takeIf { it.isNotEmpty() } ?: return null

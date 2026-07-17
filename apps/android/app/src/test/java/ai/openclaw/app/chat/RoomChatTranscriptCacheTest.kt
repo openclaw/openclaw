@@ -314,8 +314,18 @@ class RoomChatTranscriptCacheTest {
       val store = cache()
       store.saveTranscript("gateway-a", "agent-a", "custom", listOf(message("agent a text")))
       store.saveTranscript("gateway-a", "agent-b", "custom", listOf(message("agent b text")))
-      store.saveSessions("gateway-a", "agent-a", listOf(ChatSessionEntry(key = "agent-a-session", updatedAtMs = 1)))
-      store.saveSessions("gateway-a", "agent-b", listOf(ChatSessionEntry(key = "agent-b-session", updatedAtMs = 2)))
+      store.saveSessions(
+        "gateway-a",
+        "agent-a",
+        listOf(ChatSessionEntry(key = "agent-a-session", updatedAtMs = 1)),
+        retainedSessionKey = "custom",
+      )
+      store.saveSessions(
+        "gateway-a",
+        "agent-b",
+        listOf(ChatSessionEntry(key = "agent-b-session", updatedAtMs = 2)),
+        retainedSessionKey = "custom",
+      )
 
       assertEquals(
         listOf("agent a text"),
