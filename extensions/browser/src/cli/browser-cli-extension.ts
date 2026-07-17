@@ -52,9 +52,7 @@ export function resolveLocalPairingGatewayUrl(params: {
     return params.configuredRemote;
   }
   if (params.tlsEnabled) {
-    throw new Error(
-      "Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]",
-    );
+    throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
   }
   return `ws://127.0.0.1:${params.gatewayPort}`;
 }

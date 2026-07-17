@@ -274,9 +274,7 @@ export function createCopilotController({
     const nextGatewayScope = gatewayUrlFromPairing(nextConfig.relayUrl, nextConfig.gatewayUrl);
     const previousGatewayScope = currentGatewayScope();
     if (!previousGatewayScope) {
-      const staleScopes = registry
-        .gatewayScopes()
-        .filter((scope) => scope !== nextGatewayScope);
+      const staleScopes = registry.gatewayScopes().filter((scope) => scope !== nextGatewayScope);
       if (staleScopes.length > 0) {
         for (const staleScope of staleScopes) {
           await registry.closeInactiveScope(staleScope);
@@ -453,10 +451,7 @@ export function createCopilotController({
     }
   }
 
-  async function suspendTab(
-    tabId,
-    { expectedPortRevision, detachInactive = false } = {},
-  ) {
+  async function suspendTab(tabId, { expectedPortRevision, detachInactive = false } = {}) {
     if (expectedPortRevision !== undefined && portRevisions.get(tabId) !== expectedPortRevision) {
       return;
     }
@@ -938,9 +933,7 @@ export function createCopilotController({
       ? { state: "error", label: "Could not stop the previous tab run" }
       : status;
     reconciledGatewayStatusRevision = hasPendingAborts ? 0 : statusRevision;
-    broadcastStatus(
-      hasPendingAborts ? undefined : { ensureSetup: true, hydrateHistory: true },
-    );
+    broadcastStatus(hasPendingAborts ? undefined : { ensureSetup: true, hydrateHistory: true });
   }
 
   async function waitForRecoveryGateway(client, gatewayScope) {
@@ -1019,9 +1012,7 @@ export function createCopilotController({
   }
 
   async function recoverPersistedScope(gatewayScope) {
-    const scopedEntries = registry
-      .list()
-      .filter((entry) => entry.gatewayScope === gatewayScope);
+    const scopedEntries = registry.list().filter((entry) => entry.gatewayScope === gatewayScope);
     const needsGateway =
       registry.pendingArchives(gatewayScope).length > 0 ||
       scopedEntries.some(
@@ -1220,10 +1211,7 @@ export function createCopilotController({
       void runLifecycle(() =>
         reconcileGatewayReady(status, statusRevision, gatewayScope, pendingGatewayRevocation),
       ).catch(() => {
-        if (
-          gatewayScope === currentGatewayScope() &&
-          statusRevision === gatewayStatusRevision
-        ) {
+        if (gatewayScope === currentGatewayScope() && statusRevision === gatewayStatusRevision) {
           gatewayStatus = { state: "error", label: "Could not reconcile previous tab runs" };
           broadcastStatus();
         }
@@ -1269,13 +1257,15 @@ export function createCopilotController({
           sendsByTab.delete(tabId);
           scheduleHydrate(tabId);
           if (gatewayScope) {
-            void registry.finishRun(gatewayScope, entry.sessionKey, runId).then(async (finished) => {
-              if (finished) {
-                await restoreDebuggerIfReleased(tabId);
-                void refreshPanelState(tabId);
-              }
-              void drainArchives(gatewayScope);
-            });
+            void registry
+              .finishRun(gatewayScope, entry.sessionKey, runId)
+              .then(async (finished) => {
+                if (finished) {
+                  await restoreDebuggerIfReleased(tabId);
+                  void refreshPanelState(tabId);
+                }
+                void drainArchives(gatewayScope);
+              });
             continue;
           }
         }

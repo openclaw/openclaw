@@ -829,9 +829,9 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       )
       .toEqual({ gateHidden: true, messagesHidden: false });
     await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(
-      gateway.requests.filter((request) => request.method === "chat.history"),
-    ).toHaveLength(historiesBeforeNavigation);
+    expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
+      historiesBeforeNavigation,
+    );
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect
