@@ -992,7 +992,10 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # 32 vCPU: the dist build sits on the light-run critical path alongside
+    # check-lint/check-dependencies; tsdown parallelizes across the extra
+    # cores for roughly the same billed core-minutes.
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -1902,12 +1905,14 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: blacksmith-16vcpu-ubuntu-2404
+            # Top light-run pole (~186s of shard work); oxlint shard
+            # concurrency scales with cores at similar billed core-minutes.
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
             # Concurrent Knip scans need cores and memory headroom; the wall
             # clock roughly halves for similar billed core-minutes.
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
