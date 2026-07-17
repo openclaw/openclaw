@@ -346,8 +346,6 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     expectManifestAliasResolution(
       {
         provider: "azure-openai-responses",
-        modelId: "gpt-5.5",
-        cfg: {},
       },
       { provider: "openai", transport: undefined },
     );
@@ -495,7 +493,6 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
       {
         provider: "custom-openai-alias",
         modelId: "custom-model",
-        cfg: {},
       },
       {
         provider: "custom-openai-alias",
