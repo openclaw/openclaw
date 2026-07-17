@@ -1271,6 +1271,18 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('blocking: ($releaseProfile != "beta")');
   });
 
+  it("keeps beta performance advisory at the publish gate", () => {
+    const validationStep = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target"),
+      "Validate full release validation manifest",
+    );
+
+    expectTextToIncludeAll(validationStep.run, [
+      'if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]',
+      "Full release validation manifest does not record blocking product performance evidence.",
+    ]);
+  });
+
   it("keeps child-job fail-fast polling best-effort", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     expect(workflow.match(/continuing with authoritative workflow conclusion\./gu)).toHaveLength(3);
@@ -3616,6 +3628,18 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain('TARBALL_NAME="$PACK_NAME"');
     expect(npmWorkflow).not.toContain("process.stdout.write(first.filename)");
     expect(npmWorkflow).not.toContain('TARBALL_NAME="$(basename "$PACK_PATH")"');
+  });
+
+  it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
+    const preflight = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "preflight_openclaw_npm");
+    const metadata = workflowStep(preflight, "Validate release metadata");
+
+    expect(metadata.run).toContain("git merge-base --is-ancestor");
+    expect(metadata.run).toContain('RELEASE_BRANCH_NAME="release/${BASH_REMATCH[1]}"');
+    expect(metadata.run).toContain(
+      'git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"',
+    );
+    expect(metadata.run).toContain('[[ "${RELEASE_REF}" == *"-alpha."* ]]');
   });
 
   it("gates stable GitHub publication on the Windows Hub release asset contract", () => {

@@ -387,15 +387,32 @@ describe("Code Mode", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("`tools.search(query)`");
+    expect(execTool.description).toContain("one exec invocation");
+    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
+    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
     expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(entry.id)`");
-    expect(execTool.description).toContain("`tools.call(entry.id, args)`");
+    expect(execTool.description).toContain("`tools.describe(id: string)`");
+    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
+    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
+    expect(execTool.description).toContain("Never invent or transform a tool id");
+    expect(execTool.description).toContain("returns its JSON value directly");
+    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
 
-    expect(parameters.properties?.code?.description).toContain("`tools` object");
+    expect(parameters.properties?.code?.description).toContain(
+      "`tools.search` takes a query string, not an object",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Select exact ids from `ALL_TOOLS` or `tools.search`",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "never put dependent calls in Promise.all",
+    );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
     expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "Leave unset for ordinary calls",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
@@ -443,7 +460,7 @@ describe("Code Mode", () => {
     const description = compacted.tools[0]?.description ?? "";
     // Base tool guidance always stays; MCP/API and namespace guidance drop out so
     // the model never probes an empty virtual API surface.
-    expect(description).toContain("`tools.search(query)`");
+    expect(description).toContain("`tools.search(query: string, options?)`");
     expect(description).not.toContain("API.list");
     expect(description).not.toContain("MCP tools are available only through");
     expect(description).not.toContain("Registered plugin namespaces are available");
@@ -849,10 +866,9 @@ describe("Code Mode", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const hits = await tools.search("ticket", { limit: 1 });
-        const described = await tools.describe(hits[0].id);
-        const called = await tools.call(described.id, { value: "ship" });
+        const called = await tools.callValue(hits[0].id, { value: "ship" });
         text("created");
-        return called.result.details;
+        return called;
       `,
     });
 
@@ -862,6 +878,7 @@ describe("Code Mode", () => {
       input: { value: "ship" },
     });
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
+    expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
@@ -901,8 +918,8 @@ describe("Code Mode", () => {
           code: `
             const ids = [];
             for (let index = 0; index < 5; index += 1) {
-              const called = await tools.call("fake_create_ticket", { value: index });
-              ids.push(called.result.details.input.value);
+              const called = await tools.callValue("fake_create_ticket", { value: index });
+              ids.push(called.input.value);
             }
             return ids;
           `,

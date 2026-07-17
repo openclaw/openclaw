@@ -317,6 +317,15 @@ targets:
       # Universal talk waveform, compiled directly to keep the watch styling local.
       - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/TalkWaveformView.swift
         group: Shared
+      # Universal mascot, compiled directly to keep the watch styling local.
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotAnimator.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotCanvas+Accessories.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift
+        group: Shared
       - path: Sources/Fonts
         buildPhase: resources
       - path: Resources/Localizable.xcstrings
@@ -428,6 +437,16 @@ targets:
         group: WatchApp/Sources
       - path: WatchApp/Sources/WatchInboxMessages.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchMascot.swift
+        group: WatchApp/Sources
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotView.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotAnimator.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/OpenClawMascotCanvas+Accessories.swift
+        group: Shared
+      - path: ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatTypography.swift
+        group: Shared
       - path: Sources/Services/ExactOpaqueIdentifier.swift
         group: Sources/Services
     dependencies:

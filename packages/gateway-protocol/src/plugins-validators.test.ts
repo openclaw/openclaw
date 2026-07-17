@@ -4,6 +4,8 @@ import {
   validatePluginsInstallResult,
   validatePluginsListParams,
   validatePluginsListResult,
+  validatePluginsRefreshParams,
+  validatePluginsRefreshResult,
   validatePluginsSearchParams,
   validatePluginsSearchResult,
   validatePluginsSetEnabledParams,
@@ -31,6 +33,13 @@ const installedPlugin = {
 } as const;
 
 describe("plugin lifecycle protocol validators", () => {
+  it("validates plugin metadata refresh payloads", () => {
+    expect(validatePluginsRefreshParams({})).toBe(true);
+    expect(validatePluginsRefreshParams({ unexpected: true })).toBe(false);
+    expect(validatePluginsRefreshResult({ ok: true })).toBe(true);
+    expect(validatePluginsRefreshResult({ ok: false })).toBe(false);
+  });
+
   it("accepts cold catalog payloads and rejects runtime-only states", () => {
     expect(validatePluginsListParams({})).toBe(true);
     expect(validatePluginsListParams({ unexpected: true })).toBe(false);

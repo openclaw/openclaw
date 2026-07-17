@@ -261,11 +261,26 @@ jobs:
             export RELEASE_BRANCH_REF
             echo "Validation-only SHA mode: using synthetic release tag ${RELEASE_TAG} for package metadata checks."
           else
-            # Tagged release validation still proves the commit is contained in
-            # the workflow branch selected by the operator.
+            # The workflow runs from trusted main, while beta and stable tags can
+            # point at their frozen release branch after it diverged from main.
             git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
             RELEASE_TAG="${RELEASE_REF}"
             export RELEASE_TAG
+            if ! git merge-base --is-ancestor "${RELEASE_SHA}" "${RELEASE_BRANCH_REF}"; then
+              if [[ "${RELEASE_REF}" == *"-alpha."* ]]; then
+                echo "Tagged commit is not reachable from ${WORKFLOW_REF_NAME}." >&2
+                exit 1
+              fi
+              if [[ "${RELEASE_REF}" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)($|-) ]]; then
+                RELEASE_BRANCH_NAME="release/${BASH_REMATCH[1]}"
+              else
+                echo "Release tag does not identify a canonical release branch." >&2
+                exit 1
+              fi
+              RELEASE_BRANCH_REF="refs/remotes/origin/${RELEASE_BRANCH_NAME}"
+              git fetch --no-tags origin "+refs/heads/${RELEASE_BRANCH_NAME}:${RELEASE_BRANCH_REF}"
+              export RELEASE_BRANCH_REF
+            fi
           fi
           RELEASE_MAIN_REF="${RELEASE_BRANCH_REF}"
           export RELEASE_MAIN_REF

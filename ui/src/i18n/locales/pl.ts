@@ -2531,6 +2531,19 @@ export const pl: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Ten podgląd nie ma jeszcze adresu URL.",
+        blockedExternal: "Zewnętrzne podglądy są wyłączone przez zasady Gateway.",
+        blockedScheme: "Adres URL tego podglądu używa nieobsługiwanego schematu.",
+        toolbar: "Elementy sterujące podglądem",
+        reload: "Odśwież podgląd",
+        viewport: {
+          label: "Obszar wyświetlania podglądu",
+          desktop: "Komputer",
+          tablet: "Tablet",
+          mobile: "Telefon",
+        },
+      },
     },
   },
   workboard: {

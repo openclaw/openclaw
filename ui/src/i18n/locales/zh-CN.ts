@@ -2459,6 +2459,19 @@ export const zh_CN: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "此预览尚无 URL。",
+        blockedExternal: "Gateway 策略已禁用外部预览。",
+        blockedScheme: "此预览 URL 使用了不受支持的协议。",
+        toolbar: "预览控件",
+        reload: "重新加载预览",
+        viewport: {
+          label: "预览视口",
+          desktop: "桌面设备",
+          tablet: "平板设备",
+          mobile: "移动设备",
+        },
+      },
     },
   },
   workboard: {

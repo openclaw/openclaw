@@ -649,6 +649,7 @@ function createChatProps(
     onSend: () => undefined,
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
+    onToggleRealtimeVideo: () => undefined,
     onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
@@ -1449,112 +1450,6 @@ describe("chat composer workbench", () => {
     expect(container.querySelector('button[aria-label="Session workspace"]')).toBeNull();
   });
 
-  it("renders no rail strip while collapsed and reopens via the floating toggle", () => {
-    const onToggleCollapsed = vi.fn();
-    const container = renderChatView({
-      sessionWorkspace: {
-        collapsed: true,
-        sessionKey: "agent:main",
-        list: {
-          sessionKey: "agent:main",
-          root: "/workspace",
-          files: [
-            {
-              name: "AGENTS.md",
-              path: "/workspace/AGENTS.md",
-              kind: "modified",
-              missing: false,
-              size: 2048,
-            },
-          ],
-          browser: { path: "", entries: [] },
-          artifacts: [],
-        },
-        loading: false,
-        error: null,
-        activeId: null,
-        dock: "right",
-        narrowLayout: false,
-        dockDragging: false,
-        dockDragZone: null,
-        onToggleCollapsed,
-        onSetDock: () => undefined,
-        onDockDragStart: () => undefined,
-        onRefresh: () => undefined,
-        onBrowsePath: () => undefined,
-        onCopyPath: () => undefined,
-        onOpenFile: () => undefined,
-        onSearch: () => undefined,
-        onOpenArtifact: () => undefined,
-      },
-    });
-
-    // A collapsed rail renders nothing — no icon strip in the layout.
-    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-toggle");
-    expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
-    expect(toggle?.querySelector(".chat-workspace-toggle__badge")?.textContent?.trim()).toBe("1");
-
-    toggle?.click();
-
-    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
-  });
-
-  it("renders the split-view opener in the floating toggle cluster", () => {
-    const onOpenSplitView = vi.fn();
-    const container = renderChatView({ onOpenSplitView });
-
-    const cluster = container.querySelector(".chat-floating-toggles");
-    const opener = cluster?.querySelector<HTMLButtonElement>(".chat-open-split-view");
-    expect(opener?.getAttribute("aria-label")).toBe("Open split view");
-
-    opener?.click();
-    expect(onOpenSplitView).toHaveBeenCalledTimes(1);
-  });
-
-  it("hides the split-view opener while the detail sidebar is open", () => {
-    const container = renderChatView({
-      onOpenSplitView: () => undefined,
-      sidebarOpen: true,
-      sidebarContent: { kind: "markdown", content: "detail" },
-      onCloseSidebar: () => undefined,
-    });
-
-    expect(container.querySelector(".chat-open-split-view")).toBeNull();
-  });
-
-  it("suppresses the floating workspace toggle when a pane header hosts it", () => {
-    const container = renderChatView({
-      paneHeaderActive: true,
-      sessionWorkspace: {
-        collapsed: true,
-        sessionKey: "agent:main",
-        list: null,
-        loading: false,
-        error: null,
-        activeId: null,
-        dock: "right",
-        narrowLayout: false,
-        dockDragging: false,
-        dockDragZone: null,
-        onToggleCollapsed: () => undefined,
-        onSetDock: () => undefined,
-        onDockDragStart: () => undefined,
-        onRefresh: () => undefined,
-        onBrowsePath: () => undefined,
-        onCopyPath: () => undefined,
-        onOpenFile: () => undefined,
-        onSearch: () => undefined,
-        onOpenArtifact: () => undefined,
-      },
-    });
-
-    expect(container.querySelector(".chat-workspace-toggle")).toBeNull();
-    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
-  });
-
   it("stacks the detail sidebar under the thread with a horizontal divider on narrow panes", () => {
     const sidebarProps = {
       sidebarOpen: true,
@@ -2270,7 +2165,31 @@ describe("chat voice controls", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start voice input"]', "voice input button");
+    requireElement(container, '[aria-label="Start video talk"]', "video talk button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("starts Video Talk separately and renders the live camera preview", () => {
+    const onToggleRealtimeVideo = vi.fn();
+    const stream = {} as MediaStream;
+    const container = renderChatView({
+      onToggleRealtimeVideo,
+      realtimeTalkVideoStream: stream,
+    });
+
+    requireElement(container, '[aria-label="Start video talk"]', "video talk button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    const preview = requireElement(
+      container,
+      'video[aria-label="Camera preview"]',
+      "camera preview",
+    ) as HTMLVideoElement;
+
+    expect(onToggleRealtimeVideo).toHaveBeenCalledOnce();
+    expect(preview.srcObject).toBe(stream);
+    expect(preview.autoplay).toBe(true);
+    expect(preview.muted).toBe(true);
   });
 
   it("stops active voice input without sending a composed draft", () => {

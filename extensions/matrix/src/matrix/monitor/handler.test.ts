@@ -884,6 +884,33 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it.each([
+    { body: "hello", isControlCommand: false, expectedDispatches: 0 },
+    { body: "/new", isControlCommand: true, expectedDispatches: 1 },
+  ])(
+    "keeps require-mention decision for unmentioned room text $body",
+    async ({ body, isControlCommand, expectedDispatches }) => {
+      const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+        cfg: { commands: { useAccessGroups: false } },
+        isDirectMessage: false,
+        mentionRegexes: [],
+        shouldHandleTextCommands: () => true,
+        hasControlCommand: (text?: string) => isControlCommand && text === body,
+        getMemberDisplayName: async () => "sender",
+      });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$unmentioned-${isControlCommand ? "command" : "text"}`,
+          body,
+        }),
+      );
+
+      expect(finalizeInboundContext).toHaveBeenCalledTimes(expectedDispatches);
+    },
+  );
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({

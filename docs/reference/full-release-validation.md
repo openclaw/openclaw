@@ -9,7 +9,9 @@ read_when:
 
 `Full Release Validation` is the release product-validation umbrella. Most work
 happens in child workflows so a failed box can be rerun without restarting the
-whole release.
+whole release. Run release preparation before freezing the Code SHA; it
+refreshes Control UI locale output when the background bot has not landed it
+yet, then enforces the same strict zero-fallback check used by release CI.
 
 Freeze the product-complete pre-changelog commit as the **Code SHA**, then run:
 

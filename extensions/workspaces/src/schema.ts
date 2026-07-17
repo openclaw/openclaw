@@ -65,12 +65,15 @@ export const BUILTIN_WIDGET_KINDS = [
   "builtin:markdown",
   "builtin:table",
   "builtin:iframe-embed",
+  "builtin:preview",
   "builtin:sessions",
   "builtin:usage",
   "builtin:cron",
   "builtin:instances",
   "builtin:activity",
   "builtin:chart",
+  "builtin:agent-status",
+  "builtin:custom-widget-approvals",
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);

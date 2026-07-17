@@ -250,7 +250,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: bounded plugin blob store options, entry, entry info, and store types.
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
-      8006,
+      // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +2: shared realtime voice session harness through realtime-voice.
+      8014,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -275,7 +278,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: lightweight speech settings normalizers and config resolver.
       // +1: unified implicit-mention policy resolver.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
-      4473,
+      // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +1: shared realtime voice session harness through realtime-voice.
+      4479,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
