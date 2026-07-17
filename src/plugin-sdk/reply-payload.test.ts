@@ -221,6 +221,29 @@ describe("sendPayloadMediaSequence", () => {
 });
 
 describe("sendTextMediaPayload", () => {
+  it("does not duplicate a caption when a media sender returns undefined", async () => {
+    const sendMediaMock = vi.fn(async () => undefined);
+    const sendText = vi.fn();
+    const sendMedia = sendMediaMock as unknown as NonNullable<
+      Parameters<typeof sendTextMediaPayload>[0]["adapter"]["sendMedia"]
+    >;
+
+    await expect(
+      sendTextMediaPayload({
+        channel: "test",
+        ctx: {
+          cfg: {},
+          to: "target",
+          text: "caption",
+          payload: { text: "caption", mediaUrl: "https://example.com/image.png" },
+        },
+        adapter: { sendMedia, sendText },
+      }),
+    ).resolves.toBeUndefined();
+    expect(sendMediaMock).toHaveBeenCalledOnce();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("falls back to text when every media URL is empty", async () => {
     const sendMedia = vi.fn();
     const sendText = vi.fn(async ({ text }) => ({ channel: "test", messageId: text }));

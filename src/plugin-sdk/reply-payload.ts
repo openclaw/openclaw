@@ -412,6 +412,7 @@ export async function sendTextMediaPayload(params: {
   const nextReplyToId = createReplyToFanout(params.ctx);
   if (urls.length > 0) {
     const audioAsVoice = params.ctx.payload.audioAsVoice ?? params.ctx.audioAsVoice;
+    let hasSent = false;
     const lastResult = await sendPayloadMediaSequence({
       text,
       mediaUrls: urls,
@@ -431,11 +432,12 @@ export async function sendTextMediaPayload(params: {
         if (!childReported) {
           await params.ctx.onDeliveryResult?.(result);
         }
+        hasSent = true;
         return result;
       },
     });
-    if (lastResult !== undefined) {
-      return lastResult;
+    if (hasSent) {
+      return lastResult!;
     }
   }
   if (!text) {
