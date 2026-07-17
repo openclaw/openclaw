@@ -46,40 +46,26 @@ export class PluginUiBridgeController {
   private loadHandler: (() => void) | null = null;
   private readyHandler: ((event: MessageEvent) => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
-  private bridgeKey = "";
 
   sync(target: PluginUiBridgeTarget | null) {
     if (!target) {
       this.clear();
       return;
     }
-    const nextBridgeKey = [
-      target.key,
-      target.pluginId,
-      target.sessionKey,
-      target.contextTokens ?? "",
-      target.connected ? "connected" : "disconnected",
-      target.sessionActions.join("\n"),
-      target.allowChatNavigation ? "navigate" : "",
-    ].join("\0");
     const currentTarget = this.target;
     if (currentTarget?.frame === target.frame) {
-      const shouldReconnect = this.port !== null && this.bridgeKey !== nextBridgeKey;
       // Keep object identity stable for the active port listener while
       // refreshing callback/client references from the latest UI context.
-      // UI snapshots can replace the client wrapper without changing the
-      // underlying connection, which must not orphan the transferred port.
+      // UI snapshots can also refine session context after the first action
+      // starts; replacing the transferred port would orphan that request.
+      // Handlers read this mutable target, so the established port immediately
+      // uses the latest connection, scopes, session, and context window.
       Object.assign(currentTarget, target);
-      this.bridgeKey = nextBridgeKey;
-      if (shouldReconnect) {
-        this.scheduleConnect();
-      }
       return;
     }
 
     this.clear();
     this.target = target;
-    this.bridgeKey = nextBridgeKey;
     this.loadHandler = () => {
       // A load means the frame has a new document and can no longer use the
       // previously transferred port. Invalidate it before reconnecting.
@@ -241,6 +227,5 @@ export class PluginUiBridgeController {
     this.loadHandler = null;
     this.readyHandler = null;
     this.connectTimer = null;
-    this.bridgeKey = "";
   }
 }

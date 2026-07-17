@@ -207,16 +207,17 @@ describe("PluginUiBridgeController", () => {
     connected.childPort.close();
   });
 
-  it("keeps the active port when the connected client wrapper refreshes", async () => {
+  it("keeps the active port while refreshing its session context and client", async () => {
     const connected = await connectBridge();
+    const request = vi.fn(async () => ({ ok: true, result: { saved: true } }));
     connected.bridge.sync({
       frame: connected.frame,
       key: "notes/settings",
       pluginId: "notes",
-      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      client: { request } as unknown as GatewayBrowserClient,
       connected: true,
-      sessionKey: "agent:main:active",
-      contextTokens: 64_000,
+      sessionKey: "agent:main:refreshed",
+      contextTokens: 128_000,
       sessionActions: ["save"],
       allowChatNavigation: false,
       navigateToChat: vi.fn(),
@@ -226,6 +227,22 @@ describe("PluginUiBridgeController", () => {
       setTimeout(resolve, 50);
     });
     expect(connected.postMessage).toHaveBeenCalledOnce();
+    connected.childPort.postMessage({
+      v: 1,
+      type: "openclaw.pluginUi.sessionAction",
+      id: "save-refreshed",
+      actionId: "save",
+      payload: { enabled: true },
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("plugins.sessionAction", {
+        pluginId: "notes",
+        actionId: "save",
+        sessionKey: "agent:main:refreshed",
+        contextTokens: 128_000,
+        payload: { enabled: true },
+      }),
+    );
     connected.bridge.clear();
     connected.childPort.close();
   });
