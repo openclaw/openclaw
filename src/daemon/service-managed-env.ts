@@ -1,9 +1,13 @@
 /** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import {
+  isTrustedGithubCredentialEnvVarName,
+  normalizeEnvVarKey,
+} from "../infra/host-env-security.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
+export const TRUSTED_GITHUB_ENV_KEYS_VAR = "OPENCLAW_SERVICE_TRUSTED_GITHUB_ENV_KEYS";
 
 // Tracks which service environment keys OpenClaw owns across reinstall/start flows.
 type ServiceEnvCommand = {
@@ -61,6 +65,18 @@ export function formatManagedServiceEnvKeys(
         return [];
       }
       return [normalized];
+    })
+    .toSorted();
+  return keys.length > 0 ? keys.join(",") : undefined;
+}
+
+export function formatTrustedGithubEnvKeys(
+  environment: Record<string, string | undefined>,
+): string | undefined {
+  const keys = Object.keys(environment)
+    .flatMap((key) => {
+      const normalized = normalizeServiceEnvKey(key);
+      return normalized && isTrustedGithubCredentialEnvVarName(normalized) ? [normalized] : [];
     })
     .toSorted();
   return keys.length > 0 ? keys.join(",") : undefined;

@@ -37,6 +37,18 @@ If you previously stored provider keys or endpoint routing values only in a work
 
 See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
 
+## Durable service env
+
+`~/.openclaw/.env` is an operator-curated, owner-only durable file. When you run `openclaw gateway install`, accepted keys are recorded as managed service values. Depending on the platform, values can be stored in the owner-only service env file instead of the service definition.
+
+Filtering rules for this file:
+
+- Keys that are dangerous everywhere (`LD_PRELOAD`, `NODE_OPTIONS`, `BASH_ENV`, `DYLD_*`, `GIT_DIR`, …) are stripped.
+- `GH_TOKEN` and `GITHUB_TOKEN` are the only override-blocked credentials accepted from this file for trusted exec inheritance.
+- Other credential, endpoint, host-control, `PATH`, and `OPENCLAW_*` overrides remain blocked.
+
+After reinstalling the gateway, `GH_TOKEN` or `GITHUB_TOKEN` can reach `gh` only for local gateway exec with `tools.exec.security: "full"` and `tools.exec.ask: "off"`. Sandbox exec, node-host exec, prompted exec, request/plugin overrides, and less-trusted security modes do not receive these credentials.
+
 ## Config `env` block
 
 Two equivalent ways to set inline env vars (both are non-overriding):
