@@ -292,6 +292,7 @@ describe("hooks CLI process lifecycle", () => {
           ...process.env,
           NODE_ENV: undefined,
           VITEST: undefined,
+          NODE_COMPILE_CACHE: path.join(fixture.stateDir, "node-compile-cache"),
           NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_STATE_DIR: fixture.stateDir,

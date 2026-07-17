@@ -117,6 +117,33 @@ describe("entry compile cache", () => {
     });
   });
 
+  it("keeps POSIX native hook relays on the timeout-owned process", async () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-relay-");
+    const entryFile = path.join(root, "src", "entry.ts");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(entryFile, "export {};\n", "utf8");
+    const params = {
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
+      execPath: "/usr/bin/node",
+      installRoot: root,
+      argv: ["/usr/bin/node", entryFile, "hooks", "relay", "--relay-id", "relay-1"],
+    };
+
+    expect(
+      buildOpenClawCompileCacheRespawnPlan({
+        ...params,
+        platform: "linux",
+      }),
+    ).toBeUndefined();
+    expect(
+      buildOpenClawCompileCacheRespawnPlan({
+        ...params,
+        platform: "win32",
+      }),
+    ).toBeDefined();
+  });
+
   it("keeps interactive no-cache respawn plans attached to the terminal", async () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-interactive-");
     const entryFile = path.join(root, "dist", "entry.js");
