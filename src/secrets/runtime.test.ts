@@ -263,6 +263,56 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: {
+                target: "peter@example.com:22",
+                identityData: {
+                  source: "env",
+                  provider: "default",
+                  id: "DEFAULT_SSH_IDENTITY",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: {
+        DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
+        WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
+      },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toBe(
+      "DEFAULT PRIVATE KEY",
+    );
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "WORKER PRIVATE KEY",
+    );
+  });
+
   it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
     const missingRef = {
       source: "env",

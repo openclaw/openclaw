@@ -64,6 +64,7 @@ export function collectAgentSandboxAssignments(params: {
   const defaultsAgent = isRecord(agents.defaults) ? agents.defaults : undefined;
   const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
   const defaultsSsh = isRecord(defaultsSandbox?.ssh) ? defaultsSandbox.ssh : undefined;
+  const defaultsBackend = normalizeOptionalLowercaseString(defaultsSandbox?.backend) ?? "docker";
   const rawList = Array.isArray(agents.list) ? agents.list : [];
   const configuredAgents: Array<{ entry: Record<string, unknown>; index: number }> = [];
   rawList.forEach((entry, index) => {
@@ -169,13 +170,16 @@ export function collectAgentSandboxAssignments(params: {
     if (!Object.hasOwn(defaultsSsh, key) || activeDefaultKeys.has(key)) {
       continue;
     }
+    // Unlisted agents and stale registry entries still resolve through defaults,
+    // even when every current list entry overrides this credential.
+    const active = defaultsBackend === "ssh";
     collectAssignment({
       target: defaultsSsh,
       key,
       path: `agents.defaults.sandbox.ssh.${key}`,
       defaults: params.defaults,
       context: params.context,
-      active: false,
+      active,
       inactiveReason: "no enabled agent uses the sandbox SSH material.",
       owner: sandboxSecretOwner(DEFAULT_AGENT_ID),
     });
