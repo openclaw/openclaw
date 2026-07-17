@@ -74,10 +74,12 @@ async function requestGraph(params: {
   let releaseInFinally = true;
   try {
     if (!response.ok) {
-      throw await createMSTeamsHttpError(
+      const error = await createMSTeamsHttpError(
         response,
         `${params.errorPrefix ?? "Graph"} ${params.path} failed`,
       );
+      await response.body?.cancel();
+      throw error;
     }
     releaseInFinally = false;
     return responseWithRelease(response, release);
@@ -142,7 +144,9 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
   });
   try {
     if (!response.ok) {
-      throw await createMSTeamsHttpError(response, `Graph ${params.url} failed`);
+      const error = await createMSTeamsHttpError(response, `Graph ${params.url} failed`);
+      await response.body?.cancel();
+      throw error;
     }
     return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {

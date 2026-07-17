@@ -264,6 +264,19 @@ describe("msteams graph helpers", () => {
       "Graph /teams/team-1/channels failed (403): forbidden",
     );
 
+    const cancelBody = textResponse("forbidden", { status: 403 });
+    const cancelSpy = vi.spyOn(cancelBody.body!, "cancel").mockResolvedValue(undefined);
+    mockFetch(async () => cancelBody);
+
+    await expectRejectsToThrow(
+      fetchGraphJson({
+        token: graphToken,
+        path: "/teams/team-1/channels",
+      }),
+      "Graph /teams/team-1/channels failed (403): forbidden",
+    );
+    expect(cancelSpy).toHaveBeenCalledOnce();
+
     mockTextFetchResponse("{ nope", {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -322,6 +335,25 @@ describe("msteams graph helpers", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 30_000 }),
     );
+  });
+
+  it("cancels non-OK absolute url response body before throwing", async () => {
+    const forbiddenBody = textResponse("forbidden", { status: 403 });
+    const cancelSpy = vi.spyOn(forbiddenBody.body!, "cancel").mockResolvedValue(undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: forbiddenBody,
+      finalUrl: "https://graph.microsoft.com/v1.0/groups",
+      release: async () => undefined,
+    });
+
+    await expectRejectsToThrow(
+      fetchGraphAbsoluteUrl({
+        token: graphToken,
+        url: "https://graph.microsoft.com/v1.0/groups",
+      }),
+      "Graph https://graph.microsoft.com/v1.0/groups failed (403): forbidden",
+    );
+    expect(cancelSpy).toHaveBeenCalledOnce();
   });
 
   it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
