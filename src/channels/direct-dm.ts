@@ -201,19 +201,18 @@ export async function dispatchInboundDirectDmWithRuntime(
     ctxPayload,
     recordInboundSession: params.runtime.channel.session.recordInboundSession,
     record: { onRecordError: params.onRecordError },
-    runDispatch: async () =>
-      await params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
+    runDispatch: () =>
+      params.runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
         ctx: ctxPayload,
         cfg: params.cfg,
         dispatcherOptions: {
           ...replyPipeline,
-          deliver: async (payload: unknown) => {
-            const normalized =
+          deliver: (payload: unknown) =>
+            params.deliver(
               payload && typeof payload === "object"
                 ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-                : {};
-            return await params.deliver(normalized);
-          },
+                : {},
+            ),
           onError: params.onDispatchError,
         },
         replyOptions: { onModelSelected },
