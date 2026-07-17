@@ -75,6 +75,7 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
     },
   );
   const branch = result.status === 0 ? result.stdout.trim() : "";
