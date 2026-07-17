@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -69,10 +70,48 @@ export function resolveContextInjectionMode(
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
+/**
+ * Scans transcript records newest-first for a full-bootstrap marker that has
+ * not been invalidated by a later compaction. Only the tail matters:
+ * compaction after the marker makes earlier bootstrap context unreliable for
+ * continuation prompts.
+ */
+function scanRecordsForCompletedBootstrapTurn(records: readonly unknown[]): boolean {
+  let compactedAfterLatestAssistant = false;
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i] as
+      | {
+          type?: string;
+          customType?: string;
+          message?: { role?: string };
+        }
+      | null
+      | undefined;
+    if (record?.type === "compaction" || record?.type === "reset") {
+      compactedAfterLatestAssistant = true;
+      continue;
+    }
+    if (record?.type === "custom" && record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE) {
+      return !compactedAfterLatestAssistant;
+    }
+  }
+  return false;
+}
+
 /** Checks whether the session transcript still has a valid full-bootstrap marker. */
 export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
-  if (parseSqliteSessionFileMarker(sessionFile)) {
-    return false;
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (sqliteMarker) {
+    try {
+      const events = await loadTranscriptEvents({
+        agentId: sqliteMarker.agentId,
+        sessionId: sqliteMarker.sessionId,
+        storePath: sqliteMarker.storePath,
+      });
+      return scanRecordsForCompletedBootstrapTurn(events.slice(-CONTINUATION_SCAN_MAX_RECORDS));
+    } catch {
+      return false;
+    }
   }
   try {
     const stat = await fs.lstat(sessionFile);
@@ -101,43 +140,15 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
       const records = text
         .split(/\r?\n/u)
         .filter((line) => line.trim().length > 0)
-        .slice(-CONTINUATION_SCAN_MAX_RECORDS);
-      let compactedAfterLatestAssistant = false;
-
-      for (let i = records.length - 1; i >= 0; i--) {
-        // Only the tail matters: compaction after the marker makes earlier
-        // bootstrap context unreliable for continuation prompts.
-        const line = records[i];
-        if (!line) {
-          continue;
-        }
-        let entry: unknown;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const record = entry as
-          | {
-              type?: string;
-              customType?: string;
-              message?: { role?: string };
-            }
-          | null
-          | undefined;
-        if (record?.type === "compaction" || record?.type === "reset") {
-          compactedAfterLatestAssistant = true;
-          continue;
-        }
-        if (
-          record?.type === "custom" &&
-          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
-        ) {
-          return !compactedAfterLatestAssistant;
-        }
-      }
-
-      return false;
+        .slice(-CONTINUATION_SCAN_MAX_RECORDS)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as unknown];
+          } catch {
+            return [];
+          }
+        });
+      return scanRecordsForCompletedBootstrapTurn(records);
     } finally {
       await fh.close();
     }
@@ -178,7 +189,7 @@ function sanitizeBootstrapFiles(
     const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       warn?.(
-        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+        `skipping bootstrap file "${file.name}" ??missing or invalid "path" field (hook may have used "filePath" instead)`,
       );
       continue;
     }

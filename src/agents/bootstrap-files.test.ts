@@ -5,10 +5,17 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import {
   clearInternalHooks,
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -507,17 +514,104 @@ describe("hasCompletedBootstrapTurn", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
+
+  async function makeSqliteTranscript(events: Array<Record<string, unknown>>): Promise<string> {
+    const agentId = "main";
+    const sessionId = `sqlite-${randomUUID()}`;
+    const sessionKey = `agent:${agentId}:${sessionId}`;
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
+    await upsertSessionEntry(
+      { agentId, sessionKey, storePath },
+      { sessionId, sessionFile, updatedAt: Date.now() },
+    );
+    const scope = { agentId, sessionId, sessionKey, storePath };
+    for (const [index, event] of events.entries()) {
+      if (event.type === "message") {
+        // Message records must flow through the transcript-turn writer; raw
+        // event appends reject message rows to protect identity bookkeeping.
+        await persistSessionTranscriptTurn(scope, {
+          messages: [
+            {
+              eventId: `msg-${index}`,
+              parentId: null,
+              message: event.message as { role: string; content: string },
+            },
+          ],
+          touchSessionEntry: false,
+        });
+        continue;
+      }
+      await appendTranscriptEvent(scope, event);
+    }
+    return sessionFile;
+  }
 
   it("returns false when session file does not exist", async () => {
     expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
   });
 
-  it("returns false for SQLite transcript markers", async () => {
-    expect(
-      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
-    ).toBe(false);
+  it("returns false for SQLite markers whose transcript has no bootstrap marker", async () => {
+    const sessionFile = await makeSqliteTranscript([
+      { type: "message", message: { role: "user", content: "hello" } },
+      { type: "message", message: { role: "assistant", content: "hi" } },
+    ]);
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("finds a full bootstrap marker in SQLite-backed transcripts", async () => {
+    const sessionFile = await makeSqliteTranscript([
+      { type: "message", message: { role: "assistant", content: "hi" } },
+      {
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      },
+    ]);
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("returns false when SQLite compaction happens after the bootstrap marker", async () => {
+    const sessionFile = await makeSqliteTranscript([
+      {
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      },
+      { type: "compaction", summary: "trimmed" },
+    ]);
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  });
+
+  it("returns true when a later SQLite bootstrap marker follows compaction", async () => {
+    const sessionFile = await makeSqliteTranscript([
+      {
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 1 },
+      },
+      { type: "compaction", summary: "trimmed" },
+      { type: "message", message: { role: "user", content: "new ask" } },
+      { type: "message", message: { role: "assistant", content: "new reply" } },
+      {
+        type: "custom",
+        customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+        data: { timestamp: 2 },
+      },
+    ]);
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  });
+
+  it("returns false for SQLite markers whose session store is missing", async () => {
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "missing-session",
+      storePath: path.join(tmpDir, "missing-store", "sessions.json"),
+    });
+    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
   });
 
   it("returns false for empty session files", async () => {
