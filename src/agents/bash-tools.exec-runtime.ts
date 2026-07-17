@@ -37,7 +37,6 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   addSession,
   appendOutput,
@@ -46,6 +45,7 @@ import {
   tail,
 } from "./bash-process-registry.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { assertExecMaySpawn, resolveExecTimeoutMs } from "./bash-tools.exec-runtime-helpers.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -60,13 +60,6 @@ export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
-
-function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
-  if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
-    return undefined;
-  }
-  return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
-}
 
 /**
  * Detect cursor key mode from PTY output chunk.
@@ -599,8 +592,10 @@ export async function runExecProcess(opts: {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  signal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
+  await assertExecMaySpawn(opts.signal);
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
@@ -644,8 +639,6 @@ export async function runExecProcess(opts: {
     backgrounded: false,
     cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
-  addSession(session);
-
   // Tracks whether the exec run's promise has settled (process exited or
   // spawn failed).  Once settled the agent-loop no longer expects
   // tool_execution_update events, so emitUpdate must become a no-op to
@@ -840,6 +833,9 @@ export async function runExecProcess(opts: {
     };
   })();
 
+  await assertExecMaySpawn(opts.signal, finalizeSandboxExec);
+  addSession(session);
+
   let managedRun: ManagedRun | null = null;
   let usingPty = spawnSpec.mode === "pty";
   const cursorResponse = buildCursorPositionResponse();
@@ -893,6 +889,7 @@ export async function runExecProcess(opts: {
       opts.warnings.push(warning);
       usingPty = false;
       try {
+        await assertExecMaySpawn(opts.signal);
         managedRun = await supervisor.spawn({
           runId: sessionId,
           sessionId: opts.sessionKey?.trim() || sessionId,

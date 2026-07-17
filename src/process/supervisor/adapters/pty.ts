@@ -2,6 +2,11 @@
 import type { IDisposable } from "@lydell/node-pty";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  createProcessTreeTerminationTracker,
+  forceKillProcessTreeAndWait,
+  probeProcessTreeAlive as probeUntrackedProcessTreeAlive,
+} from "../process-tree-termination.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -17,6 +22,7 @@ export async function createPtyAdapter(params: {
   cols?: number;
   rows?: number;
   name?: string;
+  trackProcessTree?: boolean;
 }): Promise<PtyAdapter> {
   const { spawn } = await import("@lydell/node-pty");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
@@ -28,6 +34,12 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
+  const processTreeTracker = params.trackProcessTree
+    ? createProcessTreeTerminationTracker({
+        pid: pty.pid || undefined,
+        detached: true,
+      })
+    : undefined;
 
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
@@ -75,6 +87,7 @@ export async function createPtyAdapter(params: {
   };
 
   exitListener = pty.onExit((event) => {
+    processTreeTracker?.noteRootExit();
     const signal = event.signal && event.signal !== 0 ? event.signal : null;
     settleWait({ code: event.exitCode ?? null, signal });
   });
@@ -167,6 +180,7 @@ export async function createPtyAdapter(params: {
   };
 
   const dispose = () => {
+    processTreeTracker?.invalidateRootIdentity();
     stdinDestroyed = true;
     stdinEnded = true;
     try {
@@ -185,6 +199,20 @@ export async function createPtyAdapter(params: {
     settleWait({ code: null, signal: null });
   };
 
+  const forceKillAndWait = async (timeoutMs: number) =>
+    processTreeTracker
+      ? await processTreeTracker.forceKillAndWait(timeoutMs)
+      : await forceKillProcessTreeAndWait({
+          pid: pty.pid || undefined,
+          detached: true,
+          timeoutMs,
+        });
+
+  const probeProcessTreeAlive = async () =>
+    processTreeTracker
+      ? await processTreeTracker.probeAlive()
+      : probeUntrackedProcessTreeAlive({ pid: pty.pid || undefined, detached: true });
+
   return {
     pid: pty.pid || undefined,
     stdin,
@@ -192,6 +220,8 @@ export async function createPtyAdapter(params: {
     onStderr,
     wait,
     kill,
+    forceKillAndWait,
+    probeProcessTreeAlive,
     dispose,
   };
 }

@@ -21,9 +21,7 @@ type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
-  M extends keyof CodexAppServerRequestParamsOverride
-    ? CodexAppServerRequestParamsOverride[M]
-    : unknown;
+  M extends keyof RequestParamsOverride ? RequestParamsOverride[M] : unknown;
 
 export type CodexAppServerRequestResult<M extends CodexAppServerRequestMethod> =
   M extends keyof CodexAppServerRequestResultMap
@@ -722,7 +720,23 @@ export declare namespace v2 {
   export type SkillsListResponse = CodexSkillsListResponse;
 }
 
-type CodexAppServerRequestParamsOverride = {
+type CodexBackgroundTerminal = {
+  itemId: string;
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid: number | null;
+  cpuPercent: number | null;
+  rssKb: number | null;
+};
+
+type RequestParamsOverride = {
+  "thread/backgroundTerminals/list": {
+    threadId: string;
+    cursor?: string | null;
+    limit?: number | null;
+  };
+  "thread/backgroundTerminals/terminate": { threadId: string; processId: string };
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/archive": CodexThreadArchiveParams;
@@ -763,6 +777,11 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/backgroundTerminals/list": {
+    data: CodexBackgroundTerminal[];
+    nextCursor: string | null;
+  };
+  "thread/backgroundTerminals/terminate": { terminated: boolean };
   "thread/archive": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;

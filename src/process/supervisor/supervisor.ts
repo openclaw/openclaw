@@ -9,6 +9,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
+import { createProcessScopeDrainer } from "./scope-drain.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -94,6 +95,7 @@ function resolveElapsedTimeoutReason(params: {
 export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
+  const scopeDrainer = createProcessScopeDrainer({ listActiveRuns: () => active });
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
@@ -118,9 +120,28 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
   };
 
+  const cancelScopeAndWait: ProcessSupervisor["cancelScopeAndWait"] = async (scopeKey, options) => {
+    const normalizedScopeKey = normalizeOptionalString(scopeKey);
+    if (!normalizedScopeKey) {
+      return;
+    }
+    const timeoutMs = clampTimeout(options.timeoutMs);
+    if (!timeoutMs) {
+      throw new Error("process scope drain timeout must be a positive finite number");
+    }
+    await scopeDrainer.cancelScopeAndWait(normalizedScopeKey, { ...options, timeoutMs });
+  };
+
   const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
     const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
+    const existingRecord = registry.get(runId);
+    if ((existingRecord && existingRecord.state !== "exited") || scopeDrainer.ownsRunId(runId)) {
+      // Run ids own both the live adapter and any retained process-tree proof.
+      // Reuse would overwrite that owner and let an earlier tree escape a drain.
+      throw new Error(`process run id ${runId} already exists`);
+    }
     const scopeKey = normalizeOptionalString(input.scopeKey);
+    const finishScopedSpawn = scopeDrainer.beginSpawn(scopeKey);
     if (input.replaceExistingScope && scopeKey) {
       cancelScope(scopeKey, "manual-cancel");
     }
@@ -199,6 +220,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
                 args: [...shellArgs, ptyCommand],
                 cwd: input.cwd,
                 env: input.env,
+                trackProcessTree: scopeKey !== undefined,
               });
             })()
           : await createChildAdapter({
@@ -208,9 +230,21 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              forceDetachedProcessGroup: scopeKey !== undefined,
+              trackProcessTree: scopeKey !== undefined,
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });
+      const processTreeOwner = scopeKey
+        ? {
+            scopeKey,
+            forceKillAndWait: adapter.forceKillAndWait,
+            probeAlive: adapter.probeProcessTreeAlive,
+          }
+        : undefined;
+      if (processTreeOwner) {
+        scopeDrainer.registerProcessTree(runId, processTreeOwner);
+      }
 
       const clearTimers = () => {
         if (timeoutTimer) {
@@ -292,6 +326,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
         clearTimers();
         adapter.dispose();
         active.delete(runId);
+        if (processTreeOwner) {
+          await scopeDrainer.releaseProcessTreeIfExited(runId, processTreeOwner);
+        }
 
         const reason: TerminationReason =
           terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
@@ -311,12 +348,15 @@ export function createProcessSupervisor(): ProcessSupervisor {
           exitSignal: exit.exitSignal,
         });
         return exit;
-      })().catch((err: unknown) => {
+      })().catch(async (err: unknown) => {
         if (!settled) {
           settled = true;
           clearTimers();
           active.delete(runId);
           adapter.dispose();
+          if (processTreeOwner) {
+            await scopeDrainer.releaseProcessTreeIfExited(runId, processTreeOwner);
+          }
           registry.finalize(runId, {
             reason: "spawn-error",
             exitCode: null,
@@ -341,6 +381,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         run: managedRun,
         scopeKey,
       });
+      scopeDrainer.cancelLateSpawn(scopeKey, managedRun);
       return managedRun;
     } catch (err) {
       registry.finalize(runId, {
@@ -351,6 +392,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
       const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
+    } finally {
+      finishScopedSpawn();
     }
   };
 
@@ -358,6 +401,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
+    cancelScopeAndWait,
     getRecord: (runId: string) => registry.get(runId),
   };
 }

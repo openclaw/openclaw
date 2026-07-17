@@ -327,4 +327,62 @@ describe("createPtyAdapter", () => {
       }
     }
   });
+
+  it("invalidates a tracked Windows PID after the real PTY exit event", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (signal === 0) {
+          return true;
+        }
+        throw new Error("unexpected signal");
+      });
+      const stub = createStubPty(4568);
+      spawnMock.mockReturnValue(stub);
+      const adapter = await createPtyAdapter({
+        shell: "powershell.exe",
+        args: ["-NoLogo"],
+        trackProcessTree: true,
+      });
+
+      stub.emitExit({ exitCode: 0 });
+
+      await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+      await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
+
+  it("makes a disposed tracked Windows PID non-actionable without faking exit", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+        if (signal === 0) {
+          return true;
+        }
+        throw new Error("unexpected signal");
+      });
+      spawnMock.mockReturnValue(createStubPty(4569));
+      const adapter = await createPtyAdapter({
+        shell: "powershell.exe",
+        args: ["-NoLogo"],
+        trackProcessTree: true,
+      });
+
+      adapter.dispose();
+
+      await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+      await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    }
+  });
 });

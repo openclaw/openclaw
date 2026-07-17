@@ -63,6 +63,10 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   onStderr: (listener: (chunk: string) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
   kill: (signal?: NodeJS.Signals) => void;
+  /** Force-kills the full native process tree and returns true only after exit is confirmed. */
+  forceKillAndWait: (timeoutMs: number) => Promise<boolean>;
+  /** Returns true/false when tree liveness is known, or undefined when it cannot be proven. */
+  probeProcessTreeAlive: () => Promise<boolean | undefined>;
   dispose: () => void;
 };
 
@@ -108,5 +112,9 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  cancelScopeAndWait(
+    scopeKey: string,
+    options: { timeoutMs: number; reason?: TerminationReason },
+  ): Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

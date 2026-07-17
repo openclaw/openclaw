@@ -1,6 +1,7 @@
-import { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  interruptCodexTurnBestEffort,
+  CODEX_APP_SERVER_ABORT_CLEANUP_TIMEOUT_MS,
+  hardCancelCodexTurn,
   retireCodexAppServerClientAfterTimedOutTurn,
 } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -197,11 +198,50 @@ export async function activateCodexAttemptTurn(
       })().finally(() => state.resolveCompletion?.());
       return;
     }
-    interruptCodexTurnBestEffort(resourceState.client, {
-      threadId: resourceState.thread.threadId,
-      turnId: activeTurnId,
-    });
-    state.resolveCompletion?.();
+    // Client/route closure also aborts the internal controller, but it is not a
+    // Gateway hard cancel and the transport lifecycle already owns that path.
+    if (!terminalState.explicitCancellationObserved) {
+      state.resolveCompletion?.();
+      return;
+    }
+    const turnCompletionWatch =
+      state.completed || state.terminalTurnNotificationQueued
+        ? { completion: Promise.resolve(true), cancel: () => undefined }
+        : resourceState.turnRouter.watchNativeTurnCompletion({
+            threadId: resourceState.thread.threadId,
+            turnId: activeTurnId,
+            timeoutMs: CODEX_APP_SERVER_ABORT_CLEANUP_TIMEOUT_MS,
+          });
+    const processCleanup = params.hostProcessScope
+      ? params.hostProcessScope.cancelAndWait({
+          timeoutMs: CODEX_APP_SERVER_ABORT_CLEANUP_TIMEOUT_MS,
+        })
+      : Promise.reject(new Error("OpenClaw host process-scope cleanup is unavailable"));
+    const abortCleanup = Promise.all([
+      processCleanup,
+      hardCancelCodexTurn(resourceState.client, {
+        threadId: resourceState.thread.threadId,
+        turnId: activeTurnId,
+        timeoutMs: CODEX_APP_SERVER_ABORT_CLEANUP_TIMEOUT_MS,
+        turnCompletion: turnCompletionWatch.completion,
+      }),
+    ]).then(() => undefined);
+    state.abortCleanup = abortCleanup;
+    void abortCleanup.then(
+      () => {
+        turnCompletionWatch.cancel();
+        state.resolveCompletion?.();
+      },
+      (error: unknown) => {
+        turnCompletionWatch.cancel();
+        embeddedAgentLog.warn("codex app-server abort cleanup failed closed", {
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          error,
+        });
+        state.resolveCompletion?.();
+      },
+    );
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
   if (runAbortController.signal.aborted) {

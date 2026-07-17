@@ -113,14 +113,18 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
     env,
     execPath: process.execPath,
   });
-  return spawn(invocation.command, invocation.args, {
+  const processGroupOwned = resolveCodexAppServerDetachedMode(env);
+  const child = spawn(invocation.command, invocation.args, {
     // Preserve the shipped Supervisor endpoint contract: relative commands and
     // config discovery may depend on the endpoint's process working directory.
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     env,
-    detached: resolveCodexAppServerDetachedMode(env),
+    detached: processGroupOwned,
     shell: invocation.shell,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: invocation.windowsHide,
   });
+  const transport = child as CodexAppServerTransport;
+  transport.processGroupOwned = processGroupOwned;
+  return transport;
 }

@@ -1987,7 +1987,6 @@ export function createExecTool(
           });
         }
 
-        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -2009,6 +2008,7 @@ export function createExecTool(
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
+          signal,
           onUpdate,
         });
         discardPreparedSandboxWorkdir = null;

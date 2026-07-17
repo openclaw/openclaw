@@ -39,6 +39,9 @@ export async function cleanupCodexAttempt(
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  // A failed hard-cancel proof must not unsubscribe, release the route, or clear
+  // the active-run registry: Gateway session cleanup will then fail closed.
+  await state.abortCleanup;
   if (params.isFinalFallbackAttempt !== false) {
     await maybeEmitFastModeAutoResetBestEffort();
   }

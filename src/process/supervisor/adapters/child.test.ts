@@ -405,6 +405,56 @@ describe("createChildAdapter", () => {
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
+  it("invalidates a tracked Windows PID after the real root exit event", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const stub = createStubChild(8643);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["openclaw", "version"],
+      stdinMode: "pipe-closed",
+      trackProcessTree: true,
+    });
+
+    stub.emitExit(0, null);
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await vi.advanceTimersByTimeAsync(300);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+    await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+  });
+
+  it("invalidates a tracked Windows PID when close is the only exit event", async () => {
+    setPlatform("win32");
+    vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === 0) {
+        return true;
+      }
+      throw new Error("unexpected signal");
+    });
+    const stub = createStubChild(8644);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["openclaw", "version"],
+      stdinMode: "pipe-closed",
+      trackProcessTree: true,
+    });
+
+    stub.emitClose(0, null);
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await expect(adapter.probeProcessTreeAlive()).resolves.toBeUndefined();
+    await expect(adapter.forceKillAndWait(1_000)).resolves.toBe(false);
+  });
+
   it("disables detached mode in service-managed runtime", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
@@ -413,6 +463,22 @@ describe("createChildAdapter", () => {
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+  });
+
+  it("forces an isolated process group for scoped service-managed runs", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const { child } = createStubChild(7778);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+
+    await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+      forceDetachedProcessGroup: true,
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.options?.detached).toBe(true);
+    expect(spawnArgs.fallbacks?.[0]?.options?.detached).toBe(false);
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {

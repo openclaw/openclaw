@@ -15,6 +15,11 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "../../windows-command.js";
+import {
+  createProcessTreeTerminationTracker,
+  forceKillProcessTreeAndWait,
+  probeProcessTreeAlive as probeUntrackedProcessTreeAlive,
+} from "../process-tree-termination.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -78,6 +83,8 @@ export async function createChildAdapter(params: {
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+  forceDetachedProcessGroup?: boolean;
+  trackProcessTree?: boolean;
 }): Promise<ChildAdapter> {
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
@@ -91,10 +98,12 @@ export async function createChildAdapter(params: {
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
-  // In service-managed mode keep children attached so systemd/launchd can
-  // stop the full process tree reliably. Outside service mode preserve the
-  // existing POSIX detached behavior.
-  const useDetached = process.platform !== "win32" && !isServiceManagedRuntime();
+  // In service-managed mode ordinary children stay attached so systemd/launchd
+  // can stop the full tree. Scoped runs override that default because a hard
+  // session drain needs an independently signalable and verifiable process group.
+  const useDetached =
+    process.platform !== "win32" &&
+    (params.forceDetachedProcessGroup === true || !isServiceManagedRuntime());
 
   const options: SpawnOptions = {
     cwd: params.cwd,
@@ -124,6 +133,12 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
+  const processTreeTracker = params.trackProcessTree
+    ? createProcessTreeTerminationTracker({
+        pid: child.pid ?? undefined,
+        detached: useDetached && !spawned.usedFallback,
+      })
+    : undefined;
   // Pipe errors can arrive before output subscribers attach. Close remains
   // responsible for decoder flush and Windows drain completion.
   const ignoreOutputStreamError = () => {};
@@ -369,10 +384,12 @@ export async function createChildAdapter(params: {
     rejectPendingWait(error);
   });
   child.once("exit", (code, signal) => {
+    processTreeTracker?.noteRootExit();
     childExitState = { code, signal };
     scheduleWindowsCloseFallback();
   });
   child.once("close", (code, signal) => {
+    processTreeTracker?.noteRootExit();
     settleWait(resolveObservedExitState({ code, signal }));
   });
 
@@ -445,10 +462,28 @@ export async function createChildAdapter(params: {
   };
 
   const dispose = () => {
+    processTreeTracker?.invalidateRootIdentity();
     clearForceKillWaitFallback();
     clearWindowsCloseFallbackTimer();
     child.removeAllListeners();
   };
+
+  const forceKillAndWait = async (timeoutMs: number) =>
+    processTreeTracker
+      ? await processTreeTracker.forceKillAndWait(timeoutMs)
+      : await forceKillProcessTreeAndWait({
+          pid: child.pid ?? undefined,
+          detached: childIsDetached,
+          timeoutMs,
+        });
+
+  const probeProcessTreeAlive = async () =>
+    processTreeTracker
+      ? await processTreeTracker.probeAlive()
+      : probeUntrackedProcessTreeAlive({
+          pid: child.pid ?? undefined,
+          detached: childIsDetached,
+        });
 
   return {
     pid: child.pid ?? undefined,
@@ -457,6 +492,8 @@ export async function createChildAdapter(params: {
     onStderr,
     wait,
     kill,
+    forceKillAndWait,
+    probeProcessTreeAlive,
     dispose,
   };
 }
