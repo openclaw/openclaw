@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { isSqliteLockError } from "./sqlite-errors.js";
 
 // WAL maintenance configures SQLite write-ahead logging and schedules bounded
 // checkpoints so state databases do not accumulate unbounded WAL files.
