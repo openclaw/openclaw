@@ -255,9 +255,7 @@ describe("appendReceivedValueHint", () => {
       "gateway.bind",
       `${"x".repeat(155)}🎉tail`,
     );
-    expect(message).not.toMatch(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-    );
+    expect(message).toBe(`invalid input, got: "${"x".repeat(155)}...`);
   });
 
   it("skips when message already mentions received", () => {
