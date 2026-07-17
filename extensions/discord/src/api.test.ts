@@ -429,4 +429,27 @@ describe("fetchDiscord", () => {
       await closeServer(server);
     }
   });
+
+  it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
+    const fetcher = vi.fn(async () =>
+      jsonResponse({ message: "rate limited", retry_after: 30, global: false }, 429),
+    );
+    const controller = new AbortController();
+    const started = Date.now();
+
+    const request = requestDiscord("/users/@me/guilds", "test-token", {
+      fetcher: withFetchPreconnect(fetcher),
+      retry: { attempts: 3 },
+      signal: controller.signal,
+    });
+    // Let the first 429 land and the retry backoff sleep start.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 200);
+    });
+    controller.abort();
+
+    await expect(request).rejects.toThrow(/abort/i);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 });
