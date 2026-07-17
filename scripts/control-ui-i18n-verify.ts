@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { OPENCLAW_LOCALES } from "../packages/localization-core/src/locale-registry.js";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
 import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
@@ -238,9 +239,15 @@ export async function verifyRuntimeLocaleConfig() {
     path.join(ROOT, "ui", "src", "i18n", "lib", "registry.ts"),
     "utf8",
   );
-  const typesRaw = await readFile(path.join(ROOT, "ui", "src", "i18n", "lib", "types.ts"), "utf8");
+  const configuredLocales = ["en", ...CONTROL_UI_LOCALE_ENTRIES.map((entry) => entry.locale)];
+  const sharedUiLocales = OPENCLAW_LOCALES.filter((locale) => locale !== "sv");
+  if (!compareStringArrays(configuredLocales, sharedUiLocales)) {
+    throw new Error(
+      `runtime locale config is out of sync with the shared registry: expected ${sharedUiLocales.join(", ")}, got ${configuredLocales.join(", ")}`,
+    );
+  }
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
-    if (!registryRaw.includes(`"${entry.locale}"`) || !typesRaw.includes(`| "${entry.locale}"`)) {
+    if (!registryRaw.includes(`"${entry.locale}"`)) {
       throw new Error(`runtime locale config is missing ${entry.locale}`);
     }
   }
