@@ -36,32 +36,6 @@ function formatAnalysisCost(value: number): string {
   return formatCost(value, decimals);
 }
 
-function handleSummaryHintClick(event: MouseEvent) {
-  const button = event.currentTarget as HTMLElement;
-  const tooltip = button.nextElementSibling;
-  if (!(tooltip instanceof HTMLElement) || tooltip.localName !== "wa-tooltip") {
-    return;
-  }
-  const controller = tooltip as HTMLElement & {
-    show: () => Promise<void>;
-    hide: () => Promise<void>;
-  };
-  if (button.dataset.tooltipClickOpen === "true") {
-    delete button.dataset.tooltipClickOpen;
-    void controller.hide();
-    return;
-  }
-  button.dataset.tooltipClickOpen = "true";
-  void controller.show();
-}
-
-function handleSummaryHintHide(event: Event) {
-  const button = (event.currentTarget as HTMLElement).previousElementSibling;
-  if (button instanceof HTMLElement && button.classList.contains("usage-summary-hint")) {
-    delete button.dataset.tooltipClickOpen;
-  }
-}
-
 function handleDailyBarKeydown(
   event: KeyboardEvent,
   day: string,
@@ -649,21 +623,14 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <button
-          id=${hintId}
-          type="button"
-          class="usage-summary-hint"
-          aria-label=${params.hint}
-          @click=${handleSummaryHintClick}
-        >
+        <button id=${hintId} type="button" class="usage-summary-hint" aria-label=${params.hint}>
           ?
         </button>
         <wa-tooltip
           id=${tooltipId}
           class="usage-summary-tooltip"
           for=${hintId}
-          trigger="hover focus"
-          @wa-hide=${handleSummaryHintHide}
+          trigger="click hover focus"
         >
           ${params.hint}
         </wa-tooltip>

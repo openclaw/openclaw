@@ -102,7 +102,7 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
-  it("renders overview hints as click-capable tooltip buttons", () => {
+  it("renders overview hints with declarative click, hover, and focus triggers", () => {
     const container = document.createElement("div");
 
     render(
@@ -139,21 +139,10 @@ describe("renderUsageInsights", () => {
     expect(
       tooltips.every(
         (tooltip) =>
-          tooltip.getAttribute("trigger") === "hover focus" &&
+          tooltip.getAttribute("trigger") === "click hover focus" &&
           buttons.some((button) => button.id === tooltip.getAttribute("for")),
       ),
     ).toBe(true);
-
-    const firstTooltip = tooltips[0] as HTMLElement & {
-      show: () => Promise<void>;
-      hide: () => Promise<void>;
-    };
-    const show = vi.spyOn(firstTooltip, "show").mockResolvedValue();
-    const hide = vi.spyOn(firstTooltip, "hide").mockResolvedValue();
-    buttons[0]?.click();
-    expect(show).toHaveBeenCalledOnce();
-    buttons[0]?.click();
-    expect(hide).toHaveBeenCalledOnce();
   });
 
   it("includes cache writes in cache-hit-rate denominator", () => {
