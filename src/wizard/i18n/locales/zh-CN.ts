@@ -152,6 +152,20 @@ export const zh_CN = {
       summaryTitle: "Memory 导入摘要",
       title: "发现 memory",
     },
+    appRecommendations: {
+      catalogEntryMissing: "官方插件目录条目不可用。",
+      detected: "检测到的应用：{apps}",
+      disclosure: "应用名称使用你配置的模型和 ClawHub 搜索进行匹配。",
+      installFailed: "无法安装 {name}：{reason}",
+      noneFound: "未找到基于应用的插件或技能推荐。",
+      option: "{name} — {reason}（检测到：{app}）",
+      scanning:
+        "正在扫描已安装应用 — 应用名称将通过你配置的模型与 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）…",
+      select: "安装推荐的插件和技能",
+      skillTrust: "信任并安装 ClawHub 技能 {name}？",
+      skipped: "已跳过应用推荐：{reason}",
+      title: "应用推荐",
+    },
     plugins: {
       configureBackHint: "返回分区菜单",
       configureEmpty: "没有找到带可配置字段的插件。",

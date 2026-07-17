@@ -153,6 +153,20 @@ export const en = {
       summaryTitle: "Memory import summary",
       title: "Memories found",
     },
+    appRecommendations: {
+      catalogEntryMissing: "Official plugin catalog entry is unavailable.",
+      detected: "Detected apps: {apps}",
+      disclosure: "App names were matched using your configured model and ClawHub search.",
+      installFailed: "Could not install {name}: {reason}",
+      noneFound: "No app-based plugin or skill recommendations found.",
+      option: "{name} — {reason} (detected: {app})",
+      scanning:
+        "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
+      select: "Install recommended plugins and skills",
+      skillTrust: "Trust and install the ClawHub skill {name}?",
+      skipped: "App recommendations skipped: {reason}",
+      title: "App recommendations",
+    },
     plugins: {
       configureBackHint: "Return to section menu",
       configureEmpty: "No plugins with configurable fields found.",

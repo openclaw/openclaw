@@ -667,6 +667,7 @@ export const OpenClawSchema = z
     wizard: z
       .strictObject({
         accessMode: z.union([z.literal("full"), z.literal("guarded")]).optional(),
+        appRecommendations: z.boolean().optional(),
         lastRunAt: z.string().optional(),
         lastRunVersion: z.string().optional(),
         lastRunCommit: z.string().optional(),

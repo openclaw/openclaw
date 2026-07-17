@@ -726,6 +726,7 @@ export interface NodeHostConfig {
   gateway_port: number | null;
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
+  installed_apps_sharing: Generated<number>;
   node_id: string;
   token: string | null;
   updated_at_ms: number;
