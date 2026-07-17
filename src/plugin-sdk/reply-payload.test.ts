@@ -201,6 +201,23 @@ describe("sendPayloadMediaSequence", () => {
     expect(send).not.toHaveBeenCalled();
     expect(sendNoMedia).toHaveBeenCalledOnce();
   });
+
+  it("does not use the no-media fallback when a media send returns undefined", async () => {
+    const send = vi.fn(async () => undefined);
+    const sendNoMedia = vi.fn(async () => undefined);
+
+    await expect(
+      sendPayloadMediaSequenceOrFallback({
+        text: "caption",
+        mediaUrls: ["https://example.com/image.png"],
+        send,
+        sendNoMedia,
+        fallbackResult: undefined,
+      }),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledOnce();
+    expect(sendNoMedia).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendTextMediaPayload", () => {

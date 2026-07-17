@@ -336,7 +336,7 @@ export async function sendPayloadTextChunkSequence<TResult>(params: {
   return lastResult;
 }
 
-/** Sends a media sequence or returns a fallback when no media send produces a result. */
+/** Sends a media sequence or returns a fallback when no media item is sent. */
 export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
   /** Caption text attached to the first non-empty media URL only. */
   text: string;
@@ -349,14 +349,24 @@ export async function sendPayloadMediaSequenceOrFallback<TResult>(params: {
     isFirst: boolean;
   }) => Promise<TResult>;
   onResult?: (result: TResult) => Promise<void> | void;
-  /** Result returned when no media result is available. */
+  /** Result returned when no media item is sent. */
   fallbackResult: TResult;
   /** Optional callback used instead of `fallbackResult` when no media item is sent. */
   sendNoMedia?: () => Promise<TResult>;
 }): Promise<TResult> {
-  const result = await sendPayloadMediaSequence(params);
-  if (result !== undefined) {
-    return result;
+  let hasSent = false;
+  let lastResult = params.fallbackResult;
+  await sendPayloadMediaSequence({
+    ...params,
+    send: async (input) => {
+      const result = await params.send(input);
+      hasSent = true;
+      lastResult = result;
+      return result;
+    },
+  });
+  if (hasSent) {
+    return lastResult;
   }
   return params.sendNoMedia ? await params.sendNoMedia() : params.fallbackResult;
 }
