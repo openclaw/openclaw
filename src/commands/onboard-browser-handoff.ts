@@ -195,6 +195,11 @@ async function probeDashboardPresence(
       // does) so the gateway grants operator.read via trusted local auth.
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      // Present the shared secret when one is configured (token-auth gateways
+      // reject a token-less local connect); SecretRef/none gateways fall back to
+      // trusted-loopback auth with no token.
+      ...(target.token ? { token: target.token } : {}),
+      ...(target.password ? { password: target.password } : {}),
       expectFinal: false,
       ignoreEnvUrlOverride: true,
     });
@@ -255,14 +260,12 @@ export async function probeBrowserHatchGateway(params: {
   if (params.config.gateway?.controlUi?.enabled === false) {
     return { ok: false, detail: "control ui disabled" };
   }
-  // Reachability is proven by the same presence read the handoff waits on, so
-  // the gate and the wait share one auth path (avoids a probe that passes but a
-  // later presence read that fails, or vice versa).
+  // Reachability is proven by the same presence read (and same resolved target,
+  // so the same shared secret) the handoff waits on — the gate and the wait
+  // never disagree on auth.
   try {
-    const presence = await probeDashboardPresence(
-      { config: params.config, dashboardUrl: "", wsUrl: "" },
-      HANDOFF_PROBE_TIMEOUT_MS,
-    );
+    const target = await resolveBrowserHatchTarget(params.config, params.env ?? process.env, false);
+    const presence = await probeDashboardPresence(target, HANDOFF_PROBE_TIMEOUT_MS);
     return presence.reachable
       ? { ok: true }
       : { ok: false, ...(presence.reason ? { detail: presence.reason } : {}) };
