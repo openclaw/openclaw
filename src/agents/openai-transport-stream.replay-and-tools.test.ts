@@ -87,7 +87,29 @@ function createEncryptedReplayFixture() {
     replayOptions,
   );
   request.input.push({ type: "reasoning", id: "rs_id_only", summary: [] });
-  return { model, request };
+  const output = createResponsesAssistantOutput(
+    model as unknown as Model<"azure-openai-responses">,
+  );
+  const onStreamCreated = vi.fn();
+  const run = (
+    create: ReturnType<typeof vi.fn>,
+    options?: {
+      request?: unknown;
+      push?: (event: unknown) => void;
+      retrySignal?: AbortSignal;
+    },
+  ) =>
+    testing.runResponsesStreamWithEncryptedContentRetry({
+      client: { responses: { create } } as never,
+      request: (options?.request ?? request) as never,
+      requestOptions: undefined,
+      model,
+      output,
+      drain: createResponsesDrain(model, output, options?.push),
+      retrySignal: options?.retrySignal,
+      onStreamCreated,
+    });
+  return { request, output, onStreamCreated, run };
 }
 
 function successfulResponsesStream(responseId = "resp_recovered") {
@@ -107,6 +129,15 @@ function successfulResponsesStream(responseId = "resp_recovered") {
       },
     },
   ]);
+}
+
+function invalidEncryptedContentError(message = "Encrypted reasoning replay was rejected.") {
+  return new OpenAI.BadRequestError(
+    400,
+    { code: "invalid_encrypted_content", message, type: "invalid_request_error" },
+    undefined,
+    new Headers(),
+  );
 }
 
 function createResponsesDrain(
@@ -860,10 +891,7 @@ describe("openai transport stream", () => {
   });
 
   it("retries thinking_signature_invalid once without encrypted reasoning content", async () => {
-    const { model, request } = createEncryptedReplayFixture();
-    const output = createResponsesAssistantOutput(
-      model as unknown as Model<"azure-openai-responses">,
-    );
+    const { request, output, onStreamCreated, run } = createEncryptedReplayFixture();
     const create = vi
       .fn()
       .mockRejectedValueOnce(
@@ -880,19 +908,8 @@ describe("openai transport stream", () => {
         ),
       )
       .mockResolvedValueOnce(successfulResponsesStream());
-    const onStreamCreated = vi.fn();
 
-    await expect(
-      testing.runResponsesStreamWithEncryptedContentRetry({
-        client: { responses: { create } } as never,
-        request: request as never,
-        requestOptions: undefined,
-        model,
-        output,
-        drain: createResponsesDrain(model, output),
-        onStreamCreated,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(run(create)).resolves.toBeUndefined();
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(onStreamCreated).toHaveBeenCalledOnce();
@@ -922,7 +939,7 @@ describe("openai transport stream", () => {
   it.each(["create", "drain"] as const)(
     "does not retry $stage encrypted-content failures when compaction is present",
     async (stage) => {
-      const { model, request } = createEncryptedReplayFixture();
+      const { request, run } = createEncryptedReplayFixture();
       const requestWithCompaction = {
         ...request,
         input: [
@@ -936,18 +953,8 @@ describe("openai transport stream", () => {
           ...request.input.slice(2),
         ],
       };
-      const output = createResponsesAssistantOutput(
-        model as unknown as Model<"azure-openai-responses">,
-      );
-      const invalidError = new OpenAI.BadRequestError(
-        400,
-        {
-          code: "invalid_encrypted_content",
-          message: "Encrypted compaction replay was rejected.",
-          type: "invalid_request_error",
-        },
-        undefined,
-        new Headers(),
+      const invalidError = invalidEncryptedContentError(
+        "Encrypted compaction replay was rejected.",
       );
       const create =
         stage === "create"
@@ -968,17 +975,9 @@ describe("openai transport stream", () => {
               ]),
             );
 
-      await expect(
-        testing.runResponsesStreamWithEncryptedContentRetry({
-          client: { responses: { create } } as never,
-          request: requestWithCompaction as never,
-          requestOptions: undefined,
-          model,
-          output,
-          drain: createResponsesDrain(model, output),
-          onStreamCreated: vi.fn(),
-        }),
-      ).rejects.toThrow("Encrypted compaction replay was rejected.");
+      await expect(run(create, { request: requestWithCompaction })).rejects.toThrow(
+        "Encrypted compaction replay was rejected.",
+      );
 
       expect(create).toHaveBeenCalledOnce();
       expect(create.mock.calls[0]?.[0]).toBe(requestWithCompaction);
@@ -1007,16 +1006,7 @@ describe("openai transport stream", () => {
     const output = createResponsesAssistantOutput(
       model as unknown as Model<"azure-openai-responses">,
     );
-    const invalidError = new OpenAI.BadRequestError(
-      400,
-      {
-        code: "invalid_encrypted_content",
-        message: "Encrypted reasoning replay was rejected.",
-        type: "invalid_request_error",
-      },
-      undefined,
-      new Headers(),
-    );
+    const invalidError = invalidEncryptedContentError();
     const create = vi.fn().mockRejectedValueOnce(invalidError);
 
     await expect(
@@ -1067,25 +1057,13 @@ describe("openai transport stream", () => {
       ],
     },
   ])("retries streamed $label before content starts", async ({ events }) => {
-    const { model, request } = createEncryptedReplayFixture();
-    const output = createResponsesAssistantOutput(
-      model as unknown as Model<"azure-openai-responses">,
-    );
+    const { request, output, onStreamCreated, run } = createEncryptedReplayFixture();
     const create = vi
       .fn()
       .mockResolvedValueOnce(streamChunks(events))
       .mockResolvedValueOnce(successfulResponsesStream());
-    const onStreamCreated = vi.fn();
 
-    await testing.runResponsesStreamWithEncryptedContentRetry({
-      client: { responses: { create } } as never,
-      request: request as never,
-      requestOptions: undefined,
-      model,
-      output,
-      drain: createResponsesDrain(model, output),
-      onStreamCreated,
-    });
+    await run(create);
 
     expect(create).toHaveBeenCalledTimes(2);
     expect(onStreamCreated).toHaveBeenCalledOnce();
@@ -1132,10 +1110,7 @@ describe("openai transport stream", () => {
   ])(
     "does not retry an encrypted-content failure after $label output starts",
     async ({ item, startType }) => {
-      const { model, request } = createEncryptedReplayFixture();
-      const output = createResponsesAssistantOutput(
-        model as unknown as Model<"azure-openai-responses">,
-      );
+      const { output, run } = createEncryptedReplayFixture();
       const push = vi.fn();
       const create = vi.fn().mockResolvedValueOnce(
         streamChunks([
@@ -1153,17 +1128,7 @@ describe("openai transport stream", () => {
         ]),
       );
 
-      await expect(
-        testing.runResponsesStreamWithEncryptedContentRetry({
-          client: { responses: { create } } as never,
-          request: request as never,
-          requestOptions: undefined,
-          model,
-          output,
-          drain: createResponsesDrain(model, output, push),
-          onStreamCreated: vi.fn(),
-        }),
-      ).rejects.toThrow("invalid_encrypted_content");
+      await expect(run(create, { push })).rejects.toThrow("invalid_encrypted_content");
 
       expect(create).toHaveBeenCalledOnce();
       expect(output.content).toHaveLength(1);
@@ -1174,20 +1139,8 @@ describe("openai transport stream", () => {
   );
 
   it("shares one retry budget across create and drain failures", async () => {
-    const { model, request } = createEncryptedReplayFixture();
-    const output = createResponsesAssistantOutput(
-      model as unknown as Model<"azure-openai-responses">,
-    );
-    const invalidError = new OpenAI.BadRequestError(
-      400,
-      {
-        code: "invalid_encrypted_content",
-        message: "Encrypted reasoning replay was rejected.",
-        type: "invalid_request_error",
-      },
-      undefined,
-      new Headers(),
-    );
+    const { run } = createEncryptedReplayFixture();
+    const invalidError = invalidEncryptedContentError();
     const create = vi
       .fn()
       .mockRejectedValueOnce(invalidError)
@@ -1206,26 +1159,13 @@ describe("openai transport stream", () => {
         ]),
       );
 
-    await expect(
-      testing.runResponsesStreamWithEncryptedContentRetry({
-        client: { responses: { create } } as never,
-        request: request as never,
-        requestOptions: undefined,
-        model,
-        output,
-        drain: createResponsesDrain(model, output),
-        onStreamCreated: vi.fn(),
-      }),
-    ).rejects.toThrow("invalid_encrypted_content");
+    await expect(run(create)).rejects.toThrow("invalid_encrypted_content");
 
     expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry after the effective request signal is aborted", async () => {
-    const { model, request } = createEncryptedReplayFixture();
-    const output = createResponsesAssistantOutput(
-      model as unknown as Model<"azure-openai-responses">,
-    );
+    const { run } = createEncryptedReplayFixture();
     const abort = new AbortController();
     const create = vi.fn().mockResolvedValueOnce(
       (async function* () {
@@ -1243,18 +1183,9 @@ describe("openai transport stream", () => {
       })(),
     );
 
-    await expect(
-      testing.runResponsesStreamWithEncryptedContentRetry({
-        client: { responses: { create } } as never,
-        request: request as never,
-        requestOptions: undefined,
-        model,
-        output,
-        drain: createResponsesDrain(model, output),
-        retrySignal: abort.signal,
-        onStreamCreated: vi.fn(),
-      }),
-    ).rejects.toThrow("invalid_encrypted_content");
+    await expect(run(create, { retrySignal: abort.signal })).rejects.toThrow(
+      "invalid_encrypted_content",
+    );
 
     expect(create).toHaveBeenCalledOnce();
   });
