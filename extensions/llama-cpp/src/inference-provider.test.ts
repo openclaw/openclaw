@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessageEvent, Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessageEvent, Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
