@@ -110,6 +110,11 @@ function normalizeOption(value: unknown, questionIndex: number, optionIndex: num
   }
   const record = value as Record<string, unknown>;
   const label = readRequiredString(record.label, `${labelPrefix}.label`);
+  // Telegram button text caps at 64 chars — the tightest native transport.
+  // Bounding here keeps schema-valid prompts deliverable on every channel.
+  if (label.length > 64) {
+    throw new ToolInputError(`${labelPrefix}.label must be at most 64 characters (use 1-5 words)`);
+  }
   if (record.description !== undefined && typeof record.description !== "string") {
     throw new ToolInputError(`${labelPrefix}.description must be a string`);
   }

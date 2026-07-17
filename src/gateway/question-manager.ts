@@ -174,15 +174,15 @@ export class QuestionManager {
 
   resolve(id: string, answers: QuestionAnswers, resolvedBy?: string): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
-    this.validateAnswers(entry.record.questions, answers);
+    const canonical = this.validateAnswers(entry.record.questions, answers);
     entry.record = {
       ...entry.record,
       status: "answered",
-      answers,
+      answers: canonical,
       ...(resolvedBy ? { resolvedBy } : {}),
     };
     this.finish(entry);
-    return { status: "answered", answers };
+    return { status: "answered", answers: canonical };
   }
 
   cancel(id: string, resolvedBy?: string): QuestionResolveResult {
@@ -237,13 +237,15 @@ export class QuestionManager {
     return entry;
   }
 
-  private validateAnswers(questions: Question[], answers: QuestionAnswers): void {
+  /** Validates answers against stored questions and returns them in canonical form. */
+  private validateAnswers(questions: Question[], answers: QuestionAnswers): QuestionAnswers {
     const submittedIds = Object.keys(answers.answers);
     const questionsById = new Map(questions.map((question) => [question.id, question]));
     const unknownId = submittedIds.find((id) => !questionsById.has(id));
     if (unknownId) {
       throw this.invalidAnswer(unknownId, "is not part of this request");
     }
+    const canonical: QuestionAnswers = { answers: {} };
     for (const question of questions) {
       const values = answers.answers[question.id]?.answers;
       if (!values || values.length === 0) {
@@ -255,16 +257,22 @@ export class QuestionManager {
       if (!question.multiSelect && values.length > 1) {
         throw this.invalidAnswer(question.id, "does not allow multiple answers");
       }
+      // Store the declared option label when a value matches trim-insensitively;
+      // downstream renderers compare answers to option labels exactly.
+      const canonicalValues = values.map((value) => {
+        const matched = question.options.find((option) => option.label.trim() === value.trim());
+        return matched ? matched.label : value.trim();
+      });
       if (
         question.options.length > 0 &&
         !question.isOther &&
-        values.some(
-          (value) => !question.options.some((option) => option.label.trim() === value.trim()),
-        )
+        canonicalValues.some((value) => !question.options.some((option) => option.label === value))
       ) {
         throw this.invalidAnswer(question.id, "contains an unknown option");
       }
+      canonical.answers[question.id] = { answers: canonicalValues };
     }
+    return canonical;
   }
 
   private invalidAnswer(id: string, reason: string): QuestionManagerError {

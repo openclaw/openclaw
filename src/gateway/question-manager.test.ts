@@ -199,3 +199,27 @@ describe("QuestionManager", () => {
     expect(manager.get(record.id)).toBeNull();
   });
 });
+
+describe("answer canonicalization", () => {
+  it("stores declared option labels for trim-variant submissions", () => {
+    const manager = new QuestionManager();
+    const record = manager.request({
+      questions: [
+        {
+          id: "pick",
+          header: "Pick",
+          question: "Pick one",
+          options: [{ label: "Two" }, { label: "Three" }],
+          isOther: false,
+        },
+      ],
+      timeoutMs: 60_000,
+    });
+    const result = manager.resolve(record.id, { answers: { pick: { answers: ["  Two  "] } } });
+    expect(result).toEqual({
+      status: "answered",
+      answers: { answers: { pick: { answers: ["Two"] } } },
+    });
+    manager.reset();
+  });
+});
