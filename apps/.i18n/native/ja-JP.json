@@ -18759,6 +18759,16 @@
       "translated": "ステータスアイコンのアイドル時のまばたきや揺れを有効にします。"
     },
     {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "クイックチャットのショートカット"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "メインセッション用のフローティングチャットバーを開くグローバルショートカット。"
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "機能"
@@ -19444,6 +19454,11 @@
       "translated": "チャットを開く"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "クイックチャット"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "Canvas を閉じる"
@@ -19839,9 +19854,19 @@
       "translated": "この Gateway で利用可能な AI アクセスが見つかりませんでした"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "問題ありません。API キーまたはトークンで接続できます。Claude Code または Codex にサインインするか、適切なモデルを読み込んだ Ollama または LM Studio を起動してから、「もう一度確認」を押すこともできます。"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "以下のプロバイダーに API キーまたはトークンで接続してから、もう一度確認してください。"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "これらのツールのいずれかをインストールしてから、もう一度確認してください。以下のプロバイダーに接続することもできます。"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "推奨インストール"
     },
     {
       "id": "native.apple.e2749739df556643",
@@ -20539,9 +20564,9 @@
       "translated": "メニューバーパネルを開く"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "クイックチャットとステータスを確認するには、OpenClaw メニューバーアイコンをクリックしてください。"
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "コンパクトなチャットパネルとステータスを表示するには、メニューバーのOpenClawアイコンをクリックします。"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20574,9 +20599,9 @@
       "translated": "パネル + Canvas を使用"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "コンパクトなチャットパネルを開きます。エージェントはCanvasでプレビューやよりリッチなビジュアルを表示できます。"
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20729,6 +20754,11 @@
       "translated": "システムアクセス"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "位置情報"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "セットアップ"
@@ -20842,46 +20872,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "アクセスをリクエスト"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "自動化（AppleScript）"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "通知"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "アクセシビリティ"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "画面収録"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "マイク"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "音声認識"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "カメラ"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "位置情報"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -21097,6 +21087,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "続ける"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "\\(self.model.agentDisplay.name)にメッセージを送信"
+    },
+    {
+      "id": "native.apple.c1fec5e4735d8995",
+      "source": "main session",
+      "translated": "メインセッション"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "メッセージを送信"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "追加の権限が必要です"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "許可"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "後で"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",

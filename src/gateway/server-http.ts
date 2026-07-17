@@ -26,7 +26,10 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { CONTROL_UI_PLUGIN_ICON_PATH_PREFIX } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_CATALOG_ICON_PATH_PREFIX,
+  CONTROL_UI_PLUGIN_ICON_PATH_PREFIX,
+} from "./control-ui-contract.js";
 import {
   isControlUiApprovalDocumentPath,
   isControlUiPluginManagerRequest,
@@ -130,10 +133,12 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/readyz", "ready"],
 ]);
 
-function isControlUiPluginIconRequest(pathname: string, basePath: string): boolean {
+function isControlUiCatalogIconRequest(pathname: string, basePath: string): boolean {
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  return pathname.startsWith(`${normalizedBasePath}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/`);
+  return [CONTROL_UI_PLUGIN_ICON_PATH_PREFIX, CONTROL_UI_CATALOG_ICON_PATH_PREFIX].some((prefix) =>
+    pathname.startsWith(`${normalizedBasePath}${prefix}/`),
+  );
 }
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
@@ -820,9 +825,9 @@ export function createGatewayHttpServer(opts: {
         });
       }
 
-      if (controlUiEnabled && isControlUiPluginIconRequest(scopedRequestPath, controlUiBasePath)) {
+      if (controlUiEnabled && isControlUiCatalogIconRequest(scopedRequestPath, controlUiBasePath)) {
         requestStages.push({
-          name: "control-ui-plugin-icon",
+          name: "control-ui-catalog-icon",
           run: async () =>
             (await getPluginIconHttpModule()).handlePluginIconHttpRequest(req, res, {
               basePath: controlUiBasePath,

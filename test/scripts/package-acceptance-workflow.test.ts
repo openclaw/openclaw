@@ -3930,6 +3930,11 @@ describe("package artifact reuse", () => {
       releasePublishJob,
       "Checkout trusted release tooling",
     );
+    const releaseNodeSetup = workflowStep(releasePublishJob, "Setup Node environment");
+    const trustedReleaseToolingInstall = workflowStep(
+      releasePublishJob,
+      "Install trusted release tooling dependencies",
+    );
     const trustedClawHubPlan = workflowStep(releasePublishJob, "Resolve ClawHub release plan");
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
@@ -3943,6 +3948,12 @@ describe("package artifact reuse", () => {
     );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(releaseNodeSetup.with?.["install-deps"]).toBe("false");
+    expect(trustedReleaseToolingInstall.run).toContain("--dir .release-harness");
+    expect(trustedReleaseToolingInstall.run).toContain("--frozen-lockfile");
+    expect(trustedReleaseToolingInstall.run).toContain(
+      "ln -s .release-harness/node_modules node_modules",
     );
     expect(fastPretagScript).toContain(
       "node --import tsx scripts/plugin-release-pretag-pack-check.ts",

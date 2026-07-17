@@ -622,7 +622,7 @@ final class WebChatSwiftUIWindowController {
                 userAccent: accent))
             self.contentController = hosting
         case .panel:
-            // Anchored quick-chat panel: compact single-column chat.
+            // Anchored compact chat panel: single-column chat.
             let hosting = NSHostingController(rootView: OpenClawChatView(
                 viewModel: vm,
                 showsSessionSwitcher: true,

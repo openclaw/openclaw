@@ -27,6 +27,7 @@ import {
   normalizeOptionalAccountId,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type {
@@ -550,6 +551,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
+          // Reject the account before plugin resolution so an explicit failed SecretRef cannot
+          // drift into a channel-specific environment or file fallback.
+          assertSecretOwnerAvailable("account", `${channelId}:${normalizeAccountId(id)}`);
           const account = plugin.config.resolveAccount(cfg, id);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)

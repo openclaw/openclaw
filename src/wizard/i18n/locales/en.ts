@@ -273,6 +273,8 @@ export const en = {
       failureUnavailable: "This AI route is not available right now.",
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
+      recommendedInstall: "{label} — {hint}\n  {website}",
+      recommendedInstallsTitle: "Recommended installs",
       intro: "Connect your AI",
       invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
       invalidConfigRepair:

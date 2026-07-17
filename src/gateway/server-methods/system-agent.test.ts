@@ -451,7 +451,10 @@ describe("openclaw.chat", () => {
       await release.promise;
       return {
         candidates: [],
+        unavailableCandidates: [],
         manualProviders: [],
+        authOptions: [],
+        recommendedInstalls: [],
         workspace: "/tmp/work",
         setupComplete: false,
       };

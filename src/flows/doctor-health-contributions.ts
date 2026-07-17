@@ -757,6 +757,11 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
+async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
+  await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
   await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
@@ -2031,6 +2036,11 @@ function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Security",
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:web-fetch-proxy",
+      label: "Web fetch proxy",
+      run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:browser",

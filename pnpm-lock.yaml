@@ -56,8 +56,8 @@ importers:
         specifier: 1.6.0
         version: 1.6.0
       '@earendil-works/pi-tui':
-        specifier: 0.80.3
-        version: 0.80.3
+        specifier: 0.80.9
+        version: 0.80.9
       '@google/genai':
         specifier: 2.10.0
         version: 2.10.0(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
@@ -2871,8 +2871,8 @@ packages:
     resolution: {integrity: sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==}
     engines: {node: '>=22.12.0'}
 
-  '@earendil-works/pi-tui@0.80.3':
-    resolution: {integrity: sha512-2BJI6qwRQfnM0Q7seL1+SbacU/jRRjBnN7Hu3n9BjAn7/s5FaBNnvdD1qBQYRsFTHfjqMaDsjYqanPyqwXj99w==}
+  '@earendil-works/pi-tui@0.80.9':
+    resolution: {integrity: sha512-unPTW8hRgIHEGjV8mJJ2jqm+fzgnRubes6V2FPk9ay1W9ZLofcpYQ3NDfrODXSci+oKbBpX9JyYUMfQV6jCA/A==}
     engines: {node: '>=22.19.0'}
 
   '@emnapi/core@1.11.1':
@@ -9311,7 +9311,7 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@earendil-works/pi-tui@0.80.3':
+  '@earendil-works/pi-tui@0.80.9':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.5

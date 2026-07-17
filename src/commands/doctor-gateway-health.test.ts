@@ -116,10 +116,10 @@ describe("checkGatewayHealth", () => {
       .mockResolvedValueOnce({
         degradedSecretOwners: [
           {
-            ownerKind: "provider",
-            ownerId: "openai",
+            ownerKind: "account",
+            ownerId: "discord:ops",
             state: "unavailable",
-            paths: ["models.providers.openai.apiKey"],
+            paths: ["channels.discord.accounts.ops.token"],
             reason: "secret reference was not found",
           },
           {
@@ -138,7 +138,7 @@ describe("checkGatewayHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "- provider:openai (models.providers.openai.apiKey): secret reference was not found",
+        "- account:discord:ops (channels.discord.accounts.ops.token): secret reference was not found",
         "- capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider failed",
       ].join("\n"),
       "Secret owners unavailable",
