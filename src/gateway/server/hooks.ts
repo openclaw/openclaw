@@ -22,7 +22,11 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
-import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
+import {
+  createHooksRequestHandler,
+  type HookAgentDispatchResult,
+  type HookClientIpConfig,
+} from "./hooks-request-handler.js";
 
 /**
  * Gateway hook HTTP handler factory.
@@ -31,6 +35,8 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-requ
  * sanitize external input before it reaches logs or system-event text.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+const HOOK_AGENT_START_ADMISSION_TIMEOUT_MS = 15_000;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
   return params.agentId
@@ -93,6 +99,33 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
+function resolveHookStartupFailureStatusCode(summary: string): number {
+  const normalized = summary.toLowerCase();
+  if (
+    normalized.includes("changed while starting work") ||
+    normalized.includes("deleted while starting work") ||
+    normalized.includes("is archived")
+  ) {
+    return 409;
+  }
+  if (normalized.includes("did not start before admission timeout")) {
+    return 503;
+  }
+  return 502;
+}
+
+function createHookStartupFailure(params: {
+  summary: string;
+  runId: string;
+}): HookAgentDispatchResult {
+  return {
+    ok: false,
+    statusCode: resolveHookStartupFailureStatusCode(params.summary),
+    error: params.summary,
+    runId: params.runId,
+  };
+}
+
 /** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
@@ -114,12 +147,38 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
-  const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
+  const dispatchAgentHook = async (
+    value: HookAgentDispatchPayload,
+  ): Promise<HookAgentDispatchResult> => {
     const sessionKey = value.sessionKey;
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
     const runId = randomUUID();
     const nowMs = resolveDateTimestampMs(Date.now());
+    const startupAbortController = new AbortController();
+    let resolveStartup: (result: HookAgentDispatchResult) => void = () => {};
+    let startupSettled = false;
+    let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+    const settleStartup = (result: HookAgentDispatchResult) => {
+      if (startupSettled) {
+        return;
+      }
+      startupSettled = true;
+      if (startupTimeout) {
+        clearTimeout(startupTimeout);
+        startupTimeout = undefined;
+      }
+      resolveStartup(result);
+    };
+    const startup = new Promise<HookAgentDispatchResult>((resolve) => {
+      resolveStartup = resolve;
+    });
+    startupTimeout = setTimeout(() => {
+      const summary = "hook agent run did not start before admission timeout";
+      startupAbortController.abort(new Error(summary));
+      settleStartup(createHookStartupFailure({ summary, runId }));
+    }, HOOK_AGENT_START_ADMISSION_TIMEOUT_MS);
+    startupTimeout.unref?.();
     const delivery = value.deliver
       ? {
           mode: "announce" as const,
@@ -168,8 +227,19 @@ export function createGatewayHooksRequestHandler(params: {
           message: value.message,
           sessionKey,
           lane: "cron",
+          abortSignal: startupAbortController.signal,
+          onExecutionStarted: () => {
+            settleStartup({ ok: true, runId });
+          },
         });
         const summary = resolveHookRunSummary(result);
+        if (!startupSettled) {
+          settleStartup(
+            result.status === "ok"
+              ? { ok: true, runId }
+              : createHookStartupFailure({ summary, runId }),
+          );
+        }
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
         const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
@@ -211,8 +281,12 @@ export function createGatewayHooksRequestHandler(params: {
           });
         }
       } catch (err) {
-        logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
+        const summary = String(err);
+        if (!startupSettled) {
+          settleStartup(createHookStartupFailure({ summary, runId }));
+        }
+        logHooks.warn(`hook agent failed: ${summary}`);
+        enqueueSystemEvent(`Hook ${safeName} (error): ${summary}`, {
           sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
         });
         if (value.wakeMode === "now") {
@@ -225,7 +299,7 @@ export function createGatewayHooksRequestHandler(params: {
       }
     });
 
-    return runId;
+    return await startup;
   };
 
   return createHooksRequestHandler({
