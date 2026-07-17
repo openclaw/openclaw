@@ -4,8 +4,10 @@ import {
   clearChannelHistoryIfEnabled,
   recordChannelHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
   runWithDiagnosticTraceContext,
@@ -13,6 +15,7 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
+import { recordInboundSession } from "../session.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -25,7 +28,6 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
-import { assembleChannelTurnPlan, assembleResolvedChannelTurn } from "./planner.js";
 
 export { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 
@@ -51,6 +53,7 @@ import type {
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
   ChannelTurnResult,
+  ChannelTurnResolved,
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
   PreparedChannelTurn,
@@ -70,6 +73,36 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   canStartAgentTurn: true,
 };
 const log = createSubsystemLogger("channels/turn/kernel");
+
+function assembleChannelTurnPlan(plan: ChannelTurnPlan): AssembledChannelTurn {
+  const { route, ...turn } = plan;
+  return {
+    ...turn,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath: resolveStorePath(plan.cfg.session?.store, { agentId: route.agentId }),
+    recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher,
+  };
+}
+
+function assembleResolvedChannelTurn<TDispatchResult>(
+  value: ChannelTurnResolved<TDispatchResult>,
+): AssembledChannelTurn | PreparedChannelTurn<TDispatchResult> {
+  if (!("route" in value)) {
+    return value;
+  }
+  if (!("runDispatch" in value)) {
+    return assembleChannelTurnPlan(value);
+  }
+  const { cfg, route, ...turn } = value;
+  return {
+    ...turn,
+    routeSessionKey: route.sessionKey,
+    storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+    recordInboundSession,
+  };
+}
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
   if (!value || typeof value !== "object") {

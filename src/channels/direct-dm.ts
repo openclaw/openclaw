@@ -151,10 +151,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     replyOptions: { onModelSelected },
   });
 
-  return {
-    route,
-    ctxPayload,
-  };
+  return { route, ctxPayload };
 }
 
 /** Released runtime-shaped facade retained for external channel plugins. */
@@ -212,9 +209,5 @@ export async function dispatchInboundDirectDmWithRuntime(
         replyOptions: { onModelSelected },
       }),
   });
-  return {
-    route,
-    storePath,
-    ctxPayload,
-  };
+  return { route, storePath, ctxPayload };
 }

@@ -46,7 +46,6 @@ describe("channel feedback reflection", () => {
 
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({
       status: "complete",
-      learning: "Answer the direct question first.",
       followUp: true,
       userMessage: "Want a shorter version?",
       responseLength: 104,

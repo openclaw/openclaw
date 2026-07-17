@@ -1,6 +1,6 @@
-import { implicitMentionKindWhen } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost plugin module implements monitor behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { implicitMentionKindWhen } from "openclaw/plugin-sdk/channel-inbound";
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildChannelProgressDraftLineForEntry,

@@ -1,4 +1,3 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -6,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
 import { dispatchChannelInboundTurn } from "./turn/kernel.js";
-import type { ConversationFacts } from "./turn/types.js";
 
 export const DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS = 300_000;
 const MAX_RESPONSE_CHARS = 500;
@@ -45,7 +43,6 @@ export type ChannelFeedbackReflectionResult =
   | { status: "empty" }
   | {
       status: "complete";
-      learning: string;
       followUp: boolean;
       userMessage?: string;
       responseLength: number;
@@ -74,22 +71,6 @@ function buildReflectionPrompt(params: {
   return parts.join("\n");
 }
 
-function parseBooleanLike(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    const normalized = normalizeOptionalLowercaseString(value);
-    if (normalized === "true" || normalized === "yes") {
-      return true;
-    }
-    if (normalized === "false" || normalized === "no") {
-      return false;
-    }
-  }
-  return undefined;
-}
-
 function parseReflectionResponse(
   text: string,
 ): Omit<
@@ -112,14 +93,12 @@ function parseReflectionResponse(
       if (!learning) {
         continue;
       }
-      return {
-        learning,
-        followUp: parseBooleanLike(value.followUp) ?? false,
-        userMessage:
-          typeof value.userMessage === "string" && value.userMessage.trim()
-            ? value.userMessage.trim()
-            : undefined,
-      };
+      const followUp =
+        value.followUp === true ||
+        (typeof value.followUp === "string" &&
+          ["true", "yes"].includes(value.followUp.trim().toLowerCase()));
+      const userMessage = typeof value.userMessage === "string" ? value.userMessage.trim() : "";
+      return { followUp, userMessage: userMessage || undefined };
     } catch {}
   }
   return trimmed ? { learning: trimmed, followUp: false } : null;
@@ -133,7 +112,7 @@ export async function runChannelFeedbackReflection(params: {
   agentId: string;
   sessionKey: string;
   conversationId: string;
-  conversationKind: ConversationFacts["kind"];
+  conversationKind: "direct" | "group" | "channel";
   thumbedDownResponse?: string;
   userComment?: string;
   cooldownMs?: number;
@@ -141,8 +120,9 @@ export async function runChannelFeedbackReflection(params: {
   onDispatchError?: (error: unknown) => void;
 }): Promise<ChannelFeedbackReflectionResult> {
   const cooldownMs = params.cooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
-  const previousReflection = lastReflectionBySession.get(params.sessionKey);
-  if (previousReflection !== undefined && Date.now() - previousReflection < cooldownMs) {
+  const previousReflection =
+    lastReflectionBySession.get(params.sessionKey) ?? Number.NEGATIVE_INFINITY;
+  if (Date.now() - previousReflection < cooldownMs) {
     return { status: "cooldown" };
   }
   const prompt = buildReflectionPrompt(params);
@@ -175,7 +155,7 @@ export async function runChannelFeedbackReflection(params: {
     message: { body, bodyForAgent: prompt, rawBody: prompt, commandBody: prompt },
     access: { commands: { authorized: false } },
   });
-  let response = "";
+  const responses: string[] = [];
   await dispatchChannelInboundTurn({
     cfg: params.cfg,
     channel: params.channel,
@@ -186,7 +166,7 @@ export async function runChannelFeedbackReflection(params: {
     delivery: {
       deliver: async (payload) => {
         if (payload.text) {
-          response += `${response ? "\n" : ""}${payload.text}`;
+          responses.push(payload.text);
         }
         return { visibleReplySent: false };
       },
@@ -194,6 +174,7 @@ export async function runChannelFeedbackReflection(params: {
     },
     replyPipeline: {},
   });
+  const response = responses.join("\n");
   const parsed = parseReflectionResponse(response);
   if (!parsed) {
     return { status: "empty" };

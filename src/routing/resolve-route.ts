@@ -31,7 +31,7 @@ export type RoutePeer = {
   id: string;
 };
 
-type ResolveAgentRouteInput = {
+export type ResolveAgentRouteInput = {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string | null;
