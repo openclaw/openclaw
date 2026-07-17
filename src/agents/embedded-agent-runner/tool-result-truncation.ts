@@ -58,6 +58,7 @@ const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
 const aggregateToolResultRecoveryWarnings = new Set<string>();
+const MAX_TOOL_RESULT_RECOVERY_WARNINGS = 512;
 
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
@@ -92,7 +93,10 @@ function logToolResultSessionTruncation(params: {
     log.info(message);
     return;
   }
-  if (aggregateToolResultRecoveryWarnings.has(sessionLogKey)) {
+  if (
+    aggregateToolResultRecoveryWarnings.has(sessionLogKey) ||
+    aggregateToolResultRecoveryWarnings.size >= MAX_TOOL_RESULT_RECOVERY_WARNINGS
+  ) {
     log.info(message);
     return;
   }
