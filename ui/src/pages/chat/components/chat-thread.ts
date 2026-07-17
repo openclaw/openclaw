@@ -1061,15 +1061,15 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        questionPrompts,
+        onQuestionChange: props.onQuestionChange,
+        onQuestionSubmit: props.onQuestionSubmit,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,
         authToken: props.assistantAttachmentAuthToken ?? null,
-        questionPrompts,
-        onQuestionChange: props.onQuestionChange,
-        onQuestionSubmit: props.onQuestionSubmit,
       });
     }
     if (item.kind === "work-group") {
