@@ -238,7 +238,7 @@ export async function buildClawAddPlan(params: {
   });
 
   const pendingWorkspaceFiles: PendingWorkspaceFileAction[] = [];
-  async function addWorkspaceFileInspection(params: {
+  async function addWorkspaceFileInspection(inspection: {
     sourcePath: string;
     targetPath: string;
     id: string;
@@ -248,10 +248,10 @@ export async function buildClawAddPlan(params: {
       sourceRoot,
       source,
       workspace,
-      sourcePath: params.sourcePath,
-      targetPath: params.targetPath,
-      id: params.id,
-      manifestPath: params.manifestPath,
+      sourcePath: inspection.sourcePath,
+      targetPath: inspection.targetPath,
+      id: inspection.id,
+      manifestPath: inspection.manifestPath,
     });
     const action = result.pending?.action ?? result.action;
     if (!action) {

@@ -190,7 +190,6 @@ export async function applyClawAddPlan(
         .then(() => true)
         .catch(() => false);
       if (removedWorkspace) {
-        workspaceCreated = false;
         markInstallStatus(plan.agent.finalId, "partial", options);
       }
     }

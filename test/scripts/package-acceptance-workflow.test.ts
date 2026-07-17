@@ -617,7 +617,7 @@ describe("package acceptance workflow", () => {
       cwd: existingDir,
     });
     const sourceArchive = readFileSync(sourceZip);
-    writeFileSync(corruptZip, sourceArchive.subarray(0, sourceArchive.length - 10));
+    writeFileSync(corruptZip, sourceArchive.subarray(0, -10));
 
     const compare = (left: string, right: string) =>
       spawnSync("python3", ["scripts/compare-release-evidence-zip.py", left, right], {
@@ -3619,7 +3619,6 @@ describe("package artifact reuse", () => {
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
-    const workflow = readWorkflow(OPENCLAW_NPM_RELEASE_WORKFLOW);
     const preflight = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "preflight_openclaw_npm");
     const metadata = workflowStep(preflight, "Validate release metadata");
 
