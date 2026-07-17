@@ -890,13 +890,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       }
     },
-    onError: async (error, info) => {
+    onError: (error, info) => {
       streamingCloseErroredForReply = true;
       streamingClosedForReply = false;
       params.runtime.error?.(
         `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
       );
-      await queueIdleSideEffects({ markClosedForReply: false });
+      void queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError) => {
+        params.runtime.error?.(
+          `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
+        );
+      });
     },
   };
 
