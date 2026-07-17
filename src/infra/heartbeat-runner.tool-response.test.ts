@@ -17,6 +17,7 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { stripTrailingHeartbeatNotifyFalse } from "./heartbeat-delivery-normalization.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, testing, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -565,25 +566,31 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   });
 
-  it.each(["", "\n", "\r\n"])(
-    "converts trailing notify=false fallback text into silent Telegram delivery with suffix %j",
-    async (suffix) => {
-      const { result, sendTelegram, cfg } = await runPlainFallbackReply(
-        `No interruption needed.\n\nnotify=false${suffix}`,
-      );
+  it("converts trailing notify=false fallback text into silent Telegram delivery", async () => {
+    const { result, sendTelegram, cfg } = await runPlainFallbackReply(
+      "No interruption needed.\n\nnotify=false",
+    );
 
-      expect(result.status).toBe("ran");
-      expectTelegramSend(sendTelegram, {
-        text: "No interruption needed.",
-        cfg,
-        silent: true,
-      });
-      expect(getLastHeartbeatEvent()).toMatchObject({
-        status: "sent",
-        preview: "No interruption needed.",
-        channel: "telegram",
-        silent: true,
-      });
+    expect(result.status).toBe("ran");
+    expectTelegramSend(sendTelegram, {
+      text: "No interruption needed.",
+      cfg,
+      silent: true,
+    });
+    expect(getLastHeartbeatEvent()).toMatchObject({
+      status: "sent",
+      preview: "No interruption needed.",
+      channel: "telegram",
+      silent: true,
+    });
+  });
+
+  it.each(["\n", "\r\n"])(
+    "strips trailing notify=false with suffix %j without rerunning a heartbeat",
+    (suffix) => {
+      expect(
+        stripTrailingHeartbeatNotifyFalse(`No interruption needed.\n\nnotify=false${suffix}`),
+      ).toEqual({ text: "No interruption needed.", silent: true });
     },
   );
 
@@ -636,55 +643,20 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
-  it.each([
-    {
-      name: "uses the isolated Codex runtime instead of the base OpenClaw runtime",
+  it("uses the isolated Codex runtime instead of the base OpenClaw runtime", async () => {
+    // One direction proves prompt recalculation after isolation. Reciprocal
+    // runtime precedence is covered directly by thinking-runtime.test.ts.
+    const result = await runPromptScenario({
       config: { isolatedSession: true },
       session: {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
         agentRuntimeOverride: "openclaw",
       },
-      expectedToolPrompt: true,
-    },
-    {
-      name: "uses the isolated OpenClaw runtime instead of the base Codex runtime",
-      config: {
-        isolatedSession: true,
-        model: "anthropic/claude-sonnet-4-6",
-      },
-      session: {
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        agentRuntimeOverride: "codex",
-      },
-      expectedToolPrompt: false,
-    },
-  ])("$name", async ({ config, session, expectedToolPrompt }) => {
-    const result = await runPromptScenario({ config, session });
-
-    expect(result.calledCtx.SessionKey).toMatch(/:heartbeat$/);
-    if (expectedToolPrompt) {
-      expectHeartbeatToolPrompt(result);
-      return;
-    }
-    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
-    expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
-    expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
-  });
-
-  it.each([
-    ["observational harness id", { agentHarnessId: "codex" }],
-    ["provider-incompatible override", { agentRuntimeOverride: "codex" }],
-  ])("does not let a %s select the next heartbeat runtime", async (_label, session) => {
-    const result = await runPromptScenario({
-      config: { model: "anthropic/claude-sonnet-4-6" },
-      session,
     });
 
-    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
-    expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
-    expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
+    expect(result.calledCtx.SessionKey).toMatch(/:heartbeat$/);
+    expectHeartbeatToolPrompt(result);
   });
 
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {

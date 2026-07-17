@@ -1580,6 +1580,57 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
+  it("cancels a pending reconnect and allows a later explicit connect", async () => {
+    vi.useFakeTimers();
+    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
+    const provider = buildXaiRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { sessionResumption: true },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+
+    const connecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const firstSocket = requireSocket();
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({ type: "conversation.created", conversation: { id: "conv_close" } }),
+      ),
+    );
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.close(1006, "connection lost");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+
+    bridge.close();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(onError).not.toHaveBeenCalled();
+
+    const reconnecting = bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const reconnectedSocket = requireSocket(1);
+    reconnectedSocket.readyState = FakeWebSocket.OPEN;
+    reconnectedSocket.emit("open");
+    reconnectedSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await reconnecting;
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+    bridge.close();
+  });
+
   it("enables xAI session resumption and reconnects with the created conversation id", async () => {
     vi.useFakeTimers();
     vi.stubEnv("XAI_API_KEY", "xai-env"); // pragma: allowlist secret

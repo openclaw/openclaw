@@ -4,6 +4,8 @@
 
 Adds foreground, on-device Voice Wake with editable Gateway-synced wake words and automatic pause during other voice activity.
 
+Fixes malformed Android agent and profile initials when display names begin with emoji. Thanks @Leon-SK668.
+
 ## 2026.7.2 - 2026-07-13
 
 Adds Automations and Skills management with search, filters, editing, run tracking, install safety, and ClawHub risk review.

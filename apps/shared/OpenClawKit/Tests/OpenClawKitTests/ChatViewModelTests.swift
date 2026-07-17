@@ -405,6 +405,37 @@ private func emitAgentLifecycleEnd(
                 data: ["phase": AnyCodable("end")])))
 }
 
+private func planStep(_ step: String, status: String) -> AnyCodable {
+    AnyCodable([
+        "step": AnyCodable(step),
+        "status": AnyCodable(status),
+    ])
+}
+
+private func emitPlan(
+    transport: TestChatTransport,
+    runId: String,
+    steps: [AnyCodable],
+    explanation: String? = nil,
+    seq: Int = 2)
+{
+    var data: [String: AnyCodable] = [
+        "phase": AnyCodable("update"),
+        "steps": AnyCodable(steps),
+    ]
+    if let explanation {
+        data["explanation"] = AnyCodable(explanation)
+    }
+    transport.emit(
+        .agent(
+            OpenClawAgentEventPayload(
+                runId: runId,
+                seq: seq,
+                stream: "plan",
+                ts: Int(Date().timeIntervalSince1970 * 1000),
+                data: data)))
+}
+
 private func emitExternalFinal(
     transport: TestChatTransport,
     runId: String = "other-run",
@@ -2886,6 +2917,175 @@ struct ChatViewModelTests {
                     }
             }
         }
+    }
+
+    @Test func `plan event parses typed and legacy steps`() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "make a plan")
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        let runId = try await waitForLastSentRunId(transport)
+
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [
+                planStep("  Inspect state  ", status: "in_progress"),
+                AnyCodable("Write fix"),
+                planStep("Verify", status: "completed"),
+                planStep("Duplicate active", status: "in_progress"),
+                planStep("   ", status: "pending"),
+                planStep("Invalid status", status: "blocked"),
+                AnyCodable(42),
+            ],
+            explanation: "  Working through the change  ")
+
+        try await waitUntil("plan snapshot applies") {
+            await MainActor.run { vm.planSteps.count == 3 }
+        }
+        #expect(await MainActor.run { vm.planSteps } == [
+            OpenClawChatPlanStep(step: "Inspect state", status: .inProgress),
+            OpenClawChatPlanStep(step: "Write fix", status: .pending),
+            OpenClawChatPlanStep(step: "Verify", status: .completed),
+        ])
+        #expect(await MainActor.run { vm.planExplanation } == "Working through the change")
+    }
+
+    @Test func `plan snapshots replace and empty snapshot clears`() async throws {
+        let history = historyPayload()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "replace plan")
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        let runId = try await waitForLastSentRunId(transport)
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [
+                planStep("First", status: "completed"),
+                planStep("Second", status: "in_progress"),
+            ],
+            explanation: "Initial")
+        try await waitUntil("first plan snapshot applies") {
+            await MainActor.run { vm.planSteps.count == 2 }
+        }
+
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [planStep("Replacement", status: "pending")],
+            seq: 3)
+        try await waitUntil("replacement plan snapshot applies") {
+            await MainActor.run {
+                vm.planSteps == [OpenClawChatPlanStep(step: "Replacement", status: .pending)] &&
+                    vm.planExplanation == nil
+            }
+        }
+
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [],
+            explanation: "Explanation only",
+            seq: 4)
+        try await waitUntil("empty plan snapshot clears") {
+            await MainActor.run { vm.planSteps.isEmpty && vm.planExplanation == nil }
+        }
+    }
+
+    @Test func `agent lifecycle end clears plan`() async throws {
+        let history = historyPayload()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history, history],
+            sendMessageStatus: "pending")
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "finish plan")
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        let runId = try await waitForLastSentRunId(transport)
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [planStep("Finish", status: "in_progress")])
+        try await waitUntil("plan snapshot applies") {
+            await MainActor.run { !vm.planSteps.isEmpty }
+        }
+
+        emitAgentLifecycleEnd(transport: transport, runId: runId, seq: 3)
+
+        try await waitUntil("lifecycle end clears plan") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 && vm.planSteps.isEmpty && vm.planExplanation == nil
+            }
+        }
+    }
+
+    @Test func `plan event for wrong run is ignored`() async throws {
+        let history = historyPayload()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageStatus: "pending")
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "ignore wrong plan")
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        emitPlan(
+            transport: transport,
+            runId: "other-run",
+            steps: [planStep("Wrong run", status: "in_progress")])
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await MainActor.run { vm.planSteps.isEmpty })
+        #expect(await MainActor.run { vm.planExplanation == nil })
+    }
+
+    @Test func `terminal event for another run preserves active plan`() async throws {
+        let activeRunId = "active-run"
+        let initialHistory = historyPayload()
+        let activeHistory = historyPayload(
+            inFlightRun: OpenClawChatInFlightRun(runId: activeRunId, text: ""))
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [initialHistory, activeHistory, activeHistory],
+            sendMessageHook: { _ in
+                OpenClawChatSendResponse(runId: activeRunId, status: "pending")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await sendUserMessage(vm, text: "keep active plan")
+        try await waitUntil("remote run is adopted") {
+            await MainActor.run { vm.pendingRunCount == 1 && !vm.isSending }
+        }
+        emitPlan(
+            transport: transport,
+            runId: activeRunId,
+            steps: [planStep("Keep working", status: "in_progress")])
+        try await waitUntil("active plan applies") {
+            await MainActor.run { vm.planSteps.first?.step == "Keep working" }
+        }
+
+        emitExternalFinal(transport: transport, runId: "older-run")
+
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await MainActor.run { vm.pendingRunCount } == 1)
+        #expect(await MainActor.run { vm.planSteps } == [
+            OpenClawChatPlanStep(step: "Keep working", status: .inProgress),
+        ])
     }
 
     @Test func `pending run blocks second main send`() async throws {

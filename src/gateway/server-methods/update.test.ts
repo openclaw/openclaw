@@ -827,6 +827,25 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.reason).toBe("restart-unavailable");
     expect(payload?.result?.mode).toBe("npm");
   });
+
+  it("delegates update.run without mutating or restarting under external supervision", async () => {
+    mockGlobalInstallSurface();
+
+    const payload = await withProcessEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.restart).toBeNull();
+    expect(payload?.result).toMatchObject({
+      status: "skipped",
+      mode: "npm",
+      reason: "external-supervisor-update-required",
+    });
+  });
 });
 
 describe("update.run post-core plugin finalize", () => {

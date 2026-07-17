@@ -20,6 +20,8 @@ import {
 } from "./snapshot-provider.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const TRANSIENT_PLUGIN_BLOB_MARKER = `transient-plugin-blob-${"sensitive".repeat(32)}`;
+const DURABLE_PLUGIN_BLOB_MARKER = "durable-plugin-blob-control";
 
 async function createTempDir(): Promise<string> {
   const tempDir = tempDirs.make("openclaw-snapshot-repository-");
@@ -92,6 +94,40 @@ function createGlobalDatabase(databasePath: string): void {
         `,
       )
       .run('{"payload":"do-not-restore"}');
+  } finally {
+    database.close();
+  }
+}
+
+function seedGlobalPluginBlobSnapshotFixtures(databasePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(databasePath);
+  try {
+    const insertPluginBlob = database.prepare(
+      `
+        INSERT INTO plugin_blob_entries (
+          plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+    );
+    insertPluginBlob.run(
+      "diffs",
+      "viewer-artifacts",
+      "transient",
+      JSON.stringify({ marker: TRANSIENT_PLUGIN_BLOB_MARKER }),
+      Buffer.from(`<html>${TRANSIENT_PLUGIN_BLOB_MARKER}</html>`),
+      1,
+      Date.UTC(2099, 0, 1),
+    );
+    insertPluginBlob.run(
+      "durable-plugin",
+      "documents",
+      "durable",
+      JSON.stringify({ kind: "durable" }),
+      Buffer.from(DURABLE_PLUGIN_BLOB_MARKER),
+      1,
+      null,
+    );
   } finally {
     database.close();
   }
@@ -1042,26 +1078,56 @@ describe("local SQLite snapshot repository", () => {
     await expect(fs.readFile(racedPath!, "utf8")).resolves.toBe("racer");
   });
 
-  it("sanitizes transient global delivery rows and enforces the global owner", async () => {
+  it("sanitizes transient global rows and enforces the global owner", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "openclaw.sqlite");
     const repositoryPath = path.join(tempDir, "snapshots");
     createGlobalDatabase(sourcePath);
+    seedGlobalPluginBlobSnapshotFixtures(sourcePath);
     const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
     const snapshot = await provider.create({
       path: sourcePath,
       identity: { role: "global" },
     });
     const artifactPath = path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
-    expect((await fs.readFile(artifactPath)).includes("do-not-restore")).toBe(false);
+    const artifactBytes = await fs.readFile(artifactPath);
+    expect(artifactBytes.includes("do-not-restore")).toBe(false);
+    expect(artifactBytes.includes(TRANSIENT_PLUGIN_BLOB_MARKER)).toBe(false);
+    expect(artifactBytes.includes(DURABLE_PLUGIN_BLOB_MARKER)).toBe(true);
     const sqlite = requireNodeSqlite();
     const artifact = new sqlite.DatabaseSync(artifactPath, { readOnly: true });
     try {
       expect(
         artifact.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
       ).toEqual({ count: 0 });
+      expect(
+        artifact
+          .prepare(
+            "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
+          )
+          .all(),
+      ).toEqual([{ plugin_id: "durable-plugin", entry_key: "durable" }]);
     } finally {
       artifact.close();
+    }
+
+    const source = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
+    try {
+      expect(source.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get()).toEqual({
+        count: 1,
+      });
+      expect(
+        source
+          .prepare(
+            "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
+          )
+          .all(),
+      ).toEqual([
+        { plugin_id: "diffs", entry_key: "transient" },
+        { plugin_id: "durable-plugin", entry_key: "durable" },
+      ]);
+    } finally {
+      source.close();
     }
 
     const wrongRolePath = path.join(tempDir, "wrong-role.sqlite");

@@ -43,6 +43,7 @@ type QaSessionTranscriptSeedParams = {
 };
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
@@ -64,6 +65,15 @@ function isSessionStoreLockTimeout(error: unknown) {
     text.includes("SessionWriteLockStaleError") ||
     text.includes("session file locked") ||
     text.includes("session file lock stale")
+  );
+}
+
+function isSessionStoreFtsSettleRace(error: unknown) {
+  const text = formatErrorMessage(error);
+  return (
+    text.includes("SQLite integrity_check failed") &&
+    text.includes("fts5: checksum mismatch") &&
+    text.includes("session_transcript_fts")
   );
 }
 
@@ -287,12 +297,33 @@ async function seedQaSessionTranscript(
   }
 }
 
-async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  return Object.fromEntries(
-    listSessionEntries({ agentId: "qa", env: qaSessionRuntimeEnv(env.gateway.tempRoot) }).map(
-      ({ sessionKey, entry }) => [sessionKey, entry as QaRawSessionStoreEntry],
-    ),
-  );
+async function readRawQaSessionStore(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  options: {
+    readEntries?: typeof listSessionEntries;
+    retryDelaysMs?: readonly number[];
+  } = {},
+) {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const readEntries = options.readEntries ?? listSessionEntries;
+  const retryDelaysMs = options.retryDelaysMs ?? SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return Object.fromEntries(
+        readEntries({ agentId: "qa", env: runtimeEnv }).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry as QaRawSessionStoreEntry,
+        ]),
+      );
+    } catch (error) {
+      if (!isSessionStoreFtsSettleRace(error) || attempt === retryDelaysMs.length) {
+        throw error;
+      }
+      // Child completion can publish before its transcript writer has settled the FTS state.
+      await sleep(retryDelaysMs[attempt]);
+    }
+  }
+  throw new Error("QA session store read failed after FTS settle retries");
 }
 
 async function readSessionTranscriptSummary(

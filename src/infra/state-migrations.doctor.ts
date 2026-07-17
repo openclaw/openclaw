@@ -6,7 +6,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.core.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { isNamedProfile, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -43,10 +43,6 @@ import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
 } from "./state-migrations.debug-proxy.js";
-import {
-  detectLegacyExecApprovalsMigration,
-  migrateLegacyExecApprovals,
-} from "./state-migrations.exec-approvals.js";
 import {
   existsDir,
   fileExists,
@@ -133,6 +129,10 @@ import {
   resolveLegacyUpdateCheckPath,
 } from "./state-migrations.update-check.js";
 import { detectLegacyWebPush, migrateLegacyWebPush } from "./state-migrations.web-push.js";
+import {
+  detectLegacyWorkspaceState,
+  migrateLegacyWorkspaceState,
+} from "./state-migrations.workspace-setup.js";
 
 function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigration): string {
   switch (migration.kind) {
@@ -245,28 +245,12 @@ export async function detectLegacyStateMigrations(params: {
   homedir?: () => string;
   pluginSessionStoreAgentIds?: readonly string[];
   sessionStoreOwnership?: SessionStoreOwnership;
-  crossStateDirImports?: boolean;
   doctorOnlyStateMigrations?: boolean;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
-  // Sources under the DEFAULT home state dir are foreign state when
-  // OPENCLAW_STATE_DIR points elsewhere: an isolated/test gateway must never
-  // import (and archive) another install's files. Only an explicit doctor run
-  // opts into the cross-directory import.
-  const crossStateDirImports = params.crossStateDirImports === true;
-  const notices: string[] = [];
-  const detectedExecApprovals = detectLegacyExecApprovalsMigration({ env, homedir, stateDir });
-  const execApprovals = crossStateDirImports
-    ? detectedExecApprovals
-    : { ...detectedExecApprovals, hasLegacy: false };
-  if (detectedExecApprovals.hasLegacy && !crossStateDirImports) {
-    notices.push(
-      `Exec approvals in the default state dir were not imported into OPENCLAW_STATE_DIR automatically (${detectedExecApprovals.sourcePath} -> ${detectedExecApprovals.targetPath}); run \`openclaw doctor --fix\` to import them.`,
-    );
-  }
 
   const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const rawMainKey = params.cfg.session?.mainKey;
@@ -393,22 +377,9 @@ export async function detectLegacyStateMigrations(params: {
   const pluginBindingApprovals = {
     sourcePath: resolveLegacyPluginBindingApprovalsPath(env, homedir),
   };
-  const pluginBindingApprovalsCrossDir =
-    path.resolve(path.dirname(pluginBindingApprovals.sourcePath)) !== path.resolve(stateDir);
   const hasPluginBindingApprovals =
-    !isNamedProfile(env) &&
-    fileExists(pluginBindingApprovals.sourcePath) &&
-    (crossStateDirImports || !pluginBindingApprovalsCrossDir);
-  if (
-    !isNamedProfile(env) &&
-    fileExists(pluginBindingApprovals.sourcePath) &&
-    pluginBindingApprovalsCrossDir &&
-    !crossStateDirImports
-  ) {
-    notices.push(
-      `Plugin binding approvals in the default state dir were not imported into OPENCLAW_STATE_DIR automatically (${pluginBindingApprovals.sourcePath}); run \`openclaw doctor --fix\` to import them.`,
-    );
-  }
+    path.resolve(path.dirname(pluginBindingApprovals.sourcePath)) === path.resolve(stateDir) &&
+    fileExists(pluginBindingApprovals.sourcePath);
   const currentConversationBindings = {
     sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
   };
@@ -427,6 +398,13 @@ export async function detectLegacyStateMigrations(params: {
   });
   const apns = detectLegacyApnsRegistrations({
     stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
+  const workspace = detectLegacyWorkspaceState({
+    cfg: params.cfg,
+    stateDir,
+    env,
+    homedir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
   const webPush = detectLegacyWebPush({
@@ -598,6 +576,9 @@ export async function detectLegacyStateMigrations(params: {
   if (apns.hasLegacy) {
     preview.push("- APNs registrations: legacy JSON → shared SQLite state");
   }
+  if (workspace.hasLegacy) {
+    preview.push("- Workspace setup and attestations: legacy files → shared SQLite state");
+  }
   if (webPush.hasLegacy) {
     preview.push("- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state");
   }
@@ -612,9 +593,6 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (channelPairing.hasLegacy) {
     preview.push("- Channel pairing state: legacy JSON files → shared SQLite state");
-  }
-  if (execApprovals.hasLegacy) {
-    preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
@@ -699,14 +677,14 @@ export async function detectLegacyStateMigrations(params: {
     commitments,
     managedOutgoingImages,
     apns,
+    workspace,
     webPush,
     nodeHost,
     subagentRegistry,
     rescuePending,
     channelPairing,
-    execApprovals,
     warnings: pluginPlanWarnings,
-    notices,
+    notices: [],
     preview,
   };
 }
@@ -898,6 +876,11 @@ export async function runLegacyStateMigrations(params: {
     env,
     stateDir: detected.stateDir,
   });
+  const workspace = await migrateLegacyWorkspaceState({
+    detected: detected.workspace,
+    env,
+    stateDir: detected.stateDir,
+  });
   const webPush = await migrateLegacyWebPush({
     detected: detected.webPush,
     env,
@@ -921,7 +904,6 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
   });
-  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -951,6 +933,7 @@ export async function runLegacyStateMigrations(params: {
     commitments,
     managedOutgoingImages,
     apns,
+    workspace,
     webPush,
     nodeHost,
     subagentRegistry,
@@ -973,12 +956,12 @@ export async function runLegacyStateMigrations(params: {
       ...commitments.changes,
       ...managedOutgoingImages.changes,
       ...apns.changes,
+      ...workspace.changes,
       ...webPush.changes,
       ...nodeHost.changes,
       ...subagentRegistry.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
-      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
@@ -1003,12 +986,12 @@ export async function runLegacyStateMigrations(params: {
       ...commitments.warnings,
       ...managedOutgoingImages.warnings,
       ...apns.warnings,
+      ...workspace.warnings,
       ...webPush.warnings,
       ...nodeHost.warnings,
       ...subagentRegistry.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
-      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
@@ -1039,7 +1022,6 @@ export async function autoMigrateLegacyState(params: {
   log?: MigrationLogger;
   now?: () => number;
   recoverCorruptTargetStore?: boolean;
-  crossStateDirImports?: boolean;
 }): Promise<{
   migrated: boolean;
   skipped: boolean;
@@ -1127,7 +1109,6 @@ export async function autoMigrateLegacyState(params: {
     sessionStoreOwnership,
     env,
     homedir: params.homedir,
-    crossStateDirImports: params.crossStateDirImports,
   });
   const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (hasCustomAgentDir) {
@@ -1171,7 +1152,6 @@ export async function autoMigrateLegacyState(params: {
       detected: detected.channelPairing,
       env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
     });
-    const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
@@ -1196,7 +1176,6 @@ export async function autoMigrateLegacyState(params: {
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
       ...channelPairing.changes,
-      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
     ];
@@ -1217,7 +1196,6 @@ export async function autoMigrateLegacyState(params: {
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
       ...channelPairing.warnings,
-      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
@@ -1241,7 +1219,6 @@ export async function autoMigrateLegacyState(params: {
         pluginBindingApprovals.changes.length > 0 ||
         currentConversationBindings.changes.length > 0 ||
         channelPairing.changes.length > 0 ||
-        execApprovals.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
@@ -1266,8 +1243,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.configHealth.hasLegacy &&
     !detected.pluginBindingApprovals.hasLegacy &&
     !detected.currentConversationBindings.hasLegacy &&
-    !detected.channelPairing.hasLegacy &&
-    !detected.execApprovals.hasLegacy
+    !detected.workspace.hasLegacy &&
+    !detected.channelPairing.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
@@ -1338,7 +1315,6 @@ export async function autoMigrateLegacyState(params: {
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
   });
-  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -1376,7 +1352,6 @@ export async function autoMigrateLegacyState(params: {
     ...pluginBindingApprovals.changes,
     ...currentConversationBindings.changes,
     ...channelPairing.changes,
-    ...execApprovals.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
@@ -1401,7 +1376,6 @@ export async function autoMigrateLegacyState(params: {
     ...pluginBindingApprovals.warnings,
     ...currentConversationBindings.warnings,
     ...channelPairing.warnings,
-    ...execApprovals.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,

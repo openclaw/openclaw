@@ -10,7 +10,9 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  calculateMulawRms,
   createRealtimeVoiceForcedConsultCoordinator,
+  createSpeechThresholdGate,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -35,7 +37,7 @@ import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
-import { RealtimeAudioPacer, RealtimeMulawSpeechStartDetector } from "./realtime-audio-pacer.js";
+import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import {
   type StreamFrameAdapter,
   TelnyxStreamFrameAdapter,
@@ -711,8 +713,10 @@ export class RealtimeCallHandler {
         }
       },
     });
-    const speechDetector = new RealtimeMulawSpeechStartDetector({
-      requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
+    const speechDetector = createSpeechThresholdGate({
+      rmsThreshold: 0.035,
+      speechFrames: BARGE_IN_REQUIRED_LOUD_CHUNKS,
+      silenceFrames: 12,
     });
     const interruptResponseOnInputAudio =
       typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
@@ -947,7 +951,7 @@ export class RealtimeCallHandler {
     this.activeTelephonyClosersByCallId.set(callSid, closeTelephony);
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
-      if (speechDetector.accept(audio)) {
+      if (speechDetector.accept({ rms: calculateMulawRms(audio), peak: 0 })) {
         console.log(
           `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );

@@ -1259,8 +1259,25 @@ function createCodeModeExecDescription(
   catalog?: readonly ToolSearchCatalogEntry[],
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(ctx, catalog);
+  // A known run catalog with no MCP tools has no virtual API files, so drop the
+  // API.list/API.read/MCP guidance instead of luring the model into wasting exec
+  // turns probing an empty surface. An unknown catalog (initial tool creation,
+  // before compaction binds the run catalog) keeps the full guidance.
+  const catalogKnown = catalog !== undefined;
+  const hasMcp = catalog?.some((entry) => entry.source === "mcp") ?? false;
+  const mcpGuidance =
+    !catalogKnown || hasMcp
+      ? " Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`. MCP tools are available only through the `MCP` namespace."
+      : "";
+  const namespaceGuidance =
+    !catalogKnown || namespacePrompt
+      ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
+      : "";
   return (
-    'Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. Read TypeScript-style declaration files with `API.list(prefix?)` and `API.read(path)`. MCP tools are available only through the `MCP` namespace. Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`." +
+    mcpGuidance +
+    namespaceGuidance +
+    ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "")
   );
 }
@@ -1283,8 +1300,20 @@ async function runExec(params: {
     throw new ToolInputError("code mode is disabled.");
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+  if (params.signal?.aborted) {
+    return {
+      status: "failed" as const,
+      error: "code mode execution aborted",
+      code: "aborted" as const,
+      output: [],
+      replaySafe: params.restartSafe,
+      telemetry: telemetry(runtime),
+    };
+  }
   const catalog = runtime.all({ includeMcp: false });
   const namespaceCatalog = runtime.namespaceEntries();
+  // Namespace scope factories are trusted plugin registrations; abort is
+  // re-checked at the worker boundary rather than racing this setup.
   const namespaceRuntime = await createCodeModeNamespaceRuntime(params.ctx, namespaceCatalog);
   const apiFiles = createCodeModeApiVirtualFiles(namespaceCatalog);
   let source: string;
@@ -1300,6 +1329,7 @@ async function runExec(params: {
       telemetry: telemetry(runtime),
     };
   }
+  const deadlineMs = Date.now() + config.timeoutMs;
   try {
     const result = normalizeCodeModeWorkerResult(
       await runCodeModeWorker(
@@ -1312,12 +1342,15 @@ async function runExec(params: {
           namespaces: namespaceRuntime.descriptors,
         },
         config.timeoutMs + 1000,
+        undefined,
+        params.signal,
       ),
     );
     return await settleCodeModeResult({
       result,
       output: result.output,
       replaySafe: params.restartSafe,
+      deadlineMs,
       parentToolCallId: params.toolCallId,
       ctx: params.ctx,
       config,
@@ -1338,22 +1371,52 @@ async function runExec(params: {
   }
 }
 
-async function waitForPending(pending: PendingBridgeState[], timeoutMs: number): Promise<boolean> {
+function usableResumeBudgetMs(deadlineMs: number, config: CodeModeConfig): number | undefined {
+  // VM restore costs tens of ms and counts against the guest interrupt budget;
+  // resuming with less than this floor converts an otherwise successful run
+  // into an immediate interrupt timeout, so callers park the snapshot instead.
+  const minimum = Math.min(250, Math.max(1, Math.floor(config.timeoutMs / 2)));
+  const remaining = deadlineMs - Date.now();
+  return remaining >= minimum ? remaining : undefined;
+}
+
+async function waitForPending(
+  pending: PendingBridgeState[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  // Abort wins even over already-settled requests: callers treat `false` as
+  // "do not resume the guest", which is what a cancelled exec/wait needs.
+  if (signal?.aborted) {
+    return false;
+  }
   const pendingPromises = pending.filter((entry) => !entry.settled).map((entry) => entry.promise);
   if (pendingPromises.length === 0) {
     return true;
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   try {
     return await Promise.race([
       Promise.all(pendingPromises).then(() => true),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(false), timeoutMs);
       }),
+      ...(signal
+        ? [
+            new Promise<boolean>((resolve) => {
+              onAbort = () => resolve(false);
+              signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]
+        : []),
     ]);
   } finally {
     if (timer) {
       clearTimeout(timer);
+    }
+    if (signal && onAbort) {
+      signal.removeEventListener("abort", onAbort);
     }
   }
 }
@@ -1367,34 +1430,59 @@ async function settleCodeModeResult(params: {
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
   namespaceRuntime: CodeModeNamespaceRuntime;
+  deadlineMs: number;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
   let result = params.result;
   const output = params.output;
-  let namespaceRounds = 0;
-  const settleDeadline = Date.now() + params.config.timeoutMs;
-  // Namespace calls are trusted synchronous-looking plugin helpers. Resolve
-  // them inline when possible so the model avoids unnecessary wait turns.
+  // One exec/wait call shares a single wall-clock deadline across its initial
+  // worker run and this inline settle phase, so auto-draining bridge calls
+  // cannot stack a second full `timeoutMs` budget on top of the run that
+  // produced them. The deadline is also the only bound on sequential drain
+  // rounds; maxPendingToolCalls stays a per-batch concurrency cap enforced in
+  // the worker.
+  const settleDeadline = params.deadlineMs;
+  const abortedResult = () => ({
+    status: "failed" as const,
+    error: "code mode execution aborted",
+    code: "aborted" as const,
+    output,
+    replaySafe: params.replaySafe,
+    telemetry: telemetry(params.runtime),
+  });
+  // Bridge tool calls (search/describe/call/namespace) run through the same
+  // policy-checked executor whether the model awaits them one at a time or in a
+  // batch, so resolve them inline within the exec deadline and resume the VM
+  // instead of forcing a `wait` round-trip per await. Only explicit
+  // yield_control hands control back to the model; a call that outlives the
+  // deadline still falls back to a suspended snapshot below.
   while (
     result.status === "waiting" &&
     result.pendingRequests.length > 0 &&
-    result.pendingRequests.every((request) => request.method === "namespace") &&
-    namespaceRounds < params.config.maxPendingToolCalls
+    result.pendingRequests.every((request) => request.method !== "yield")
   ) {
     if (params.replaySafe) {
-      return {
-        status: "failed" as const,
-        error: "restart-safe code mode cannot call plugin namespaces.",
-        code: "invalid_input" as const,
-        output,
-        replaySafe: true,
-        telemetry: telemetry(params.runtime),
-      };
+      // Replay-safe runs never inline-drain: namespace calls stay a hard error
+      // and other pending work falls through to the replay-safe snapshot check.
+      if (result.pendingRequests.every((request) => request.method === "namespace")) {
+        return {
+          status: "failed" as const,
+          error: "restart-safe code mode cannot call plugin namespaces.",
+          code: "invalid_input" as const,
+          output,
+          replaySafe: true,
+          telemetry: telemetry(params.runtime),
+        };
+      }
+      break;
     }
     const remainingMs = settleDeadline - Date.now();
     if (remainingMs <= 0) {
       break;
+    }
+    if (params.signal?.aborted) {
+      return abortedResult();
     }
     enforceSnapshotPayloadLimits({
       snapshotBytes: result.snapshotBytes,
@@ -1411,8 +1499,19 @@ async function settleCodeModeResult(params: {
         signal: params.signal,
         onUpdate: params.onUpdate,
       });
-      const ready = await waitForPending(pending, remainingMs);
-      if (!ready) {
+      const ready = await waitForPending(pending, remainingMs, params.signal);
+      const resumeBudgetMs = ready
+        ? usableResumeBudgetMs(settleDeadline, params.config)
+        : undefined;
+      if (!ready || resumeBudgetMs === undefined) {
+        // Abort drops the run instead of parking it: a suspended snapshot for a
+        // cancelled call could never be waited on and would pin one of the
+        // process-global active-run slots until TTL expiry.
+        if (params.signal?.aborted) {
+          return abortedResult();
+        }
+        // Parked rather than resumed: without a usable budget the restore alone
+        // would burn the remaining deadline and fail a recoverable run.
         return storeSnapshotState({
           pending,
           replaySafe: false,
@@ -1429,15 +1528,23 @@ async function settleCodeModeResult(params: {
       for (const entry of pending) {
         settledRequests.push(entry.settled ?? (await entry.promise));
       }
+      // The resumed guest inherits only the remaining shared budget as its
+      // QuickJS interrupt deadline; the extra 1000ms is host watchdog grace,
+      // not extra guest run time.
       result = normalizeCodeModeWorkerResult(
         await runCodeModeWorker(
           {
             kind: "resume",
             snapshotBytes: result.snapshotBytes,
-            config: params.config,
+            config: {
+              ...params.config,
+              timeoutMs: resumeBudgetMs,
+            },
             settledRequests,
           },
-          Math.max(1, settleDeadline - Date.now()) + 1000,
+          resumeBudgetMs + 1000,
+          undefined,
+          params.signal,
         ),
       );
     } finally {
@@ -1445,9 +1552,11 @@ async function settleCodeModeResult(params: {
     }
     output.push(...result.output);
     enforceOutputLimit(output, params.config);
-    namespaceRounds += 1;
   }
   if (result.status === "waiting") {
+    if (params.signal?.aborted) {
+      return abortedResult();
+    }
     const pendingReplaySafe = pendingBridgeRequestsReplaySafe(
       result.pendingRequests,
       params.runtime,
@@ -1517,9 +1626,33 @@ async function runWait(params: {
     throw new ToolInputError("code mode run is already being resumed.");
   }
   resumingRunIds.add(state.runId);
+  // One wait call shares a single wall-clock deadline across draining the prior
+  // pending calls, the resume worker, and the inline settle phase.
+  const deadlineMs = Date.now() + state.config.timeoutMs;
   try {
-    const ready = await waitForPending(state.pending, state.config.timeoutMs);
-    if (!ready) {
+    const ready = await waitForPending(
+      state.pending,
+      Math.max(1, deadlineMs - Date.now()),
+      params.signal,
+    );
+    const resumeBudgetMs = ready ? usableResumeBudgetMs(deadlineMs, state.config) : undefined;
+    if (!ready || resumeBudgetMs === undefined) {
+      // An aborted wait drops the suspended run: nothing will resume it, and
+      // parking it would pin a process-global active-run slot until TTL expiry.
+      if (params.signal?.aborted) {
+        activeRuns.delete(state.runId);
+        return {
+          status: "failed" as const,
+          error: "code mode execution aborted",
+          code: "aborted" as const,
+          output: state.output,
+          replaySafe: state.replaySafe,
+          telemetry: telemetry(state.runtime),
+        };
+      }
+      // Not ready, or ready without a usable resume budget: keep the snapshot
+      // so the next wait can resume with a fresh deadline instead of losing
+      // the run to a restore-only interrupt timeout.
       const pending = state.pending.filter((entry) => !entry.settled);
       return {
         status: "waiting" as const,
@@ -1537,15 +1670,22 @@ async function runWait(params: {
     for (const entry of state.pending) {
       settledRequests.push(entry.settled ?? (await entry.promise));
     }
+    // The resumed guest inherits only the remaining shared budget as its QuickJS
+    // interrupt deadline; the extra 1000ms is host watchdog grace only.
     const result = normalizeCodeModeWorkerResult(
       await runCodeModeWorker(
         {
           kind: "resume",
           snapshotBytes: state.snapshotBytes,
-          config: state.config,
+          config: {
+            ...state.config,
+            timeoutMs: resumeBudgetMs,
+          },
           settledRequests,
         },
-        state.config.timeoutMs + 1000,
+        resumeBudgetMs + 1000,
+        undefined,
+        params.signal,
       ),
     );
     const output = [...state.output, ...result.output];
@@ -1554,6 +1694,7 @@ async function runWait(params: {
       result,
       output,
       replaySafe: state.replaySafe,
+      deadlineMs,
       parentToolCallId: params.toolCallId,
       ctx: state.ctx,
       config: state.config,
@@ -1690,7 +1831,11 @@ export function applyCodeModeCatalog(params: {
     isVisibleControlTool: isCodeModeControlTool,
     shouldCatalogTool: (tool) => !isCodeModeControlTool(tool),
   });
-  const visibleCatalog = params.catalogRef?.current?.entries ?? [];
+  // Only the catalog ref reflects the freshly compacted run catalog. Without it
+  // the real catalog is registered under session keys and resolved later, so
+  // keep the catalog "unknown" (undefined) rather than an empty array that would
+  // wrongly strip MCP/namespace guidance from the exec description.
+  const visibleCatalog = params.catalogRef?.current?.entries;
   for (const tool of compacted.tools) {
     if (tool.name === CODE_MODE_EXEC_TOOL_NAME) {
       tool.description = createCodeModeExecDescription(
