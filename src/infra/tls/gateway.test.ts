@@ -39,6 +39,17 @@ async function writeGeneratedTlsPair(args: string[]): Promise<void> {
   ]);
 }
 
+function requireSingleRecoveryDir(entries: string[]): string {
+  const recoveryDirs = entries.filter((entry) => entry.startsWith(".openclaw-gateway-tls-"));
+  expect(recoveryDirs).toHaveLength(1);
+  const recoveryDir = recoveryDirs[0];
+  if (!recoveryDir) {
+    throw new Error("missing gateway TLS recovery directory");
+  }
+  expect(recoveryDir).toMatch(/^\.openclaw-gateway-tls-cert-/);
+  return recoveryDir;
+}
+
 const KEY_PEM = [
   "-----BEGIN PRIVATE KEY-----", // pragma: allowlist secret
   "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDrur5CWp4psMMb",
@@ -296,11 +307,9 @@ describe("loadGatewayTlsRuntime", () => {
     await expect(fs.readFile(certPath, "utf8")).resolves.toBe("operator-owned-cert\n");
     await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
     const entries = await fs.readdir(dir);
-    const recoveryDirs = entries.filter((entry) => entry.startsWith(".openclaw-gateway-tls-"));
-    expect(recoveryDirs).toHaveLength(1);
-    expect(recoveryDirs[0]).toMatch(/^\.openclaw-gateway-tls-cert-/);
+    const recoveryDir = requireSingleRecoveryDir(entries);
     await expect(
-      fs.readdir(path.join(dir, recoveryDirs[0])).then((items) => items.toSorted()),
+      fs.readdir(path.join(dir, recoveryDir)).then((items) => items.toSorted()),
     ).resolves.toEqual(["cert.pem", "published-gateway-cert.pem"]);
   });
 
@@ -346,12 +355,10 @@ describe("loadGatewayTlsRuntime", () => {
     );
     await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
     const entries = await fs.readdir(dir);
-    const recoveryDirs = entries.filter((entry) => entry.startsWith(".openclaw-gateway-tls-"));
-    expect(recoveryDirs).toHaveLength(1);
-    expect(recoveryDirs[0]).toMatch(/^\.openclaw-gateway-tls-cert-/);
+    const recoveryDir = requireSingleRecoveryDir(entries);
     await expect(
       fs.readFile(
-        path.join(dir, recoveryDirs[0], "published-gateway-cert.pem", "operator-owned.txt"),
+        path.join(dir, recoveryDir, "published-gateway-cert.pem", "operator-owned.txt"),
         "utf8",
       ),
     ).resolves.toBe("operator directory\n");
