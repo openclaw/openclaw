@@ -125,12 +125,15 @@ function createSecretsApplyResult(options?: {
   };
 }
 
-async function withPlanFile(run: (planPath: string) => Promise<void>) {
+async function withPlanFile(
+  run: (planPath: string) => Promise<void>,
+  contents = `${JSON.stringify(createManualSecretsPlan())}\n`,
+) {
   const planPath = path.join(
     os.tmpdir(),
     `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
-  await fs.writeFile(planPath, `${JSON.stringify(createManualSecretsPlan())}\n`, "utf8");
+  await fs.writeFile(planPath, contents, "utf8");
   try {
     await run(planPath);
   } finally {
@@ -383,6 +386,17 @@ describe("secrets CLI", () => {
         allowExec: true,
       });
     });
+  });
+
+  it("shows a user-friendly error when the secrets plan file is malformed JSON", async () => {
+    await withPlanFile(async (planPath) => {
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain(`Malformed JSON in secrets plan file: ${planPath}`);
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    }, "{invalid json");
   });
 
   it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {

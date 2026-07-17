@@ -36,6 +36,10 @@ function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
   }
 }
 
+function resolveVoiceCallSetupValue(configured: unknown, fallback: unknown): string | undefined {
+  return normalizeOptionalString(configured) ?? normalizeOptionalString(fallback);
+}
+
 function getVoiceCallWebhookExposureCheck(voiceCallConfig: Record<string, unknown>): SetupCheck {
   const publicUrl = normalizeOptionalString(voiceCallConfig.publicUrl);
   const tunnel = asRecord(voiceCallConfig.tunnel);
@@ -240,14 +244,19 @@ export function getGoogleMeetSetupStatus(
 
     const provider = normalizeOptionalString(voiceCallConfig.provider) ?? "twilio";
     if (provider === "twilio") {
-      const accountSid = normalizeOptionalString(voiceCallTwilioConfig.accountSid);
-      const authToken = normalizeOptionalString(voiceCallTwilioConfig.authToken);
-      const fromNumber = normalizeOptionalString(voiceCallConfig.fromNumber);
-      const twilioReady = Boolean(
-        (accountSid || env.TWILIO_ACCOUNT_SID) &&
-        (authToken || env.TWILIO_AUTH_TOKEN) &&
-        (fromNumber || env.TWILIO_FROM_NUMBER),
+      const accountSid = resolveVoiceCallSetupValue(
+        voiceCallTwilioConfig.accountSid,
+        env.TWILIO_ACCOUNT_SID,
       );
+      const authToken = resolveVoiceCallSetupValue(
+        voiceCallTwilioConfig.authToken,
+        env.TWILIO_AUTH_TOKEN,
+      );
+      const fromNumber = resolveVoiceCallSetupValue(
+        voiceCallConfig.fromNumber,
+        env.TWILIO_FROM_NUMBER,
+      );
+      const twilioReady = Boolean(accountSid && authToken && fromNumber);
       checks.push({
         id: "twilio-voice-call-credentials",
         ok: twilioReady,

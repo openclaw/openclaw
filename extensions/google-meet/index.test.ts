@@ -376,6 +376,57 @@ function requireSetupCheck(checks: unknown[] | undefined, id: string): Record<st
   return check;
 }
 
+type TwilioSetupCredentials = {
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+};
+
+async function getTwilioVoiceCallCredentialsCheck(params: {
+  env: TwilioSetupCredentials;
+  configured?: Partial<TwilioSetupCredentials>;
+}): Promise<Record<string, unknown>> {
+  vi.stubEnv("TWILIO_ACCOUNT_SID", params.env.accountSid);
+  vi.stubEnv("TWILIO_AUTH_TOKEN", params.env.authToken);
+  vi.stubEnv("TWILIO_FROM_NUMBER", params.env.fromNumber);
+  const { tools } = setup(
+    {
+      defaultTransport: "chrome-node",
+      chromeNode: { node: "parallels-macos" },
+    },
+    {
+      fullConfig: {
+        plugins: {
+          allow: ["google-meet", "voice-call"],
+          entries: {
+            "voice-call": {
+              enabled: true,
+              config: {
+                provider: "twilio",
+                publicUrl: "https://voice.example.com/voice/webhook",
+                fromNumber: params.configured?.fromNumber,
+                twilio: {
+                  accountSid: params.configured?.accountSid,
+                  authToken: params.configured?.authToken,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  );
+  const tool = tools[0] as {
+    execute: (
+      id: string,
+      params: unknown,
+    ) => Promise<{ details: { checks?: unknown[] } }>;
+  };
+
+  const result = await tool.execute("id", { action: "setup_status" });
+  return requireSetupCheck(result.details.checks, "twilio-voice-call-credentials");
+}
+
 function requireFetchGuardCall(auditContext: string): Record<string, unknown> {
   const call = (
     fetchGuardMocks.fetchWithSsrFGuard.mock.calls as Array<[Record<string, unknown>]>
@@ -2602,6 +2653,64 @@ describe("google-meet plugin", () => {
     expect(requireSetupCheck(result.details.checks, "twilio-voice-call-plugin").ok).toBe(true);
     expect(requireSetupCheck(result.details.checks, "twilio-voice-call-credentials").ok).toBe(true);
     expect(requireSetupCheck(result.details.checks, "twilio-voice-call-webhook").ok).toBe(true);
+  });
+
+  it.each([
+    {
+      label: "environment account SID",
+      env: { accountSid: "   ", authToken: "test-auth-token", fromNumber: "+15550001234" },
+    },
+    {
+      label: "environment auth token",
+      env: { accountSid: "AC123", authToken: "   ", fromNumber: "+15550001234" },
+    },
+    {
+      label: "environment from number",
+      env: { accountSid: "AC123", authToken: "test-auth-token", fromNumber: "   " },
+    },
+    {
+      label: "configured account SID",
+      env: { accountSid: "", authToken: "", fromNumber: "" },
+      configured: { accountSid: "   ", authToken: "test-auth-token", fromNumber: "+15550001234" },
+    },
+    {
+      label: "configured auth token",
+      env: { accountSid: "", authToken: "", fromNumber: "" },
+      configured: { accountSid: "AC123", authToken: "   ", fromNumber: "+15550001234" },
+    },
+    {
+      label: "configured from number",
+      env: { accountSid: "", authToken: "", fromNumber: "" },
+      configured: { accountSid: "AC123", authToken: "test-auth-token", fromNumber: "   " },
+    },
+  ])("reports a blank $label as missing", async ({ env, configured }) => {
+    const check = await getTwilioVoiceCallCredentialsCheck({ env, configured });
+
+    expect(check.ok).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "environment",
+      env: {
+        accountSid: "  AC123  ",
+        authToken: "  test-auth-token  ",
+        fromNumber: "  +15550001234  ",
+      },
+    },
+    {
+      label: "configuration",
+      env: { accountSid: "", authToken: "", fromNumber: "" },
+      configured: {
+        accountSid: "  AC123  ",
+        authToken: "  test-auth-token  ",
+        fromNumber: "  +15550001234  ",
+      },
+    },
+  ])("accepts padded Twilio credentials from $label", async ({ env, configured }) => {
+    const check = await getTwilioVoiceCallCredentialsCheck({ env, configured });
+
+    expect(check.ok).toBe(true);
   });
 
   it("reports missing voice-call wiring for explicit Twilio transport", async () => {
