@@ -50,7 +50,7 @@ export function collectRuntimeConfigAssignments(params: {
     surface,
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: hasImplicitDefaultAccount,
+    topLevelActiveWithoutAccounts: surface.channelEnabled,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
       enabled && !hasOwnProperty(account, "appSecret"),
     accountActive: ({ enabled }) => enabled,
