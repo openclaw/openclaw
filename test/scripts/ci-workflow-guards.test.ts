@@ -1886,11 +1886,57 @@ describe("ci workflow guards", () => {
       const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
       return typeof runsOn === "string" && runsOn.includes("blacksmith-");
     });
-    const setupNodeStep = workflow.jobs["checks-node-core-test-nondist-shard"].steps.find(
+    const stickyConsumers = Object.entries(workflow.jobs).flatMap(([jobName, job]) => {
+      const steps = (job as { steps?: WorkflowStep[] }).steps ?? [];
+      return steps
+        .filter((step) => step.with && step.with["sticky-disk"] !== undefined)
+        .map((step) => ({ jobName, step }));
+    });
+    // Every Linux Blacksmith lane that installs Node dependencies consumes
+    // the snapshot; missing entries silently pay the full install again.
+    expect(stickyConsumers.map((entry) => entry.jobName).toSorted()).toEqual([
+      "build-artifacts",
+      "check-additional-shard",
+      "check-docs",
+      "check-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-fast-core",
+      "checks-fast-plugin-contracts-shard",
+      "checks-node-core-test-nondist-shard",
+      "checks-ui",
+      "control-ui-i18n",
+      "native-i18n",
+      "qa-smoke-ci-profile",
+    ]);
+    for (const { jobName, step } of stickyConsumers) {
+      const stickyCondition = step.with["sticky-disk"];
+      const cacheCondition = step.with["use-actions-cache"];
+      expect(stickyCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(stickyCondition, jobName).toContain(
+        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+      expect(cacheCondition, jobName).toContain("github.event_name != 'workflow_dispatch'");
+      expect(cacheCondition, jobName).toContain(
+        "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
+      );
+      expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
+    }
+    // Exactly one CI job may publish the shared snapshot; concurrent
+    // committers would race the disk and consumers could clone a torn tree.
+    const ciWriters = stickyConsumers.filter(
+      (entry) => entry.step.with["save-sticky-disk"] === "true",
+    );
+    expect(ciWriters.map((entry) => entry.jobName)).toEqual(["build-artifacts"]);
+    const warmWorkflow = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    const warmSetupStep = warmWorkflow.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
-    const stickyCondition = setupNodeStep.with["sticky-disk"];
-    const cacheCondition = setupNodeStep.with["use-actions-cache"];
+    // The scheduled warm run is the deadline writer: canonical main pushes
+    // cancel each other under merge traffic, so build-artifacts alone could
+    // starve the snapshot for days.
+    expect(warmSetupStep.with["save-sticky-disk"]).toBe("true");
+    expect(warmWorkflow.on).not.toHaveProperty("pull_request");
+    expect(warmWorkflow.on).not.toHaveProperty("workflow_dispatch");
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const validateLayoutStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
@@ -1920,16 +1966,8 @@ describe("ci workflow guards", () => {
         "github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
       );
     }
-    expect(stickyCondition).toContain("github.event_name != 'workflow_dispatch'");
-    expect(stickyCondition).toContain(
-      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-    );
-    expect(cacheCondition).toContain("github.event_name != 'workflow_dispatch'");
-    expect(cacheCondition).toContain(
-      "github.event.pull_request.head.repo.full_name == 'openclaw/openclaw'",
-    );
-    expect(cacheCondition).toContain("&& 'false' || 'true'");
     expect(action.inputs["sticky-disk"].default).toBe("false");
+    expect(action.inputs["save-sticky-disk"].default).toBe("false");
     expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
     expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
     expect(validateLayoutStep.run).toContain('config_value="$(pnpm config get "$config_name")"');
@@ -1947,17 +1985,17 @@ describe("ci workflow guards", () => {
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
       with: {
         path: "/var/tmp/openclaw-node-deps",
-        commit: "if-missing",
       },
     });
-    expect(mountStep.with.key).toContain("node-deps-bind-v2-");
-    expect(mountStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
-    expect(mountStep.with.key).toContain("inputs.frozen-lockfile");
-    expect(mountStep.with.key).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
-    expect(mountStep.with.key).toContain("'.npmrc'");
-    expect(mountStep.with.key).toContain("'.pnpmfile.cjs'");
-    expect(mountStep.with.key).toContain(".github/actions/setup-node-env/sticky-importers.sh");
-    expect(mountStep.with.key).toContain("scripts/postinstall-bundled-plugins.mjs");
+    // O(1) disks: Blacksmith caps sticky disks per installation, and the old
+    // per-PR/per-manifest-hash keys saturated that cap (mounts 429ed fleet
+    // wide). Install inputs belong in the runtime fingerprint, not the key.
+    expect(mountStep.with.key).toBe(
+      "${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}",
+    );
+    expect(mountStep.with.commit).toBe(
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
+    );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
       uses: "./.github/actions/register-bind-mount-cleanup",
@@ -1972,20 +2010,43 @@ describe("ci workflow guards", () => {
     expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
     expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
+    expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$DEPS_FINGERPRINT"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
+    // The fingerprint must be evaluated on this step (before its bind mount
+    // lands): any later hashFiles('**/package.json') sweep would include
+    // snapshot-internal manifests and permanently miss the warm path.
+    const fingerprintEnv = bindStep.env.DEPS_FINGERPRINT;
+    expect(fingerprintEnv).toContain("node-${{ inputs.node-version }}");
+    expect(fingerprintEnv).toContain("frozen-${{ inputs.frozen-lockfile }}");
+    expect(fingerprintEnv).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
+    expect(fingerprintEnv).toContain("'pnpm-workspace.yaml'");
+    expect(fingerprintEnv).toContain("'.npmrc'");
+    expect(fingerprintEnv).toContain("'.pnpmfile.cjs'");
+    expect(fingerprintEnv).toContain(".github/actions/setup-node-env/sticky-importers.sh");
+    expect(fingerprintEnv).toContain("scripts/postinstall-bundled-plugins.mjs");
     expect(installStep.env).toMatchObject({
       STICKY_DISK: "${{ inputs.sticky-disk }}",
       STICKY_ROOT: "/var/tmp/openclaw-node-deps",
+      STICKY_WRITER:
+        "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
     });
-    expect(installStep.run).toContain('sticky_ready_marker="$STICKY_ROOT/.install-complete-v2"');
+    expect(installStep.run).toContain('sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"');
+    expect(installStep.run).toContain(
+      '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
+    );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
-    expect(installStep.run).toContain("Sticky dependency snapshot is ready; skipping pnpm install");
+    expect(installStep.run).toContain(
+      "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
+    );
+    // Read-only consumers never capture; only the designated writer refreshes
+    // the archive and publishes the fingerprint after a successful install.
+    expect(installStep.run).toContain('[ "$STICKY_WRITER" = "true" ]');
     expect(installStep.run.indexOf('pnpm "${install_args[@]}"')).toBeLessThan(
       installStep.run.indexOf(
-        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
+        'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
     const cleanupAction = parse(
@@ -2059,7 +2120,7 @@ describe("ci workflow guards", () => {
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
       symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
 
-      execFileSync("bash", [helper, "capture", stickyRoot, workspace]);
+      execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
@@ -2068,6 +2129,10 @@ describe("ci workflow guards", () => {
         "../../../node_modules/shared",
       );
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
+      expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
+        "fingerprint-a\n",
+      );
+      expect(() => execFileSync("bash", [helper, "capture", stickyRoot, workspace])).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
