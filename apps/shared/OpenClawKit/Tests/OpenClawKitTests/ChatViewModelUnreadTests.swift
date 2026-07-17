@@ -458,6 +458,41 @@ struct ChatViewModelUnreadTests {
         #expect(attempts.map(\.1) == [true])
     }
 
+    @Test func `pending explicit unread overlays stale list until fresh observation`() async throws {
+        let transport = UnreadTestTransport(
+            sessions: [
+                self.entry(key: "a", unread: false),
+                self.entry(key: "b", unread: false),
+            ],
+            patchDelay: .milliseconds(200))
+        let viewModel = self.viewModel(sessionKey: "b", transport: transport)
+        viewModel.refreshSessions()
+        try await self.waitUntil { viewModel.sessions.count == 2 }
+
+        viewModel.setSessionUnread(key: "a", unread: true)
+        try await self.waitUntil { await transport.unreadPatchStartCount() == 1 }
+        viewModel.refreshSessions()
+        try await self.waitUntil { await transport.listCallCount() >= 2 }
+
+        #expect(viewModel.sessions.first(where: { $0.key == "a" })?.unread == true)
+        #expect(viewModel.unreadPatchGuard.localUnreadOverride(key: "a") == true)
+
+        await transport.setSessions([
+            self.entry(key: "a", unread: true),
+            self.entry(key: "b", unread: false),
+        ])
+        let listCallCount = await transport.listCallCount()
+        try await self.waitUntil { await transport.unreadPatchAttempts().count == 1 }
+        try await self.waitUntil {
+            await transport.listCallCount() > listCallCount &&
+                viewModel.unreadPatchGuard.localUnreadOverride(key: "a") == nil
+        }
+
+        #expect(viewModel.unreadPatchGuard.localUnreadOverride(key: "a") == nil)
+        #expect(viewModel.unreadPatchGuard.confirmedUnread(key: "a") == true)
+        #expect(viewModel.sessions.first(where: { $0.key == "a" })?.unread == true)
+    }
+
     private func viewModel(
         sessionKey: String,
         activeAgentID: String? = nil,

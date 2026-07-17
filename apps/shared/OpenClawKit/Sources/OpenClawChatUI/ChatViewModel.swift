@@ -953,7 +953,7 @@ extension OpenClawChatViewModel {
                     key: self.sessionMutationIdentity(for: session.key, listedKey: session.key),
                     unread: session.unread)
             }
-            self.sessions = organized
+            self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             self.sessionDefaults = res.defaults
             if let overlappingRequestID = overlappingSuccessfulSettingsPatchRequestID,
                lastSuccessfulSettingsPatchRequestIDsByTarget[target] == overlappingRequestID

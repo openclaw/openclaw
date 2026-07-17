@@ -5,6 +5,7 @@ struct ChatSessionUnreadPatchGuard {
     private var requested = false
     private var activeExplicitUnread: Bool?
     private var confirmedUnreadByKey: [String: Bool] = [:]
+    private var pendingExplicitUnreadByKey: [String: Bool] = [:]
     private var pendingExplicitRevisions: [String: Int] = [:]
     private var revisions: [String: Int] = [:]
 
@@ -42,6 +43,7 @@ struct ChatSessionUnreadPatchGuard {
     mutating func beginExplicitPatch(key: String, unread: Bool, isActive: Bool) -> Int {
         let revision = self.advanceRevision(key: key)
         self.pendingExplicitRevisions[key] = revision
+        self.pendingExplicitUnreadByKey[key] = unread
         if isActive {
             self.activeSessionKey = key
             // The explicit action owns this activation. Only navigation opens
@@ -56,6 +58,7 @@ struct ChatSessionUnreadPatchGuard {
         guard self.revisions[key] == revision else { return false }
         if self.pendingExplicitRevisions[key] == revision {
             self.pendingExplicitRevisions.removeValue(forKey: key)
+            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
         }
         self.confirmedUnreadByKey[key] = unread
         return true
@@ -65,6 +68,7 @@ struct ChatSessionUnreadPatchGuard {
         guard self.revisions[key] == revision else { return false }
         if self.pendingExplicitRevisions[key] == revision {
             self.pendingExplicitRevisions.removeValue(forKey: key)
+            self.pendingExplicitUnreadByKey.removeValue(forKey: key)
         }
         if key == self.activeSessionKey {
             self.requested = false
@@ -75,6 +79,14 @@ struct ChatSessionUnreadPatchGuard {
 
     func confirmedUnread(key: String) -> Bool? {
         self.confirmedUnreadByKey[key]
+    }
+
+    func localUnreadOverride(key: String) -> Bool? {
+        if let unread = self.pendingExplicitUnreadByKey[key] {
+            return unread
+        }
+        guard key == self.activeSessionKey else { return nil }
+        return self.activeExplicitUnread
     }
 
     private mutating func advanceRevision(key: String) -> Int {

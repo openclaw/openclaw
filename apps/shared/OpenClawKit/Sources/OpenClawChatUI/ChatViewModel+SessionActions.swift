@@ -84,7 +84,7 @@ extension OpenClawChatViewModel {
                     unread: nil)
                 self.refreshSessions()
             } catch {
-                self.sessions = previous
+                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
                 self.errorText = error.localizedDescription
                 chatSessionActionsLogger.error(
                     "sessions.patch(label) failed \(error.localizedDescription, privacy: .public)")
@@ -170,7 +170,7 @@ extension OpenClawChatViewModel {
                     unread: nil)
                 self.refreshSessions()
             } catch {
-                self.sessions = previous
+                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
                 self.errorText = error.localizedDescription
                 chatSessionActionsLogger.error(
                     "sessions.patch(pinned) failed \(error.localizedDescription, privacy: .public)")
@@ -201,7 +201,7 @@ extension OpenClawChatViewModel {
                 }
                 self.refreshSessions()
             } catch {
-                self.sessions = previous
+                self.sessions = self.applyingLocalUnreadOverrides(to: previous)
                 self.errorText = error.localizedDescription
                 chatSessionActionsLogger.error(
                     "sessions.patch(archived) failed \(error.localizedDescription, privacy: .public)")
