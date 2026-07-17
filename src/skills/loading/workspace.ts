@@ -1641,8 +1641,7 @@ export function resolveSkillsPromptForRun(params: {
     const unavailableNames = new Set(
       params.skillsSnapshot?.skills
         .filter(
-          (skill): skill is typeof skill & { skillKey: string } =>
-            Boolean(skill.skillKey) && isSkillSecretOwnerUnavailable(skill.skillKey),
+          (skill) => skill.skillKey !== undefined && isSkillSecretOwnerUnavailable(skill.skillKey),
         )
         .map((skill) => escapeXml(skill.name)),
     );
