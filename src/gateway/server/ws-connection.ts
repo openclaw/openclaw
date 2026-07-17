@@ -498,10 +498,23 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       };
       if (!client) {
         const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
+        // Only suppress pre-auth close noise for identified benign patterns:
+        // Swift PM testing helpers, explicit startup retries, local-abort
+        // shutdowns, and OpenClaw client reconnects from loopback during
+        // startup without auth frames. Keep WARN for unexplained remote,
+        // proxy, and network-failure closes so operators can investigate.
+        const isBenignPreAuthReconnect =
+          openedDuringStartup &&
+          (code === 1001 || code === 1006) &&
+          !hasReceivedPreauthFrame &&
+          lastFrameType === undefined &&
+          normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
+          isLoopbackAddress(remoteAddr);
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
           isExpectedStartupRetryClose ||
-          isExpectedLocalAppStartupAbort(code)
+          isExpectedLocalAppStartupAbort(code) ||
+          isBenignPreAuthReconnect
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");

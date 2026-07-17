@@ -285,7 +285,12 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;
   }
-  log.warn(
+  // WhatsApp partial-streaming delivery can produce zero-count visible dispatches
+  // that are not actual message drops. Keep WARN for all other channels where the
+  // signal still represents genuine silent-delivery risk.
+  const isWhatsAppPartialDelivery = params.channel === "whatsapp";
+  const logFn = isWhatsAppPartialDelivery ? log.info : log.warn;
+  logFn(
     `visible channel turn dispatched with no queued reply payloads: channel=${params.channel} ` +
       `messageId=${params.messageId ?? "unknown"} sessionKey=${
         params.ctxPayload.SessionKey ?? params.routeSessionKey
