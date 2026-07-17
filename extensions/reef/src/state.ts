@@ -45,9 +45,9 @@ export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
 export const REEF_DELIVERED_NAMESPACE = "delivered";
 export const REEF_DELIVERED_MAX_ENTRIES = 5_000;
 export const REEF_DELIVERED_TTL_MS = REEF_REPLAY_TTL_MS;
-export const REEF_INBOX_CURSOR_NAMESPACE = "inbox-cursor";
-export const REEF_INBOX_CURSOR_KEY = "current";
-export const REEF_INBOX_CURSOR_MAX_ENTRIES = 1;
+const REEF_INBOX_CURSOR_NAMESPACE = "inbox-cursor";
+const REEF_INBOX_CURSOR_KEY = "current";
+const REEF_INBOX_CURSOR_MAX_ENTRIES = 1;
 
 export type ReefReplayRecord = {
   peer: string;

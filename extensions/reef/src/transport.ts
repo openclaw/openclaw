@@ -227,7 +227,7 @@ export interface WebSocketLike {
   close(): void;
 }
 
-export interface ReefInboxConnectionOptions {
+interface ReefInboxConnectionOptions {
   initialCursor?: number;
   persistCursor?: (cursor: number) => void;
   onState?: (state: "connected" | "disconnected") => void;
