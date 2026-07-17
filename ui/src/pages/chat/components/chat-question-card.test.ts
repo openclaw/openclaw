@@ -141,7 +141,7 @@ describe("shared question card", () => {
       expect(submit.disabled).toBe(false);
     });
 
-    it("clears free-form text when the request token changes", async () => {
+    it("clears free-form text when the request key changes", async () => {
       const status = codexStatus({
         itemId: "reused-item",
         questions: [
@@ -161,7 +161,8 @@ describe("shared question card", () => {
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
       await card.updateComplete;
 
-      draw({ ...status, actionToken: "test-second-token" }, vi.fn());
+      // A new itemId changes the request key exactly like a new action token.
+      draw({ ...status, itemId: "item-second-request" }, vi.fn());
       await card.updateComplete;
       expect(container.querySelector<HTMLInputElement>(".chat-question__other")?.value).toBe("");
     });
