@@ -15,6 +15,10 @@ import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
 import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
+import type {
+  probeBrowserHatchGateway,
+  runBrowserHatchHandoff,
+} from "./onboard-browser-handoff.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
@@ -49,11 +53,15 @@ export type GuidedOnboardingDeps = {
   launchHatchTui?: (workspace: string) => Promise<void>;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
   runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
+  /** Browser-first local hatch handoff. Tests inject this to avoid real browser/Gateway work. */
+  runBrowserHandoff?: typeof runBrowserHatchHandoff;
+  probeBrowserHandoffGateway?: typeof probeBrowserHatchGateway;
+  platform?: NodeJS.Platform;
 };
 
 export type GuidedAccessMode = "full" | "guarded";
 
-type GuidedOnboardingHandoff = { workspace: string; next: "hatch" | "chat" };
+type GuidedOnboardingHandoff = { workspace: string; next: "browser" | "hatch" | "chat" };
 
 type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
 
@@ -688,17 +696,38 @@ async function runGuidedOnboardingFlow(
         ...(latestSnapshot.hash ? { baseHash: latestSnapshot.hash } : {}),
         migrationBaseConfig: latestConfig,
       });
+      persistedConfig = mergedConfig;
+    }
+  }
+  const hatchWorkspace = alreadyConfigured
+    ? resolveUserPath(
+        existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+      )
+    : workspace;
+  if (opts.tui !== true && (deps.platform ?? process.platform) === "darwin") {
+    const probeBrowserHandoffGateway =
+      deps.probeBrowserHandoffGateway ??
+      (await import("./onboard-browser-handoff.js")).probeBrowserHatchGateway;
+    const gatewayProbe = await probeBrowserHandoffGateway({ config: persistedConfig });
+    if (gatewayProbe.ok) {
+      const runBrowserHandoff =
+        deps.runBrowserHandoff ??
+        (await import("./onboard-browser-handoff.js")).runBrowserHatchHandoff;
+      const handoff = await runBrowserHandoff({
+        config: persistedConfig,
+        prompter,
+        ...(opts.suppressGatewayTokenOutput ? { suppressTokenOutput: true } : {}),
+      });
+      if (handoff.handedOff) {
+        await prompter.outro(t("wizard.guided.browserHandoffReady"));
+        return { workspace: hatchWorkspace, next: "browser" };
+      }
     }
   }
   await prompter.note(t("wizard.guided.findMeLater"), t("wizard.guided.welcomeTitle"));
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
   // rerun that is the persisted default, not the --workspace probe context.
-  const hatchWorkspace = alreadyConfigured
-    ? resolveUserPath(
-        existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
-      )
-    : workspace;
   return { workspace: hatchWorkspace, next: "hatch" };
 }
 
@@ -765,6 +794,9 @@ export async function runGuidedOnboarding(
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
     await (deps.launchHatchTui ?? launchHatchTui)(handoff.workspace);
+    return;
+  }
+  if (handoff.next === "browser") {
     return;
   }
   // Chat handoff: legacy remote-gateway flow, or local recovery after a
