@@ -7,6 +7,7 @@ import {
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import {
   escapeTelegramHtml,
@@ -289,7 +290,27 @@ export function createTelegramDraftStream(params: {
       replyTargetState = { kind: "retained", generation: sendGeneration, messageId };
     }
   };
-  const streamState = { stopped: false, final: false };
+  // Aborting on the stopped transition wakes the final flush's retry_after
+  // waits: stopForClear (clear/discard teardown) marks stopped through the
+  // shared controls state, so a parked stop() must not sleep out the flood
+  // window for text that will never be delivered. Re-armed when the stream
+  // resets to a new message.
+  let streamStoppedController = new AbortController();
+  let streamStopped = false;
+  const streamState = {
+    get stopped() {
+      return streamStopped;
+    },
+    set stopped(value: boolean) {
+      if (value && !streamStopped) {
+        streamStoppedController.abort();
+      } else if (!value && streamStopped) {
+        streamStoppedController = new AbortController();
+      }
+      streamStopped = value;
+    },
+    final: false,
+  };
   let messageSendAttempted = false;
   let suspendedUntilMs = 0;
   let consecutivePreviewFailures = 0;
@@ -669,9 +690,11 @@ export function createTelegramDraftStream(params: {
     const waitForRetryAfter = async () => {
       const delayMs = Math.max(0, suspendedUntilMs - Date.now());
       if (delayMs > 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
+        // Stop-aware: a concurrent discard/clear aborts the wait instead of
+        // parking the flush until the window expires; the stopped re-check
+        // below owns the early return. A graceful stop still waits the full
+        // retry_after before sending.
+        await sleepWithAbort(delayMs, streamStoppedController.signal).catch(() => {});
       }
     };
     streamState.final = true;

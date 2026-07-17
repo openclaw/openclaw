@@ -944,6 +944,104 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("returns stop's final flush promptly when discarded during the retry_after wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.editMessageText.mockRejectedValueOnce(
+        Object.assign(new Error("429: retry after 5"), {
+          error_code: 429,
+          parameters: { retry_after: 5 },
+        }),
+      );
+      const stream = createDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.flush();
+      stream.update("Hello final");
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+      let stopSettled = false;
+      const stopPromise = stream.stop().then(() => {
+        stopSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSettled).toBe(false);
+
+      // Teardown (clear/discard via stopForClear) must wake the parked wait;
+      // the final text is undeliverable once the stream is stopped.
+      await stream.discard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopSettled).toBe(true);
+      await stopPromise;
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors a new retry_after window after a discarded stream resets", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.editMessageText
+        .mockRejectedValueOnce(
+          Object.assign(new Error("429: retry after 1"), {
+            error_code: 429,
+            parameters: { retry_after: 1 },
+          }),
+        )
+        .mockRejectedValueOnce(
+          Object.assign(new Error("429: retry after 1"), {
+            error_code: 429,
+            parameters: { retry_after: 1 },
+          }),
+        );
+      const stream = createDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.flush();
+      stream.update("Hello final");
+
+      let firstStopSettled = false;
+      const firstStop = stream.stop().then(() => {
+        firstStopSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await stream.discard();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstStopSettled).toBe(true);
+      await firstStop;
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+      // A later turn reuses the stream; a fresh suspension must still gate the
+      // full window instead of inheriting the discarded stream's aborted wait.
+      stream.forceNewMessage();
+      await vi.advanceTimersByTimeAsync(1100);
+      stream.update("Next");
+      await stream.flush();
+      stream.update("Next again");
+      await stream.flush();
+      stream.update("Next final");
+      expect(api.editMessageText).toHaveBeenCalledTimes(2);
+
+      const secondStop = stream.stop();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(api.editMessageText).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await secondStop;
+
+      expect(api.editMessageText).toHaveBeenCalledTimes(3);
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Next final");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops the preview after repeated retryable edit failures", async () => {
     const api = createMockDraftApi();
     api.editMessageText.mockRejectedValue(
