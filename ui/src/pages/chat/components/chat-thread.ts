@@ -56,6 +56,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import type { PlanStatus } from "../tool-stream.ts";
 import { getToolTitlesVersion } from "../tool-titles.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
@@ -108,6 +109,7 @@ type ChatThreadProps = {
   runActive?: boolean;
   /** True while the agent is visibly working (isChatRunWorking); shows the working spark. */
   runWorking?: boolean;
+  planStatus?: PlanStatus | null;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
@@ -972,6 +974,8 @@ function renderChatThreadContents(
     queue: props.queue,
     showToolCalls: props.showToolCalls,
     runWorking: Boolean(props.runWorking),
+    runActive: Boolean(props.runActive),
+    planStatus: props.planStatus,
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
@@ -1050,6 +1054,8 @@ function renderChatThreadContents(
     }
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
+        planStatus: props.planStatus,
+        planActive: Boolean(props.runActive),
         onOpenSidebar: props.onOpenSidebar,
         assistant: assistantIdentity,
         basePath: props.basePath,
@@ -1117,6 +1123,7 @@ function renderChatThreadContents(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
+    props.planStatus,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,

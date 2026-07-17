@@ -27,6 +27,7 @@ import type {
 import {
   buildOpenAICompatibleReplayPolicy,
   buildProviderReplayFamilyHooks,
+  selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
@@ -117,7 +118,11 @@ async function discoverAppGuidedOllamaModel(ctx: ProviderAppGuidedSetupContext) 
     quiet: true,
     ...discoveryAccess,
   });
-  const model = provider.models?.find((candidate) => candidate.compat?.supportsTools === true);
+  const toolModels =
+    provider.models?.filter((candidate) => candidate.compat?.supportsTools === true) ?? [];
+  const preferredModelId = selectPreferredLocalModelId(toolModels.map((candidate) => candidate.id));
+  const model =
+    toolModels.find((candidate) => candidate.id.trim() === preferredModelId) ?? toolModels[0];
   let ownerValue = existing?.apiKey;
   if (ownerValue === undefined) {
     if (accessValue) {

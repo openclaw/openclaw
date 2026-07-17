@@ -567,14 +567,23 @@ jobs:
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
-          const nodeTestShards = runNodeFull
-            ? (changedNodeTestShards
-                ? changedNodeTestShards
-                : createNodeTestPlan({
-                    includeReleaseOnlyPluginShards: false,
-                    compact: compactPullRequest,
-                  })
-              ).map((shard) => ({
+          const rawNodeTestShards = runNodeFull
+            ? changedNodeTestShards
+              ? changedNodeTestShards
+              : createNodeTestPlan({
+                  includeReleaseOnlyPluginShards: false,
+                  compact: compactPullRequest,
+                })
+            : [];
+          const assignVitestFsCacheWriter =
+            typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
+              ? nodeTestPlan.assignVitestFsCacheWriter
+              : (shards) =>
+                  shards.map((shard, index) => ({
+                    ...shard,
+                    saveVitestFsCache: index === 0,
+                  }));
+          const nodeTestShards = assignVitestFsCacheWriter(rawNodeTestShards).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -587,12 +596,12 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
                   shard.shardName === "core-tooling" ||
                   shard.groups?.some((group) => group.shard_name.startsWith("core-tooling")),
-              }))
-            : [];
+              }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
@@ -668,7 +677,10 @@ jobs:
               runAndroid
                 ? [
                     // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
-                    { check_name: "android-test-play", task: "test-play" },
+                    {
+                      check_name: "android-test-play",
+                      task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
+                    },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     {
                       check_name: "android-build-play",
@@ -948,6 +960,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "build"
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -1713,7 +1729,15 @@ jobs:
           # Fork PRs must keep actions/cache: sticky snapshots are writable,
           # repository-global state and must never be produced by fork code.
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          vitest-fs-cache: "true"
+          node-compile-cache: "true"
+          node-compile-cache-scope: "test"
+          # One matrix job commits the shared warm seed. Other jobs restore it
+          # read-only, avoiding concurrent sticky-disk or archive writers.
+          save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
+          save-node-compile-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -1729,18 +1753,28 @@ jobs:
         run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
-        # Scale the in-process Vitest worker budget with the runner class. Bins
-        # run one Vitest process at a time (planConcurrency 1), so workers are
-        # the only in-job parallelism; import-bound suites scale near-linearly.
+        # Scale the in-process Vitest worker budget with the cores the job
+        # actually received: runner labels over-promise under fleet load
+        # (observed: a 16 vCPU label delivering a 4-CPU cgroup) and dispatch
+        # runs fall back to hosted runners regardless of matrix.runner.
+        # Serial-plan bins (planConcurrency 1) get the full budget; anything
+        # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
-          SHARD_RUNNER: ${{ matrix.runner || 'blacksmith-4vcpu-ubuntu-2404' }}
+          SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
-          if [[ "$SHARD_RUNNER" == *"-8vcpu-"* ]]; then
-            echo "OPENCLAW_VITEST_MAX_WORKERS=6" >> "$GITHUB_ENV"
+          cores="$(nproc)"
+          if [ "$SHARD_PLAN_CONCURRENCY" != "1" ]; then
+            workers=2
+          elif [ "$cores" -ge 12 ]; then
+            workers=6
+          elif [ "$cores" -ge 6 ]; then
+            workers=4
           else
-            echo "OPENCLAW_VITEST_MAX_WORKERS=3" >> "$GITHUB_ENV"
+            workers=3
           fi
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Run Node test shard
         # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the
@@ -1820,7 +1854,9 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Concurrent Knip scans need cores and memory headroom; the wall
+            # clock roughly halves for similar billed core-minutes.
+            runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             # Slowest static lane (~3.5min on 4 vCPU); extra cores shorten the
@@ -1857,8 +1893,14 @@ jobs:
             echo "boundary artifact snapshot not seeded yet; lint prepares cold"
             exit 0
           fi
-          # rsync -a preserves snapshot mtimes; fresh checkout sources stay
-          # newer, so the prepare script always takes its incremental path.
+          # Same tree-OID gate as the boundary lane: restore only artifacts
+          # produced from identical generative sources, so stale snapshots can
+          # neither false-skip rebuilds nor leave ghost declarations.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; lint prepares cold"
+            exit 0
+          fi
           for payload in dist packages extensions; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
@@ -1870,6 +1912,7 @@ jobs:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
+          RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
@@ -1908,9 +1951,10 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              # Control-UI i18n catalogs only change with ui/ sources or the
-              # i18n tooling (manifest-gated); oxlint always runs.
-              if [ "$RUN_CONTROL_UI_I18N" = "true" ]; then
+              # The i18n verify covers keys extracted from every ui/ source,
+              # not just ui/src/i18n; any ui-touching diff (run_ui_tests) or
+              # i18n-tooling diff must run it. oxlint always runs.
+              if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
                 pnpm lint --threads=8
               else
                 echo "[skip] changed scope cannot affect control-UI i18n catalogs"
@@ -1923,13 +1967,45 @@ jobs:
             dependencies)
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
-                pnpm deadcode:dependencies
-                pnpm deadcode:unused-files
+                # The three deadcode scripts spawn independent Knip scans over
+                # separate configs; run them concurrently (with buffered logs
+                # so output stays readable) instead of paying ~3 minutes of
+                # serial scanning.
+                dc_scripts=(deadcode:dependencies deadcode:unused-files)
                 if has_package_script "deadcode:exports"; then
-                  pnpm deadcode:exports
+                  dc_scripts+=(deadcode:exports)
                 elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                   echo "Current CI targets must provide the deadcode:exports package script." >&2
                   exit 1
+                fi
+                if [ "$(nproc)" -lt 8 ]; then
+                  # Hosted/dispatch runners are too small for up to seven
+                  # concurrent Knip processes; keep the serial path there.
+                  for dc in "${dc_scripts[@]}"; do
+                    pnpm "$dc"
+                  done
+                else
+                  dc_pids=()
+                  dc_logs=()
+                  for dc in "${dc_scripts[@]}"; do
+                    dc_log="$(mktemp -t deadcode-log.XXXXXX)"
+                    dc_logs+=("$dc_log")
+                    pnpm "$dc" >"$dc_log" 2>&1 &
+                    dc_pids+=($!)
+                  done
+                  dc_failures=0
+                  for i in "${!dc_scripts[@]}"; do
+                    if wait "${dc_pids[$i]}"; then
+                      echo "[ok] ${dc_scripts[$i]}"
+                    else
+                      echo "::error title=${dc_scripts[$i]} failed::${dc_scripts[$i]} failed"
+                      dc_failures=1
+                    fi
+                    cat "${dc_logs[$i]}"
+                  done
+                  if [ "$dc_failures" -ne 0 ]; then
+                    exit 1
+                  fi
                 fi
               elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
@@ -2039,10 +2115,19 @@ jobs:
             echo "restored=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # rsync -a preserves the snapshotting run's artifact mtimes; the
-          # fresh checkout's newer source mtimes force the prepare script down
-          # its incremental-rebuild path, so a stale snapshot can never
-          # false-skip the boundary compile.
+          # Restore only when the generative source trees AND the runner
+          # toolchain match the snapshotting run. Tree OIDs cover source
+          # content exactly; the node/pnpm versions cover toolchain-only
+          # changes (the sticky key already hashes config/scripts/lockfile, so
+          # those force a fresh key). Restored artifacts are valid by
+          # construction: no clock-skew mtime race can false-skip a rebuild,
+          # and deleted/renamed sources or a toolchain bump build cold.
+          current_trees="$({ git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; })"
+          if [ ! -f "$sticky_root/.source-trees" ] || [ "$current_trees" != "$(cat "$sticky_root/.source-trees")" ]; then
+            echo "boundary source trees changed since snapshot; building cold"
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           for payload in dist packages extensions; do
             if [ -d "$sticky_root/$payload" ]; then
               rsync -a "$sticky_root/$payload/" "$payload/"
@@ -2222,6 +2307,7 @@ jobs:
           fi
           find extensions -maxdepth 3 \( -name '.boundary-tsc.tsbuildinfo' -o -name '.boundary-tsc.stamp' \) \
             -exec rsync -aR {} "$sticky_root/" \;
+          { git rev-parse HEAD:src/plugin-sdk HEAD:packages HEAD:extensions HEAD:src/auto-reply HEAD:src/types HEAD:src/plugins/types.ts HEAD:src/video-generation HEAD:src/channels; node --version; corepack pnpm --version 2>/dev/null || pnpm --version; } > "$sticky_root/.source-trees"
           touch "$sticky_root/.snapshot-ready"
 
   # Validate docs (format, lint, broken links) only when docs files changed.
@@ -2897,6 +2983,13 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             test-play)
+              ./gradlew --no-daemon --build-cache \
+                :app:testPlayDebugUnitTest \
+                :wear-shared:testDebugUnitTest
+              ;;
+            test-play-compat)
+              # Frozen targets predate the Wear shared project. Keep their app-owned
+              # Play unit tests without importing current Android modules.
               ./gradlew --no-daemon --build-cache :app:testPlayDebugUnitTest
               ;;
             test-third-party)
@@ -2908,7 +3001,9 @@ jobs:
                 :app:assembleThirdPartyDebug \
                 :app:lintPlayDebug \
                 :app:lintThirdPartyDebug \
-                :benchmark:assembleDebug
+                :benchmark:assembleDebug \
+                :wear-shared:assembleDebug \
+                :wear-shared:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -2917,7 +3012,10 @@ jobs:
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
-              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
+              ./gradlew --no-daemon --build-cache \
+                :app:ktlintCheck \
+                :benchmark:ktlintCheck \
+                :wear-shared:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

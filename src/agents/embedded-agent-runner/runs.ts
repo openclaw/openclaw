@@ -298,19 +298,6 @@ function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): vo
 }
 
 /**
- * @deprecated Use queueEmbeddedAgentMessageWithOutcomeAsync for delivery decisions.
- * This boolean helper only reports immediate queue eligibility; it cannot surface
- * async runtime rejection from the active run.
- */
-export function queueEmbeddedAgentMessage(
-  sessionId: string,
-  text: string,
-  options?: EmbeddedAgentQueueMessageOptions,
-): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
-}
-
-/**
  * @deprecated Prefer queueEmbeddedAgentMessageWithOutcomeAsync when callers need to
  * know whether steering was accepted. This sync helper is fire-and-forget after
  * initial eligibility and only logs later runtime rejection.

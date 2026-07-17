@@ -21,6 +21,7 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   1257: "windows-1257",
   1258: "windows-1258",
 };
+const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
@@ -53,7 +54,9 @@ export function resolveWindowsConsoleEncoding(): string | null {
     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
     });
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
@@ -80,7 +83,9 @@ export function resolveWindowsSystemEncoding(): string | null {
       {
         windowsHide: true,
         encoding: "utf8",
+        killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
       },
     );
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;

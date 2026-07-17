@@ -21,7 +21,11 @@ import {
   HERMES_REASON_MODEL_PROVIDER_CONFLICT,
 } from "./items.js";
 import { buildHermesMemoryPlan, isMemoryOnlyMigration } from "./memory.js";
-import { resolveCurrentModelRef, resolveHermesModelRef } from "./model.js";
+import {
+  resolveCurrentModelRef,
+  resolveHermesModelRef,
+  usesRetiredHermesQwenProvider,
+} from "./model.js";
 import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverHermesSource, hasHermesSource } from "./source.js";
@@ -93,16 +97,6 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
         overwrite: ctx.overwrite,
       }),
     );
-    if (modelRef.startsWith("qwen-oauth/")) {
-      items.push(
-        createMigrationManualItem({
-          id: "manual:auth-reauthenticate:qwen-oauth",
-          source: source.configPath ?? source.root,
-          message: "Hermes Qwen OAuth uses the external Qwen CLI credential store.",
-          recommendation: "Authenticate qwen-oauth in OpenClaw after migration.",
-        }),
-      );
-    }
   }
   const configItems = buildConfigItems({
     ctx,
@@ -163,7 +157,22 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     );
   }
   items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
-  items.push(...(await buildAuthItems({ ctx, source, targets })));
+  const authItems = await buildAuthItems({ ctx, source, targets });
+  if (
+    usesRetiredHermesQwenProvider(config) &&
+    !authItems.some((item) => item.id === "manual:auth-reauthenticate:qwen")
+  ) {
+    authItems.unshift(
+      createMigrationManualItem({
+        id: "manual:auth-reauthenticate:qwen",
+        source: source.configPath ?? source.root,
+        message: "Hermes Qwen Portal OAuth and Qwen CLI credentials cannot be reused by OpenClaw.",
+        recommendation:
+          "Authenticate qwen with an API key after migration: openclaw onboard --auth-choice qwen-api-key.",
+      }),
+    );
+  }
+  items.push(...authItems);
   items.push(...(await buildSecretItems({ config, ctx, source, targets })));
   for (const archivePath of source.archivePaths) {
     items.push(

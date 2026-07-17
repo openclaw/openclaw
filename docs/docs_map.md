@@ -311,6 +311,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: manual token
   - H3: Alternative: env-based token
   - H3: JSON5 reference
   - H3: Account config keys
@@ -7662,7 +7663,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install plugin
   - H2: Getting started
   - H2: Non-interactive setup
-  - H2: Built-in catalog
+  - H2: Direct Arcee catalog
+  - H2: OpenRouter catalog
   - H2: Supported features
   - H2: Related
 
@@ -8241,18 +8243,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config example
   - H2: Related
 
-## providers/qwen-oauth.md
-
-- Route: /providers/qwen-oauth
-- Headings:
-  - H2: Setup
-  - H2: Defaults
-  - H2: How this differs from Qwen
-  - H2: Models
-  - H2: Migration
-  - H2: Troubleshooting
-  - H2: Related
-
 ## providers/qwen.md
 
 - Route: /providers/qwen
@@ -8342,7 +8332,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Privacy modes
   - H2: Getting started
   - H2: Model selection
-  - H2: Built-in catalog (38 models)
+  - H2: Built-in catalog (30 models)
   - H2: Model discovery
   - H2: DeepSeek V4 replay behavior
   - H2: Streaming and tool support

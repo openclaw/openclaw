@@ -526,8 +526,10 @@ function runConcurrentSchemaProbe(params: {
     const rootDir = ${JSON.stringify(params.rootDir)};
     const mode = ${JSON.stringify(params.mode)};
     const workerSource = ${JSON.stringify(workerSource)};
-    const workerCount = 8;
-    const roundCount = 3;
+    // The barriers deterministically overlap both openers. Two contenders prove
+    // serialization without repeating the same child-process stress.
+    const workerCount = 2;
+    const roundCount = 1;
     const databasePaths = [];
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2168,7 +2170,7 @@ describe("openclaw state database", () => {
     );
     const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(3);
+    expect(databasePaths).toHaveLength(1);
     for (const [round, databasePath] of databasePaths.entries()) {
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {
@@ -2202,7 +2204,7 @@ describe("openclaw state database", () => {
     );
     const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(3);
+    expect(databasePaths).toHaveLength(1);
     for (const databasePath of databasePaths) {
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {

@@ -141,7 +141,16 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "about"],
+    routes: [
+      "infrastructure",
+      "nodes",
+      "approvals",
+      "worktrees",
+      "debug",
+      "logs",
+      "activity",
+      "about",
+    ],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -152,6 +161,7 @@ const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGA
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
+  approvals: "shieldCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -242,6 +252,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },

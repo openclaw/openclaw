@@ -13,6 +13,7 @@ struct ChatProTab: View {
     @State private var viewModelOwnerID = ""
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
+    @State private var showsBackgroundTasks = false
     // Transport can start unscoped while the UI uses its "main" fallback.
     // Track the real agent so gateway metadata replaces the captured transport.
     @State private var viewModelTransportAgentID = ""
@@ -128,6 +129,9 @@ struct ChatProTab: View {
             }
             .sheet(item: self.$transcriptShareItem) { item in
                 ChatTranscriptShareSheet(fileURL: item.fileURL)
+            }
+            .sheet(isPresented: self.$showsBackgroundTasks) {
+                BackgroundTasksScreen(agentID: self.currentAgentID)
             }
             .alert(
                 String(localized: "Unable to Export Transcript"),
@@ -337,6 +341,18 @@ struct ChatProTab: View {
             }
 
             Divider()
+
+            Button {
+                self.showsBackgroundTasks = true
+            } label: {
+                Label {
+                    Text("Background Tasks")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+            }
+            .disabled(!self.appModel.isOperatorGatewayConnected)
 
             Button {
                 self.exportTranscript()

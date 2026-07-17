@@ -334,6 +334,30 @@ describe("ollama plugin", () => {
     expect(ensureOllamaModelPulledMock).not.toHaveBeenCalled();
   });
 
+  it("prefers the strongest tool-calling family among installed models", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "llama3.3:70b", name: "llama3.3:70b", compat: { supportsTools: true } },
+        { id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } },
+        {
+          id: "nomic-embed-text",
+          name: "nomic-embed-text",
+          compat: { supportsTools: true },
+        },
+      ],
+    });
+
+    await expect(provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} })).resolves.toEqual(
+      {
+        modelRef: "ollama/qwen3.5:4b",
+        detail: "qwen3.5:4b at http://127.0.0.1:11434",
+      },
+    );
+  });
+
   it("uses configured Ollama access while discovering installed models", async () => {
     const provider = registerProvider();
     const configuredValue = "configured-access";
