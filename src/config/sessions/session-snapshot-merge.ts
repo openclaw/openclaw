@@ -79,6 +79,32 @@ function mainSessionRecoveryOwnershipChanged(before: SessionEntry, after: Sessio
   );
 }
 
+function mainSessionRecoveryCycleStateUnchanged(
+  before: SessionEntry,
+  after: SessionEntry,
+): boolean {
+  const beforeState = before.mainRestartRecovery;
+  const afterState = after.mainRestartRecovery;
+  if (!beforeState || !afterState) {
+    return false;
+  }
+  return (
+    beforeState.cycleId === afterState.cycleId &&
+    beforeState.chargedAttempts === afterState.chargedAttempts &&
+    isDeepStrictEqual(beforeState.reservation, afterState.reservation) &&
+    isDeepStrictEqual(beforeState.tombstone, afterState.tombstone)
+  );
+}
+
+function restartRecoveryRunsOnlyConsumed(before: SessionEntry, after: SessionEntry): boolean {
+  const initialRuns = new Set(
+    (before.restartRecoveryRuns ?? []).map((run) => `${run.runId}\u0000${run.lifecycleGeneration}`),
+  );
+  return (after.restartRecoveryRuns ?? []).every((run) =>
+    initialRuns.has(`${run.runId}\u0000${run.lifecycleGeneration}`),
+  );
+}
+
 function isCanonicalMainSessionRecoveryClear(entry: SessionEntry): boolean {
   return (
     entry.abortedLastRun === false &&
@@ -192,7 +218,15 @@ export function projectSessionSnapshotChanges(params: {
     // initial snapshot. Preserve the concurrently narrowed owner aggregate.
     patch.abortedLastRun = true;
   }
-  if (mainRecoveryChanged && !mainRecoveryChangedConcurrently) {
+  const currentOnlyConsumedLifecycleFences =
+    isCanonicalMainSessionRecoveryClear(params.next) &&
+    !mainRecoveryOwnershipChangedConcurrently &&
+    mainSessionRecoveryCycleStateUnchanged(params.initial, params.current) &&
+    restartRecoveryRunsOnlyConsumed(params.initial, params.current);
+  if (
+    mainRecoveryChanged &&
+    (!mainRecoveryChangedConcurrently || currentOnlyConsumedLifecycleFences)
+  ) {
     // Apply all three fields together: a stale healthy flag can otherwise hide a newer marker.
     // A healthy run first marks its claim non-interrupted; token-scoped release
     // removes the aggregate only after the final concurrent owner exits.

@@ -392,6 +392,69 @@ describe("reply turn admission", () => {
     },
   );
 
+  it.each(["visible", "heartbeat"] as const)(
+    "rejects %s reply admission for a tombstoned recovery session",
+    async (kind) => {
+      const sessionKey = `agent:main:telegram:topic:recovery-tombstone:${kind}`;
+      const sessionId = "tombstoned-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "failed",
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 4,
+            chargedAttempts: 3,
+            tombstone: { reason: "automatic recovery exhausted" },
+          },
+        },
+      });
+
+      await expect(
+        admitReplyTurn({
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          storePath,
+          kind,
+          resetTriggered: false,
+        }),
+      ).rejects.toThrow(/changed while starting work/i);
+    },
+  );
+
+  it("drops a queued followup for an admitted recovery fence", async () => {
+    const sessionKey = "agent:main:telegram:topic:admitted-recovery";
+    const sessionId = "admitted-recovery-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "generation-1" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 3,
+          chargedAttempts: 1,
+        },
+      },
+    });
+
+    await expect(
+      admitReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind: "queued_followup",
+        resetTriggered: false,
+      }),
+    ).resolves.toEqual({ status: "skipped", reason: "lifecycle-invalidated" });
+  });
+
   it("schedules released recovery only after retained admission exits", async () => {
     const sourceSessionKey = "agent:main:telegram:slash:recovery-adoption";
     const sessionKey = "agent:main:telegram:topic:recovery-adoption";
