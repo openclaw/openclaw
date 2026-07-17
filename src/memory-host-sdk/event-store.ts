@@ -8,7 +8,11 @@ import type { MemoryHostEventRecord } from "./event-types.js";
 
 const MEMORY_HOST_EVENTS_PLUGIN_ID = "memory-core";
 const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
-const MAX_MEMORY_HOST_EVENTS = 50_000;
+const MEMORY_HOST_EVENT_CURSORS_NAMESPACE = "memory-host.event-cursors";
+// Event rotation retains deep diagnostics without consuming memory-core's
+// plugin-wide 50,000-row budget or starving sibling state namespaces.
+const MAX_MEMORY_HOST_EVENTS = 10_000;
+const MAX_MEMORY_HOST_EVENT_CURSORS = 1_000;
 const MAX_MEMORY_HOST_EVENT_JSON_BYTES = 8 * 1024;
 const MAX_MEMORY_HOST_EVENT_ITEMS = 10;
 const MAX_MEMORY_HOST_EVENT_TEXT_BYTES = 2 * 1024;
@@ -27,7 +31,7 @@ type StoredMemoryHostCursor = {
   lastSequence: number;
 };
 
-type StoredMemoryHostEntry = StoredMemoryHostEvent | StoredMemoryHostCursor;
+let maxMemoryHostEventsForTests: number | undefined;
 
 export type PersistedMemoryHostEvent = {
   key: string;
@@ -63,9 +67,19 @@ function memoryHostEventStorageKey(workspaceDir: string, sequence: number): stri
 }
 
 function openMemoryHostEventStore(env?: NodeJS.ProcessEnv) {
-  return createPluginStateSyncKeyedStore<StoredMemoryHostEntry>(MEMORY_HOST_EVENTS_PLUGIN_ID, {
+  return createPluginStateSyncKeyedStore<StoredMemoryHostEvent>(MEMORY_HOST_EVENTS_PLUGIN_ID, {
     namespace: MEMORY_HOST_EVENTS_NAMESPACE,
-    maxEntries: MAX_MEMORY_HOST_EVENTS,
+    maxEntries: maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
+    ...(env ? { env } : {}),
+  });
+}
+
+function openMemoryHostCursorStore(env?: NodeJS.ProcessEnv) {
+  // Cursor isolation keeps event rotation from evicting sequence ownership.
+  // Lost inactive cursors remain recoverable from each workspace's latest event.
+  return createPluginStateSyncKeyedStore<StoredMemoryHostCursor>(MEMORY_HOST_EVENTS_PLUGIN_ID, {
+    namespace: MEMORY_HOST_EVENT_CURSORS_NAMESPACE,
+    maxEntries: MAX_MEMORY_HOST_EVENT_CURSORS,
     ...(env ? { env } : {}),
   });
 }
@@ -294,11 +308,11 @@ function normalizeMemoryHostEventRecordForStorage(value: unknown): MemoryHostEve
 
 function allocateEventSequence(params: {
   workspaceDir: string;
-  store: ReturnType<typeof openMemoryHostEventStore>;
+  cursorStore: ReturnType<typeof openMemoryHostCursorStore>;
   env?: NodeJS.ProcessEnv;
 }): number {
   const key = cursorKey(params.workspaceDir);
-  const cursor = params.store.lookup(key);
+  const cursor = params.cursorStore.lookup(key);
   const existingMax =
     cursor?.kind === "cursor"
       ? cursor.lastSequence
@@ -311,7 +325,7 @@ function allocateEventSequence(params: {
           }).at(-1)?.value.sequence ?? 0,
         );
   let allocated = 0;
-  params.store.update?.(key, (current) => {
+  params.cursorStore.update?.(key, (current) => {
     const lastSequence =
       current?.kind === "cursor" ? Math.max(current.lastSequence, existingMax) : existingMax;
     allocated = lastSequence + 1;
@@ -333,9 +347,10 @@ export function registerMemoryHostEvent(params: {
     throw new TypeError("Memory host event is invalid");
   }
   const store = openMemoryHostEventStore(params.env);
+  const cursorStore = openMemoryHostCursorStore(params.env);
   const sequence = allocateEventSequence({
     workspaceDir: params.workspaceDir,
-    store,
+    cursorStore,
     ...(params.env ? { env: params.env } : {}),
   });
   store.register(memoryHostEventStorageKey(params.workspaceDir, sequence), {
@@ -352,8 +367,14 @@ export function listStoredMemoryHostEvents(params: {
   env?: NodeJS.ProcessEnv;
 }): PersistedMemoryHostEvent[] {
   const limit = Number.isFinite(params.limit)
-    ? Math.max(1, Math.min(MAX_MEMORY_HOST_EVENTS, Math.floor(params.limit as number)))
-    : MAX_MEMORY_HOST_EVENTS;
+    ? Math.max(
+        1,
+        Math.min(
+          maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS,
+          Math.floor(params.limit as number),
+        ),
+      )
+    : (maxMemoryHostEventsForTests ?? MAX_MEMORY_HOST_EVENTS);
   const entries = pluginStateEntriesInKeyRange({
     pluginId: MEMORY_HOST_EVENTS_PLUGIN_ID,
     namespace: MEMORY_HOST_EVENTS_NAMESPACE,
@@ -363,8 +384,13 @@ export function listStoredMemoryHostEvents(params: {
     order: "desc",
     ...(params.env ? { env: params.env } : {}),
   }).flatMap((entry): PersistedMemoryHostEvent[] => {
-    const value = entry.value as StoredMemoryHostEntry;
+    const value = entry.value as StoredMemoryHostEvent;
     return value.kind === "event" ? [{ ...entry, value }] : [];
   });
   return entries.toReversed();
+}
+
+/** Test-only retention override; production keeps a 10,000-event namespace budget. */
+export function setMaxMemoryHostEventsForTests(maxEntries?: number): void {
+  maxMemoryHostEventsForTests = maxEntries;
 }

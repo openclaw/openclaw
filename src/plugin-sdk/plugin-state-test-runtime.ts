@@ -7,6 +7,7 @@ export {
   getPluginStateCapacity as getPluginStateCapacityForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
 export {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,

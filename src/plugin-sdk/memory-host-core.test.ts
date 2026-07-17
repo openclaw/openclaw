@@ -160,6 +160,80 @@ describe("memory-host-core helpers", () => {
     }
   });
 
+  it("does not let an older concurrent snapshot overwrite a newer event export", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-race-"));
+    const workspaceDir = path.join(fixtureRoot, "workspace");
+    const eventExportPath = path.join(workspaceDir, "memory", "events", "memory-host-events.jsonl");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+    const originalReadFile = fs.readFile.bind(fs);
+    let releaseFirstRead: (() => void) | undefined;
+    let signalFirstRead: (() => void) | undefined;
+    let shouldBlockFirstRead = true;
+    const firstReadStarted = new Promise<void>((resolve) => {
+      signalFirstRead = resolve;
+    });
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const target = args[0];
+        if (
+          shouldBlockFirstRead &&
+          typeof target === "string" &&
+          path.resolve(target) === eventExportPath
+        ) {
+          shouldBlockFirstRead = false;
+          signalFirstRead?.();
+          await new Promise<void>((resolve) => {
+            releaseFirstRead = resolve;
+          });
+        }
+        return await originalReadFile(...args);
+      });
+
+    try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.recall.recorded",
+        timestamp: "2026-05-18T12:00:00.000Z",
+        query: "older",
+        resultCount: 0,
+        results: [],
+      });
+      const olderListing = listMemoryHostPublicArtifacts({ cfg });
+      await firstReadStarted;
+
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.recall.recorded",
+        timestamp: "2026-05-18T12:01:00.000Z",
+        query: "newer",
+        resultCount: 0,
+        results: [],
+      });
+      const newerListing = listMemoryHostPublicArtifacts({ cfg });
+      await Promise.race([
+        newerListing,
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        }),
+      ]);
+      releaseFirstRead?.();
+      await Promise.all([olderListing, newerListing]);
+
+      const exported = (await fs.readFile(eventExportPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { query: string });
+      expect(exported.map((event) => event.query)).toEqual(["older", "newer"]);
+    } finally {
+      releaseFirstRead?.();
+      readFileSpy.mockRestore();
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
     expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
     expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);

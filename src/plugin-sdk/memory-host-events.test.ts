@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   appendMemoryHostEvent,
@@ -31,6 +32,7 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
 }
 
 afterEach(() => {
+  setMaxMemoryHostEventsForTests(undefined);
   resetPluginStateStoreForTests();
 });
 
@@ -200,6 +202,31 @@ describe("memory host event journal helpers", () => {
     }
     expect(event.results).toHaveLength(10);
     expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(8 * 1024);
+  });
+
+  it("rotates old events without evicting the workspace sequence cursor", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-rotation-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    setMaxMemoryHostEventsForTests(3);
+
+    for (let index = 1; index <= 5; index += 1) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: `2026-04-05T12:00:0${index}.000Z`,
+          query: `event-${index}`,
+          resultCount: 0,
+          results: [],
+        },
+        { env },
+      );
+    }
+
+    const events = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(
+      events.map((event) => (event.type === "memory.recall.recorded" ? event.query : "")),
+    ).toEqual(["event-3", "event-4", "event-5"]);
   });
 });
 

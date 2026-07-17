@@ -91,7 +91,9 @@ type StoredMemoryHostEvent = {
 };
 
 const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
-const MAX_MEMORY_HOST_EVENTS = 50_000;
+// Keep migration aligned with event-store.ts retention so legacy import cannot
+// consume memory-core's plugin-wide budget or starve sibling state namespaces.
+const MAX_MEMORY_HOST_EVENTS = 10_000;
 const MAX_LEGACY_MEMORY_HOST_EVENT_VALUE_BYTES = 65_536;
 const LEGACY_MEMORY_HOST_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 

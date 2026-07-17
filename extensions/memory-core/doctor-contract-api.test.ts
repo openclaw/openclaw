@@ -494,16 +494,13 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
       preview: [expect.stringContaining("Memory Core host events")],
     });
-    const store = context().openPluginStateKeyedStore<
-      | {
-          kind: "event";
-          workspaceKey: string;
-          event: { type: string; query: string };
-          recordedAt: number;
-          sequence: number;
-        }
-      | { kind: "cursor"; workspaceKey: string; lastSequence: number }
-    >({ namespace: "memory-host.events", maxEntries: 50_000 });
+    const store = context().openPluginStateKeyedStore<{
+      kind: "event";
+      workspaceKey: string;
+      event: { type: string; query: string };
+      recordedAt: number;
+      sequence: number;
+    }>({ namespace: "memory-host.events", maxEntries: 10_000 });
     await store.register("runtime-event", {
       kind: "event",
       workspaceKey: path.resolve(workspaceDir).replace(/\\/g, "/"),
@@ -514,12 +511,6 @@ describe("memory-core doctor dreaming migration", () => {
       recordedAt: Date.parse("2026-07-02T00:00:00.000Z"),
       sequence: 1,
     });
-    await store.register("runtime-cursor", {
-      kind: "cursor",
-      workspaceKey: path.resolve(workspaceDir).replace(/\\/g, "/"),
-      lastSequence: 1,
-    });
-
     const result = await migration.migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
@@ -536,9 +527,6 @@ describe("memory-core doctor dreaming migration", () => {
       "runtime after upgrade",
     ]);
     expect(events[0]?.sequence).toBeLessThan(0);
-    expect(entries.find((entry) => entry.value.kind === "cursor")?.value).toMatchObject({
-      lastSequence: 1,
-    });
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
   });
 
@@ -583,7 +571,7 @@ describe("memory-core doctor dreaming migration", () => {
       expect.stringContaining("Archived Memory Core host events legacy source"),
     ]);
     const entries = await context()
-      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 50_000 })
+      .openPluginStateKeyedStore({ namespace: "memory-host.events", maxEntries: 10_000 })
       .entries();
     expect(entries).toEqual([]);
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();

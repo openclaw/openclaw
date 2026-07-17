@@ -7,11 +7,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
+import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 
 const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.jsonl";
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS = 1_000;
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES = 1024 * 1024;
+const memoryHostEventExportQueue = new KeyedAsyncQueue();
 
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
@@ -65,27 +67,39 @@ function serializeMemoryHostEventExport(
 
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
-  content: string;
-}): Promise<string> {
-  const absolutePath = path.join(
-    params.workspaceDir,
-    ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"),
-  );
-  // SQLite is authoritative. Reading this bounded export only avoids replacing
-  // an unchanged named artifact and preserves stable mtimes for bridge consumers.
-  const existing = await fs.readFile(absolutePath, "utf8").catch(() => undefined);
-  if (existing !== params.content) {
-    await replaceFileAtomic({
-      filePath: absolutePath,
-      content: params.content,
-      dirMode: 0o700,
-      mode: 0o600,
-      tempPrefix: `${path.basename(absolutePath)}.export`,
-      syncParentDir: true,
-      syncTempFile: true,
+}): Promise<string | undefined> {
+  const workspaceKey = path.resolve(params.workspaceDir);
+  // Snapshot and replacement stay in one per-workspace queue. Otherwise an
+  // older concurrent listing can overwrite a newer derived export.
+  return memoryHostEventExportQueue.enqueue(workspaceKey, async () => {
+    const storedEvents = listStoredMemoryHostEvents({
+      workspaceDir: params.workspaceDir,
+      limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
     });
-  }
-  return absolutePath;
+    if (storedEvents.length === 0) {
+      return undefined;
+    }
+    const content = serializeMemoryHostEventExport(storedEvents);
+    const absolutePath = path.join(
+      params.workspaceDir,
+      ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"),
+    );
+    // SQLite is authoritative. Reading this bounded export only avoids replacing
+    // an unchanged named artifact and preserves stable mtimes for bridge consumers.
+    const existing = await fs.readFile(absolutePath, "utf8").catch(() => undefined);
+    if (existing !== content) {
+      await replaceFileAtomic({
+        filePath: absolutePath,
+        content,
+        dirMode: 0o700,
+        mode: 0o600,
+        tempPrefix: `${path.basename(absolutePath)}.export`,
+        syncParentDir: true,
+        syncTempFile: true,
+      });
+    }
+    return absolutePath;
+  });
 }
 
 /** Lists public memory artifacts for one workspace, including notes and event logs. */
@@ -125,20 +139,15 @@ async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
-  const storedEvents = listStoredMemoryHostEvents({
+  const eventExportPath = await materializeMemoryHostEventExport({
     workspaceDir: params.workspaceDir,
-    limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
   });
-  if (storedEvents.length > 0) {
-    const absolutePath = await materializeMemoryHostEventExport({
-      workspaceDir: params.workspaceDir,
-      content: serializeMemoryHostEventExport(storedEvents),
-    });
+  if (eventExportPath) {
     artifacts.push({
       kind: "event-log",
       workspaceDir: params.workspaceDir,
       relativePath: MEMORY_HOST_EVENTS_RELATIVE_PATH,
-      absolutePath,
+      absolutePath: eventExportPath,
       agentIds: [...params.agentIds],
       contentType: "json",
     });
