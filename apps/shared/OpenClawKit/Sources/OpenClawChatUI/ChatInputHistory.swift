@@ -41,6 +41,12 @@ struct ChatInputHistory: Equatable, Sendable {
             }
         }
         if let recall {
+            // The accepted send retired this text. If the user recalled during
+            // the pending await, the stash holds the already-sent draft;
+            // Escape/Down must not resurrect it into a duplicate send.
+            if let stash = self.stashedDraft, Self.normalized(stash) == text {
+                self.stashedDraft = ""
+            }
             self.restoreRecall(recall)
         } else {
             self.resetNavigation()
@@ -131,6 +137,9 @@ struct ChatInputHistory: Equatable, Sendable {
     }
 
     private mutating func enforceLimit() {
+        // Accepted tradeoff: if the actively recalled entry is the evicted
+        // oldest one, restoreRecall resets navigation and the stashed draft is
+        // dropped. Guarding that corner is not worth extra recall state.
         if self.entries.count > Self.limit {
             self.entries.removeLast(self.entries.count - Self.limit)
         }
@@ -149,7 +158,10 @@ struct ChatInputHistory: Equatable, Sendable {
     private func recallMarker() -> RecallMarker? {
         guard let cursor, self.entries.indices.contains(cursor) else { return nil }
         let value = self.entries[cursor]
-        let occurrence = self.entries[...cursor].filter { $0 == value }.count
+        // Count occurrences from the oldest end: accepted sends prepend at the
+        // newest end, so newest-relative occurrence numbers would silently
+        // re-point the cursor at a different duplicate after a late accept.
+        let occurrence = self.entries[cursor...].filter { $0 == value }.count
         return RecallMarker(value: value, occurrence: occurrence)
     }
 
@@ -209,7 +221,7 @@ struct ChatInputHistory: Equatable, Sendable {
 
     private static func index(ofOccurrence occurrence: Int, value: String, in entries: [String]) -> Int? {
         var seen = 0
-        for (index, entry) in entries.enumerated() where entry == value {
+        for (index, entry) in entries.enumerated().reversed() where entry == value {
             seen += 1
             if seen == occurrence { return index }
         }

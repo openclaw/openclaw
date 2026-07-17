@@ -138,6 +138,40 @@ struct ChatInputHistoryTests {
         #expect(history.entries == ["two", "/compact", "one"])
     }
 
+    @Test func `late acceptance retires a stash holding the sent text`() {
+        var history = ChatInputHistory()
+        history.record("older")
+        #expect(history.previous(draft: "sent me") == "older")
+
+        history.record("sent me")
+
+        #expect(history.cancel() == "")
+    }
+
+    @Test func `late acceptance keeps a genuinely newer stashed draft`() {
+        var history = ChatInputHistory()
+        history.record("older")
+        #expect(history.previous(draft: "newer unsent draft") == "older")
+
+        history.record("sent me")
+
+        #expect(history.cancel() == "newer unsent draft")
+    }
+
+    @Test func `recall marker stays on the same duplicate after an identical prepend`() {
+        var history = ChatInputHistory()
+        history.record("dup")
+        history.record("x")
+        #expect(history.previous(draft: "") == "x")
+        #expect(history.previous(draft: "") == "dup")
+
+        history.record("dup")
+
+        #expect(history.entries == ["dup", "x", "dup"])
+        // Cursor still points at the oldest "dup": one step newer is "x".
+        #expect(history.next() == "x")
+    }
+
     @Test func `manual edit exits recall without overwriting stashed draft`() {
         var history = ChatInputHistory()
         history.record("sent")
