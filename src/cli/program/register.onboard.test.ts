@@ -122,6 +122,12 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
+  it("forwards --tui to guided onboarding", async () => {
+    await runCli(["onboard", "--tui"]);
+
+    expect(setupWizardOptions().tui).toBe(true);
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(setupWizardOptions().mistralApiKey).toBe("sk-mistral-test"); // pragma: allowlist secret

@@ -607,11 +607,12 @@ export async function executePluginInstall(
   runtime: RuntimeEnv,
   opts: ExecuteOptions,
 ): Promise<SystemAgentOperationResult> {
-  if (opts.approved) {
-    const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
-    if (validationError) {
-      throw new Error(validationError);
-    }
+  // Reject an untrusted plugin source before proposing or installing it, not
+  // only on the approved apply — a formatted "plan" must never surface an
+  // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
+  const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
+  if (validationError) {
+    throw new Error(validationError);
   }
   const result = await applyPersistentOperation({
     auditOperation: "plugin.install",

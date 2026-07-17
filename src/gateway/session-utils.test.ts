@@ -820,6 +820,33 @@ describe("gateway session utils", () => {
     expect(lockedCodex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
   });
 
+  test("reports observed locked runtime from agentHarnessId instead of configured intent", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "observed-codex",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      } as SessionEntry,
+    });
+
+    expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
+  });
+
   test.each(["xhigh", "max"] as const)(
     "preserves catalog-less persisted %s in session change projections",
     (thinkingLevel) => {
@@ -1226,6 +1253,38 @@ describe("gateway session utils", () => {
     // Explicit off persists and wins over the per-channel default.
     expect(row.responseUsage).toBe("off");
     expect(row.effectiveResponseUsage).toBe("off");
+  });
+
+  test("buildGatewaySessionRow projects the effective Control UI queue mode", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      messages: { queue: { mode: "interrupt", byChannel: { webchat: "collect" } } },
+    } as OpenClawConfig;
+    const inheritedEntry = { sessionId: "s1", updatedAt: 1 } as SessionEntry;
+    const inheritedRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:main": inheritedEntry },
+      key: "agent:main:main",
+      entry: inheritedEntry,
+    });
+    expect(inheritedRow.queueMode).toBeUndefined();
+    expect(inheritedRow.effectiveQueueMode).toBe("collect");
+
+    const overriddenEntry = {
+      sessionId: "s2",
+      updatedAt: 1,
+      queueMode: "followup",
+    } as SessionEntry;
+    const overriddenRow = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: { "agent:main:other": overriddenEntry },
+      key: "agent:main:other",
+      entry: overriddenEntry,
+    });
+    expect(overriddenRow.queueMode).toBe("followup");
+    expect(overriddenRow.effectiveQueueMode).toBe("followup");
   });
 
   test("resolveSessionStoreKey maps main aliases to default agent main", () => {

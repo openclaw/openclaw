@@ -6,10 +6,13 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
 } from "./message-cache.js";
+import {
+  clearTelegramRuntimeForTest,
+  resetTelegramMessageCacheForTest as resetTelegramMessageCacheBucketsForTest,
+} from "./runtime.test-support.js";
 
 type TelegramMessageCachePersistentStore = NonNullable<
   NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["persistentStore"]
@@ -939,6 +942,10 @@ describe("telegram message cache", () => {
   });
 
   it("preserves rich-message placeholders in subsequent conversation context", async () => {
+    // A runtime leaked by earlier suite files binds new caches to the
+    // persistent keyed store; clear it so this cache stays instance-local.
+    clearTelegramRuntimeForTest();
+    resetTelegramMessageCacheBucketsForTest();
     const cache = createTelegramMessageCache();
     const chat = { id: 7, type: "private", first_name: "Nora" } as const;
     await cache.record({
@@ -982,6 +989,10 @@ describe("telegram message cache", () => {
   });
 
   it("preserves rich-message text in subsequent conversation context", async () => {
+    // A runtime leaked by earlier suite files binds new caches to the
+    // persistent keyed store; clear it so this cache stays instance-local.
+    clearTelegramRuntimeForTest();
+    resetTelegramMessageCacheBucketsForTest();
     const cache = createTelegramMessageCache();
     const chat = { id: 7, type: "private", first_name: "Nora" } as const;
     await cache.record({

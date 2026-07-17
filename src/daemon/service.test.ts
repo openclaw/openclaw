@@ -95,6 +95,30 @@ describe("resolveGatewayService", () => {
     }
   });
 
+  it("guards every native service mutation when an external supervisor owns lifecycle", async () => {
+    setPlatform("darwin");
+    const service = resolveGatewayService();
+    const env = { OPENCLAW_SUPERVISOR_MODE: "external" };
+    const installArgs = {
+      env,
+      stdout: process.stdout,
+      programArguments: ["openclaw", "gateway", "run"],
+    };
+    const mutations = [
+      () => service.stage(installArgs),
+      () => service.install(installArgs),
+      () => service.uninstall({ env, stdout: process.stdout }),
+      () => service.stop({ env, stdout: process.stdout }),
+      () => service.restart({ env, stdout: process.stdout }),
+    ];
+
+    for (const mutate of mutations) {
+      await expect(mutate()).rejects.toThrow(
+        "gateway lifecycle is managed by an external supervisor",
+      );
+    }
+  });
+
   it("describes scheduled restart handoffs consistently", () => {
     expect(describeGatewayServiceRestart("Gateway", { outcome: "scheduled" })).toEqual({
       scheduled: true,

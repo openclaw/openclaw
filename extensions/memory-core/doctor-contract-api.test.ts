@@ -57,6 +57,16 @@ function legacyMemoryIndexMigration() {
   return migration;
 }
 
+function qmdFileLockMigration() {
+  const migration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-qmd-file-locks-to-sqlite-leases",
+  );
+  if (!migration) {
+    throw new Error("expected memory-core QMD file-lock migration");
+  }
+  return migration;
+}
+
 function vectorToBlob(embedding: number[]): Buffer {
   return Buffer.from(new Float32Array(embedding).buffer);
 }
@@ -1369,7 +1379,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(retryPath)).resolves.toBeUndefined();
   });
 
-  it("leaves the legacy memory sidecar in place when metadata conflicts", async () => {
+  it("keeps canonical metadata and archives a conflicting derived legacy index", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1378,17 +1388,50 @@ describe("memory-core doctor dreaming migration", () => {
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory meta rows conflict with canonical memory index rows",
-      ),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.changes).toEqual([]);
     expect(readMemoryRows(agentPath).chunks).toEqual([
       { id: "canonical-other-chunk", text: "canonical unrelated memory" },
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+
+    const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+    expect(secondRun).toEqual({ changes: [], warnings: [] });
+  });
+
+  it("keeps canonical chunks and archives a conflicting derived legacy index", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this");
+    const canonicalDb = new DatabaseSync(agentPath);
+    try {
+      canonicalDb
+        .prepare("UPDATE memory_index_chunks SET text = ? WHERE id = ?")
+        .run("canonical memory remains authoritative", "chunk-1");
+    } finally {
+      canonicalDb.close();
+    }
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
+      cache: [],
+    });
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
   it("merges legacy sidecar rows into a non-empty canonical index when rows do not conflict", async () => {
@@ -1416,6 +1459,25 @@ describe("memory-core doctor dreaming migration", () => {
       ],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
+    const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
+    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("retains an exact canonical FTS row without duplicating it", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
@@ -1529,7 +1591,7 @@ describe("memory-core doctor dreaming migration", () => {
       legacyDims: null,
     },
   ])(
-    "leaves legacy sidecars in place when cache collision $reason",
+    "keeps canonical cache rows when a legacy collision has $reason",
     async ({ canonicalEmbedding, canonicalDims, legacyEmbedding, legacyDims }) => {
       const stateDir = path.join(rootDir, "state");
       const legacyPath = path.join(stateDir, "memory", "main.sqlite");
@@ -1552,12 +1614,11 @@ describe("memory-core doctor dreaming migration", () => {
 
       const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-      expect(result.warnings).toEqual([
-        expect.stringContaining(
-          "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory embedding_cache rows conflict with canonical memory index rows",
-        ),
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+        expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
-      expect(result.changes).toEqual([]);
       expect(readMemoryRows(agentPath)).toEqual({
         sources: [{ path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" }],
         chunks: [{ id: "canonical-other-chunk", text: "canonical unrelated memory" }],
@@ -1574,8 +1635,8 @@ describe("memory-core doctor dreaming migration", () => {
           updated_at: 99,
         },
       ]);
-      await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-      await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+      await expect(fs.access(legacyPath)).rejects.toThrow();
+      await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
     },
   );
 
@@ -1598,7 +1659,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
-  it("leaves legacy vector sidecars in place when canonical vector rows conflict", async () => {
+  it("keeps canonical vector rows and archives a conflicting derived legacy index", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1607,14 +1668,13 @@ describe("memory-core doctor dreaming migration", () => {
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec rows conflict with canonical memory index rows",
-      ),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.changes).toEqual([]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
   it("leaves legacy vector sidecars in place when vector rows have no chunk", async () => {
@@ -1632,7 +1692,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec chunk references rows conflict",
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec rows reference missing chunks",
       ),
     ]);
     expect(result.changes).toEqual([]);
@@ -1640,26 +1700,44 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
-  it("leaves legacy sidecars in place when canonical FTS rows conflict", async () => {
+  it("keeps canonical FTS rows and archives a conflicting derived legacy index", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
+    const legacyDb = new DatabaseSync(legacyPath);
+    try {
+      legacyDb.exec(`
+        INSERT INTO files VALUES ('SECOND.md', 'memory', 'second-file-hash', 11, 21);
+        INSERT INTO chunks VALUES (
+          'chunk-2', 'SECOND.md', 'memory', 1, 1, 'second-chunk-hash', 'embed-model',
+          'second legacy memory', '[0,1,0]', 31
+        );
+      `);
+    } finally {
+      legacyDb.close();
+    }
     await createCanonicalLegacyMemoryRowsWithFts(agentPath, "stale text");
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory fts rows conflict",
-      ),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.changes).toEqual([]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    const keywordRows = await searchMigratedKeywordRows(agentPath, "stale");
+    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      chunks: [{ id: "chunk-1", text: "remember this" }],
+      cache: [],
+    });
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("leaves legacy vector sidecars in place when canonical metadata dimensions conflict", async () => {
+  it("keeps canonical vector metadata and archives a conflicting derived legacy index", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -1668,17 +1746,107 @@ describe("memory-core doctor dreaming migration", () => {
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
-    expect(result.warnings).toEqual([
-      expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory meta rows conflict with canonical memory index rows",
-      ),
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
-    expect(result.changes).toEqual([]);
     expect(readMemoryRows(agentPath).chunks).toEqual([
       { id: "canonical-other-chunk", text: "canonical unrelated memory" },
     ]);
-    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
-    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+    await expect(fs.access(legacyPath)).rejects.toThrow();
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("removes only exact stale QMD lock sidecars and is idempotent", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const globalLockPath = path.join(stateDir, "qmd", "embed.lock.lock");
+    const agentLockPath = path.join(stateDir, "agents", "main", "qmd-write.lock.lock");
+    const ignoredPaths = [
+      path.join(stateDir, "qmd", "other.lock.lock"),
+      path.join(stateDir, "agents", "main", "nested", "qmd-write.lock.lock"),
+      path.join(stateDir, "agents", "main!", "qmd-write.lock.lock"),
+      path.join(stateDir, "agents", "main", "qmd-write.lock.lock.extra"),
+    ];
+    const stalePayload = `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`;
+    for (const filePath of [globalLockPath, agentLockPath, ...ignoredPaths]) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, stalePayload, "utf8");
+    }
+
+    const migration = qmdFileLockMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
+      preview: [
+        `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+        `- Retired Memory Core QMD file lock: ${agentLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+      ],
+    });
+
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [
+        `Removed retired Memory Core QMD file lock: ${globalLockPath}`,
+        `Removed retired Memory Core QMD file lock: ${agentLockPath}`,
+      ],
+      warnings: [],
+    });
+    await expect(fs.access(globalLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(agentLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.join(stateDir, "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      fs.access(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    for (const filePath of ignoredPaths) {
+      await expect(fs.access(filePath)).resolves.toBeUndefined();
+    }
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+  });
+
+  it("retains live and ambiguous QMD locks and ignores symlink candidates", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const globalLockPath = path.join(stateDir, "qmd", "embed.lock.lock");
+    const malformedLockPath = path.join(stateDir, "agents", "main", "qmd-write.lock.lock");
+    const symlinkLockPath = path.join(stateDir, "agents", "other", "qmd-write.lock.lock");
+    const symlinkTargetPath = path.join(rootDir, "stale-lock-target");
+    await fs.mkdir(path.dirname(globalLockPath), { recursive: true });
+    await fs.mkdir(path.dirname(malformedLockPath), { recursive: true });
+    await fs.mkdir(path.dirname(symlinkLockPath), { recursive: true });
+    await fs.writeFile(
+      globalLockPath,
+      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(malformedLockPath, "{", "utf8");
+    await fs.writeFile(
+      symlinkTargetPath,
+      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+    await fs.symlink(symlinkTargetPath, symlinkLockPath);
+
+    const migration = qmdFileLockMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
+      preview: [
+        `- Retired Memory Core QMD file lock: ${globalLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+        `- Retired Memory Core QMD file lock: ${malformedLockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+      ],
+    });
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [
+        `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${globalLockPath}`,
+        `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${malformedLockPath}`,
+      ],
+    });
+    await expect(fs.access(globalLockPath)).resolves.toBeUndefined();
+    await expect(fs.readFile(malformedLockPath, "utf8")).resolves.toBe("{");
+    expect((await fs.lstat(symlinkLockPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(symlinkTargetPath)).resolves.toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

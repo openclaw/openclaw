@@ -206,6 +206,18 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
     expect(message).not.toContain("s".repeat(100));
     expect(message).not.toContain(prefix);
   });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
+  });
 });
 
 describe("Gateway child fixture helpers", () => {
@@ -1229,6 +1241,22 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("allows loaded runners time to reap force-killed gateway process groups", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 5_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when forced gateway process-group shutdown times out",
     async () => {
@@ -1278,10 +1306,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
@@ -2145,12 +2175,45 @@ describe("qa bundled plugin dir", () => {
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
     expect(Object.keys(overrides)).toEqual(["openai"]);
-    expect(overrides["openai"]?.baseUrl).toBe("");
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
     expect(overrides["openai"]?.models).toEqual([]);
     expect(overrides["openai"]?.apiKey).toEqual({
       source: "env",
       id: "OPENCLAW_LIVE_CODEX_API_KEY",
     });
+  });
+
+  it("omits empty base URLs without dropping provider configs that inherit auth", async () => {
+    const configPath = path.join(
+      await mkdtemp(path.join(os.tmpdir(), "qa-provider-config-")),
+      "openclaw.json",
+    );
+    cleanups.push(async () => {
+      await rm(path.dirname(configPath), { recursive: true, force: true });
+    });
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "",
+              api: "openai-responses",
+              models: [],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
+      providerIds: ["openai"],
+      env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
+    });
+    expect(Object.keys(overrides)).toEqual(["openai"]);
+    expect(overrides["openai"]).not.toHaveProperty("baseUrl");
+    expect(overrides["openai"]?.api).toBe("openai-responses");
   });
 
   it("does not copy OpenAI provider configs for custom OpenAI-compatible runs", async () => {

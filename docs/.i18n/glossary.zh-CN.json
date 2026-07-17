@@ -1404,8 +1404,16 @@
     "target": "操作员权限范围"
   },
   {
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
+  },
+  {
     "source": "Scheduled tasks vs heartbeat",
     "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水线"
   },
   {
     "source": "Scheduled tasks: Troubleshooting",
@@ -1526,5 +1534,25 @@
   {
     "source": "Security audit",
     "target": "安全审计"
+  },
+  {
+    "source": "Linux Canvas plugin",
+    "target": "Linux Canvas plugin"
+  },
+  {
+    "source": "Baseten",
+    "target": "Baseten"
+  },
+  {
+    "source": "Baseten plugin",
+    "target": "Baseten 插件"
+  },
+  {
+    "source": "baseten",
+    "target": "baseten"
+  },
+  {
+    "source": "Baseten (Inkling + Model APIs)",
+    "target": "Baseten（Inkling + Model APIs）"
   }
 ]

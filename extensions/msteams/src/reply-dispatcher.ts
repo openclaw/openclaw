@@ -1,12 +1,15 @@
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 // Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
+  normalizeAgentPlanSteps,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -294,9 +297,9 @@ export function createMSTeamsReplyDispatcher(params: {
     dispatcher,
     replyOptions,
     markDispatchIdle: baseMarkDispatchIdle,
-  } = core.channel.reply.createReplyDispatcherWithTyping({
+  } = createReplyDispatcherWithTyping({
     ...replyPipeline,
-    humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+    humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
       await streamController.onReplyStart();
       // Always start the typing keepalive loop when typing is enabled and
@@ -459,20 +462,9 @@ export function createMSTeamsReplyDispatcher(params: {
           if (payload?.phase !== "update") {
             return;
           }
-          await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
-              event: "plan",
-              phase: payload.phase as string,
-              ...(typeof payload?.title === "string" ? { title: payload.title } : {}),
-              ...(typeof payload?.explanation === "string"
-                ? { explanation: payload.explanation }
-                : {}),
-              ...(Array.isArray(payload?.steps) &&
-              payload.steps.every((s: unknown) => typeof s === "string")
-                ? { steps: payload.steps }
-                : {}),
-            }),
-          );
+          await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
+            explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
+          });
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {

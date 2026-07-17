@@ -54,7 +54,11 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
+import {
+  resolveModelEntries,
+  resolveScopeDecision,
+  type ResolvedMediaModelEntry,
+} from "./resolve.js";
 import {
   buildModelDecision,
   formatDecisionSummary,
@@ -71,13 +75,12 @@ import type {
 } from "./types.js";
 
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
-export type RunCapabilityResult = {
+type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
@@ -336,10 +339,16 @@ export function resolveMediaAttachmentLocalRoots(params: {
 const binaryCache = new Map<string, Promise<string | null>>();
 const antigravityCliCache = new Map<string, Promise<string | null>>();
 
-export function clearMediaUnderstandingBinaryCacheForTests(): void {
+function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
   antigravityCliCache.clear();
   clearLocalAudioInspectionCacheForTests();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaUnderstandingRunnerTestApi")
+  ] = { clearMediaUnderstandingBinaryCacheForTests };
 }
 
 function expandHomeDir(value: string): string {
@@ -849,7 +858,7 @@ async function runAttachmentEntries(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   cache: MediaAttachmentCache;
-  entries: MediaUnderstandingModelConfig[];
+  entries: ResolvedMediaModelEntry[];
   config?: MediaUnderstandingConfig;
 }): Promise<{
   output: MediaUnderstandingOutput | null;
@@ -857,7 +866,8 @@ async function runAttachmentEntries(params: {
 }> {
   const { entries, capability } = params;
   const attempts: MediaUnderstandingModelDecision[] = [];
-  for (const entry of entries) {
+  for (const candidate of entries) {
+    const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
       const result =
@@ -882,6 +892,7 @@ async function runAttachmentEntries(params: {
               workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
               config: params.config,
+              secretOwnerId: candidate.secretOwnerId,
             });
       if (result) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
@@ -1037,17 +1048,19 @@ export async function runCapability(params: {
     config,
     providerRegistry: params.providerRegistry,
   });
-  let resolvedEntries = entries;
+  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
   if (resolvedEntries.length === 0) {
-    resolvedEntries = await resolveAutoEntries({
-      cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
-      capability,
-      activeModel: params.activeModel,
-    });
+    resolvedEntries = (
+      await resolveAutoEntries({
+        cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        providerRegistry: params.providerRegistry,
+        capability,
+        activeModel: params.activeModel,
+      })
+    ).map((entry) => ({ entry }));
   }
   if (resolvedEntries.length === 0) {
     return {

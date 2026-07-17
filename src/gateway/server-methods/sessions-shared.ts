@@ -50,10 +50,18 @@ export function resolveSessionWorkerPlacementMutationError(params: {
   const placement = params.context.workerSessionPlacementService
     ?.getMany([params.sessionId])
     .get(params.sessionId);
+  // Failed placement normally keeps destructive mutation fenced. Missing worker identity or an
+  // authoritative destroyed environment proves cleanup cannot orphan a live worker.
+  const failedPlacementCanDelete =
+    params.action === "delete" &&
+    placement?.state === "failed" &&
+    (placement.environmentId === null ||
+      params.context.workerEnvironmentService?.get(placement.environmentId)?.state === "destroyed");
   if (
     !placement ||
     placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed")
+    (params.action === "delete" && placement.state === "reclaimed") ||
+    failedPlacementCanDelete
   ) {
     return undefined;
   }
@@ -270,7 +278,7 @@ export function emitSessionOperation(
 }
 
 export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore" | "dispatch";
+  action: "patch" | "delete" | "compact" | "branch" | "restore" | "dispatch" | "reclaim";
   client: GatewayClient | null;
   isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
   respond: RespondFn;

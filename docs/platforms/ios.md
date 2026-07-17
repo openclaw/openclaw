@@ -104,7 +104,7 @@ openclaw gateway call node.list --params "{}"
 ## Health summaries
 
 The iOS node can return an opt-in, read-only HealthKit aggregate for the current
-calendar day. iPhone consent and explicit Gateway command authorization are
+calendar day. iOS device consent and explicit Gateway command authorization are
 independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
 setup, invocation, payload fields, privacy behavior, and troubleshooting.
 

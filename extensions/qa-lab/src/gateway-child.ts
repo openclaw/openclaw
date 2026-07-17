@@ -14,10 +14,12 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
+  normalizeOptionalString,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaBundledPluginSourceDir,
@@ -71,6 +73,9 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
+// Loaded Docker runners can take several seconds to reap a force-killed process group.
+const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
@@ -490,7 +495,10 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
 const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
 
 function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
-  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  const logTail = sliceUtf16Safe(
+    redactQaGatewayDebugText(logs),
+    -QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS,
+  );
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
@@ -587,6 +595,7 @@ export const testing = {
   formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
+  resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
 };
 
@@ -631,6 +640,7 @@ function signalQaGatewayWindowsProcessTree(
   const result = runTaskkill(taskkillPath, args, {
     stdio: "ignore",
     windowsHide: true,
+    timeout: 5_000,
   });
   if (!result.error && result.status === 0) {
     return true;
@@ -639,6 +649,7 @@ function signalQaGatewayWindowsProcessTree(
     const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 5_000,
     });
     return !forceResult.error && forceResult.status === 0;
   }
@@ -682,6 +693,16 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
   return !isQaGatewayChildProcessTreeAlive(child);
 }
 
+function resolveQaGatewayChildStopTimeouts(opts?: {
+  gracefulTimeoutMs?: number;
+  forceTimeoutMs?: number;
+}) {
+  return {
+    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
+  };
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
   opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
@@ -689,12 +710,13 @@ async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
+  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, opts?.gracefulTimeoutMs ?? 5_000)) {
+  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
   if (!stopped) {
     throw new Error("qa gateway process tree remained alive after forced shutdown");
   }
@@ -736,15 +758,14 @@ function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
 }
 
 function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | null {
-  if (isQaModelProviderConfig(value)) {
-    return value;
-  }
-  if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+  if (!isQaModelProviderConfig(value) && (!isRecord(value) || !Object.hasOwn(value, "apiKey"))) {
     return null;
   }
+  const { baseUrl: rawBaseUrl, ...providerConfig } = value;
+  const baseUrl = normalizeOptionalString(rawBaseUrl);
   return {
-    ...value,
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    ...providerConfig,
+    ...(baseUrl ? { baseUrl } : {}),
     models: Array.isArray(value.models) ? value.models : [],
   } as ModelProviderConfig;
 }
@@ -1111,7 +1132,6 @@ export async function startQaGatewayChild(params: {
               identity,
               opts: {
                 gracefulTimeoutMs: 1_500,
-                forceTimeoutMs: 1_500,
               },
             });
           } catch (cleanupError) {
@@ -1131,7 +1151,6 @@ export async function startQaGatewayChild(params: {
           try {
             await stopQaGatewayChildProcessTree(spawnedChild, {
               gracefulTimeoutMs: 1_500,
-              forceTimeoutMs: 1_500,
             });
           } catch (cleanupError) {
             cleanupErrors.push(cleanupError);
