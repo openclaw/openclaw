@@ -48,15 +48,20 @@ jobs:
           import { appendFileSync } from "node:fs";
           import { createNodeTestShards } from "./scripts/lib/ci-node-test-plan.mjs";
 
-          const shard = createNodeTestShards().find((candidate) => candidate.shardName === "core-unit-fast");
-          if (!shard) {
-            throw new Error("core-unit-fast cache seed shard is missing");
+          // The unit-fast graph is striped across jobs; warm the union of its
+          // configs as whole suites so the seed covers every stripe's imports.
+          const shards = createNodeTestShards().filter((candidate) =>
+            candidate.shardName.startsWith("core-unit-fast"),
+          );
+          if (shards.length === 0) {
+            throw new Error("core-unit-fast cache seed shards are missing");
           }
+          const configs = [...new Set(shards.flatMap((shard) => shard.configs))];
           appendFileSync(
             process.env.GITHUB_ENV,
             [
-              `OPENCLAW_NODE_TEST_CONFIGS_JSON=${JSON.stringify(shard.configs)}`,
-              `OPENCLAW_VITEST_SHARD_NAME=${shard.shardName}`,
+              `OPENCLAW_NODE_TEST_CONFIGS_JSON=${JSON.stringify(configs)}`,
+              "OPENCLAW_VITEST_SHARD_NAME=core-unit-fast",
               "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
             ].join("\n") + "\n",
           );

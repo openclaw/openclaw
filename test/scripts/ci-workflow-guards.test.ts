@@ -2286,7 +2286,7 @@ describe("ci workflow guards", () => {
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
     expect(warmer.jobs.warm.if).toBe("github.repository == 'openclaw/openclaw'");
     expect(warmerSource).toContain('cron: "17 8 * * *"');
-    expect(warmerSource).toContain('candidate.shardName === "core-unit-fast"');
+    expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
       "save-node-compile-cache": "true",
