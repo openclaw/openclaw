@@ -225,6 +225,44 @@ describe("secrets runtime snapshot", () => {
     expect(ssh?.knownHostsData).toBe("example.com ssh-ed25519 AAAATEST");
   });
 
+  it("keeps SSH lifecycle secrets materialized after the agent sandbox is disabled", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "off",
+              backend: "ssh",
+              ssh: { target: "peter@example.com:22" },
+            },
+          },
+          list: [
+            {
+              id: "worker",
+              enabled: false,
+              sandbox: {
+                ssh: {
+                  identityData: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISABLED_WORKER_SSH_IDENTITY",
+                  },
+                },
+              },
+            },
+          ],
+        },
+      }),
+      env: { DISABLED_WORKER_SSH_IDENTITY: "DISABLED WORKER PRIVATE KEY" },
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.agents?.list?.[0]?.sandbox?.ssh?.identityData).toBe(
+      "DISABLED WORKER PRIVATE KEY",
+    );
+  });
+
   it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
     const missingRef = {
       source: "env",

@@ -50,7 +50,7 @@ function collectAssignment(params: {
   });
 }
 
-/** Collects SSH material once for every enabled agent that can use it. */
+/** Collects SSH material once for every agent whose current backend can manage it. */
 export function collectAgentSandboxAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -94,10 +94,6 @@ export function collectAgentSandboxAssignments(params: {
       normalizeOptionalLowercaseString(sandbox?.backend) ??
       normalizeOptionalLowercaseString(defaultsSandbox?.backend) ??
       "docker";
-    const mode =
-      (typeof sandbox?.mode === "string" ? sandbox.mode : undefined) ??
-      (typeof defaultsSandbox?.mode === "string" ? defaultsSandbox.mode : undefined) ??
-      "off";
     const scope = resolveSandboxScope({
       scope:
         typeof sandbox?.scope === "string"
@@ -112,7 +108,10 @@ export function collectAgentSandboxAssignments(params: {
             ? defaultsSandbox.perSession
             : undefined,
     });
-    const active = rawAgent?.enabled !== false && backend === "ssh" && mode !== "off";
+    // Existing registry entries remain inspectable/removable after an agent or its
+    // sandbox is disabled, so SSH lifecycle credentials stay materialized while
+    // SSH remains the configured backend.
+    const active = backend === "ssh";
     const owner = sandboxSecretOwner(agentId);
 
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
@@ -126,7 +125,7 @@ export function collectAgentSandboxAssignments(params: {
             defaults: params.defaults,
             context: params.context,
             active,
-            inactiveReason: "sandbox SSH backend is not active for this agent.",
+            inactiveReason: "sandbox SSH backend is not configured for this agent.",
             owner,
           });
           continue;
@@ -157,7 +156,7 @@ export function collectAgentSandboxAssignments(params: {
         defaults: params.defaults,
         context: params.context,
         active: true,
-        inactiveReason: "sandbox SSH backend is not active for this agent.",
+        inactiveReason: "sandbox SSH backend is not configured for this agent.",
         owner,
       });
     }
