@@ -1,5 +1,9 @@
 // Session and transcript event subscription handlers.
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsMessagesSubscribeParams,
@@ -7,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { isBrowserCopilotClient } from "../../utils/message-channel.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
@@ -33,6 +38,25 @@ function resolveSessionMessageSubscriptionKey(params: {
 
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
   "sessions.subscribe": ({ client, context, respond }) => {
+    // Session-scoped clients (browser copilot / SESSION_SCOPED_EVENTS) must not join the broad
+    // sessions.changed/session.message fanout. The per-tab isolation invariant in
+    // server-broadcast.ts (SESSION_SUBSCRIPTION_EVENTS) is enforced only on the per-session
+    // subscription path; a scoped connection on the broad registry would receive every session's
+    // live transcript. Such clients subscribe per session via sessions.messages.subscribe.
+    if (
+      isBrowserCopilotClient(client?.connect?.client) ||
+      hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "session-scoped clients must subscribe per session via sessions.messages.subscribe",
+        ),
+      );
+      return;
+    }
     const connId = client?.connId?.trim();
     if (connId) {
       context.subscribeSessionEvents(connId);

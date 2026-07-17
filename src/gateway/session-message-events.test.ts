@@ -305,6 +305,81 @@ describe("session.message websocket events", () => {
     }
   });
 
+  test("denies browser-copilot the broad sessions.subscribe and blocks foreign session transcript delivery", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        other: { sessionId: "sess-other", updatedAt: Date.now() },
+      },
+      storePath,
+    });
+    const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    const copilotClient = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      deviceFamily: "extension",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const copilotIdentityPath = path.join(path.dirname(storePath), "copilot-repro-device.json");
+    const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    const pairingWs = await harness.openWs({ origin: copilotOrigin });
+    const copilotWs = await harness.openWs({ origin: copilotOrigin });
+    try {
+      const pairedHello = await connectOk(pairingWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        prePairDevice: true,
+        browserOrigin: copilotOrigin,
+      });
+      const deviceToken = (pairedHello as { auth?: { deviceToken?: string } }).auth?.deviceToken;
+      expect(deviceToken).toBeTruthy();
+      pairingWs.close();
+
+      // The NEW "session-scoped / per-tab" principal connects (dedicated paired identity+origin).
+      await connectOk(copilotWs, {
+        scopes: ["operator.read", "operator.write"],
+        caps: [...scopedCaps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS],
+        client: copilotClient,
+        deviceIdentityPath: copilotIdentityPath,
+        deviceToken,
+        skipDefaultAuth: true,
+      });
+
+      // The legacy broad sessions.subscribe must be rejected for a session-scoped principal so it
+      // cannot join the unscoped fanout that carries session.message/sessions.changed.
+      const broad = await rpcReq(copilotWs, "sessions.subscribe");
+      expect(broad.ok).toBe(false);
+      expect(broad.error?.message ?? "").toContain("sessions.messages.subscribe");
+
+      // A DIFFERENT session's live transcript must NOT reach this connection.
+      const foreignDelivery = onceMessage(
+        copilotWs,
+        (message) =>
+          message.type === "event" &&
+          message.event === "session.message" &&
+          (message.payload as { sessionKey?: string } | undefined)?.sessionKey === "agent:main:other",
+        1500,
+      ).then(
+        () => true,
+        () => false,
+      );
+      const appended = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:other",
+        text: "SECRET transcript that belongs to a different tab/session",
+        storePath,
+      });
+      expect(appended.ok).toBe(true);
+      await expect(foreignDelivery).resolves.toBe(false);
+    } finally {
+      pairingWs.close();
+      copilotWs.close();
+    }
+  });
+
   test("rejects client identity changes across a dedicated copilot pairing", async () => {
     const storePath = await createSessionStoreFile();
     const copilotOrigin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
