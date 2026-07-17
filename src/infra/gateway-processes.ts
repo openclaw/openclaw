@@ -11,6 +11,11 @@ import {
 
 // Gateway process helpers verify argv before signaling or reporting listener
 // PIDs so stale port owners cannot be mistaken for OpenClaw.
+// A stalled ps probe must not block the gateway process indefinitely. spawnSync
+// defaults to SIGTERM, which an unresponsive process can ignore, so we force
+// SIGKILL once the timeout elapses.
+const GATEWAY_PS_PROBE_TIMEOUT_MS = 1_000;
+
 /** Read command argv for a PID using the current platform's process APIs. */
 export function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "linux") {
@@ -23,7 +28,8 @@ export function readGatewayProcessArgsSync(pid: number): string[] | null {
   if (process.platform === "darwin") {
     const ps = spawnSync("ps", ["-o", "command=", "-p", String(pid)], {
       encoding: "utf8",
-      timeout: 1000,
+      killSignal: "SIGKILL",
+      timeout: GATEWAY_PS_PROBE_TIMEOUT_MS,
     });
     if (ps.error || ps.status !== 0) {
       return null;
