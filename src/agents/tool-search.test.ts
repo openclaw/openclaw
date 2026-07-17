@@ -361,8 +361,10 @@ describe("Tool Search", () => {
       provider: "openai",
       runtimePlan: {
         tools: {
-          normalize: (tools) =>
-            tools.map(({ outputSchema: _outputSchema, ...tool }) => tool as AnyAgentTool),
+          normalize: (tools: AnyAgentTool[]) =>
+            tools.map(
+              ({ outputSchema: _outputSchema, ...tool }: AnyAgentTool) => tool as AnyAgentTool,
+            ),
           logDiagnostics: vi.fn(),
         },
       } as never,

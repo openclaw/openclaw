@@ -248,11 +248,11 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     const tool = {
       ...createParameterFreeTool("fixture_status"),
       outputSchema,
-    } as AgentTool;
+    } as unknown as AgentTool;
     const normalized = {
       ...createParameterFreeTool("fixture_status"),
       parameters: normalizedParameterFreeSchema(),
-    } as AgentTool;
+    } as unknown as AgentTool;
     mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 
     const result = normalizeAgentRuntimeTools({
