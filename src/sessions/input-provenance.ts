@@ -83,6 +83,15 @@ export function isAgentMediatedCompletionSourceTool(value: unknown): boolean {
   return sourceTool ? AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET.has(sourceTool) : false;
 }
 
+export function isCompletionReportInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
+  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
+}
+
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
   "subagent_announce",
