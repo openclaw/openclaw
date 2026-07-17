@@ -520,6 +520,7 @@ export function resetChatStateForRouteSession(
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatVerboseLevel = null;
+  state.chatEffectiveQueueMode = undefined;
   state.chatStream = null;
   state.chatSending = false;
   state.chatSendingScopeKey = null;
@@ -1239,6 +1240,7 @@ export function createPageState(
     chatToolMessages: [] as Record<string, unknown>[],
     chatThinkingLevel: null,
     chatVerboseLevel: null,
+    chatEffectiveQueueMode: undefined,
     chatAttachments: [] as ChatAttachment[],
     chatRunId: null,
     chatStream: null,

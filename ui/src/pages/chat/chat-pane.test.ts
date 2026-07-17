@@ -40,6 +40,7 @@ type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
+  applySessionsState: (state: ApplicationContext["sessions"]["state"]) => void;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -573,6 +574,53 @@ describe("chat pane initialization", () => {
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
     );
+  });
+});
+
+describe("chat pane queue mode ownership", () => {
+  it("keeps its history-projected mode when another pane publishes a scoped list", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatEffectiveQueueMode = "interrupt";
+
+    pane.applySessionsState({
+      agentId: "other",
+      deletedSessions: [],
+      error: null,
+      loading: false,
+      result: {
+        sessions: [{ key: "agent:other:main", kind: "direct", updatedAt: 1 }],
+      },
+    } as ApplicationContext["sessions"]["state"]);
+
+    expect(state.chatEffectiveQueueMode).toBe("interrupt");
+  });
+
+  it("adopts a matching session row mode when its own scoped list arrives", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const sessions = {} as SessionCapability;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.chatEffectiveQueueMode = "interrupt";
+
+    pane.applySessionsState({
+      agentId: "main",
+      deletedSessions: [],
+      error: null,
+      loading: false,
+      result: {
+        sessions: [
+          {
+            effectiveQueueMode: "followup",
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 1,
+          },
+        ],
+      },
+    } as ApplicationContext["sessions"]["state"]);
+
+    expect(state.chatEffectiveQueueMode).toBe("followup");
   });
 });
 

@@ -323,6 +323,8 @@ export type ChatState = {
   chatMessagesBySession?: ChatMessageCache;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
+  /** Pane-owned effective queue mode from this session's latest history response. */
+  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -1091,6 +1093,7 @@ async function loadChatHistoryUncached(
     }
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     state.chatVerboseLevel = res.verboseLevel ?? null;
+    state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
