@@ -417,6 +417,7 @@ describe("openai transport stream", () => {
       ...createAzureResponsesModel(),
       provider: "amazon-bedrock-mantle",
       baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      compat: { collapseRotatingMessageSnapshots: true },
     };
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
@@ -708,6 +709,7 @@ describe("openai transport stream", () => {
       ...createAzureResponsesModel(),
       provider: "amazon-bedrock-mantle",
       baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+      compat: { collapseRotatingMessageSnapshots: true },
     };
     const output = createResponsesAssistantOutput(model);
 

@@ -43,6 +43,8 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether adjacent strict-prefix message items may be provider-emitted rotating snapshots of one output. */
+  collapseRotatingMessageSnapshots?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";

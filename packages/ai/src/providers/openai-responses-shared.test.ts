@@ -81,6 +81,7 @@ const bedrockMantleResponsesModel = {
   ...nativeOpenAIModel,
   provider: "amazon-bedrock-mantle",
   baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+  compat: { collapseRotatingMessageSnapshots: true },
 } satisfies Model<"openai-responses">;
 
 const proxyOpenAIModel = {
@@ -2786,6 +2787,61 @@ describe("processResponsesStream", () => {
       ]);
     },
   );
+
+  it("does not enable cross-item snapshot collapse from Bedrock provider identity alone", async () => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const modelWithoutProviderCompat = {
+      ...nativeOpenAIModel,
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
+    } satisfies Model<"openai-responses">;
+    const messageItem = (id: string, text: string) => ({
+      type: "message",
+      id,
+      phase: "final_answer",
+      content: [{ type: "output_text", text }],
+    });
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_1", "Hello"),
+        },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        {
+          type: "response.output_item.done",
+          item: messageItem("msg_2", "Hello world."),
+        },
+        { type: "response.completed", response: { id: "resp_1", status: "completed" } },
+      ]),
+      output,
+      stream,
+      modelWithoutProviderCompat,
+    );
+    stream.end();
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "Hello",
+        textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" }),
+      },
+      {
+        type: "text",
+        text: "Hello world.",
+        textSignature: JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" }),
+      },
+    ]);
+  });
 
   it("streams a deferred distinct message live once its text diverges from the prior block", async () => {
     const output = createAssistantOutput();

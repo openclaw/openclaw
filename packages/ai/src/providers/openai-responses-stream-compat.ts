@@ -58,13 +58,14 @@ type ResponsesMessageSnapshotLineage = {
   outputIndex: number | undefined;
 };
 
-export function allowsResponsesCrossItemSnapshotCollapse(model: {
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  const provider = typeof model.provider === "string" ? model.provider : "";
-  const baseUrl = typeof model.baseUrl === "string" ? model.baseUrl : "";
-  return provider === "amazon-bedrock-mantle" || baseUrl.includes("bedrock-mantle.");
+export function allowsResponsesCrossItemSnapshotCollapse(model: { compat?: unknown }): boolean {
+  const compat = model.compat;
+  return (
+    !!compat &&
+    typeof compat === "object" &&
+    (compat as { collapseRotatingMessageSnapshots?: unknown }).collapseRotatingMessageSnapshots ===
+      true
+  );
 }
 
 // Some openai-responses providers re-emit one assistant output slot as cumulative
@@ -72,9 +73,10 @@ export function allowsResponsesCrossItemSnapshotCollapse(model: {
 // final message item. A same-output-slot or same-item, same-phase strict
 // extension replaces the prior text block, or the visible reply repeats once per
 // snapshot (#91959).
-// Bedrock Mantle's shipped compatibility path can emit rotating message ids and
-// separate output items, so that provider route keeps the older cross-item
-// strict-prefix collapse. Other routes use item id / output_index lineage.
+// Providers that declare compat.collapseRotatingMessageSnapshots can emit
+// rotating message ids and separate output items for one cumulative output, so
+// those provider-owned routes keep the older cross-item strict-prefix collapse.
+// Other routes use item id / output_index lineage.
 // Extension-only on purpose: equal or shrinking adjacent items stay distinct
 // (the Responses protocol allows multiple message items per response), so a
 // false positive can only merge rendering — it can never lose text.
