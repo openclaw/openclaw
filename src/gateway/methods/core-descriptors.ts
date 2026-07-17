@@ -446,6 +446,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "board.prompt.authorize", scope: "operator.read", since: "2026.7" },
   { name: "board.data.read", scope: "operator.read", since: "2026.7" },
   { name: "board.action", scope: "operator.write", since: "2026.7" },
+  { name: "publisherFeeds.list", scope: "operator.read", startup: true },
+  { name: "publisherFeeds.follow", scope: "operator.write" },
+  { name: "publisherFeeds.unfollow", scope: "operator.write" },
+  { name: "publisherFeeds.refresh", scope: "operator.write", startup: true },
+  { name: "publisherFeeds.status", scope: "operator.read", startup: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

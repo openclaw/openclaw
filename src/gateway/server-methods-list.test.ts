@@ -71,6 +71,11 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
+      "publisherFeeds.list",
+      "publisherFeeds.follow",
+      "publisherFeeds.unfollow",
+      "publisherFeeds.refresh",
+      "publisherFeeds.status",
     ]);
     const methods = listGatewayMethods();
     expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
@@ -151,6 +156,11 @@ describe("listGatewayMethods", () => {
       "board.prompt.authorize",
       "board.data.read",
       "board.action",
+      "publisherFeeds.list",
+      "publisherFeeds.follow",
+      "publisherFeeds.unfollow",
+      "publisherFeeds.refresh",
+      "publisherFeeds.status",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

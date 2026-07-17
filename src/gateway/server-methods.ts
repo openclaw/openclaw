@@ -161,6 +161,10 @@ const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
 );
+const loadPublisherFeedsHandlers = lazyHandlerModule(
+  () => import("./server-methods/publisher-feeds.js"),
+  (module) => module.publisherFeedsHandlers,
+);
 const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
@@ -680,6 +684,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: SKILLS_GATEWAY_METHOD_NAMES,
     loadHandlers: loadSkillsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "publisherFeeds.list",
+      "publisherFeeds.follow",
+      "publisherFeeds.unfollow",
+      "publisherFeeds.refresh",
+      "publisherFeeds.status",
+    ],
+    loadHandlers: loadPublisherFeedsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

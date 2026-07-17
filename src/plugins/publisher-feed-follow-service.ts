@@ -31,6 +31,18 @@ type FollowedPublisherFeedStatus = FollowedPublisherFeed & {
   verifiedAt: string | null;
 };
 
+export class PublisherFeedFollowInputError extends Error {
+  override name = "PublisherFeedFollowInputError";
+}
+
+function normalizeFollowInput(raw: string, label: string, maxBytes: number): string {
+  const value = raw.trim();
+  if (!value || new TextEncoder().encode(value).length > maxBytes) {
+    throw new PublisherFeedFollowInputError(`${label} is invalid`);
+  }
+  return value;
+}
+
 function resolveProfile(params: {
   marketplaces: MarketplacesConfig | undefined;
   profileName: string;
@@ -40,10 +52,12 @@ function resolveProfile(params: {
     profileName
   ];
   if (!profile) {
-    throw new Error(`publisher feed profile ${JSON.stringify(profileName)} is not configured`);
+    throw new PublisherFeedFollowInputError(
+      `publisher feed profile ${JSON.stringify(profileName)} is not configured`,
+    );
   }
   if (profile.verification?.mode !== "signed") {
-    throw new Error(
+    throw new PublisherFeedFollowInputError(
       `publisher feed profile ${JSON.stringify(profileName)} must require signatures`,
     );
   }
@@ -51,10 +65,12 @@ function resolveProfile(params: {
   try {
     url = new URL(profile.url);
   } catch {
-    throw new Error(`publisher feed profile ${JSON.stringify(profileName)} has an invalid URL`);
+    throw new PublisherFeedFollowInputError(
+      `publisher feed profile ${JSON.stringify(profileName)} has an invalid URL`,
+    );
   }
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
-    throw new Error(
+    throw new PublisherFeedFollowInputError(
       `publisher feed profile ${JSON.stringify(profileName)} must use an HTTPS URL without credentials, query, or fragment`,
     );
   }
@@ -111,21 +127,23 @@ export async function followPublisherFeed(params: {
   feedProfile: string;
   deps: PublisherFeedFollowServiceDependencies;
 }): Promise<{ follow: FollowedPublisherFeed; refresh: PublisherFeedRefreshResult }> {
+  const publisherId = normalizeFollowInput(params.publisherId, "publisher id", 200);
+  const feedProfile = normalizeFollowInput(params.feedProfile, "publisher feed profile", 100);
   const target = resolveProfile({
     marketplaces: params.deps.marketplaces,
-    profileName: params.feedProfile,
+    profileName: feedProfile,
   });
   const refresh = params.deps.refresh ?? refreshPublisherFeedState;
   const refreshed = await refresh({
     ...target,
-    publisherId: params.publisherId,
+    publisherId,
     store: params.deps.states,
     forceSnapshot: true,
   });
   const follow = await params.deps.follows.follow({
     sourceOrigin: new URL(target.baseUrl).origin,
     publisherId: refreshed.record.state.publisherId,
-    feedProfile: params.feedProfile,
+    feedProfile,
   });
   return { follow, refresh: refreshed };
 }
@@ -175,8 +193,8 @@ export async function unfollowPublisherFeed(params: {
   feedProfile: string;
   deps: PublisherFeedFollowServiceDependencies;
 }): Promise<boolean> {
-  const publisherId = params.publisherId.trim();
-  const feedProfile = params.feedProfile.trim();
+  const publisherId = normalizeFollowInput(params.publisherId, "publisher id", 200);
+  const feedProfile = normalizeFollowInput(params.feedProfile, "publisher feed profile", 100);
   const matches = (await params.deps.follows.list()).filter(
     (follow) => follow.publisherId === publisherId && follow.feedProfile === feedProfile,
   );
