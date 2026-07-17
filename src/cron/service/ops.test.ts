@@ -4,11 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
-import {
-  findTaskByRunId,
-  listTaskRecordsUnsorted,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-registry.js";
+import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as cronSchedule from "../schedule.js";
@@ -484,6 +481,56 @@ describe("cron service ops seam coverage", () => {
     });
   });
 
+  it("keeps a finalized one-shot disabled when startup restores its stale marker", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30_000;
+    const endedAt = startedAt + 4_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createDueIsolatedJob(now);
+      job.id = "startup-post-execution-conflict";
+      job.name = "startup post-execution conflict";
+      job.schedule = { kind: "at", at: new Date(startedAt).toISOString() };
+      job.state = { runningAtMs: startedAt, nextRunAtMs: startedAt };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      if (!taskRunId) {
+        throw new Error("expected cron task run");
+      }
+      tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "error",
+          error:
+            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+        },
+      });
+
+      await start(state);
+
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs[0]?.enabled).toBe(false);
+      expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+      stop(state);
+    });
+  });
+
   it("restores finalized failure-alert cooldown without redelivery", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
@@ -670,6 +717,45 @@ describe("cron service ops seam coverage", () => {
           durationMs: 0,
         },
       });
+    });
+  });
+
+  it("does not reschedule a manual lifecycle conflict after execution starts", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const job = createDueIsolatedJob(now);
+    job.id = "manual-post-execution-conflict";
+    job.name = "manual post-execution conflict";
+    job.schedule = { kind: "at", at: new Date(now - 1).toISOString() };
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({
+          status: "error" as const,
+          error:
+            'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+          executionStarted: true,
+        })),
+      });
+
+      await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: true });
+
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs[0]).toMatchObject({
+        id: job.id,
+        enabled: false,
+        state: {
+          consecutiveErrors: 1,
+        },
+      });
+      expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
     });
   });
 
@@ -1292,3 +1378,4 @@ describe("cron service ops persist rollback", () => {
     expect(requestHeartbeat).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

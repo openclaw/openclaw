@@ -3,6 +3,12 @@ import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 export const FIELD_HELP: Record<string, string> = {
+  "channels.discord.activities":
+    "Discord Activities configuration for launching interactive HTML widgets inside Discord. Leave unset to keep all Activity routes, tools, and handlers disabled.",
+  "channels.discord.activities.clientSecret":
+    "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
+  "channels.discord.activities.applicationId":
+    "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
@@ -508,9 +514,9 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
   "tools.experimental":
-    "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
+    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
   "tools.experimental.planTool":
-    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded OpenClaw runs.",
+    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":
@@ -710,14 +716,6 @@ export const FIELD_HELP: Record<string, string> = {
     "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
   "media.ttlHours":
     "Optional retention window in hours for persisted media cleanup across the full media tree. Leave unset to disable automatic cleanup (media writes never prune), or set values like 24 (1 day) or 168 (7 days) to periodically remove media older than the window.",
-  audio:
-    "Global audio ingestion settings used before higher-level tools process speech or media content. Configure this when you need deterministic transcription behavior for voice notes and clips.",
-  "audio.transcription":
-    "Command-based transcription settings for converting audio files into text before agent handling. Keep a simple, deterministic command path here so failures are easy to diagnose in logs.",
-  "audio.transcription.command":
-    'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
-  "audio.transcription.timeoutSeconds":
-    "Maximum time allowed for the transcription command to finish before it is aborted. Increase this for longer recordings, and keep it tight in latency-sensitive deployments.",
   bindings:
     "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
   "bindings[].type":
@@ -1669,7 +1667,7 @@ export const FIELD_HELP: Record<string, string> = {
   "commands.plugins":
     "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
-  "commands.restart": "Allow /restart and gateway restart tool actions (default: true).",
+  "commands.restart": "Allow /restart and external SIGUSR1 restart requests (default: true).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
   "commands.ownerAllowFrom":
     "Explicit owner allowlist for owner-scoped commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
@@ -2039,6 +2037,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
   "channels.defaults.contextVisibility":
     'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
+  "channels.defaults.implicitMentions":
+    "Default policy for whether reply-to-bot, quoted-bot, and bot-participated-thread facts activate supporting message channels without an explicit mention.",
+  "channels.defaults.implicitMentions.replyToBot":
+    "Treat replies to the bot's own messages as implicit mentions by default. Defaults to true for backward compatibility.",
+  "channels.defaults.implicitMentions.quotedBot":
+    "Treat quoted bot messages as implicit mentions by default. Defaults to true for backward compatibility.",
+  "channels.defaults.implicitMentions.threadParticipation":
+    "Treat follow-ups in threads where the bot participated as implicit mentions by default. Defaults to true for backward compatibility.",
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":
@@ -2087,3 +2093,4 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

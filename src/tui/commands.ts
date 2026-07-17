@@ -34,13 +34,14 @@ type SlashCommandOptions = {
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
+  crestodian: "openclaw", // hidden alias
   gwstatus: "gateway-status",
 };
 
 // These shared commands have explicit local TUI routing but no same-named
 // built-in autocomplete entry. Other shared commands require the Gateway and
 // must stay out of local autocomplete and model prompts.
-const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "stop"]);
+const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "queue", "stop"]);
 
 function createLevelCompletion(
   levels: string[],
@@ -115,7 +116,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
-    { name: "crestodian", description: "Return to Crestodian" },
+    { name: "openclaw", description: "Return to OpenClaw" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -221,7 +222,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/gwstatus",
     ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
-    "/crestodian [request]",
+    "/openclaw [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,

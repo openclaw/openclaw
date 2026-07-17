@@ -84,9 +84,9 @@ export function syncExecutionAttemptMetadata(
     id: existingAttempt?.id ?? key,
     status: attemptStatus,
     startedAt: existingAttempt?.startedAt ?? execution.startedAt,
-    engine: execution.engine,
     mode: execution.mode,
-    model: execution.model,
+    ...(execution.engine ? { engine: execution.engine } : {}),
+    ...(execution.model ? { model: execution.model } : {}),
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
@@ -742,3 +742,4 @@ export function compareNotifications(a: WorkboardNotification, b: WorkboardNotif
   }
   return a.id.localeCompare(b.id);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

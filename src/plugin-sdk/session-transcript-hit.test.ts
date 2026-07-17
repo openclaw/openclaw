@@ -1,15 +1,47 @@
 // Session transcript hit tests cover transcript match formatting and path resolution.
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../config/sessions/types.js";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { replaceSessionEntry as replaceInternalSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   extractTranscriptStemFromSessionsMemoryHit,
   formatSessionTranscriptMemoryHitKey,
+  loadCombinedSessionStoreForGateway,
   parseSessionTranscriptMemoryHitKey,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   resolveTranscriptStemToSessionKeys,
 } from "./session-transcript-hit.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("loadCombinedSessionStoreForGateway", () => {
+  it("hides main restart recovery from combined session store reads", async () => {
+    const storePath = path.join(tempDirs.make("openclaw-transcript-hit-sdk-"), "sessions.json");
+    const sessionKey = "agent:main:transcript-isolation";
+    await replaceInternalSessionEntry({ agentId: "main", sessionKey, storePath }, {
+      mainRestartRecovery: {
+        chargedAttempts: 1,
+        cycleId: "transcript-hit-cycle",
+        revision: 1,
+      },
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      sessionId: "transcript-isolation-session",
+      updatedAt: 10,
+    } as InternalSessionEntry);
+
+    const { store } = loadCombinedSessionStoreForGateway({ session: { store: storePath } });
+
+    expect(store[sessionKey]).toMatchObject({
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      sessionId: "transcript-isolation-session",
+      updatedAt: 10,
+    });
+    expect(store[sessionKey]).not.toHaveProperty("mainRestartRecovery");
+  });
+});
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {
   it("strips sessions/ and .jsonl for builtin paths", () => {

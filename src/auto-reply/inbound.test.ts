@@ -11,7 +11,6 @@ import { createInboundDebouncer } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
-  buildInboundDedupeKey,
   claimInboundDedupe,
   commitInboundDedupe,
   resetInboundDedupe,
@@ -416,8 +415,9 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(buildInboundDedupeKey(ctx)).toBe(
-      JSON.stringify([
+    expect(claimInboundDedupe(ctx, { inFlight: new Set() })).toEqual({
+      status: "claimed",
+      key: JSON.stringify([
         "",
         channelRouteDedupeKey({
           channel: "telegram",
@@ -425,7 +425,7 @@ describe("inbound dedupe", () => {
         }),
         "42",
       ]),
-    );
+    });
   });
 
   it("skips duplicates with the same key", () => {
@@ -1454,3 +1454,4 @@ describe("resolveGroupRequireMention", () => {
     await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -14,11 +14,13 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  loadLocalUserIdentity,
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
   normalizeChatSendShortcut,
   patchSettings,
+  saveLocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -26,6 +28,7 @@ import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -61,7 +64,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
-type LocalUiSetting = "textScale" | "chatSendShortcut" | "catalogOpenTarget";
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "chatFollowUpMode" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -239,6 +242,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
@@ -320,7 +324,16 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
+    this.userAvatar = loadLocalUserIdentity().avatar;
     this.syncRouteData();
+  }
+
+  private setLocalUserAvatar(avatar: string | null) {
+    const identity = saveLocalUserIdentity({
+      ...loadLocalUserIdentity(),
+      avatar,
+    });
+    this.userAvatar = identity.avatar;
   }
 
   override disconnectedCallback() {
@@ -581,6 +594,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       customTheme: next.customTheme,
       textScale: next.textScale,
       chatSendShortcut: next.chatSendShortcut,
+      chatFollowUpMode: next.chatFollowUpMode,
       catalogOpenTarget: next.catalogOpenTarget,
       realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
@@ -785,6 +799,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      chatFollowUpMode: this.settings.chatFollowUpMode,
+      serverQueueMode: configState.configSnapshot
+        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
+            configNeedsApply: configState.configNeedsApply,
+          })
+        : undefined,
+      setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
       microphone: {
@@ -923,6 +944,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
       assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
       assistantAvatarOverride: null,
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
       basePath: this.context.basePath,
     });
   }
@@ -980,3 +1003,4 @@ export class ConfigPage extends OpenClawLightDomElement {
 }
 
 customElements.define("openclaw-config-page", ConfigPage);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

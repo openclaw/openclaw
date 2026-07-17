@@ -15,11 +15,16 @@ import {
   ReadyListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
+import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
+import {
+  DiscordPresenceEmissionGate,
+  resolveDiscordPresenceGateOptions,
+} from "./presence-emission-gate.js";
 import {
   DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
   isDiscordOfflineStatus,
@@ -103,6 +108,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   private readonly guildPresenceState = new Map<string, GuildPresenceState>();
   private gatewayGeneration = 0;
   private readonly cooldownStore: PluginStateSyncKeyedStore<number>;
+  private readonly emissionGate: DiscordPresenceEmissionGate;
 
   constructor(
     private readonly params: {
@@ -114,11 +120,13 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       nowMs?: () => number;
       cooldownStore?: PluginStateSyncKeyedStore<number>;
       presenceBaseline?: DiscordPresenceBaselineCache;
+      emissionGate?: DiscordPresenceEmissionGate;
     },
   ) {
     super();
     this.cooldownStore = params.cooldownStore ?? openDiscordPresenceCooldownStore();
     this.presenceBaseline = params.presenceBaseline ?? new DiscordPresenceBaselineCache();
+    this.emissionGate = params.emissionGate ?? new DiscordPresenceEmissionGate();
   }
 
   seedGuildSnapshot(data: GuildCreateEvent): void {
@@ -190,6 +198,9 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
 
   resetGatewaySession(): void {
     this.gatewayGeneration += 1;
+    // A READY event starts a new Gateway session and rebuilds guild presence state. Hold emission
+    // during that rebuild so the re-observation burst cannot wake the agent per member.
+    this.emissionGate.noteGatewaySessionReset(this.params.nowMs?.() ?? Date.now());
     this.presenceBaseline.clear();
     this.guildPresenceState.clear();
     // Generations make old REST results inert. Detach their chains so a hung lookup cannot block
@@ -264,42 +275,101 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       return;
     }
 
-    const fetchedUserIsBot =
-      data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
-    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
-      return;
-    }
-    if (fetchedUserIsBot) {
+    const gateOptions = resolveDiscordPresenceGateOptions(config);
+    const reconnectGate = this.emissionGate.evaluateReconnectWindow(nowMs, gateOptions);
+    if (!reconnectGate.allowed) {
+      if (reconnectGate.shouldLog) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.info("Discord presence events suppressed", {
+          reason: reconnectGate.reason,
+          accountId: this.params.accountId,
+          guildId: data.guild_id,
+        });
+      }
+      // Mark online so the member is not re-greeted at window end; a later observed
+      // offline-to-online transition still emits normally.
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       return;
     }
-    const route = resolveAgentRoute({
-      cfg: this.params.cfg,
-      channel: "discord",
-      accountId: this.params.accountId,
-      guildId: data.guild_id,
-      peer: { kind: "channel", id: presenceEvent.channelId },
-    });
+
+    // Reserve before Discord REST lookups so a presence storm cannot bypass the burst cap by
+    // filling the permission queue. Release every unqueued attempt; commit only after enqueue.
+    const burstNowMs = this.params.nowMs?.() ?? Date.now();
+    const burstGate = this.emissionGate.reserveBurst(data.guild_id, burstNowMs, gateOptions);
+    if (!burstGate.allowed) {
+      if (burstGate.shouldLog) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.info("Discord presence events suppressed", {
+          reason: burstGate.reason,
+          accountId: this.params.accountId,
+          guildId: data.guild_id,
+        });
+      }
+      if (burstGate.reason === "burst-pending") {
+        // Pending permission checks cap REST concurrency, but they are not emitted greetings.
+        // Keep this member retryable after a lookup settles instead of advancing its baseline.
+        return;
+      }
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      return;
+    }
+    const burstReservation = burstGate.reservation;
+    let burstCommitted = false;
+    let cooldownReserved = false;
     try {
-      // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
-      // cooldown; skipping this wake is safer than allowing a duplicate greeting.
-      const reserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
-        ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
-      });
-      if (!reserved) {
-        // Another live listener won the durable claim while this one awaited Discord. Treat the
-        // member as online locally so overlapping provider generations cannot retry the greeting.
+      const fetchedUserIsBot =
+        data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
+      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+        return;
+      }
+      if (fetchedUserIsBot) {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-    } catch (err) {
-      const logger = this.params.logger ?? discordEventQueueLog;
-      logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
-      return;
-    }
-    let queued: boolean;
-    try {
-      queued = enqueueSystemEvent(presenceEvent.text, {
+      const canViewTargetChannel = await canViewDiscordGuildChannel(
+        data.guild_id,
+        presenceEvent.channelId,
+        userId,
+        {
+          cfg: this.params.cfg,
+          accountId: this.params.accountId,
+          rest: client.rest,
+        },
+      );
+      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+        return;
+      }
+      if (!canViewTargetChannel) {
+        // Presence is guild-wide. Require target-channel visibility so private channel greetings
+        // cannot be triggered by unrelated guild members.
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+        return;
+      }
+      const route = resolveAgentRoute({
+        cfg: this.params.cfg,
+        channel: "discord",
+        accountId: this.params.accountId,
+        guildId: data.guild_id,
+        peer: { kind: "channel", id: presenceEvent.channelId },
+      });
+
+      try {
+        cooldownReserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
+          ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+        });
+        if (!cooldownReserved) {
+          // Another live listener won the durable claim while this one awaited Discord. Treat the
+          // member as online locally so overlapping provider generations cannot retry the greeting.
+          this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+          return;
+        }
+      } catch (err) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
+        return;
+      }
+
+      const queued = enqueueSystemEvent(presenceEvent.text, {
         sessionKey: route.sessionKey,
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
@@ -308,31 +378,36 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           accountId: this.params.accountId,
         },
       });
-    } catch (err) {
-      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
+      if (!queued) {
+        return;
+      }
+      this.emissionGate.commitBurst(
+        data.guild_id,
+        burstReservation,
+        this.params.nowMs?.() ?? Date.now(),
+      );
+      burstCommitted = true;
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      requestHeartbeat({
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        heartbeat: {
+          target: "discord",
+          to: `channel:${presenceEvent.channelId}`,
+          accountId: this.params.accountId,
+        },
+      });
+    } finally {
+      if (!burstCommitted) {
+        this.emissionGate.releaseBurst(data.guild_id, burstReservation);
+      }
+      if (cooldownReserved && !burstCommitted && this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }
-      throw err;
     }
-    if (!queued) {
-      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
-        this.cooldownStore.delete(presenceKey);
-      }
-      return;
-    }
-    this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-    requestHeartbeat({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      heartbeat: {
-        target: "discord",
-        to: `channel:${presenceEvent.channelId}`,
-        accountId: this.params.accountId,
-      },
-    });
   }
 
   private isCurrentGeneration(

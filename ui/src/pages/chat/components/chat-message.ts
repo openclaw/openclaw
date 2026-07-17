@@ -51,6 +51,8 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -556,13 +558,18 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<
+  ChatItem,
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "plan" }
+>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  planStatus?: PlanStatus | null;
+  planActive?: boolean;
 };
 
 // One assistant group per contiguous run of streaming items: a reply that
@@ -578,28 +585,36 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part.
-  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
-  const avatar = indicatorOnly
+  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
-    <div class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}">
+    <div
+      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
+      data-chat-row-key=${parts[0]?.key ?? nothing}
+    >
       ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
             ? renderChatWorkingIndicator(part)
-            : renderGroupedMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: part.text }],
-                  timestamp: part.startedAt,
-                },
-                part.key,
-                { isStreaming: part.isStreaming, showReasoning: false },
-                onOpenSidebar,
-              ),
+            : part.kind === "plan"
+              ? renderChatPlanChecklist(opts.planStatus, {
+                  active: opts.planActive === true,
+                  variant: "card",
+                })
+              : renderGroupedMessage(
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: part.text }],
+                    timestamp: part.startedAt,
+                  },
+                  part.key,
+                  { isStreaming: part.isStreaming, showReasoning: false },
+                  onOpenSidebar,
+                ),
         )}
         ${footerStartedAt !== null
           ? html`
@@ -622,13 +637,13 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
  * the turn's done indicator; the expanded groups render after this row.
  */
 export function renderWorkGroupSummary(
-  item: { durationMs: number | null; hasError: boolean },
+  item: { key: string; durationMs: number | null; hasError: boolean },
   opts: { expanded: boolean; onToggle: () => void },
 ) {
   const duration = formatDurationCompact(item.durationMs, { spaced: true });
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
   return html`
-    <div class="chat-group tool chat-group--work">
+    <div class="chat-group tool chat-group--work" data-chat-row-key=${item.key}>
       <span class="chat-work-group__gutter" aria-hidden="true"></span>
       <div class="chat-group-messages">
         <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
@@ -787,7 +802,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
     return html`
-      <div class="chat-group tool chat-group--activity">
+      <div class="chat-group tool chat-group--activity" data-chat-row-key=${group.key}>
         ${renderChatAvatar(
           group.role,
           {
@@ -865,7 +880,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
   return html`
-    <div class="chat-group ${roleClass}">
+    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
       ${renderChatAvatar(
         group.role,
         {
@@ -2131,7 +2146,6 @@ function renderGroupedMessage(
     "chat-bubble",
     isToolShell ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
-    "fade-in",
   ]
     .filter(Boolean)
     .join(" ");
@@ -2429,3 +2443,4 @@ function renderMarkdownText(
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

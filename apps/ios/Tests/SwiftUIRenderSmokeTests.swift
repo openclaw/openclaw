@@ -251,7 +251,9 @@ struct SwiftUIRenderSmokeTests {
                 assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
                 isClean: false,
-                contextWindowTokens: 1_000_000)
+                contextWindowTokens: 1_000_000,
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))

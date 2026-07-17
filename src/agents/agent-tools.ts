@@ -66,6 +66,7 @@ import {
   type ResolvedConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
 import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-descriptors.js";
+import { applyDelegationCapability, type DelegationCapability } from "./delegation-capability.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { createLazyExecTool, resolveExecToolConfig } from "./lazy-exec-tool.js";
 import {
@@ -342,6 +343,8 @@ type OpenClawCodingToolsOptions = {
   modelId?: string;
   /** Internal review-run restrictions and proposal provenance. */
   skillWorkshop?: SkillWorkshopRunOptions;
+  /** Attempt-local authority to start or redirect delegated work. */
+  delegationCapability?: DelegationCapability;
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
@@ -424,8 +427,8 @@ type OpenClawCodingToolsOptions = {
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
-  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
-  crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
+  /** Ring-zero OpenClaw tool; set only by the OpenClaw agent runner. */
+  systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
@@ -872,6 +875,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             disableMessageTool: options?.disableMessageTool,
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+            clientCaps: options?.clientCaps,
             authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,
@@ -928,7 +932,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? mergeAgentRingZeroTools(
           ringZeroTools,
           createOpenClawTools({
-            ...(options?.crestodianTool ? { crestodianTool: options.crestodianTool } : {}),
+            ...(options?.systemAgentTool ? { systemAgentTool: options.systemAgentTool } : {}),
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
@@ -1101,7 +1105,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   });
   // Host-bound ring-zero tools carry their own authority checks. Agent policy
   // must not deadlock setup, but the tools still receive schema/hook wrappers.
-  const authorizedTools = mergeAgentRingZeroTools(ringZeroTools, subagentFiltered);
+  const authorizedTools = applyDelegationCapability(
+    mergeAgentRingZeroTools(ringZeroTools, subagentFiltered),
+    options?.delegationCapability,
+  );
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
   }
@@ -1176,3 +1183,4 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
 export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

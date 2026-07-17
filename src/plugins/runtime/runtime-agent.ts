@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
   buildConfiguredModelCatalog,
@@ -19,18 +20,13 @@ import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
-  listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
+  loadSessionEntry as loadInternalSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
-  replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
   rollbackPluginOwnedSessionEntryLifecycle,
   type SessionAccessScope,
-  updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
   isSessionWorkAdmissionActive,
@@ -39,49 +35,23 @@ import {
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
+import {
+  getPluginSessionEntry,
+  listPluginSessionEntries,
+  patchPluginSessionEntry,
+  projectPluginSessionEntry,
+  updatePluginSessionStoreEntry,
+  upsertPluginSessionEntry,
+} from "./session-store-facade.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
-
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
   readConsistency?: "latest";
   storePath?: string;
-};
-
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
-
-type RuntimeSessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
-
-type RuntimeSessionStoreEntryUpdateParams = {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
-};
-
-type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
-  fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  preserveActivity?: boolean;
-  replaceEntry?: boolean;
-  update: (
-    entry: SessionEntry,
-    context: { existingEntry?: SessionEntry },
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
-
-type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
-  entry: SessionEntry;
 };
 
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
@@ -103,60 +73,10 @@ function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAcc
   };
 }
 
-function getSessionEntry(params: RuntimeSessionStoreReadParams): SessionEntry | undefined {
-  return loadSessionEntry(toSessionAccessScope(params));
-}
-
-function listSessionEntries(
-  params: RuntimeSessionStoreListParams = {},
-): RuntimeSessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-    ...(params.env !== undefined ? { env: params.env } : {}),
-    ...(params.hydrateSkillPromptRefs !== undefined
-      ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
-      : {}),
-    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
-  });
-}
-
-async function patchSessionEntry(
-  params: RuntimeSessionStoreEntryPatchParams,
-): Promise<SessionEntry | null> {
-  return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
-    fallbackEntry: params.fallbackEntry,
-    maintenanceConfig:
-      params.maintenanceConfig !== undefined
-        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
-        : undefined,
-    preserveActivity: params.preserveActivity,
-    replaceEntry: params.replaceEntry,
-  });
-}
-
-async function updateSessionStoreEntry(
-  params: RuntimeSessionStoreEntryUpdateParams,
-): Promise<SessionEntry | null> {
-  // Maintainer note: keep the legacy object-parameter API here, but route
-  // mutations through the session accessor boundary.
-  return await updateSessionEntry(
-    {
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    params.update,
-    {
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
-      requireWriteSuccess: params.requireWriteSuccess,
-    },
-  );
-}
-
-async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Promise<void> {
-  // Maintainer note: this compatibility helper has full-entry replacement
-  // semantics, so removed fields must not survive as merge leftovers.
-  await replaceSessionEntry(toSessionAccessScope(params), params.entry);
+function getInternalSessionEntry(
+  params: RuntimeSessionStoreReadParams,
+): InternalSessionEntry | undefined {
+  return loadInternalSessionEntry(toSessionAccessScope(params)) as InternalSessionEntry | undefined;
 }
 
 async function createSessionEntry(
@@ -204,7 +124,7 @@ async function createSessionEntry(
           key: context.key,
           agentId: context.agentId,
           sessionId: context.entry.sessionId,
-          entry: structuredClone(context.entry),
+          entry: projectPluginSessionEntry(context.entry as InternalSessionEntry),
         });
         if (finalPatch === undefined) {
           return;
@@ -220,7 +140,7 @@ async function createSessionEntry(
       try {
         const matchingEntry =
           params.recoverMatchingInitialEntry === true
-            ? getSessionEntry({
+            ? getInternalSessionEntry({
                 sessionKey: target.canonicalKey,
                 storePath: target.storePath,
                 readConsistency: "latest",
@@ -351,7 +271,7 @@ async function createSessionEntry(
           key: created.key,
           agentId: created.agentId,
           sessionId: finalEntry.sessionId,
-          entry: finalEntry,
+          entry: projectPluginSessionEntry(finalEntry as InternalSessionEntry),
         };
       } catch (error) {
         if (!callbackContext) {
@@ -407,7 +327,7 @@ async function runWithSessionWorkAdmission<T>(
   params: { storePath: string; sessionKey: string; signal?: AbortSignal },
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  const initialEntry = getSessionEntry({
+  const initialEntry = getInternalSessionEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     readConsistency: "latest",
@@ -422,7 +342,7 @@ async function runWithSessionWorkAdmission<T>(
         new Error("Agent work interrupted by a session lifecycle change."),
       ),
     assertAllowed: () => {
-      const currentEntry = getSessionEntry({
+      const currentEntry = getInternalSessionEntry({
         storePath: params.storePath,
         sessionKey: params.sessionKey,
         readConsistency: "latest",
@@ -453,10 +373,7 @@ async function runWithSessionWorkAdmission<T>(
 /** Creates the plugin runtime agent facade with lazy embedded-agent/session helpers. */
 export function createRuntimeAgent(): PluginRuntime["agent"] {
   const agentRuntime = {
-    defaults: {
-      model: DEFAULT_MODEL,
-      provider: DEFAULT_PROVIDER,
-    },
+    defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
     resolveAgentDir,
     resolveAgentWorkspaceDir,
     resolveAgentIdentity,
@@ -489,6 +406,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       return profile.defaultLevel ? { ...policy, defaultLevel: profile.defaultLevel } : policy;
     },
     resolveAgentTimeoutMs,
+    resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
     ensureAgentWorkspace,
   } satisfies Omit<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session"> &
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
@@ -504,12 +422,12 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath,
     createSessionEntry,
-    getSessionEntry,
-    listSessionEntries,
-    patchSessionEntry,
-    upsertSessionEntry,
+    getSessionEntry: getPluginSessionEntry,
+    listSessionEntries: listPluginSessionEntries,
+    patchSessionEntry: patchPluginSessionEntry,
+    upsertSessionEntry: upsertPluginSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
-    updateSessionStoreEntry,
+    updateSessionStoreEntry: updatePluginSessionStoreEntry,
   }));
 
   return agentRuntime as PluginRuntime["agent"];

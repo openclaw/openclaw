@@ -525,6 +525,19 @@ describe("grouped chat rendering", () => {
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
   });
 
+  it("does not replay an arrival animation when a message row mounts", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Stable transcript row",
+      timestamp: 1000,
+    });
+
+    const bubble = expectElement(container, ".chat-bubble", HTMLElement);
+    expect(bubble.classList.contains("fade-in")).toBe(false);
+    expect(expectElement(container, ".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
+  });
+
   it("uses the displayed answer for assistant message actions", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
@@ -1059,6 +1072,34 @@ describe("grouped chat rendering", () => {
       ),
     ).toHaveLength(0);
     expect(container.querySelector(".chat-group-footer")).toBeNull();
+  });
+
+  it("renders the active plan card inside the working stream group", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup(
+        [
+          { kind: "reading-indicator", key: "reading", startedAt: 1_000 },
+          { kind: "plan", key: "plan:main:active" },
+        ],
+        {
+          planActive: true,
+          planStatus: {
+            explanation: "Keep the change focused",
+            steps: [
+              { step: "Inspect", status: "completed" },
+              { step: "Implement", status: "in_progress" },
+            ],
+          },
+        },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-group--working .plan-checklist--card")).not.toBeNull();
+    expect(container.querySelectorAll(".plan-checklist__step")).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
   });
 
   it("keeps the avatar once a stream part joins the reading indicator", () => {
@@ -3148,3 +3189,4 @@ describe("grouped chat rendering", () => {
     expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

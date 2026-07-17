@@ -78,6 +78,7 @@ function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    notifyPluginMetadataChanged: () => {},
     resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
@@ -140,7 +141,7 @@ function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
-    crestodianSessions: new Map(),
+    systemAgentSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,

@@ -4,6 +4,11 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
+import {
+  recordPluginSessionMetaFromInbound,
+  updatePluginSessionLastRoute,
+} from "../plugins/runtime/session-store-facade.js";
+
 export {
   getSessionEntry,
   listSessionEntries,
@@ -143,9 +148,9 @@ export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
 export {
-  recordInboundSessionMeta as recordSessionMetaFromInbound,
-  updateSessionLastRoute as updateLastRoute,
-} from "../config/sessions/session-accessor.js";
+  recordPluginSessionMetaFromInbound as recordSessionMetaFromInbound,
+  updatePluginSessionLastRoute as updateLastRoute,
+};
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";

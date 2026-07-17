@@ -154,6 +154,19 @@ export const SessionsFilesSetResultSchema = closedObject({
   file: SessionFileEntrySchema,
 });
 
+/** Opens a session workspace on the Gateway host without accepting a client path. */
+export const SessionsFilesRevealParamsSchema = closedObject({
+  key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+});
+
+/** Result for revealing a session workspace on the Gateway host. */
+export const SessionsFilesRevealResultSchema = closedObject({
+  ok: Type.Boolean(),
+  path: Type.Optional(NonEmptyString),
+  error: Type.Optional(NonEmptyString),
+});
+
 /** Change status for one file in a session checkout diff. */
 export const SessionDiffFileStatusSchema = Type.Union([
   Type.Literal("added"),
@@ -200,19 +213,16 @@ export const SessionsDiffResultSchema = closedObject({
 
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = closedObject({
-  /**
-   * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-   * to keep large session stores from monopolizing the event loop.
-   */
+  /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
+  requireLastInteraction: Type.Optional(Type.Boolean()),
+  sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
-  /**
-   * Limit returned agent-scoped rows to agents currently present in config.
-   * Broad disk discovery remains the default for recovery/ACP consumers.
-   */
+  /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
    * Read first 8KB of each session transcript to derive title from first user message.
@@ -648,6 +658,8 @@ export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
 export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
 export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsSchema>;
+export type SessionsFilesRevealResult = Static<typeof SessionsFilesRevealResultSchema>;
 export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
 export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
 export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;

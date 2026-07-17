@@ -167,6 +167,7 @@ type CreateTalkRealtimeRelaySessionParams = {
   model?: string;
   sessionKey?: string;
   voice?: string;
+  language?: string;
   forceAgentConsultOnFinalTranscript?: boolean;
 };
 
@@ -619,6 +620,7 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
+    language: params.language,
     autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
     interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
@@ -1451,3 +1453,4 @@ export function stopTalkRealtimeRelaySession(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   closeRelaySession(session, "completed");
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

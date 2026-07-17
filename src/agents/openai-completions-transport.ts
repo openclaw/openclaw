@@ -1555,6 +1555,8 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "kimi-k2.5",
   "kimi-k2.6",
   "kimi-k2.7-code",
+  "kimi-k2.7-code-highspeed",
+  "kimi-k3",
   "kimi-k2-thinking",
   "kimi-k2-thinking-turbo",
   "mimo-v2-pro",
@@ -1917,7 +1919,7 @@ function hasOpenAICompletionsReasoningUsageActivity(
   );
 }
 
-export const completionsTesting = {
+const completionsTesting = {
   getCompat,
   createSseDoneDetector,
   createOpenAICompletionsClient,
@@ -1926,3 +1928,12 @@ export const completionsTesting = {
   processOpenAICompletionsStream,
   shouldEmitOpenAICompletionsReasoningForModel,
 };
+
+declare global {
+  var openclawOpenAICompletionsTransportTestApi: typeof completionsTesting | undefined;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  globalThis.openclawOpenAICompletionsTransportTestApi = completionsTesting;
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

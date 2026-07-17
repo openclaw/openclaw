@@ -86,7 +86,6 @@ let lastRequestOptions: {
     expectFinal?: boolean;
     timeoutMs?: number | null;
     signal?: AbortSignal;
-    onDispatched?: () => void;
     onAccepted?: (payload: unknown) => void;
   };
 } | null = null;
@@ -232,7 +231,6 @@ class StubGatewayClient {
       expectFinal?: boolean;
       timeoutMs?: number | null;
       signal?: AbortSignal;
-      onDispatched?: () => void;
       onAccepted?: (payload: unknown) => void;
     },
   ) {
@@ -1921,23 +1919,20 @@ describe("callGateway error details", () => {
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
-  it("forwards caller abort signal and lifecycle callbacks to client requests", async () => {
+  it("forwards caller abort signal and accepted callback to client requests", async () => {
     setLocalLoopbackGatewayConfig();
     const controller = new AbortController();
-    const onDispatched = vi.fn();
     const onAccepted = vi.fn();
 
     await callGateway({
       method: "agent",
       expectFinal: true,
       signal: controller.signal,
-      onDispatched,
       onAccepted,
     });
 
     expect(lastRequestOptions?.method).toBe("agent");
     expect(lastRequestOptions?.opts?.signal).toBe(controller.signal);
-    expect(lastRequestOptions?.opts?.onDispatched).toBe(onDispatched);
     expect(lastRequestOptions?.opts?.onAccepted).toBe(onAccepted);
   });
 
@@ -2829,3 +2824,4 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

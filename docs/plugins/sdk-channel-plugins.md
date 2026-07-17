@@ -75,11 +75,11 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply helpers such as `createChannelTurnReplyPipeline`,
-`dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
-remain available for compatibility dispatchers. Do not use them for new
-channel code; start with the `message` adapter, receipts, and receive/send
-lifecycle helpers on `openclaw/plugin-sdk/channel-outbound` instead.
+Legacy reply helpers such as `dispatchInboundReplyWithBase` and
+`recordInboundSessionAndDispatchReply` remain available for compatibility
+dispatchers. Do not use them for new channel code; start with the `message`
+adapter, receipts, and receive/send lifecycle helpers on
+`openclaw/plugin-sdk/channel-outbound` instead.
 
 ### Inbound ingress (experimental)
 
@@ -92,9 +92,29 @@ effects stay in the plugin. Keep plugin identity normalization in the
 descriptor you pass to the resolver; do not serialize raw match values from
 the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
-ownership boundary, and test expectations. The older
-`openclaw/plugin-sdk/channel-ingress` subpath stays exported as a deprecated
-compatibility facade for third-party plugins.
+ownership boundary, and test expectations.
+
+### Durable ingress and replay dedupe
+
+Channels adopting the durable ingress drain follow the Telegram reference
+pattern: enqueue the raw transport envelope at a single receive chokepoint
+(no normalization at receive time), gate the transport ack on the durable
+append for webhook transports, derive one serialized lane per conversation,
+and mark the event complete at dispatch adoption. The queue's primary key is
+`(queue_name, event_id)` and completion tombstones the row instead of
+deleting it, so a late platform redelivery of the same `event_id` is rejected
+durably for the tombstone retention window.
+
+That tombstone is the layering rule for replay guards
+(`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
+replay guard only when the guard's identity or retention exceeds the queue's
+— a logical message key that differs from the transport delivery id (Telegram
+dedupes `chat_id:message_id` because debounce merges can re-surface a message
+under a fresh `update_id`), or a longer window than the channel's tombstone
+retention. If your guard key would equal the drain `event_id`, delete the
+guard when adopting the drain and size `completedTtlMs`/`completedMaxEntries`
+to cover the old guard window instead. Non-dedupe protections (age fences,
+outbound echo caches) are unrelated to this rule and stay.
 
 ### Typing indicators
 
@@ -468,6 +488,7 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
 const wasMentioned = matchesMentionWithExplicit({
   text,
@@ -489,12 +510,18 @@ const facts = {
   ],
 };
 
+const implicitMentions = resolveChannelImplicitMentions({
+  cfg,
+  channel: channelId,
+  accountId,
+});
+
 const decision = resolveInboundMentionDecision({
   facts,
   policy: {
     isGroup,
     requireMention,
-    allowedImplicitMentionKinds: requireExplicitMention ? [] : ["reply_to_bot", "quoted_bot"],
+    implicitMentions,
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,

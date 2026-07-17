@@ -4,9 +4,6 @@ import {
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
-import type { GatewayProtocolRequestOptions } from "./protocol-client.types.js";
-
-export type { GatewayProtocolRequestOptions } from "./protocol-client.types.js";
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -18,6 +15,12 @@ export type GatewayProtocolSocketHandlers = {
   message: (data: string) => void;
   close: (code: number, reason: string) => void;
   error: (error: Error) => void;
+};
+export type GatewayProtocolRequestOptions = {
+  timeoutMs?: number | null;
+  expectFinal?: boolean;
+  onAccepted?: (payload: unknown) => void;
+  signal?: AbortSignal;
 };
 type GatewayProtocolConnectContext<TPlan> = {
   generation: number;
@@ -296,9 +299,7 @@ export class GatewayProtocolClient<TPlan> {
         cleanup();
         this.finishRequestTiming(id, pending, false, "CLIENT_SEND_ERROR");
         reject(error instanceof Error ? error : new Error(String(error)));
-        return;
       }
-      this.invoke("dispatched", () => options?.onDispatched?.());
     });
   }
 

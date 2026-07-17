@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -10,7 +11,6 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV } from "../../commands/doctor-invocation.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import { UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayPort } from "../../config/config.js";
@@ -109,7 +109,7 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   return params.serviceLoaded;
 }
 
-export function shouldUseLegacyProcessRestartAfterUpdate(params: {
+function shouldUseLegacyProcessRestartAfterUpdate(params: {
   updateMode: UpdateRunResult["mode"];
 }): boolean {
   return !isPackageManagerUpdateMode(params.updateMode);
@@ -126,7 +126,7 @@ type PostUpdateLaunchAgentRecoveryDeps = {
   recover?: typeof recoverInstalledLaunchAgent;
 };
 
-export async function recoverInstalledLaunchAgentAfterUpdate(params: {
+async function recoverInstalledLaunchAgentAfterUpdate(params: {
   service?: GatewayService;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateLaunchAgentRecoveryDeps;
@@ -171,7 +171,7 @@ type PostUpdateGatewayHealthRecoveryDeps = {
   waitForHealthy?: typeof waitForGatewayHealthyRestart;
 };
 
-export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
+async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   health: GatewayRestartSnapshot;
   service: GatewayService;
   port: number;
@@ -228,7 +228,7 @@ function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string 
   return `Recovery: run \`${restartCommand}\`; if the local service manager reports the gateway service is missing, stale, or not running, run \`${installCommand}\` from the same user account, then rerun \`${statusCommand}\`.`;
 }
 
-export function formatPostUpdateGatewayRecoveryInstructions(
+function formatPostUpdateGatewayRecoveryInstructions(
   result: UpdateRunResult,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
@@ -240,6 +240,16 @@ export function formatPostUpdateGatewayRecoveryInstructions(
     );
   }
   return lines;
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.updateCommandServiceTestApi")] =
+    {
+      formatPostUpdateGatewayRecoveryInstructions,
+      recoverInstalledLaunchAgentAfterUpdate,
+      recoverLaunchAgentAndRecheckGatewayHealth,
+      shouldUseLegacyProcessRestartAfterUpdate,
+    };
 }
 
 export type PreManagedServiceStop = {
@@ -710,24 +720,33 @@ export function tryResolveInvocationCwd(): string | undefined {
   }
 }
 
-export async function resolvePackageRuntimePreflightError(params: {
+type PackageRuntimePreflight = {
+  nodeRunner?: string;
+  replacedNodeRunner?: string;
+  targetVersion?: string;
+};
+
+export async function resolvePackageRuntimePreflight(params: {
   tag: string;
   timeoutMs?: number;
   nodeRunner?: string;
+  fallbackNodeRunner?: string;
   spec?: string;
   command?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<string | null> {
+}): Promise<Result<PackageRuntimePreflight, string>> {
+  const nodeRunner = normalizeOptionalString(params.nodeRunner);
+  const unchanged = (): PackageRuntimePreflight => (nodeRunner ? { nodeRunner } : {});
   if (!canResolveRegistryVersionForPackageTarget(params.tag)) {
-    return null;
+    return ok(unchanged());
   }
   if (params.spec && !canResolveRegistryVersionForPackageTarget(params.spec)) {
-    return null;
+    return ok(unchanged());
   }
   const target = params.tag.trim();
   if (!target) {
-    return null;
+    return ok(unchanged());
   }
   const status = await fetchNpmPackageTargetStatus({
     target,
@@ -738,29 +757,58 @@ export async function resolvePackageRuntimePreflightError(params: {
     env: params.env,
   });
   if (status.error) {
-    return null;
+    return ok(unchanged());
   }
   const runtime = await resolvePackageRuntimeForPreflight({
-    nodeRunner: params.nodeRunner,
+    nodeRunner,
     timeoutMs: params.timeoutMs,
   });
   const satisfies = nodeVersionSatisfiesEngine(runtime.version, status.nodeEngine);
-  if (satisfies !== false) {
-    return null;
+  const targetVersion = status.version ?? target;
+  if (satisfies === true) {
+    return ok({
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    });
   }
-  const targetLabel = status.version ?? target;
+  const fallbackNodeRunner = normalizeOptionalString(params.fallbackNodeRunner);
+  if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
+    const fallbackRuntime = await resolvePackageRuntimeForPreflight({
+      nodeRunner: fallbackNodeRunner,
+      timeoutMs: params.timeoutMs,
+    });
+    const fallbackSatisfies = nodeVersionSatisfiesEngine(
+      fallbackRuntime.version,
+      status.nodeEngine,
+    );
+    if (fallbackSatisfies === true) {
+      return ok({
+        nodeRunner: fallbackNodeRunner,
+        replacedNodeRunner: nodeRunner,
+        targetVersion,
+      });
+    }
+  }
+  if (satisfies !== false) {
+    return ok({
+      ...(nodeRunner ? { nodeRunner } : {}),
+      targetVersion,
+    });
+  }
   const runtimeLabel = runtime.nodeRunner
     ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
     : `Node ${runtime.version ?? "unknown"}`;
-  return [
-    `${runtimeLabel} is too old for openclaw@${targetLabel}.`,
-    `The requested package requires ${status.nodeEngine}.`,
-    runtime.nodeRunner
-      ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-      : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
-    "Bare `npm i -g openclaw` can silently install an older compatible release.",
-    "After upgrading Node, use `npm i -g openclaw@latest`.",
-  ].join("\n");
+  return resultError(
+    [
+      `${runtimeLabel} is too old for openclaw@${targetVersion}.`,
+      `The requested package requires ${status.nodeEngine}.`,
+      runtime.nodeRunner
+        ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
+        : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
+      "Bare `npm i -g openclaw` can silently install an older compatible release.",
+      "After upgrading Node, use `npm i -g openclaw@latest`.",
+    ].join("\n"),
+  );
 }
 
 async function resolvePackageRuntimeForPreflight(params: {
@@ -831,7 +879,6 @@ export function resolvePostInstallDoctorEnv(params?: {
 }): NodeJS.ProcessEnv {
   const resolvedEnv: NodeJS.ProcessEnv = {
     ...disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env),
-    [DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS_ENV]: "1",
   };
   if (!params?.serviceEnv) {
     return resolvedEnv;
@@ -917,6 +964,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   invocationCwd?: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  timeoutMs: number;
 }): Promise<boolean> {
   const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
   if (!entrypoint) {
@@ -934,7 +982,9 @@ async function runUpdatedInstallGatewayRestart(params: {
     {
       cwd: params.result.root,
       env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
-      timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
+      // Restart health owns migration-aware readiness. Keep only the caller's bounded update
+      // budget outside it so the former fixed 60-second watchdog cannot preempt that wait.
+      timeoutMs: params.timeoutMs,
     },
   );
   if (res.code === 0) {
@@ -1133,6 +1183,7 @@ export async function maybeRestartService(params: {
   nodeRunner?: string;
   skipLegacyServiceRestart?: boolean;
   requireRunningServiceAfterRestart?: boolean;
+  timeoutMs: number;
 }): Promise<boolean> {
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
@@ -1146,6 +1197,7 @@ export async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         return;
       }
@@ -1322,6 +1374,7 @@ export async function maybeRestartService(params: {
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
           nodeRunner: params.nodeRunner,
+          timeoutMs: params.timeoutMs,
         });
         if (
           updatedInstallRestartNeedsServiceRootProof &&
@@ -1381,7 +1434,6 @@ export async function maybeRestartService(params: {
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
-            crossStateDirImports: false,
           });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
@@ -1428,3 +1480,4 @@ export async function maybeRestartService(params: {
   }
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

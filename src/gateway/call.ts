@@ -78,7 +78,6 @@ type CallGatewayBaseOptions = {
   expectFinal?: boolean;
   timeoutMs?: number | null;
   signal?: AbortSignal;
-  onDispatched?: GatewayClientRequestOptions["onDispatched"];
   onAccepted?: GatewayClientRequestOptions["onAccepted"];
   onSignalAbort?: (request: GatewayRequestFunction) => Promise<void> | void;
   clientName?: GatewayClientName;
@@ -114,7 +113,9 @@ export type CallGatewayCliOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export type CallGatewayOptions = CallGatewayCliOptions;
+export type CallGatewayOptions = CallGatewayBaseOptions & {
+  scopes?: OperatorScope[];
+};
 
 export type GatewayTransportErrorKind = "closed" | "timeout";
 
@@ -1041,7 +1042,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
               expectFinal: opts.expectFinal,
               timeoutMs: opts.timeoutMs,
               signal: opts.signal,
-              onDispatched: opts.onDispatched,
               onAccepted: opts.onAccepted,
             });
             ignoreClose = true;
@@ -1334,3 +1334,4 @@ export function randomIdempotencyKey() {
   return randomUUID();
 }
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,18 +2,14 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSignalReplyContextWithPersistence } from "../reply-authors.js";
+import { resetSignalReplyAuthorsForTests } from "../reply-authors.test-helpers.js";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
-const [
-  { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
-  { createSignalEventHandler },
-  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
-] = await Promise.all([
-  import("./event-handler.test-harness.js"),
-  import("./event-handler.js"),
-  import("../reply-authors.js"),
-]);
+let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
+let createSignalReceiveEvent: typeof import("./event-handler.test-harness.js").createSignalReceiveEvent;
+let createSignalEventHandler: typeof import("./event-handler.js").createSignalEventHandler;
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
@@ -83,6 +79,38 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  return {
+    ...actual,
+    runChannelInboundEvent: (params: RunParams) => {
+      const resolveTurn = params.adapter.resolveTurn;
+      return actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || !("runDispatch" in resolved)) {
+              return resolved;
+            }
+            const { route, ...turn } = resolved;
+            return {
+              ...turn,
+              routeSessionKey: route.sessionKey,
+              storePath: "/tmp/openclaw/signal-sessions.json",
+              recordInboundSession: recordInboundSessionMock,
+            };
+          },
+        },
+      });
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
     "openclaw/plugin-sdk/conversation-runtime",
@@ -129,9 +157,14 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    [{ createBaseSignalEventHandlerDeps, createSignalReceiveEvent }, { createSignalEventHandler }] =
+      await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+  });
+
+  beforeEach(() => {
     vi.useRealTimers();
-    await clearSignalReplyAuthorsForTest();
+    resetSignalReplyAuthorsForTests();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -2159,3 +2192,4 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

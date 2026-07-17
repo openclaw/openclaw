@@ -68,12 +68,18 @@ export interface AndroidNotificationRecentPackages {
   updated_at_ms: number;
 }
 
+export interface ApnsRegistrationTombstones {
+  deleted_at_ms: number;
+  node_id: string;
+}
+
 export interface ApnsRegistrations {
   distribution: string | null;
   environment: string;
   installation_id: string | null;
   node_id: string;
   relay_handle: string | null;
+  relay_origin: string | null;
   send_grant: string | null;
   token: string | null;
   token_debug_suffix: string | null;
@@ -632,14 +638,17 @@ export interface MacosPortGuardianRecords {
 }
 
 export interface ManagedOutgoingImageRecords {
+  agent_id: string | null;
   alt: string;
   attachment_id: string;
+  cleanup_pending: Generated<number>;
   created_at: string;
   message_id: string | null;
   original_content_type: string;
   original_filename: string | null;
   original_height: number | null;
   original_media_id: string;
+  original_media_root: string;
   original_media_subdir: string;
   original_size_bytes: number | null;
   original_width: number | null;
@@ -647,6 +656,13 @@ export interface ManagedOutgoingImageRecords {
   retention_class: string | null;
   session_key: string;
   updated_at: string | null;
+}
+
+export interface McpOauthStores {
+  format_version: number;
+  store_json: string;
+  store_key: string;
+  updated_at: number;
 }
 
 export interface MediaBlobs {
@@ -712,10 +728,12 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
+  installed_apps_sharing: Generated<number>;
   node_id: string;
   token: string | null;
   updated_at_ms: number;
@@ -894,6 +912,13 @@ export interface SkillLifecycle {
   state_changed_at_ms: number;
 }
 
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -969,6 +994,13 @@ export interface SubagentRuns {
   requester_display_key: string;
   requester_origin_json: string | null;
   requester_session_key: string;
+  requester_settle_wake_attempt_count: number | null;
+  requester_settle_wake_batch_run_ids_json: string | null;
+  requester_settle_wake_last_error: string | null;
+  requester_settle_wake_next_attempt_at: number | null;
+  requester_settle_wake_replay_count: number | null;
+  requester_settle_wake_retire_after: number | null;
+  requester_settle_wake_status: string | null;
   run_id: string;
   run_timeout_seconds: number | null;
   session_started_at: number | null;
@@ -1182,6 +1214,51 @@ export interface WorkerTranscriptCommits {
   updated_at_ms: number;
 }
 
+export interface WorkerWorkspacePendingResults {
+  claim_id: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_instance_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  recovery_requested_at_ms: number | null;
+  run_id: string;
+  session_id: string;
+  workspace_accepted_at_ms: number | null;
+}
+
+export interface WorkerWorkspaceReconciliations {
+  base_manifest_ref: string;
+  base_pack: Uint8Array;
+  created_at_ms: number;
+  current_manifest_ref: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_json: string;
+  session_id: string;
+}
+
+export interface WorkspaceAttestations {
+  attested_at_ms: number;
+  updated_at_ms: number;
+  workspace_key: string;
+}
+
+export interface WorkspaceGeneratedBootstrapHashes {
+  filename: string;
+  sha256: string;
+  workspace_key: string;
+}
+
+export interface WorkspacePathAliases {
+  alias_key: string;
+  alias_path: string;
+  updated_at_ms: number;
+  workspace_key: string;
+  workspace_path: string;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1189,6 +1266,13 @@ export interface WorkspaceSetupState {
   version: number;
   workspace_key: string;
   workspace_path: string;
+}
+
+export interface WorktreeProvisionedFileChunks {
+  chunk_index: number;
+  data: Uint8Array;
+  path: string;
+  worktree_id: string;
 }
 
 export interface Worktrees {
@@ -1200,6 +1284,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  provisioned_paths_json: string | null;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
@@ -1213,6 +1298,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
+  apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
@@ -1250,6 +1336,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
@@ -1270,6 +1357,7 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;
@@ -1289,6 +1377,12 @@ export interface DB {
   worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
+  worker_workspace_pending_results: WorkerWorkspacePendingResults;
+  worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
+  workspace_attestations: WorkspaceAttestations;
+  workspace_generated_bootstrap_hashes: WorkspaceGeneratedBootstrapHashes;
+  workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
+  worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
   worktrees: Worktrees;
 }

@@ -107,8 +107,10 @@ export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
+  icon?: string;
   source?: string;
   kind?: string;
+  featured?: boolean;
   install?: {
     candidates?: readonly OfficialExternalPluginCatalogInstallCandidate[];
   };
@@ -1271,6 +1273,17 @@ export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPlug
   return dedupeOfficialExternalPluginCatalogEntries(bundledOfficialExternalPluginCatalogEntries());
 }
 
+/** Returns whether an id is the canonical id of an official external plugin. */
+export function isOfficialExternalPluginId(pluginId: string): boolean {
+  const normalized = normalizeOptionalString(pluginId)?.toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return listOfficialExternalPluginCatalogEntries().some(
+    (entry) => resolveOfficialExternalPluginId(entry)?.toLowerCase() === normalized,
+  );
+}
+
 /** Resolves official external plugin owners for configured capability provider ids. */
 export function resolveOfficialExternalProviderContractPluginIds(params: {
   contract: OfficialExternalProviderContract;
@@ -1434,3 +1447,4 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
     (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

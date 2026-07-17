@@ -23,7 +23,6 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
-import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import { requestCodexAppServerClientJson } from "./app-server/request.js";
 import {
   reclaimCurrentCodexSessionGeneration,
@@ -119,7 +118,6 @@ export {
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
 } from "./session-catalog-parsing.js";
-export { CODEX_TERMINAL_RESUME_COMMAND } from "./session-catalog-terminal.js";
 
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
@@ -168,7 +166,6 @@ function createCodexSessionCatalogControlFromRequests(params: {
             modelProviders: [],
             sortKey: "recency_at",
             sortDirection: "desc",
-            sourceKinds: [...CODEX_INTERACTIVE_THREAD_SOURCE_KINDS],
             ...(cwd ? { cwd } : {}),
             ...(cursor ? { cursor } : {}),
           },
@@ -1336,3 +1333,4 @@ export const codexSessionCatalogRuntime = {
   continueNode: continueNodeCodexSession,
   archiveLocal: archiveLocalCodexSession,
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

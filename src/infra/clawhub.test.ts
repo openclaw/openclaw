@@ -1016,6 +1016,43 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
   });
 
+  it.each(["0x10", "1e3", "-1", "-0", "+7", "0.5", "9007199254740993"])(
+    "does not describe malformed RateLimit-Reset values as seconds: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: { "RateLimit-Reset": reset },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded Sign in for higher rate limits\.$/);
+    },
+  );
+
+  it.each(["invalid", "+7", "-0"])(
+    "uses a valid Retry-After hint when RateLimit-Reset is malformed: %s",
+    async (reset) => {
+      process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
+      await expect(
+        searchClawHubSkills({
+          query: "calendar",
+          fetchImpl: async () =>
+            new Response("Rate limit exceeded", {
+              status: 429,
+              headers: {
+                "RateLimit-Reset": reset,
+                "Retry-After": "7",
+              },
+            }),
+        }),
+      ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+    },
+  );
+
   it("retries transient ClawHub reads and honors Retry-After", async () => {
     const cancel = vi.fn();
     let attempts = 0;
@@ -1113,22 +1150,29 @@ describe("clawhub helpers", () => {
   });
 
   it("times out and cancels stalled ClawHub error bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode("partial error"),
-      headers: { "content-type": "text/plain" },
-      status: 500,
-      statusText: "Server Error",
-    });
+    const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
     await expect(
       searchClawHubSkills({
         query: "calendar",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
+        fetchImpl: async () => {
+          const stalled = createStalledBodyResponse({
+            firstChunk: new TextEncoder().encode("partial error"),
+            headers: { "content-type": "text/plain", "retry-after": "0" },
+            status: 500,
+            statusText: "Server Error",
+          });
+          stalledResponses.push(stalled);
+          return stalled.response;
+        },
       }),
     ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    for (const stalled of stalledResponses) {
+      expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    }
+    const finalResponse = stalledResponses.at(-1);
+    expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {
@@ -1171,7 +1215,8 @@ describe("clawhub helpers", () => {
     try {
       await searchClawHubSkills({
         query: "calendar",
-        fetchImpl: async () => new Response(oversized, { status: 500 }),
+        fetchImpl: async () =>
+          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
       });
     } catch (caught) {
       error = caught;
@@ -1385,3 +1430,4 @@ describe("clawhub helpers", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

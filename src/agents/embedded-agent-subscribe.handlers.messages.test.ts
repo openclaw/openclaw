@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import {
-  buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
@@ -12,9 +11,12 @@ import {
   handleMessageUpdate,
   hasAssistantVisibleReply,
   readPendingToolMediaReply,
+} from "./embedded-agent-subscribe.handlers.messages.js";
+import {
+  buildAssistantStreamData,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+} from "./embedded-agent-subscribe.handlers.messages.test-support.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   createOpenAiResponsesPartial,
@@ -72,6 +74,7 @@ function createMessageUpdateContext(
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     consumePartialReplyDirectives:
       params.consumePartialReplyDirectives ??
@@ -158,6 +161,7 @@ function createMessageEndContext(
       ...params.state,
     },
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
@@ -1950,3 +1954,4 @@ describe("handleMessageEnd", () => {
     expect(event?.data?.replace).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

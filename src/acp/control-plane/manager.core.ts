@@ -5,9 +5,11 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { projectPluginSessionEntry } from "../../plugins/runtime/session-store-facade.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { runManagerCancelSession } from "./manager.cancel-session.js";
@@ -73,10 +75,10 @@ export class AcpSessionManager {
     maxMs: 0,
   };
   private readonly errorCountsByCode = new Map<string, number>();
-  private readonly deps: AcpSessionManagerDeps;
+  readonly #deps: AcpSessionManagerDeps;
 
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
-    this.deps = deps;
+    this.#deps = deps;
   }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
@@ -87,7 +89,7 @@ export class AcpSessionManager {
         sessionKey,
       };
     }
-    const stored = this.deps.loadSessionEntry({
+    const stored = this.#deps.loadSessionEntry({
       cfg: params.cfg,
       sessionKey,
       clone: false,
@@ -98,7 +100,9 @@ export class AcpSessionManager {
         kind: "ready",
         sessionKey,
         meta: acp,
-        entry: stored.entry,
+        entry: stored.entry
+          ? projectPluginSessionEntry(stored.entry as InternalSessionEntry)
+          : undefined,
       };
     }
     if (isAcpSessionKey(sessionKey)) {
@@ -139,7 +143,7 @@ export class AcpSessionManager {
   }): Promise<AcpStartupIdentityReconcileResult> {
     return await runManagerStartupIdentityReconcile({
       cfg: params.cfg,
-      deps: this.deps,
+      deps: this.#deps,
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
@@ -164,10 +168,10 @@ export class AcpSessionManager {
       return await runManagerInitializeSession({
         input,
         sessionKey,
-        deps: this.deps,
+        deps: this.#deps,
         runtimeHandles: this.runtimeHandles,
         enforceConcurrentSessionLimit: this.enforceConcurrentSessionLimit.bind(this),
-        writeSessionMeta: this.writeSessionMeta.bind(this),
+        writeSessionMeta: this.#writeSessionMeta.bind(this),
       });
     });
   }
@@ -217,7 +221,7 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
         runtimeMode,
-        ...this.runtimeOptionCommandServices(),
+        ...this.#runtimeOptionCommandServices(),
       });
     });
   }
@@ -243,7 +247,7 @@ export class AcpSessionManager {
         sessionKey,
         key,
         value,
-        ...this.runtimeOptionCommandServices(),
+        ...this.#runtimeOptionCommandServices(),
       });
     });
   }
@@ -265,7 +269,7 @@ export class AcpSessionManager {
         cfg: params.cfg,
         sessionKey,
         patch: validatedPatch,
-        ...this.runtimeOptionCommandServices(),
+        ...this.#runtimeOptionCommandServices(),
       });
     });
   }
@@ -283,7 +287,7 @@ export class AcpSessionManager {
       return await runResetManagerSessionRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
-        ...this.runtimeOptionCommandServices(),
+        ...this.#runtimeOptionCommandServices(),
       });
     });
   }
@@ -303,7 +307,7 @@ export class AcpSessionManager {
         await runManagerTurn({
           input,
           sessionKey,
-          deps: this.deps,
+          deps: this.#deps,
           runtimeHandles: this.runtimeHandles,
           activeTurnBySession: this.activeTurnBySession,
           resolveSession: this.resolveSession.bind(this),
@@ -312,7 +316,7 @@ export class AcpSessionManager {
           setSessionState: this.setSessionState.bind(this),
           recordTurnCompletion: this.recordTurnCompletion.bind(this),
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
-          writeSessionMeta: this.writeSessionMeta.bind(this),
+          writeSessionMeta: this.#writeSessionMeta.bind(this),
         }),
       input.signal,
     );
@@ -355,11 +359,11 @@ export class AcpSessionManager {
         await runManagerCloseSession({
           input,
           sessionKey,
-          deps: this.deps,
+          deps: this.#deps,
           runtimeHandles: this.runtimeHandles,
           resolveSession: this.resolveSession.bind(this),
           ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
-          writeSessionMeta: this.writeSessionMeta.bind(this),
+          writeSessionMeta: this.#writeSessionMeta.bind(this),
         }),
     );
   }
@@ -371,21 +375,21 @@ export class AcpSessionManager {
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     return await ensureManagerRuntimeHandle({
       ...params,
-      deps: this.deps,
+      deps: this.#deps,
       runtimeHandles: this.runtimeHandles,
       enforceConcurrentSessionLimit: (limitParams) =>
         this.enforceConcurrentSessionLimit(limitParams),
-      writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
+      writeSessionMeta: async (writeParams) => await this.#writeSessionMeta(writeParams),
     });
   }
 
-  private runtimeOptionCommandServices(): RuntimeOptionCommandServices {
+  #runtimeOptionCommandServices(): RuntimeOptionCommandServices {
     return {
       runtimeHandles: this.runtimeHandles,
       resolveSession: this.resolveSession.bind(this),
       ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
       resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
-      writeSessionMeta: this.writeSessionMeta.bind(this),
+      writeSessionMeta: this.#writeSessionMeta.bind(this),
     };
   }
 
@@ -459,7 +463,7 @@ export class AcpSessionManager {
     lastError?: string;
     clearLastError?: boolean;
   }): Promise<void> {
-    await this.writeSessionMeta({
+    await this.#writeSessionMeta({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       skipMaintenance: true,
@@ -516,11 +520,11 @@ export class AcpSessionManager {
           cached.handle = handle;
         }
       },
-      writeSessionMeta: async (writeParams) => await this.writeSessionMeta(writeParams),
+      writeSessionMeta: async (writeParams) => await this.#writeSessionMeta(writeParams),
     });
   }
 
-  private async writeSessionMeta(params: {
+  async #writeSessionMeta(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
     mutate: (
@@ -532,7 +536,7 @@ export class AcpSessionManager {
     takeCacheOwnership?: boolean;
   }): Promise<SessionEntry | null> {
     try {
-      return await this.deps.upsertSessionMeta({
+      return await this.#deps.upsertSessionMeta({
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         mutate: params.mutate,

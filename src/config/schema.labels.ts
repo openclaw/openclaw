@@ -3,6 +3,9 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  "channels.discord.activities": "Discord Activities",
+  "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
+  "channels.discord.activities.applicationId": "Discord Activities Application ID",
   meta: "Metadata",
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.lastTouchedAt": "Config Last Touched At",
@@ -435,10 +438,6 @@ export const FIELD_LABELS: Record<string, string> = {
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
   "media.ttlHours": "Media Retention TTL (hours)",
-  audio: "Audio",
-  "audio.transcription": "Audio Transcription",
-  "audio.transcription.command": "Audio Transcription Command",
-  "audio.transcription.timeoutSeconds": "Audio Transcription Timeout (sec)",
   bindings: "Bindings",
   "bindings[].type": "Binding Type",
   "bindings[].agentId": "Binding Agent ID",
@@ -1074,6 +1073,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
   "channels.defaults.contextVisibility": "Default Context Visibility",
+  "channels.defaults.implicitMentions": "Default Implicit Mentions",
+  "channels.defaults.implicitMentions.replyToBot": "Default Reply-to-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.quotedBot": "Default Quoted-Bot Implicit Mentions",
+  "channels.defaults.implicitMentions.threadParticipation":
+    "Default Thread-Participation Implicit Mentions",
   "channels.defaults.heartbeat": "Default Heartbeat Visibility",
   "channels.defaults.heartbeat.showOk": "Heartbeat Show OK",
   "channels.defaults.heartbeat.showAlerts": "Heartbeat Show Alerts",
@@ -1131,3 +1135,4 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

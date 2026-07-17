@@ -2,6 +2,12 @@
 
 import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { testing as registryTesting } from "../acp/runtime/registry.js";
+import {
+  readAcpSessionEntry as readInternalAcpSessionEntry,
+  type AcpSessionStoreEntry,
+} from "../acp/runtime/session-meta.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { projectPluginSessionEntry } from "../plugins/runtime/session-store-facade.js";
 
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
@@ -27,9 +33,22 @@ export type {
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
-export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
-export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+export type { AcpSessionStoreEntry };
 export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
+
+/** Reads ACP metadata through the public plugin session projection. */
+export function readAcpSessionEntry(
+  params: Parameters<typeof readInternalAcpSessionEntry>[0],
+): AcpSessionStoreEntry | null {
+  const result = readInternalAcpSessionEntry(params);
+  if (!result?.entry) {
+    return result;
+  }
+  return {
+    ...result,
+    entry: projectPluginSessionEntry(result.entry as InternalSessionEntry),
+  };
+}
 
 // Keep test helpers off the hot init path. Eagerly merging them here can
 // create a back-edge through the bundled ACP runtime chunk before the imported

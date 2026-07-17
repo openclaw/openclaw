@@ -182,6 +182,23 @@ describe("GatewayClient", () => {
     });
   });
 
+  test("reconnects with updated node manifest metadata", () => {
+    const client = new GatewayClient({ caps: ["system"], commands: ["system.run"] });
+    const close = vi.fn();
+    installSyntheticSocket(client, vi.fn(), close);
+
+    client.updateNodeManifest({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
+    });
+
+    expect(close).toHaveBeenCalledWith(1012, "node manifest changed");
+    expect((client as unknown as { opts: Record<string, unknown> }).opts).toMatchObject({
+      caps: ["canvas", "system"],
+      commands: ["canvas.present", "system.run"],
+    });
+  });
+
   test("rejects an unbounded request, reconnects, and does not replay it", async () => {
     const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     wss = server;
@@ -449,54 +466,23 @@ describe("GatewayClient", () => {
 
   test("cleans pending request state when websocket send throws", async () => {
     const { client, send } = createOpenGatewayClient(25);
-    const onDispatched = vi.fn();
     send.mockImplementationOnce(() => {
       throw new Error("synthetic send failure");
     });
 
-    await expect(client.request("status", undefined, { onDispatched })).rejects.toThrow(
-      "synthetic send failure",
-    );
-    expect(onDispatched).not.toHaveBeenCalled();
+    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
     expect(getPendingCount(client)).toBe(0);
   });
 
-  test("isolates dispatched callback failures from the request lifecycle", async () => {
-    const { client, send } = createOpenGatewayClient(25);
-    const onDispatched = vi.fn(() => {
-      throw new Error("synthetic dispatched callback failure");
-    });
-    const requestPromise = client.request<{ status: string }>("status", undefined, {
-      onDispatched,
-    });
-    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
-
-    handleGatewayMessage(client, {
-      type: "res",
-      id: frame.id,
-      ok: true,
-      payload: { status: "ok" },
-    });
-
-    await expect(requestPromise).resolves.toEqual({ status: "ok" });
-    expect(onDispatched).toHaveBeenCalledTimes(1);
-    expect(getPendingCount(client)).toBe(0);
-  });
-
-  test("notifies dispatched then accepted expectFinal requests while waiting for final", async () => {
+  test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
     const { client, send } = createOpenGatewayClient(25);
 
-    const onDispatched = vi.fn();
     const onAccepted = vi.fn();
     const requestPromise = client.request<{ status: string }>("agent", undefined, {
       expectFinal: true,
-      onDispatched,
       onAccepted,
     });
     const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
-
-    expect(onDispatched).toHaveBeenCalledTimes(1);
-    expect(onAccepted).not.toHaveBeenCalled();
 
     handleGatewayMessage(client, {
       type: "res",

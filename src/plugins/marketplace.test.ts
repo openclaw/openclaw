@@ -751,7 +751,7 @@ describe("marketplace plugins", () => {
     });
   });
 
-  it("returns a structured error for invalid archive URLs", async () => {
+  it("redacts invalid archive URLs in structured errors", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const manifestPath = await writeMarketplaceManifest(rootDir, {
         plugins: [
@@ -769,7 +769,7 @@ describe("marketplace plugins", () => {
 
       expect(result).toEqual({
         ok: false,
-        error: "failed to download https://%/frontend-design.tgz: Invalid URL",
+        error: "failed to download ***: Invalid URL",
       });
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
@@ -1169,7 +1169,8 @@ describe("marketplace plugins", () => {
       expect(result.error).toContain(
         "failed to download https://***:***@example.com/frontend-design.tgz:",
       );
-      expect(result.error).toContain("Authorization: Bearer sk-123…mnop");
+      expect(result.error).toContain("Authorization: Bearer sk-123…");
+      expect(result.error).not.toContain("abcdefghijklmnop");
       expect(result.error).not.toContain("user:pass@");
       let hasControlChars = false;
       for (const char of result.error) {
@@ -1323,3 +1324,4 @@ describe("marketplace plugins", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

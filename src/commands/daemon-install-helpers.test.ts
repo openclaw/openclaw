@@ -279,6 +279,26 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
+  it("passes only the existing service NODE_OPTIONS to heap resolution", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await buildGatewayInstallPlan({
+      env: {
+        HOME: isolatedHome,
+        NODE_OPTIONS: "--max-old-space-size=16384",
+      },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        NODE_OPTIONS: "--max-old-space-size=6144",
+      },
+    });
+
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").existingNodeOptions,
+    ).toBe("--max-old-space-size=6144");
+  });
+
   it("adds the active openclaw command bin directory to the managed service PATH", async () => {
     mockNodeGatewayPlanFixture();
     const originalArgv = process.argv;
@@ -1810,3 +1830,4 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
     expect(result.OPENCLAW_BAZ).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

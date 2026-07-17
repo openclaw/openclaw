@@ -4,7 +4,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadCombinedSessionStoreForGateway as loadInternalCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
+import { projectPluginSessionStore } from "../plugins/runtime/session-store-facade.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -20,7 +22,16 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+/** Loads the combined gateway store through the public plugin session projection. */
+export function loadCombinedSessionStoreForGateway(
+  ...args: Parameters<typeof loadInternalCombinedSessionStoreForGateway>
+): ReturnType<typeof loadInternalCombinedSessionStoreForGateway> {
+  const result = loadInternalCombinedSessionStoreForGateway(...args);
+  return {
+    ...result,
+    store: projectPluginSessionStore(result.store as Record<string, InternalSessionEntry>),
+  };
+}
 
 const QMD_ARCHIVE_STEM_RE = /^(.+)-jsonl-(reset|deleted)-(.+)$/;
 const QMD_ARCHIVE_TIMESTAMP_RE =

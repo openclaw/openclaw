@@ -54,6 +54,7 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
+  dispatchChannelInboundTurn,
   dispatchChannelInboundReply,
   runChannelInboundEvent,
   runPreparedInboundReply,
@@ -65,26 +66,22 @@ import {
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveStorePath } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import {
-  readSessionUpdatedAt,
-  recordInboundSessionMeta,
-  updateSessionLastRoute,
-} from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  fetchRemoteMedia,
-  readRemoteMediaBuffer,
-  saveRemoteMedia,
-  saveResponseMedia,
-} from "../../media/fetch.js";
+import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
+  removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
+import {
+  recordPluginSessionMetaFromInbound,
+  updatePluginSessionLastRoute,
+} from "./session-store-facade.js";
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
@@ -93,9 +90,9 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     readSessionUpdatedAt,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
-    recordSessionMetaFromInbound: recordInboundSessionMeta,
+    recordSessionMetaFromInbound: recordPluginSessionMetaFromInbound,
     recordInboundSession,
-    updateLastRoute: updateSessionLastRoute,
+    updateLastRoute: updatePluginSessionLastRoute,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
   };
   const channelRuntime = {
@@ -133,6 +130,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildPairingReply,
       readAllowFromStore: ({ channel, accountId, env }) =>
         readChannelAllowFromStore(channel, env, accountId),
+      removeAllowFromStoreEntry: ({ channel, entry, accountId, env, pairingAdapter }) =>
+        removeChannelAllowFromStoreEntry({
+          channel,
+          entry,
+          accountId,
+          env,
+          pairingAdapter,
+        }),
       upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
         upsertChannelPairingRequest({
           channel,
@@ -145,7 +150,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     media: {
       readRemoteMediaBuffer,
-      fetchRemoteMedia,
+      fetchRemoteMedia: readRemoteMediaBuffer,
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
@@ -189,6 +194,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildContext: buildChannelInboundEventContext,
       run: runChannelInboundEvent,
       runPreparedReply: runPreparedInboundReply,
+      dispatch: dispatchChannelInboundTurn,
       dispatchReply: dispatchChannelInboundReply,
     },
     threadBindings: {
