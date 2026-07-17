@@ -4,7 +4,9 @@ export function serializeStreamError(error: unknown): string {
     ? error.message
     : (() => {
         try {
-          return JSON.stringify(error);
+          const json = JSON.stringify(error);
+          if (json === undefined) return String(error);
+          return json;
         } catch {
           return String(error);
         }

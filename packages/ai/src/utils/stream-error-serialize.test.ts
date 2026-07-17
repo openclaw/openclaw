@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { serializeStreamError } from "./stream-error.js";
+import { serializeStreamError } from "./stream-error-serialize.js";
 
 function makeCircular() {
   const e: Record<string, unknown> = { code: "ECONNRESET", message: "socket hang up" };
