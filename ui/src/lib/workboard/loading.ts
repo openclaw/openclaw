@@ -118,7 +118,7 @@ async function loadWorkboardInternal(
         state.cards = normalized.cards;
         state.boards = normalized.boards;
         state.statuses = normalized.statuses;
-        state.tasksByCardId = new Map();
+        state.tasksByCardId = previousTasksByCardId;
         params.requestUpdate?.();
       }
       const taskLinkState: WorkboardTaskLinkState = {

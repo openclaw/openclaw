@@ -2320,6 +2320,53 @@ describe("workboard controller", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("preserves previous task links while replacement enrichment settles", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+    } satisfies WorkboardCard;
+    const taskList = createDeferred<unknown>();
+    const replacementTask = { ...sampleTask, status: "completed" as const };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [linked], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "tasks.list") {
+        return taskList.promise;
+      }
+      return {};
+    });
+
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set(linked.id, sampleTask);
+
+    const loading = loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(state.cards).toMatchObject([{ id: linked.id, title: linked.title }]);
+    expect(state.tasksByCardId.get(linked.id)).toEqual(sampleTask);
+    expect(state.loaded).toBe(true);
+    expect(state.loading).toBe(true);
+
+    taskList.resolve({ tasks: [replacementTask] });
+    await loading;
+
+    expect(state.tasksByCardId.get(linked.id)).toEqual(replacementTask);
+    expect(state.loaded).toBe(true);
+    expect(state.loading).toBe(false);
+  });
+
   it("does not mark a load successful when task enrichment is invalidated by a write", async () => {
     const host = {};
     const taskList = createDeferred<unknown>();
