@@ -1134,6 +1134,87 @@ describe("Claude session catalog", () => {
     ).rejects.toThrow("transcript cursor is invalid");
   });
 
+  it("rejects malformed provider read cursors before paired-node I/O", async () => {
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    for (const cursor of ["", " wrapped ", "x".repeat(257)]) {
+      await expect(
+        provider.read({
+          hostId: "node:node-a",
+          threadId: "session-a",
+          cursor,
+          limit: 1,
+        }),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("forwards paired-node cursors exactly and rejects malformed response cursors", async () => {
+    const catalogCursor = "catalog+/=_cursor";
+    const transcriptCursor = "transcript+/=_cursor";
+    let catalogNextCursor = "catalog+/=_next";
+    let transcriptNextCursor = "transcript+/=_next";
+    const invoke = vi.fn(async ({ command }: Parameters<PluginRuntime["nodes"]["invoke"]>[0]) => ({
+      payloadJSON: JSON.stringify(
+        command === CLAUDE_SESSIONS_LIST_COMMAND
+          ? { sessions: [], nextCursor: catalogNextCursor }
+          : { threadId: "session-a", items: [], nextCursor: transcriptNextCursor },
+      ),
+    }));
+    const provider = captureCatalogProvider({
+      nodes: {
+        list: vi.fn(async () => ({
+          nodes: [
+            {
+              nodeId: "node-a",
+              connected: true,
+              commands: [CLAUDE_SESSIONS_LIST_COMMAND, CLAUDE_SESSION_READ_COMMAND],
+            },
+          ],
+        })),
+        invoke,
+      },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      provider.list({ hostIds: ["node:node-a"], cursors: { "node:node-a": catalogCursor } }),
+    ).resolves.toMatchObject([{ nextCursor: catalogNextCursor }]);
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSIONS_LIST_COMMAND,
+        params: expect.objectContaining({ cursor: catalogCursor }),
+      }),
+    );
+
+    await expect(
+      provider.read({
+        hostId: "node:node-a",
+        threadId: "session-a",
+        cursor: transcriptCursor,
+        limit: 1,
+      }),
+    ).resolves.toMatchObject({ nextCursor: transcriptNextCursor });
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: CLAUDE_SESSION_READ_COMMAND,
+        params: expect.objectContaining({ cursor: transcriptCursor }),
+      }),
+    );
+
+    catalogNextCursor = " wrapped ";
+    await expect(provider.list({ hostIds: ["node:node-a"] })).resolves.toMatchObject([
+      { error: { code: "NODE_INVOKE_FAILED" } },
+    ]);
+    transcriptNextCursor = " ";
+    await expect(
+      provider.read({ hostId: "node:node-a", threadId: "session-a", limit: 1 }),
+    ).rejects.toThrow("Claude node returned an invalid transcript page");
+  });
+
   it("advertises terminal resume only when the store and Claude binary exist", async () => {
     const home = await createHome();
     const commands = createClaudeSessionNodeHostCommands();
@@ -1143,6 +1224,9 @@ describe("Claude session catalog", () => {
       CLAUDE_TERMINAL_RESUME_COMMAND,
     ]);
     expect(commands.every((command) => command.dangerous === false)).toBe(true);
+    await expect(commands[0]?.handle(JSON.stringify({ cursor: " wrapped " }))).rejects.toThrow(
+      "catalog cursor is invalid",
+    );
     const policy = createClaudeSessionNodeInvokePolicies()[0];
     expect(policy?.commands).toEqual([
       CLAUDE_SESSIONS_LIST_COMMAND,
