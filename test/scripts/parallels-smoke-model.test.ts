@@ -525,12 +525,21 @@ fetch_host_metadata "https://example.test/metadata"`,
   });
 
   it("bounds host artifact server startup stderr", () => {
-    const retained = hostServerTesting.appendBoundedOutput(
-      "a".repeat(10),
-      Buffer.from("b".repeat(10)),
-      12,
-    );
-    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+    const retained = hostServerTesting.createBoundedOutputTail(12);
+    hostServerTesting.appendBoundedOutput(retained, Buffer.from("a".repeat(10)));
+    hostServerTesting.appendBoundedOutput(retained, Buffer.from("b".repeat(10)));
+    expect(hostServerTesting.readBoundedOutput(retained)).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+
+    const emojiTail = hostServerTesting.createBoundedOutputTail(7);
+    hostServerTesting.appendBoundedOutput(emojiTail, Buffer.from("prefix "));
+    hostServerTesting.appendBoundedOutput(emojiTail, Buffer.from("\u{1f600}tail", "utf8"));
+    expect(hostServerTesting.readBoundedOutput(emojiTail)).toBe("tail");
+
+    const splitEmoji = Buffer.from("\u{1f600}", "utf8");
+    const splitTail = hostServerTesting.createBoundedOutputTail(4);
+    hostServerTesting.appendBoundedOutput(splitTail, splitEmoji.subarray(0, 2));
+    hostServerTesting.appendBoundedOutput(splitTail, splitEmoji.subarray(2));
+    expect(hostServerTesting.readBoundedOutput(splitTail)).toBe("\u{1f600}");
   });
 
   it("accepts npm 10/11 array and npm 12 workspace result shapes", () => {

@@ -14,6 +14,11 @@ import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
 type HostServerChild = ChildProcess & { stderr: Readable };
+type BoundedOutputTail = {
+  buffer: Buffer;
+  limitBytes: number;
+  truncated: boolean;
+};
 
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
@@ -176,9 +181,9 @@ function hasHostServerChildExited(child: HostServerChild): boolean {
 }
 
 async function waitForHostServer(child: HostServerChild, port: number): Promise<void> {
-  let stderr = "";
+  const stderr = createBoundedOutputTail(HOST_SERVER_STDERR_LIMIT_BYTES);
   child.stderr.on("data", (chunk: Buffer) => {
-    stderr = appendBoundedOutput(stderr, chunk, HOST_SERVER_STDERR_LIMIT_BYTES);
+    appendBoundedOutput(stderr, chunk);
   });
   let childClosed = false;
   const childClose = new Promise<void>((resolve) => {
@@ -193,7 +198,11 @@ async function waitForHostServer(child: HostServerChild, port: number): Promise<
       if (!childClosed) {
         await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
       }
-      die(`host artifact server exited early: ${stderr.trim() || formatHostServerExit(child)}`);
+      die(
+        `host artifact server exited early: ${
+          readBoundedOutput(stderr).trim() || formatHostServerExit(child)
+        }`,
+      );
     }
     if (await canConnect(port)) {
       return;
@@ -203,15 +212,40 @@ async function waitForHostServer(child: HostServerChild, port: number): Promise<
     });
   }
   child.kill("SIGTERM");
-  die(`host artifact server did not start on port ${port}: ${stderr.trim()}`);
+  die(`host artifact server did not start on port ${port}: ${readBoundedOutput(stderr).trim()}`);
 }
 
-function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number): string {
-  const combined = Buffer.concat([Buffer.from(previous, "utf8"), chunk]);
-  if (combined.byteLength <= limitBytes) {
-    return combined.toString("utf8");
+function createBoundedOutputTail(limitBytes: number): BoundedOutputTail {
+  return {
+    buffer: Buffer.alloc(0),
+    limitBytes,
+    truncated: false,
+  };
+}
+
+function appendBoundedOutput(tail: BoundedOutputTail, chunk: Buffer): void {
+  const combined = Buffer.concat([tail.buffer, chunk]);
+  if (combined.byteLength <= tail.limitBytes) {
+    tail.buffer = combined;
+    return;
   }
-  return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
+  tail.buffer = Buffer.from(combined.subarray(combined.byteLength - tail.limitBytes));
+  tail.truncated = true;
+}
+
+function readBoundedOutput(tail: BoundedOutputTail): string {
+  return decodeUtf8Tail(tail.buffer, tail.truncated);
+}
+
+function decodeUtf8Tail(buffer: Buffer, truncated: boolean): string {
+  if (!truncated) {
+    return buffer.toString("utf8");
+  }
+  let start = 0;
+  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  return buffer.subarray(start).toString("utf8");
 }
 
 function formatHostServerExit(child: HostServerChild): string {
@@ -235,5 +269,7 @@ async function canConnect(port: number): Promise<boolean> {
 
 export const testing = {
   appendBoundedOutput,
+  createBoundedOutputTail,
+  readBoundedOutput,
   stopHostServerChild,
 };
