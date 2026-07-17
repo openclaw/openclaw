@@ -248,6 +248,52 @@ describe("agent command restart recovery ownership", () => {
     });
   });
 
+  it("keeps retrying admitted recovery restoration after immediate store failures", async () => {
+    vi.useFakeTimers();
+    try {
+      const target = createTarget();
+      const restoredTarget = {
+        sessionId: target.sessionId,
+        sessionKey,
+        storePath: target.storePath,
+      };
+      let failures = 0;
+      const restoreAdmittedRecovery = vi.fn(async () => {
+        if (failures < 3) {
+          failures += 1;
+          throw new Error("transient session-store failure");
+        }
+        return restoredTarget;
+      });
+      const recovery = runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "claim",
+        opts: { mainRestartRecoveryAdmitted: true } as AgentCommandOpts,
+        prepare: async () => {
+          throw new Error("model preparation failed");
+        },
+        restoreAdmittedRecovery,
+        run: vi.fn(),
+      });
+      const rejected = expect(recovery).rejects.toThrow("model preparation failed");
+
+      await vi.advanceTimersByTimeAsync(100);
+      await rejected;
+      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(3);
+      expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
+        undefined,
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(restoreAdmittedRecovery).toHaveBeenCalledTimes(4);
+      expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
+        restoredTarget,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects ordinary work while an admitted recovery is still running", async () => {
     const target = createTarget();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

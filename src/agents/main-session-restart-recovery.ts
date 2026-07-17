@@ -56,6 +56,7 @@ import {
 import {
   isMainRestartRecoveryCandidate,
   transitionMainSessionRecovery,
+  type MainSessionRecoveryObservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
