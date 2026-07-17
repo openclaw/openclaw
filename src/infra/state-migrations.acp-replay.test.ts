@@ -11,7 +11,6 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
-  resolveLegacyAcpReplayLedgerPath,
 } from "./state-migrations.acp-replay.js";
 
 function legacyStore() {
@@ -45,7 +44,7 @@ function legacyStore() {
 }
 
 async function writeLegacyStore(stateDir: string, value: unknown = legacyStore()): Promise<string> {
-  const sourcePath = resolveLegacyAcpReplayLedgerPath(stateDir);
+  const sourcePath = path.join(stateDir, "acp", "event-ledger.json");
   await fs.mkdir(path.dirname(sourcePath), { recursive: true });
   await fs.writeFile(sourcePath, JSON.stringify(value), "utf8");
   return sourcePath;

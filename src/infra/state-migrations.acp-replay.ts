@@ -6,9 +6,15 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { isRecord } from "../utils.js";
 import { withFileLock } from "./file-lock.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_LEDGER_VERSION = 1;
@@ -52,7 +58,12 @@ type LegacySourceIdentity = {
   size: number | bigint;
 };
 
-export function resolveLegacyAcpReplayLedgerPath(stateDir: string): string {
+type AcpReplayMigrationDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "acp_replay_events" | "acp_replay_sessions"
+>;
+
+function resolveLegacyAcpReplayLedgerPath(stateDir: string): string {
   return path.join(stateDir, "acp", "event-ledger.json");
 }
 
@@ -188,23 +199,22 @@ function sourceIdentityMatches(left: LegacySourceIdentity, right: LegacySourceId
 }
 
 function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySession): boolean {
-  const stored = db
-    .prepare(
-      `SELECT session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes
-         FROM acp_replay_sessions
-        WHERE session_id = ?`,
-    )
-    .get(session.sessionId) as
-    | {
-        session_key: string;
-        cwd: string;
-        complete: number | bigint;
-        created_at: number | bigint;
-        updated_at: number | bigint;
-        next_seq: number | bigint;
-        estimated_bytes: number | bigint;
-      }
-    | undefined;
+  const replayDb = getNodeSqliteKysely<AcpReplayMigrationDatabase>(db);
+  const stored = executeSqliteQueryTakeFirstSync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_sessions")
+      .select([
+        "session_key",
+        "cwd",
+        "complete",
+        "created_at",
+        "updated_at",
+        "next_seq",
+        "estimated_bytes",
+      ])
+      .where("session_id", "=", session.sessionId),
+  );
   if (
     !stored ||
     stored.session_key !== session.sessionKey ||
@@ -217,21 +227,14 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     return false;
   }
 
-  const storedEvents = db
-    .prepare(
-      `SELECT seq, at, session_key, run_id, update_json, estimated_bytes
-         FROM acp_replay_events
-        WHERE session_id = ?
-        ORDER BY seq ASC`,
-    )
-    .all(session.sessionId) as Array<{
-    seq: number | bigint;
-    at: number | bigint;
-    session_key: string;
-    run_id: string | null;
-    update_json: string;
-    estimated_bytes: number | bigint;
-  }>;
+  const storedEvents = executeSqliteQuerySync(
+    db,
+    replayDb
+      .selectFrom("acp_replay_events")
+      .select(["seq", "at", "session_key", "run_id", "update_json", "estimated_bytes"])
+      .where("session_id", "=", session.sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
   if (storedEvents.length !== session.events.length) {
     return false;
   }
@@ -260,26 +263,31 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     expectedEventBytes.push(estimateEventBytes(event, JSON.stringify(event.update)));
   }
 
-  const updateEventBytes = db.prepare(
-    `UPDATE acp_replay_events
-        SET estimated_bytes = ?
-      WHERE session_id = ? AND seq = ?`,
-  );
   for (const [index, event] of session.events.entries()) {
     const expectedBytes = expectedEventBytes[index];
     if (
       expectedBytes !== undefined &&
       Number(storedEvents[index]?.estimated_bytes) !== expectedBytes
     ) {
-      updateEventBytes.run(expectedBytes, session.sessionId, event.seq);
+      executeSqliteQuerySync(
+        db,
+        replayDb
+          .updateTable("acp_replay_events")
+          .set({ estimated_bytes: expectedBytes })
+          .where("session_id", "=", session.sessionId)
+          .where("seq", "=", event.seq),
+      );
     }
   }
   const expectedSessionBytes =
     estimateSessionBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
   if (Number(stored.estimated_bytes) !== expectedSessionBytes) {
-    db.prepare("UPDATE acp_replay_sessions SET estimated_bytes = ? WHERE session_id = ?").run(
-      expectedSessionBytes,
-      session.sessionId,
+    executeSqliteQuerySync(
+      db,
+      replayDb
+        .updateTable("acp_replay_sessions")
+        .set({ estimated_bytes: expectedSessionBytes })
+        .where("session_id", "=", session.sessionId),
     );
   }
   return true;
@@ -329,26 +337,17 @@ export async function migrateLegacyAcpReplayLedger(params: {
 
           runOpenClawStateWriteTransaction(
             ({ db }) => {
-              const sessionExists = db.prepare(
-                "SELECT 1 FROM acp_replay_sessions WHERE session_id = ?",
-              );
-              const insertSession = db.prepare(
-                `INSERT INTO acp_replay_sessions (
-                   session_id, session_key, cwd, complete, created_at, updated_at, next_seq,
-                   estimated_bytes
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              );
-              const insertEvent = db.prepare(
-                `INSERT INTO acp_replay_events (
-                   session_id, seq, at, session_key, run_id, update_json, estimated_bytes
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              );
-              const updateSessionBytes = db.prepare(
-                "UPDATE acp_replay_sessions SET estimated_bytes = ? WHERE session_id = ?",
-              );
+              const replayDb = getNodeSqliteKysely<AcpReplayMigrationDatabase>(db);
               const missingSessions: LegacyAcpReplaySession[] = [];
               for (const session of sessions) {
-                if (sessionExists.get(session.sessionId)) {
+                const existing = executeSqliteQueryTakeFirstSync(
+                  db,
+                  replayDb
+                    .selectFrom("acp_replay_sessions")
+                    .select("session_id")
+                    .where("session_id", "=", session.sessionId),
+                );
+                if (existing) {
                   if (!reconcileCanonicalSession(db, session)) {
                     throw new Error(
                       `canonical ACP replay session ${session.sessionId} conflicts with the legacy source`,
@@ -362,32 +361,44 @@ export async function migrateLegacyAcpReplayLedger(params: {
 
               for (const session of missingSessions) {
                 let estimatedBytes = estimateSessionBytes(session);
-                insertSession.run(
-                  session.sessionId,
-                  session.sessionKey,
-                  session.cwd,
-                  session.complete ? 1 : 0,
-                  session.createdAt,
-                  session.updatedAt,
-                  session.nextSeq,
-                  estimatedBytes,
+                executeSqliteQuerySync(
+                  db,
+                  replayDb.insertInto("acp_replay_sessions").values({
+                    session_id: session.sessionId,
+                    session_key: session.sessionKey,
+                    cwd: session.cwd,
+                    complete: session.complete ? 1 : 0,
+                    created_at: session.createdAt,
+                    updated_at: session.updatedAt,
+                    next_seq: session.nextSeq,
+                    estimated_bytes: estimatedBytes,
+                  }),
                 );
                 for (const event of session.events) {
                   const updateJson = JSON.stringify(event.update);
                   const eventBytes = estimateEventBytes(event, updateJson);
-                  insertEvent.run(
-                    event.sessionId,
-                    event.seq,
-                    event.at,
-                    event.sessionKey,
-                    event.runId ?? null,
-                    updateJson,
-                    eventBytes,
+                  executeSqliteQuerySync(
+                    db,
+                    replayDb.insertInto("acp_replay_events").values({
+                      session_id: event.sessionId,
+                      seq: event.seq,
+                      at: event.at,
+                      session_key: event.sessionKey,
+                      run_id: event.runId ?? null,
+                      update_json: updateJson,
+                      estimated_bytes: eventBytes,
+                    }),
                   );
                   estimatedBytes += eventBytes;
                   importedEvents += 1;
                 }
-                updateSessionBytes.run(estimatedBytes, session.sessionId);
+                executeSqliteQuerySync(
+                  db,
+                  replayDb
+                    .updateTable("acp_replay_sessions")
+                    .set({ estimated_bytes: estimatedBytes })
+                    .where("session_id", "=", session.sessionId),
+                );
                 if (!reconcileCanonicalSession(db, session)) {
                   throw new Error(
                     `failed verifying imported ACP replay session ${session.sessionId}`,
