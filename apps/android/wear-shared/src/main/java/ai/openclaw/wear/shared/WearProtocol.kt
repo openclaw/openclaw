@@ -33,6 +33,18 @@ object WearProtocol {
   const val MAX_JSON_DEPTH = 32
 }
 
+enum class WearProxyCapability(
+  val wireValue: String,
+) {
+  AgentControls(wireValue = "agent-controls"),
+  GatewayControls(wireValue = "gateway-controls"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String): WearProxyCapability? = entries.firstOrNull { capability -> capability.wireValue == value }
+  }
+}
+
 @Serializable
 enum class WearRpcMethod {
   @SerialName("proxy.status")

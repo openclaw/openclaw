@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 
 internal enum class WearGatewayState {
@@ -39,6 +40,8 @@ internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
   val activeAgentId: String? = null,
   val agents: List<WearAgentSummary> = emptyList(),
+  val agentControlsSupported: Boolean = false,
+  val gatewayControlsSupported: Boolean = false,
   val activeSessionId: String? = null,
   val sessions: List<WearSessionSummary> = emptyList(),
   val messages: List<WearChatMessage> = emptyList(),
@@ -82,6 +85,8 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
           selected = agent.id == activeAgentId,
         )
       },
+    agentControlsSupported = WearProxyCapability.AgentControls in proxyCapabilities,
+    gatewayControlsSupported = WearProxyCapability.GatewayControls in proxyCapabilities,
     activeSessionId = selectedSession?.key,
     sessions =
       sessions.map { session ->

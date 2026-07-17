@@ -3,6 +3,7 @@ package ai.openclaw.app.wear
 import ai.openclaw.wear.shared.WearEventType
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearProtocolCodec
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.test.runTest
@@ -52,6 +53,10 @@ class WearProxyControllerTest {
           .toBoolean(),
       )
       assertEquals("Offline", result.getValue("status").jsonPrimitive.content)
+      assertEquals(
+        WearProxyCapability.entries.map(WearProxyCapability::wireValue),
+        result.getValue("capabilities").jsonArray.map { it.jsonPrimitive.content },
+      )
     }
 
   @Test
@@ -94,12 +99,14 @@ class WearProxyControllerTest {
             buildJsonObject { put("agentId", "ops") },
           ),
         )
+      val selectedStatus = controller.handle(request(WearRpcMethod.ProxyStatus))
       val disconnected = controller.handle(request(WearRpcMethod.GatewayDisconnect))
       val reconnected = controller.handle(request(WearRpcMethod.GatewayConnect))
 
       val statusResult = checkNotNull(status.result).jsonObject
       val agentsResult = checkNotNull(agents.result).jsonObject
       val selectedResult = checkNotNull(selected.result).jsonObject
+      val selectedStatusResult = checkNotNull(selectedStatus.result).jsonObject
       val disconnectedResult = checkNotNull(disconnected.result).jsonObject
       val reconnectedResult = checkNotNull(reconnected.result).jsonObject
 
@@ -108,6 +115,9 @@ class WearProxyControllerTest {
       assertEquals("openai/gpt-test", statusResult.getValue("selectedModelRef").jsonPrimitive.content)
       assertEquals(2, agentsResult.getValue("agents").jsonArray.size)
       assertEquals("ops", selectedResult.getValue("activeAgentId").jsonPrimitive.content)
+      assertEquals("ops", selectedStatusResult.getValue("activeAgentId").jsonPrimitive.content)
+      assertEquals("agent:ops:main", selectedStatusResult.getValue("activeSessionKey").jsonPrimitive.content)
+      assertEquals("openai/gpt-test", selectedStatusResult.getValue("selectedModelRef").jsonPrimitive.content)
       assertFalse(
         disconnectedResult
           .getValue("connected")

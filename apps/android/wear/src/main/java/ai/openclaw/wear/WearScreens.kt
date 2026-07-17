@@ -188,6 +188,7 @@ internal fun OpenClawWearScreens(
         AGENTS_PAGE ->
           AgentsPage(
             agents = snapshot.agents,
+            supported = snapshot.agentControlsSupported,
             actionBusy = actionBusy,
             onSelectAgent = onSelectAgent,
           )
@@ -202,6 +203,7 @@ internal fun OpenClawWearScreens(
             snapshot = snapshot,
             themeMode = themeMode,
             autoSpeak = autoSpeak,
+            gatewayControlSupported = snapshot.gatewayControlsSupported,
             actionBusy = actionBusy,
             onThemeModeChange = onThemeModeChange,
             onAutoSpeakChange = onAutoSpeakChange,
@@ -991,11 +993,19 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
 @Composable
 private fun AgentsPage(
   agents: List<WearAgentSummary>,
+  supported: Boolean,
   actionBusy: Boolean,
   onSelectAgent: (String) -> Unit,
 ) {
   WearPage(pageLabel = stringResource(R.string.agents)) {
-    if (agents.isEmpty()) {
+    if (!supported) {
+      item {
+        EmptyPanel(
+          title = stringResource(R.string.update_required),
+          detail = stringResource(R.string.update_required_detail),
+        )
+      }
+    } else if (agents.isEmpty()) {
       item {
         EmptyPanel(
           title = stringResource(R.string.no_agents),
@@ -1067,6 +1077,7 @@ private fun ControlsPage(
   snapshot: WearConversationSnapshot,
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
+  gatewayControlSupported: Boolean,
   actionBusy: Boolean,
   onThemeModeChange: (WearThemeMode) -> Unit,
   onAutoSpeakChange: (Boolean) -> Unit,
@@ -1082,13 +1093,15 @@ private fun ControlsPage(
       SelectionButton(
         title = stringResource(R.string.gateway),
         detail =
-          if (gatewayConnected) {
+          if (!gatewayControlSupported) {
+            stringResource(R.string.update_required)
+          } else if (gatewayConnected) {
             stringResource(R.string.on)
           } else {
             stringResource(R.string.off)
           },
         selected = gatewayConnected,
-        enabled = !actionBusy,
+        enabled = gatewayControlSupported && !actionBusy,
         onClick = { onGatewayEnabledChange(!gatewayConnected) },
       )
     }

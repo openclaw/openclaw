@@ -1,6 +1,7 @@
 package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearEventType
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import android.app.Application
@@ -28,6 +29,7 @@ internal data class WearUiState(
   val agents: List<WearAgent> = emptyList(),
   val activeAgentId: String? = null,
   val selectedModelRef: String? = null,
+  val proxyCapabilities: Set<WearProxyCapability> = emptySet(),
   val sessions: List<WearSession> = emptyList(),
   val selectedSession: WearSession? = null,
   val messages: List<WearChatMessage> = emptyList(),
@@ -52,6 +54,7 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     agents = emptyList(),
     activeAgentId = null,
     selectedModelRef = null,
+    proxyCapabilities = emptySet(),
     sessions = emptyList(),
     selectedSession = null,
     messages = emptyList(),
@@ -265,11 +268,17 @@ internal class WearViewModel(
   fun selectAgent(agentId: String) {
     val current = mutableState.value
     val phoneNodeId = current.phoneNodeId ?: return
-    if (current.controlBusy || current.activeAgentId == agentId) return
+    if (
+      current.controlBusy ||
+      current.activeAgentId == agentId ||
+      WearProxyCapability.AgentControls !in current.proxyCapabilities
+    ) {
+      return
+    }
     viewModelScope.launch {
       mutableState.update { it.copy(controlBusy = true, error = null) }
       try {
-        repository.selectAgent(agentId, phoneNodeId)
+        repository.selectAgent(agentId, phoneNodeId, current.proxyCapabilities)
         mutableState.update {
           it.copy(
             activeAgentId = agentId,
@@ -293,7 +302,13 @@ internal class WearViewModel(
   fun setGatewayEnabled(enabled: Boolean) {
     val current = mutableState.value
     val phoneNodeId = current.phoneNodeId ?: return
-    if (current.controlBusy || current.connected == enabled) return
+    if (
+      current.controlBusy ||
+      current.connected == enabled ||
+      WearProxyCapability.GatewayControls !in current.proxyCapabilities
+    ) {
+      return
+    }
     viewModelScope.launch {
       mutableState.update { it.copy(controlBusy = true, error = null) }
       try {
@@ -303,7 +318,7 @@ internal class WearViewModel(
           talkAttemptId = null
           realtimeTalkClient.disconnectLocal()
         }
-        val status = repository.setGatewayEnabled(enabled, phoneNodeId)
+        val status = repository.setGatewayEnabled(enabled, phoneNodeId, current.proxyCapabilities)
         mutableState.update {
           it.copy(
             connected = status.connected,
@@ -311,6 +326,7 @@ internal class WearViewModel(
             phoneNodeId = status.phoneNodeId,
             activeAgentId = status.activeAgentId ?: it.activeAgentId,
             selectedModelRef = status.selectedModelRef ?: it.selectedModelRef,
+            proxyCapabilities = status.capabilities,
             realtimeTalk = if (enabled) it.realtimeTalk else WearRealtimeTalkSnapshot(),
           )
         }
@@ -333,8 +349,8 @@ internal class WearViewModel(
         try {
           val status = repository.status(expectedNodeId)
           val agentList =
-            if (status.connected) {
-              repository.agents(status.phoneNodeId)
+            if (status.connected && WearProxyCapability.AgentControls in status.capabilities) {
+              repository.agents(status.phoneNodeId, status.capabilities)
             } else {
               WearAgentList(
                 agents = emptyList(),
@@ -392,6 +408,7 @@ internal class WearViewModel(
                 status.activeAgentId
                   ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
               selectedModelRef = status.selectedModelRef,
+              proxyCapabilities = status.capabilities,
               sessions = projectedSessions,
               selectedSession = selectedSession,
               messages = if (selectionChanged || !status.connected) emptyList() else it.messages,
@@ -420,6 +437,7 @@ internal class WearViewModel(
               agents = emptyList(),
               activeAgentId = null,
               selectedModelRef = null,
+              proxyCapabilities = emptySet(),
               sessions = emptyList(),
               selectedSession = null,
               messages = emptyList(),

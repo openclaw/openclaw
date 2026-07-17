@@ -39,8 +39,7 @@ class MainActivity : ComponentActivity() {
     setContent {
       OpenClawWearApp(
         viewModel = viewModel,
-        themePreferences = remember { WearThemePreferences(applicationContext) },
-        conversationPreferences = remember { WearConversationPreferences(applicationContext) },
+        settingsStore = remember { WearSettingsStore(applicationContext) },
         speaker = remember { WearReplySpeaker(applicationContext) },
       )
     }
@@ -60,17 +59,17 @@ class MainActivity : ComponentActivity() {
 @Composable
 internal fun OpenClawWearApp(
   viewModel: WearViewModel,
-  themePreferences: WearThemePreferences,
-  conversationPreferences: WearConversationPreferences,
+  settingsStore: WearSettingsStore,
   speaker: WearReplySpeaker,
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
   val speaking by speaker.isSpeaking.collectAsState()
   val view = LocalView.current
+  val initialSettings = remember(settingsStore) { settingsStore.read() }
   var interaction by remember { mutableStateOf(WearInteractionState.READY) }
-  var themeMode by remember { mutableStateOf(themePreferences.read()) }
-  var autoSpeak by remember { mutableStateOf(conversationPreferences.readAutoSpeak()) }
+  var themeMode by remember { mutableStateOf(initialSettings.themeMode) }
+  var autoSpeak by remember { mutableStateOf(initialSettings.autoSpeak) }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
@@ -255,11 +254,11 @@ internal fun OpenClawWearApp(
         },
         onThemeModeChange = { selectedMode ->
           themeMode = selectedMode
-          themePreferences.write(selectedMode)
+          settingsStore.writeThemeMode(selectedMode)
         },
         onAutoSpeakChange = { enabled ->
           autoSpeak = enabled
-          conversationPreferences.writeAutoSpeak(enabled)
+          settingsStore.writeAutoSpeak(enabled)
           if (!enabled) speaker.stop()
         },
         onSpeakLatest = {

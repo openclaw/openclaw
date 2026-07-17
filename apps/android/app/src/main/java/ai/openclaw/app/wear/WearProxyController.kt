@@ -1,6 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcError
@@ -113,6 +114,12 @@ internal class WearProxyController(
     return buildJsonObject {
       put("connected", isGatewayConnected())
       put("status", gatewayStatusText().takeCodePoints(MAX_STATUS_CHARS))
+      put(
+        "capabilities",
+        buildJsonArray {
+          WearProxyCapability.entries.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+        },
+      )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
       activeSessionKey()?.takeIf(String::isNotBlank)?.let { put("activeSessionKey", it.takeCodePoints(MAX_SESSION_KEY_CHARS)) }
       selectedModelRef()?.takeIf(String::isNotBlank)?.let { put("selectedModelRef", it.takeCodePoints(MAX_MODEL_REF_CHARS)) }

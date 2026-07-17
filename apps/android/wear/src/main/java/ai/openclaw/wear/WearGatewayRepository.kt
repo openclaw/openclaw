@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcMethod
@@ -20,6 +21,7 @@ internal data class WearProxyStatus(
   val activeAgentId: String?,
   val activeSessionKey: String?,
   val selectedModelRef: String?,
+  val capabilities: Set<WearProxyCapability>,
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
@@ -127,13 +129,18 @@ internal class WearGatewayRepository(
       activeAgentId = result.string("activeAgentId"),
       activeSessionKey = result.string("activeSessionKey"),
       selectedModelRef = result.string("selectedModelRef"),
+      capabilities = result.proxyCapabilities(),
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
     )
   }
 
-  suspend fun agents(expectedNodeId: String): WearAgentList {
+  suspend fun agents(
+    expectedNodeId: String,
+    capabilities: Set<WearProxyCapability>,
+  ): WearAgentList {
+    capabilities.require(WearProxyCapability.AgentControls)
     val response =
       requester.request(
         WearRpcMethod.AgentsList,
@@ -156,7 +163,9 @@ internal class WearGatewayRepository(
   suspend fun selectAgent(
     agentId: String,
     phoneNodeId: String,
+    capabilities: Set<WearProxyCapability>,
   ) {
+    capabilities.require(WearProxyCapability.AgentControls)
     requester.request(
       WearRpcMethod.AgentsSelect,
       buildJsonObject { put("agentId", agentId) },
@@ -168,7 +177,9 @@ internal class WearGatewayRepository(
   suspend fun setGatewayEnabled(
     enabled: Boolean,
     phoneNodeId: String,
+    capabilities: Set<WearProxyCapability>,
   ): WearProxyStatus {
+    capabilities.require(WearProxyCapability.GatewayControls)
     val method = if (enabled) WearRpcMethod.GatewayConnect else WearRpcMethod.GatewayDisconnect
     val response =
       requester.request(
@@ -184,6 +195,7 @@ internal class WearGatewayRepository(
       activeAgentId = result.string("activeAgentId"),
       activeSessionKey = result.string("activeSessionKey"),
       selectedModelRef = result.string("selectedModelRef"),
+      capabilities = result.proxyCapabilities(),
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
@@ -385,3 +397,21 @@ private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimi
 private fun JsonObject.boolean(name: String): Boolean? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
 
 private fun JsonObject.long(name: String): Long? = (this[name] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+
+private fun JsonObject.proxyCapabilities(): Set<WearProxyCapability> =
+  (this["capabilities"] as? JsonArray)
+    .orEmpty()
+    .mapNotNull { element ->
+      (element as? JsonPrimitive)
+        ?.takeIf(JsonPrimitive::isString)
+        ?.contentOrNull
+        ?.let(WearProxyCapability::fromWireValue)
+    }.toSet()
+
+private fun Set<WearProxyCapability>.require(capability: WearProxyCapability) {
+  if (capability !in this) {
+    // Old phones omit capability negotiation. Fail before sending an RPC they
+    // cannot decode so the paired app remains usable during staggered updates.
+    throw WearProxyException("unsupported_peer", "Update OpenClaw on the paired phone")
+  }
+}

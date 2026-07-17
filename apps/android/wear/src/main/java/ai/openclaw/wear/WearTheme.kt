@@ -23,30 +23,12 @@ internal enum class WearThemeMode(
   }
 }
 
-internal class WearThemePreferences(
-  context: Context,
-) {
-  private val preferences =
-    context.applicationContext.getSharedPreferences(
-      PREFERENCES_NAME,
-      Context.MODE_PRIVATE,
-    )
+internal data class WearSettings(
+  val themeMode: WearThemeMode,
+  val autoSpeak: Boolean,
+)
 
-  fun read(): WearThemeMode = WearThemeMode.fromRawValue(preferences.getString(THEME_MODE_KEY, null))
-
-  fun write(mode: WearThemeMode) {
-    preferences.edit {
-      putString(THEME_MODE_KEY, mode.rawValue)
-    }
-  }
-
-  private companion object {
-    const val PREFERENCES_NAME = "openclaw.wear.appearance"
-    const val THEME_MODE_KEY = "themeMode"
-  }
-}
-
-internal class WearConversationPreferences(
+internal class WearSettingsStore internal constructor(
   private val preferences: SharedPreferences,
 ) {
   constructor(context: Context) :
@@ -57,11 +39,17 @@ internal class WearConversationPreferences(
       ),
     )
 
-  fun readAutoSpeak(): Boolean =
-    preferences.getBoolean(
-      AUTO_SPEAK_KEY,
-      DEFAULT_AUTO_SPEAK,
+  fun read(): WearSettings =
+    WearSettings(
+      themeMode = WearThemeMode.fromRawValue(preferences.getString(THEME_MODE_KEY, null)),
+      autoSpeak = preferences.getBoolean(AUTO_SPEAK_KEY, DEFAULT_AUTO_SPEAK),
     )
+
+  fun writeThemeMode(mode: WearThemeMode) {
+    preferences.edit {
+      putString(THEME_MODE_KEY, mode.rawValue)
+    }
+  }
 
   fun writeAutoSpeak(enabled: Boolean) {
     preferences.edit {
@@ -70,9 +58,12 @@ internal class WearConversationPreferences(
   }
 
   private companion object {
+    // One Watch-owned store is the durable owner for local UI preferences. These
+    // keys have not shipped in a tagged release, so defaults are the only upgrade path.
     const val DEFAULT_AUTO_SPEAK = false
-    const val PREFERENCES_NAME = "openclaw.wear.conversation"
-    const val AUTO_SPEAK_KEY = "autoSpeak"
+    const val PREFERENCES_NAME = "openclaw.wear.settings"
+    const val THEME_MODE_KEY = "appearance.themeMode"
+    const val AUTO_SPEAK_KEY = "conversation.autoSpeak"
   }
 }
 

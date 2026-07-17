@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.test.runTest
@@ -65,6 +66,7 @@ class WearGatewayRepositoryTest {
   @Test
   fun agentsAndGatewayControlsRequireThePreferredPhone() =
     runTest {
+      val capabilities = WearProxyCapability.entries.toSet()
       val requester =
         RecordingRequester { method, _ ->
           when (method) {
@@ -75,22 +77,28 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test"}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls"]}""",
               )
             else -> error("unexpected $method")
           }
         }
       val repository = WearGatewayRepository(requester)
 
-      val agents = repository.agents("phone-a")
-      repository.selectAgent("main", "phone-a")
-      val status = repository.setGatewayEnabled(enabled = false, phoneNodeId = "phone-a")
+      val agents = repository.agents("phone-a", capabilities)
+      repository.selectAgent("main", "phone-a", capabilities)
+      val status =
+        repository.setGatewayEnabled(
+          enabled = false,
+          phoneNodeId = "phone-a",
+          capabilities = capabilities,
+        )
 
       assertEquals("Main", agents.agents.single().name)
       assertTrue(agents.agents.single().selected)
       assertEquals("Offline", status.detail)
       assertEquals("main", status.activeAgentId)
       assertEquals("openai/gpt-test", status.selectedModelRef)
+      assertEquals(capabilities, status.capabilities)
       assertEquals(
         listOf(WearRpcMethod.AgentsList, WearRpcMethod.AgentsSelect, WearRpcMethod.GatewayDisconnect),
         requester.calls.map(Pair<WearRpcMethod, JsonObject>::first),
@@ -98,6 +106,50 @@ class WearGatewayRepositoryTest {
       assertEquals(setOf("agentId"), requester.calls[1].second.keys)
       assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
       assertTrue(requester.requirePreferredNodes.all { it })
+    }
+
+  @Test
+  fun oldPhoneStatusBlocksUnsupportedControlsBeforeSendingTheirRpc() =
+    runTest {
+      val requester =
+        RecordingRequester { method, _ ->
+          assertEquals(WearRpcMethod.ProxyStatus, method)
+          json.parseToJsonElement(
+            """{"connected":true,"status":"Connected","activeSessionKey":"agent:main"}""",
+          )
+        }
+      val repository = WearGatewayRepository(requester)
+
+      val status = repository.status()
+      val agentsFailure = runCatching { repository.agents(status.phoneNodeId, status.capabilities) }.exceptionOrNull()
+      val gatewayFailure =
+        runCatching {
+          repository.setGatewayEnabled(
+            enabled = false,
+            phoneNodeId = status.phoneNodeId,
+            capabilities = status.capabilities,
+          )
+        }.exceptionOrNull()
+
+      assertTrue(status.capabilities.isEmpty())
+      assertEquals("unsupported_peer", (agentsFailure as? WearProxyException)?.code)
+      assertEquals("unsupported_peer", (gatewayFailure as? WearProxyException)?.code)
+      assertEquals(listOf(WearRpcMethod.ProxyStatus), requester.calls.map(Pair<WearRpcMethod, JsonObject>::first))
+    }
+
+  @Test
+  fun newPhoneStatusNegotiatesKnownCapabilitiesAndIgnoresFutureOnes() =
+    runTest {
+      val requester =
+        RecordingRequester { _, _ ->
+          json.parseToJsonElement(
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls"]}""",
+          )
+        }
+
+      val status = WearGatewayRepository(requester).status()
+
+      assertEquals(WearProxyCapability.entries.toSet(), status.capabilities)
     }
 
   @Test
