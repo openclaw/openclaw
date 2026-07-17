@@ -107,6 +107,33 @@ export class NewSessionModelControl {
       });
   }
 
+  resolveAgentRuntimeId(options: {
+    agent?: GatewayAgentRow;
+    context: ApplicationContext | undefined;
+  }): string | undefined {
+    const defaults = options.context?.sessions.state.result?.defaults;
+    const agentDefaultModel = options.agent?.model?.primary;
+    if (this.selected) {
+      // Agent/default runtime metadata belongs to its default model. An explicit
+      // model without per-model metadata is unknown, not an inherited runtime.
+      return resolveDraftModelTarget(
+        this.selected,
+        undefined,
+        this.catalog,
+      )?.entry?.agentRuntime?.id.trim();
+    }
+    const defaultTarget = resolveDraftModelTarget(
+      agentDefaultModel ?? defaults?.model,
+      agentDefaultModel ? undefined : defaults?.modelProvider,
+      this.catalog,
+    );
+    return (
+      defaultTarget?.entry?.agentRuntime?.id.trim() ??
+      options.agent?.agentRuntime?.id.trim() ??
+      defaults?.agentRuntime?.id.trim()
+    );
+  }
+
   render(options: {
     agent?: GatewayAgentRow;
     agentId: string;
