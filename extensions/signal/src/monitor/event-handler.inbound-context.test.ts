@@ -336,7 +336,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     ).resolves.toEqual({ author: "+15550002222", body: "edited hello" });
   });
 
-  it("preserves the last debounced message body for native reply quote metadata", async () => {
+  it("joins debounced message bodies with newlines and preserves the last native reply body", async () => {
     vi.useFakeTimers();
     const deliverRepliesMock = vi.fn().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockImplementationOnce(async (params: any) => {
@@ -386,7 +386,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
       });
       const context = requireCapturedContext();
-      expect(context.BodyForAgent).toBe("first debounced message\\nsecond debounced message");
+      expect(context.BodyForAgent).toBe("first debounced message\nsecond debounced message");
       expect(context.ReplyToId).toBe("1700000000002");
       expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
       expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
@@ -2070,8 +2070,8 @@ describe("signal createSignalEventHandler inbound context", () => {
 
       const context = requireCapturedContext();
       expect(context.BodyForAgent).toContain("[signal attachment unavailable]");
-      expect(context.RawBody).toBe("first request\\nsecond request");
-      expect(context.CommandBody).toBe("first request\\nsecond request");
+      expect(context.RawBody).toBe("first request\nsecond request");
+      expect(context.CommandBody).toBe("first request\nsecond request");
     } finally {
       vi.useRealTimers();
     }

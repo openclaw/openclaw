@@ -731,11 +731,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const combinedText = entries
       .map((entry) => entry.bodyText)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     const combinedCommandBody = entries
       .map((entry) => entry.commandBody)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     if (!combinedText.trim()) {
       await settle();
       return;
