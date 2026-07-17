@@ -44,6 +44,10 @@ import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import {
+  listActiveDegradedPlugins,
+  toPublicPluginVerificationDiagnostic,
+} from "../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -354,14 +358,11 @@ const buildSessionSummary = async (storePath: string, agentId?: string) => {
 
 function buildPluginHealthSummary(): PluginHealthSummary | undefined {
   const registry = getActivePluginRegistry();
-  if (!registry) {
-    return undefined;
-  }
-  const loaded = registry.plugins
+  const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = registry.plugins
+  const errors = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "error")
     .map((plugin) => {
       const error: PluginHealthErrorSummary = {
@@ -382,10 +383,17 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
       return error;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
-  if (loaded.length === 0 && errors.length === 0) {
+  const unavailable = listActiveDegradedPlugins()
+    .map(({ pluginId, state, diagnostic }) => ({
+      id: pluginId,
+      state,
+      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+    }))
+    .toSorted((left, right) => left.id.localeCompare(right.id));
+  if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }
-  return { loaded, errors };
+  return { loaded, errors, unavailable };
 }
 
 function readBooleanField(value: unknown, key: string): boolean | undefined {

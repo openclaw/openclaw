@@ -104,8 +104,10 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
  * are swapped and the in-update doctor pass has already returned, but BEFORE
  * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
  * an external package fetch may be transient, and failing the core update
- * would strand the user. Payload smoke failures still block the restart so we
- * never restart with an installed active plugin whose payload is unloadable.
+ * would strand the user. Explicit `openclaw update` callers keep reporting
+ * payload smoke failures as errors. Gateway startup consumes the same typed
+ * failures by quarantining each known plugin owner before any module import,
+ * then boots with that plugin marked configured-unavailable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -244,8 +246,8 @@ export function filterRecordsToActive(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
- *    Repair warnings are nonblocking; smoke failures remain blocking
- *    because they prove an active installed payload is unloadable.
+ *    Repair warnings are nonblocking; smoke failures remain errors on the
+ *    explicit update path even though Gateway startup can quarantine them.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

@@ -21,6 +21,7 @@ import {
   formatAutoEnabledActivationReason,
   formatMissingPluginRegisterError,
   markPluginActivationDisabled,
+  recordPluginConfiguredUnavailable,
   recordPluginError,
 } from "./loader-records.js";
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
@@ -50,6 +51,7 @@ import {
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
+import { findActiveDegradedPlugin } from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
@@ -145,6 +147,19 @@ export function loadRuntimePluginCandidate(params: {
     activationState,
   });
   applyPluginManifestRecordDetails(record, manifestRecord);
+  const degradedPlugin = findActiveDegradedPlugin(pluginId);
+  if (enableState.enabled && degradedPlugin) {
+    // Startup verification owns this boot-stable quarantine. Return before
+    // artifact resolution so no top-level plugin code can execute this boot.
+    recordPluginConfiguredUnavailable({
+      registry,
+      record,
+      seenIds: state.seenIds,
+      origin: candidate.origin,
+      degradedPlugin,
+    });
+    return;
+  }
   const localSetupBasePolicyBlock = resolveManifestOwnerBasePolicyBlock({
     plugin: { id: pluginId },
     normalizedConfig: context.normalized,

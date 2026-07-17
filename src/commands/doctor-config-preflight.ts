@@ -15,6 +15,12 @@ import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import {
+  buildDegradedPluginsFromVerificationFailures,
+  setActiveDegradedPlugins,
+  type DegradedPlugin,
+} from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
@@ -147,10 +153,15 @@ type StartupPluginVerificationDiagnostic = {
   messages: string[];
 };
 
+type StartupPluginConvergenceResult = {
+  blockingDiagnostic: StartupPluginVerificationDiagnostic | null;
+  quarantinedPlugins: DegradedPlugin[];
+};
+
 async function runStartupUpgradeConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<StartupPluginVerificationDiagnostic | null> {
+}): Promise<StartupPluginConvergenceResult> {
   const { planStartupPluginConvergence } = await measureStartupPreflightStep(
     "plugin-plan-import",
     () => import("./doctor/shared/startup-plugin-convergence-plan.js"),
@@ -162,7 +173,7 @@ async function runStartupUpgradeConvergence(params: {
     }),
   );
   if (!plan.required) {
-    return null;
+    return { blockingDiagnostic: null, quarantinedPlugins: [] };
   }
   const { runPostCorePluginConvergence } = await measureStartupPreflightStep(
     "plugin-convergence-import",
@@ -191,7 +202,37 @@ async function runStartupUpgradeConvergence(params: {
   if (warnings.length > 0) {
     note(warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
   }
-  return warnings.length > 0 ? { kind: "plugin-verification", messages: warnings } : null;
+  const normalizedPlugins = normalizePluginsConfig(params.cfg.plugins);
+  const quarantinedPlugins = buildDegradedPluginsFromVerificationFailures(
+    convergence.smokeFailures.filter(
+      (failure) =>
+        resolveEffectiveEnableState({
+          id: failure.pluginId,
+          origin: "global",
+          config: normalizedPlugins,
+          rootConfig: params.cfg,
+        }).enabled,
+    ),
+  );
+  const quarantinedWarningKeys = new Set(
+    convergence.smokeFailures.map((failure) =>
+      JSON.stringify([failure.pluginId, `${failure.reason}: ${failure.detail}`]),
+    ),
+  );
+  const blockingMessages = convergence.warnings
+    .filter(
+      (warning) =>
+        !warning.pluginId ||
+        !quarantinedWarningKeys.has(JSON.stringify([warning.pluginId, warning.reason])),
+    )
+    .map((warning) => `${warning.message} ${warning.guidance.join(" ")}`.trim());
+  return {
+    blockingDiagnostic:
+      blockingMessages.length > 0
+        ? { kind: "plugin-verification", messages: blockingMessages }
+        : null,
+    quarantinedPlugins,
+  };
 }
 
 function formatStartupMigrationFailure(params: { warnings: string[]; blockers: string[] }): string {
@@ -498,13 +539,17 @@ export async function runDoctorConfigPreflight(
           }),
         );
       }
-      const pluginVerificationDiagnostic = await runStartupUpgradeConvergence({
+      // This state is established before the first Gateway plugin load and remains
+      // fixed for the boot, so repaired payloads require a deliberate restart.
+      setActiveDegradedPlugins([]);
+      const pluginConvergence = await runStartupUpgradeConvergence({
         cfg: baseConfig,
         env: process.env,
       });
-      if (pluginVerificationDiagnostic) {
+      setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
+      if (pluginConvergence.blockingDiagnostic) {
         throwStartupMigrationRefusal(
-          formatStartupPluginVerificationFailure(pluginVerificationDiagnostic),
+          formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
         );
       }
       startupCheckpoint?.recordSuccessfulStartupMigrations({

@@ -15,6 +15,7 @@ let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string 
 let healthPluginsForTest: HealthTestPlugin[] = [];
 
 let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePluginRegistry;
+let setActiveDegradedPlugins: typeof import("../plugins/runtime-degraded-state.js").setActiveDegradedPlugins;
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
@@ -88,14 +89,16 @@ async function loadFreshHealthModulesForTest() {
     listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
   }));
 
-  const [pluginsRuntime, channelTestUtils, health] = await Promise.all([
+  const [pluginsRuntime, pluginDegradedState, channelTestUtils, health] = await Promise.all([
     import("../plugins/runtime.js"),
+    import("../plugins/runtime-degraded-state.js"),
     import("../test-utils/channel-plugins.js"),
     import("./health.js"),
   ]);
 
   return {
     setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
+    setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
     createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
     createTestRegistry: channelTestUtils.createTestRegistry,
     getHealthSnapshot: health.getHealthSnapshot,
@@ -461,6 +464,7 @@ describe("getHealthSnapshot", () => {
   beforeAll(async () => {
     ({
       setActivePluginRegistry,
+      setActiveDegradedPlugins,
       createChannelTestPluginBase,
       createTestRegistry,
       getHealthSnapshot,
@@ -468,6 +472,7 @@ describe("getHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    setActiveDegradedPlugins([]);
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
     listHealthSessionEntriesCalls = [];
@@ -550,6 +555,39 @@ describe("getHealthSnapshot", () => {
         error: "failed to load plugin dependency: ENOSPC",
       },
     ]);
+  });
+
+  it("includes configured-unavailable plugins in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry(createTestRegistry([]));
+    setActiveDegradedPlugins([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "unreadable-package-json",
+          detail: "Could not read /private/plugins/discord/package.json: permission denied",
+          installPath: "/private/plugins/discord",
+        },
+      },
+    ]);
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.plugins?.unavailable).toEqual([
+      {
+        id: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "unreadable-package-json",
+          detail: "Could not read <plugin-install>/package.json: permission denied",
+        },
+      },
+    ]);
+    expect(JSON.stringify(snap.plugins?.unavailable)).not.toContain("/private/plugins");
   });
 
   it("includes dead-lettered delivery queue entries in the health snapshot", async () => {

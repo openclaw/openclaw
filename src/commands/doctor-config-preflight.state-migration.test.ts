@@ -1,5 +1,9 @@
 // Doctor config preflight tests cover state migration preflight behavior before config repair.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listActiveDegradedPlugins,
+  setActiveDegradedPlugins,
+} from "../plugins/runtime-degraded-state.js";
 import { ExitError } from "../runtime.js";
 
 type StateMigrationResult = {
@@ -11,8 +15,17 @@ type StateMigrationResult = {
 };
 
 type StartupConvergenceWarning = {
+  pluginId?: string;
+  reason: string;
   message: string;
   guidance: string[];
+};
+
+type StartupSmokeFailure = {
+  pluginId: string;
+  installPath?: string;
+  reason: "missing-main-entry" | "unreadable-package-json";
+  detail: string;
 };
 
 type StartupConvergenceResult = {
@@ -20,7 +33,7 @@ type StartupConvergenceResult = {
   notices?: StartupConvergenceWarning[];
   warnings: StartupConvergenceWarning[];
   errored: boolean;
-  smokeFailures: unknown[];
+  smokeFailures: StartupSmokeFailure[];
   installRecords: Record<string, unknown>;
 };
 
@@ -178,6 +191,7 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveDegradedPlugins([]);
     needsStartupMigrationCheckpoint.mockReturnValue(false);
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
@@ -577,6 +591,7 @@ describe("runDoctorConfigPreflight state migration", () => {
       makeStartupConvergenceResult({
         warnings: [
           {
+            reason: "Configured plugin discord is not installed.",
             message: "Configured plugin discord is not installed.",
             guidance: ["Run `openclaw update repair` to retry plugin repair."],
           },
@@ -600,13 +615,34 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
-  it("blocks gateway readiness when plugin convergence reports an error", async () => {
+  it("quarantines a plugin payload verification failure and checkpoints readiness", async () => {
     needsStartupMigrationCheckpoint.mockReturnValue(true);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: true,
+      config: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      sourceConfig: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      parsed: {
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      },
+      legacyIssues: [],
+      warnings: [],
+      issues: [],
+    });
     runPostCorePluginConvergence.mockResolvedValueOnce(
       makeStartupConvergenceResult({
         errored: true,
         warnings: [
           {
+            pluginId: "discord",
+            reason: "missing-main-entry: index.js",
             message: 'Plugin "discord" failed post-core payload smoke check (missing): index.js',
             guidance: [
               "Run `openclaw update repair` to retry plugin repair.",
@@ -614,20 +650,43 @@ describe("runDoctorConfigPreflight state migration", () => {
             ],
           },
         ],
+        smokeFailures: [
+          {
+            pluginId: "discord",
+            installPath: "/plugins/discord",
+            reason: "missing-main-entry",
+            detail: "index.js",
+          },
+        ],
       }),
     );
 
-    await expect(
-      runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        requireStartupMigrationCheckpoint: true,
-      }),
-    ).rejects.toThrow(
-      'OpenClaw plugin verification failed; refusing to report the gateway ready.\n- Plugin "discord" failed post-core payload smoke check',
-    );
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
 
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    expect(listActiveDegradedPlugins()).toEqual([
+      {
+        pluginId: "discord",
+        state: "configured-unavailable",
+        diagnostic: {
+          kind: "plugin-verification",
+          reason: "missing-main-entry",
+          detail: "index.js",
+          installPath: "/plugins/discord",
+        },
+      },
+    ]);
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '- Plugin "discord" failed post-core payload smoke check (missing): index.js',
+      ),
+      "Doctor warnings",
+    );
+    expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(1);
+    expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });
 
