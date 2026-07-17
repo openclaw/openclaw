@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import {
+  readRemoteMediaBufferSpy,
+  resetReadRemoteMediaBufferMock,
+  telegramBotDepsForTest,
+} from "./bot.media.e2e-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,
@@ -269,6 +273,24 @@ describe("telegram local Bot API media", () => {
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }
+  });
+
+  it("cancels response body on non-ok status before throwing", async () => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    const response = new Response(body, { status: 404, statusText: "Not Found" });
+    const fetchImpl = vi.fn().mockResolvedValue(response);
+
+    resetReadRemoteMediaBufferMock();
+
+    await expect(
+      readRemoteMediaBufferSpy({
+        url: "https://example.com/file.jpg",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("Failed to fetch media from https://example.com/file.jpg");
+
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 
