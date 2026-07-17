@@ -141,7 +141,7 @@ async function acquireOwnerLease(params: {
     }
     try {
       fileLock = await acquireFileLock(ownerPath, {
-        retries: { retries: 0 },
+        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
         stale: OWNER_LOCK_STALE_MS,
         // The shared lock wrapper reclaims only a definitely dead PID and removes
         // the exact unchanged sidecar. Live or ambiguous owners remain fail-closed.
