@@ -66,4 +66,16 @@ describe("resolveMatrixThreadRouting", () => {
       threadId: undefined,
     });
   });
+
+  it("handles missing messageId gracefully without crashing", () => {
+    // The TypeScript type says `messageId: string`, but runtime callers
+    // could pass unexpected values. The ?. guard prevents a crash.
+    expect(
+      resolveMatrixThreadRouting({
+        isDirectMessage: false,
+        threadReplies: "always",
+        messageId: undefined as unknown as string,
+      }),
+    ).toEqual({ threadId: undefined });
+  });
 });
