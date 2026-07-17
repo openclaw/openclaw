@@ -413,10 +413,11 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
-    const model = makeResponsesModel({
+    const model = {
+      ...createAzureResponsesModel(),
       provider: "amazon-bedrock-mantle",
       baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
-    });
+    };
     const output = createResponsesAssistantOutput(model);
     const pushSpy = vi.fn();
     const textBlockSignatures: Array<[string, number, string | undefined]> = [];
@@ -703,10 +704,11 @@ describe("openai transport stream", () => {
   });
 
   it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
-    const model = makeResponsesModel({
+    const model = {
+      ...createAzureResponsesModel(),
       provider: "amazon-bedrock-mantle",
       baseUrl: "https://bedrock-mantle.us-east-1.api.aws/v1",
-    });
+    };
     const output = createResponsesAssistantOutput(model);
 
     await testing.processResponsesStream(
