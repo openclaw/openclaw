@@ -3,6 +3,9 @@
 # Shared helpers for Docker E2E scripts that keep a named container running
 # while polling readiness from the host.
 
+DOCKER_E2E_CONTAINER_LIB_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd)"
+source "$DOCKER_E2E_CONTAINER_LIB_DIR/docker-e2e-resource-diagnostics.sh"
+
 docker_e2e_timeout_bin() {
   if command -v timeout >/dev/null 2>&1; then
     printf '%s\n' timeout
@@ -142,11 +145,7 @@ docker_e2e_docker_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
-    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    else
-      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    fi
+    docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
@@ -157,11 +156,7 @@ docker_e2e_docker_run_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
-    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    else
-      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    fi
+    docker_e2e_docker_run_with_resource_diagnostics "$timeout_value" "$@"
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
