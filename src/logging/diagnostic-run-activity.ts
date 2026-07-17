@@ -9,6 +9,7 @@ import {
 type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
+  runIds: Set<string>;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Map<string, ActiveModelCall>;
@@ -87,6 +88,11 @@ export function resolveRunStaleThresholdMs(
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
+const sessionActivities = new Set<SessionActivity>();
+const SESSION_ACTIVITY_TTL_MS = 30 * 60 * 1000;
+const SESSION_ACTIVITY_PRUNE_INTERVAL_MS = 60 * 1000;
+const SESSION_ACTIVITY_MAX_ENTRIES = 2000;
+let lastSessionActivityPruneAt = 0;
 let embeddedRunSequence = 0;
 
 function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
@@ -106,12 +112,14 @@ function registerSessionActivityRefs(
   activity: SessionActivity,
   params: { sessionId?: string; sessionKey?: string; runId?: string },
 ): void {
+  sessionActivities.add(activity);
   activity.sessionId ??= params.sessionId;
   activity.sessionKey ??= params.sessionKey;
   for (const ref of sessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
   if (params.runId) {
+    activity.runIds.add(params.runId);
     activityByRunId.set(params.runId, activity);
   }
 }
@@ -132,6 +140,9 @@ function replaceSessionActivityReferences(source: SessionActivity, target: Sessi
 function mergeSessionActivity(target: SessionActivity, source: SessionActivity): void {
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
+  for (const runId of source.runIds) {
+    target.runIds.add(runId);
+  }
   for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
     target.activeEmbeddedRuns.set(key, embeddedRun);
   }
@@ -152,6 +163,7 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
     target.lastProgressReason = source.lastProgressReason;
   }
   replaceSessionActivityReferences(source, target);
+  sessionActivities.delete(source);
 }
 
 function resolveSessionActivity(params: {
@@ -192,6 +204,7 @@ function resolveSessionActivity(params: {
   const created: SessionActivity = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    runIds: new Set(),
     activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Map(),
@@ -202,9 +215,64 @@ function resolveSessionActivity(params: {
   return created;
 }
 
+function isIdleSessionActivity(activity: SessionActivity): boolean {
+  return (
+    activity.runIds.size === 0 &&
+    activity.activeEmbeddedRuns.size === 0 &&
+    activity.activeTools.size === 0 &&
+    activity.activeModelCalls.size === 0
+  );
+}
+
+function deleteSessionActivity(activity: SessionActivity): void {
+  for (const [ref, candidate] of activityByRef) {
+    if (candidate === activity) {
+      activityByRef.delete(ref);
+    }
+  }
+  sessionActivities.delete(activity);
+}
+
+function pruneDiagnosticSessionActivities(now = Date.now(), force = false): void {
+  const shouldPruneForSize = sessionActivities.size > SESSION_ACTIVITY_MAX_ENTRIES;
+  if (
+    !force &&
+    !shouldPruneForSize &&
+    now - lastSessionActivityPruneAt < SESSION_ACTIVITY_PRUNE_INTERVAL_MS
+  ) {
+    return;
+  }
+  lastSessionActivityPruneAt = now;
+
+  for (const activity of sessionActivities) {
+    if (
+      isIdleSessionActivity(activity) &&
+      now - activity.lastProgressAt > SESSION_ACTIVITY_TTL_MS
+    ) {
+      deleteSessionActivity(activity);
+    }
+  }
+
+  const excess = sessionActivities.size - SESSION_ACTIVITY_MAX_ENTRIES;
+  if (excess <= 0) {
+    return;
+  }
+  const idleActivities = Array.from(sessionActivities)
+    .filter(isIdleSessionActivity)
+    .toSorted((a, b) => a.lastProgressAt - b.lastProgressAt);
+  for (let index = 0; index < excess; index += 1) {
+    const activity = idleActivities[index];
+    if (!activity) {
+      break;
+    }
+    deleteSessionActivity(activity);
+  }
+}
+
 function touchSessionActivity(activity: SessionActivity, reason: string, now = Date.now()): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
+  pruneDiagnosticSessionActivities(now);
 }
 
 function toolKey(event: {
@@ -307,6 +375,7 @@ function recordRunCompleted(
     return;
   }
   activityByRunId.delete(event.runId);
+  activity.runIds.delete(event.runId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeEmbeddedRuns.clear();
@@ -695,6 +764,8 @@ export function stopDiagnosticRunActivityTracking(): void {
   unregisterDiagnosticRunActivityListener = undefined;
   activityByRef.clear();
   activityByRunId.clear();
+  sessionActivities.clear();
+  lastSessionActivityPruneAt = 0;
   embeddedRunSequence = 0;
 }
 

@@ -11,6 +11,7 @@ import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resolveRunStaleThresholdMs,
   RUN_STALE_TAKEOVER_MS,
   startDiagnosticRunActivityTracking,
@@ -100,5 +101,46 @@ describe("resolveRunStaleThresholdMs", () => {
     },
   ])("$name", ({ activity, expected }) => {
     expect(resolveRunStaleThresholdMs(activity)).toBe(expected);
+  });
+});
+
+describe("diagnostic run activity retention", () => {
+  it("bounds completed session activity while preserving active runs", () => {
+    startDiagnosticRunActivityTracking();
+    const active = {
+      runId: "active-run",
+      sessionId: "active-session",
+      sessionKey: "agent:main:active",
+    };
+    markDiagnosticRunProgress({ ...active, reason: "proof:active" });
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `completed-run-${index}`;
+      const sessionId = `completed-session-${index}`;
+      const sessionKey = `agent:main:completed-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "completed-session-0",
+        sessionKey: "agent:main:completed-0",
+      }),
+    ).toEqual({});
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "completed-session-2000",
+        sessionKey: "agent:main:completed-2000",
+      }).lastProgressReason,
+    ).toBe("run:completed");
+    expect(getDiagnosticSessionActivitySnapshot(active).lastProgressReason).toBe("proof:active");
   });
 });
