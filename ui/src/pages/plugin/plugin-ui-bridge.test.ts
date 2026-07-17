@@ -158,7 +158,9 @@ describe("PluginUiBridgeController", () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const frameWindow = frame.contentWindow;
-    if (!frameWindow) throw new Error("expected iframe window");
+    if (!frameWindow) {
+      throw new Error("expected iframe window");
+    }
     const postMessage = vi.spyOn(frameWindow, "postMessage");
     const bridge = new PluginUiBridgeController();
     bridge.sync({
@@ -181,7 +183,9 @@ describe("PluginUiBridgeController", () => {
     frame.dispatchEvent(new Event("load"));
 
     await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(postMessage).toHaveBeenCalledOnce();
     bridge.clear();
   });
@@ -195,7 +199,9 @@ describe("PluginUiBridgeController", () => {
       }),
     );
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(connected.postMessage).toHaveBeenCalledOnce();
     connected.bridge.clear();
     connected.childPort.close();
@@ -216,7 +222,9 @@ describe("PluginUiBridgeController", () => {
       navigateToChat: vi.fn(),
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
     expect(connected.postMessage).toHaveBeenCalledOnce();
     connected.bridge.clear();
     connected.childPort.close();
