@@ -50,6 +50,32 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("keeps bare reset context model-visible while persisting the reset marker", () => {
+    const resetContext = "Startup context\n\nA new session was started via /reset.";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: resetContext,
+        transcriptPrompt: "[OpenClaw session reset]",
+      }),
+    ).toEqual({
+      prompt: "[OpenClaw session reset]",
+      modelPrompt: resetContext,
+    });
+  });
+
+  it("keeps the room-event instruction model-visible while persisting the chat line", () => {
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "[OpenClaw room event]",
+        transcriptPrompt: "#35676 Kesava: No thanks",
+      }),
+    ).toEqual({
+      prompt: "#35676 Kesava: No thanks",
+      modelPrompt: "[OpenClaw room event]",
+    });
+  });
+
   it("preserves heartbeat task text when prompt-build hooks add model context", () => {
     const heartbeatTask = "Read HEARTBEAT.md and handle any due tasks.";
     const prependContext = "Hook-provided policy context";
