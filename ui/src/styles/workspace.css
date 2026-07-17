@@ -136,7 +136,7 @@ button.workspace-tab:hover {
   overflow: auto;
 }
 
-.workspace-fullbleed > .workspace-custom-widget,
+.workspace-fullbleed > .workspace-widget__custom,
 .workspace-fullbleed > .workspace-embed__frame {
   width: 100%;
   height: 100%;

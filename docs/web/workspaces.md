@@ -65,6 +65,11 @@ lists only pending entries from the Workspaces custom-widget registry. Its Appro
 Reject controls are disabled unless the current connection holds `operator.approvals`;
 it does not expose exec, plugin, or system-agent approvals.
 
+Tabs use the 12-column widget grid by default. A tab containing zero or one widget can
+instead use the `full` layout, which removes the widget card chrome and lets the widget
+fill the tab. Switch layouts with `openclaw workspaces tabs full <slug>` and
+`openclaw workspaces tabs grid <slug>`.
+
 Widgets declare data through **bindings**, they never fetch on their own:
 
 | Binding  | Resolves to                                                                                               |
@@ -110,6 +115,7 @@ per-invocation confirmation quoting the exact text, and passes a rate limit.
 ```sh
 openclaw workspaces tabs list
 openclaw workspaces tabs create --title Financials
+openclaw workspaces tabs full financials
 openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
 openclaw workspaces widget-approve revenue-chart
 ```
