@@ -1264,6 +1264,46 @@ describe("telegram message cache", () => {
     expect(context.map((entry) => entry.node.body)).toContain("unpersisted gap");
   });
 
+  it("uses a stable same-timestamp boundary for non-decimal ambient watermark ids", () => {
+    const watermark = {
+      messageId: "b",
+      timestampMs: 1_700_000_001_000,
+      sessionId: "session-current",
+      updatedAt: 1_700_000_002_000,
+    };
+
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "a", timestamp: 1_700_000_001_000 },
+        watermark,
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "b", timestamp: 1_700_000_001_000 },
+        watermark,
+      ),
+    ).toBe(false);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "c", timestamp: 1_700_000_001_000 },
+        watermark,
+      ),
+    ).toBe(true);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1000", timestamp: 1_700_000_001_000 },
+        { ...watermark, messageId: "999" },
+      ),
+    ).toBe(true);
+    expect(
+      isTelegramHistoryEntryAfterAmbientWatermark(
+        { messageId: "1e3", timestamp: 1_700_000_001_000 },
+        { ...watermark, messageId: "999" },
+      ),
+    ).toBe(false);
+  });
+
   it("does not select messages before the latest session reset command", async () => {
     const cache = createTelegramMessageCache();
     const beforeSession = Date.parse("2026-05-10T12:40:00.000Z");

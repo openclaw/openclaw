@@ -50,12 +50,23 @@ function telegramHistoryEntryKey(entry: HistoryEntry): string | undefined {
   return undefined;
 }
 
-function numericMessageId(value: string | undefined): number | undefined {
-  if (!value?.trim()) {
+function numericMessageId(value: string | undefined): bigint | undefined {
+  if (!value || !/^(?:0|[1-9]\d*)$/.test(value)) {
     return undefined;
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return BigInt(value);
+}
+
+function compareMessageIds(left: string | undefined, right: string | undefined): number {
+  if (left === undefined || right === undefined) {
+    return left === right ? 0 : left === undefined ? -1 : 1;
+  }
+  const leftMessageId = numericMessageId(left);
+  const rightMessageId = numericMessageId(right);
+  if (leftMessageId !== undefined && rightMessageId !== undefined) {
+    return leftMessageId === rightMessageId ? 0 : leftMessageId > rightMessageId ? 1 : -1;
+  }
+  return left === right ? 0 : left > right ? 1 : -1;
 }
 
 export function isTelegramHistoryEntryAfterAmbientWatermark(
@@ -70,20 +81,9 @@ export function isTelegramHistoryEntryAfterAmbientWatermark(
     if (entry.timestamp !== watermark.timestampMs) {
       return entry.timestamp > watermark.timestampMs;
     }
-    const entryMessageId = numericMessageId(entry.messageId);
-    const watermarkMessageId = numericMessageId(watermark.messageId);
-    return (
-      entryMessageId !== undefined &&
-      watermarkMessageId !== undefined &&
-      entryMessageId > watermarkMessageId
-    );
+    return compareMessageIds(entry.messageId, watermark.messageId) > 0;
   }
-  const entryMessageId = numericMessageId(entry.messageId);
-  const watermarkMessageId = numericMessageId(watermark.messageId);
-  if (entryMessageId !== undefined && watermarkMessageId !== undefined) {
-    return entryMessageId > watermarkMessageId;
-  }
-  return entry.messageId !== watermark.messageId;
+  return compareMessageIds(entry.messageId, watermark.messageId) > 0;
 }
 
 function telegramChatWindowPayload(

@@ -26,6 +26,15 @@ function numericMessageId(value: string): bigint | undefined {
   return BigInt(value);
 }
 
+function compareMessageIds(left: string, right: string): number {
+  const leftMessageId = numericMessageId(left);
+  const rightMessageId = numericMessageId(right);
+  if (leftMessageId !== undefined && rightMessageId !== undefined) {
+    return leftMessageId === rightMessageId ? 0 : leftMessageId > rightMessageId ? 1 : -1;
+  }
+  return left === right ? 0 : left > right ? 1 : -1;
+}
+
 function isAmbientTranscriptWatermarkAfter(
   next: Pick<AmbientTranscriptWatermark, "messageId" | "timestampMs">,
   current: AmbientTranscriptWatermark | undefined,
@@ -37,19 +46,9 @@ function isAmbientTranscriptWatermarkAfter(
     if (next.timestampMs !== current.timestampMs) {
       return next.timestampMs > current.timestampMs;
     }
-    const nextMessageId = numericMessageId(next.messageId);
-    const currentMessageId = numericMessageId(current.messageId);
-    if (nextMessageId !== undefined && currentMessageId !== undefined) {
-      return nextMessageId > currentMessageId;
-    }
-    return next.messageId !== current.messageId;
+    return compareMessageIds(next.messageId, current.messageId) > 0;
   }
-  const nextMessageId = numericMessageId(next.messageId);
-  const currentMessageId = numericMessageId(current.messageId);
-  if (nextMessageId !== undefined && currentMessageId !== undefined) {
-    return nextMessageId > currentMessageId;
-  }
-  return next.messageId !== current.messageId;
+  return compareMessageIds(next.messageId, current.messageId) > 0;
 }
 
 export function readAmbientTranscriptWatermark(

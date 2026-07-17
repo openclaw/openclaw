@@ -148,5 +148,10 @@ describe("ambient transcript watermark", () => {
     await expect(updateMessageId("18")).resolves.toBe("18");
     await expect(updateMessageId("1e3")).resolves.toBe("1e3");
     await expect(updateMessageId("999")).resolves.toBe("999");
+    await expect(updateMessageId("1e3")).resolves.toBe("999");
+    await expect(updateMessageId("0999")).resolves.toBe("999");
+    await expect(updateMessageId("a")).resolves.toBe("a");
+    await expect(updateMessageId("b")).resolves.toBe("b");
+    await expect(updateMessageId("a")).resolves.toBe("b");
   });
 });
