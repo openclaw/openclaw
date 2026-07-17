@@ -375,6 +375,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "approval.history", scope: "operator.approvals" },
   { name: "plugin.surface.refresh", scope: "operator.read" },
   { name: "conversations.list", scope: "operator.admin" },
+  { name: "publisherFeeds.list", scope: "operator.read", startup: true },
+  { name: "publisherFeeds.follow", scope: "operator.write" },
+  { name: "publisherFeeds.unfollow", scope: "operator.write" },
+  { name: "publisherFeeds.refresh", scope: "operator.write", startup: true },
+  { name: "publisherFeeds.status", scope: "operator.read", startup: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

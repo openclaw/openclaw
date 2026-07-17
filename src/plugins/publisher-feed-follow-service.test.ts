@@ -125,8 +125,8 @@ describe("publisher feed follow service", () => {
       record: acceptedState(),
     }));
     const result = await followPublisherFeed({
-      publisherId: "publishers:alice",
-      feedProfile: "clawhub-signed",
+      publisherId: " publishers:alice ",
+      feedProfile: " clawhub-signed ",
       deps: { ...deps, refresh },
     });
     expect(refresh).toHaveBeenCalledWith(
@@ -139,6 +139,27 @@ describe("publisher feed follow service", () => {
     );
     expect(deps.follows.follow).toHaveBeenCalledAfter(refresh);
     expect(result.follow.publisherId).toBe("publishers:alice");
+    expect(result.follow.feedProfile).toBe("clawhub-signed");
+    await expect(
+      unfollowPublisherFeed({
+        publisherId: " publishers:alice ",
+        feedProfile: " clawhub-signed ",
+        deps,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("rejects identifiers beyond the UTF-8 byte contract before refresh", async () => {
+    const deps = dependencies();
+    const refresh = vi.fn();
+    await expect(
+      followPublisherFeed({
+        publisherId: "é".repeat(101),
+        feedProfile: "clawhub-signed",
+        deps: { ...deps, refresh },
+      }),
+    ).rejects.toThrow("publisher id is invalid");
+    expect(refresh).not.toHaveBeenCalled();
   });
 
   it("lists accepted state, refreshes independently, and unfollows", async () => {
