@@ -112,8 +112,10 @@ export function createCopilotTokenStore(storage, gatewayScope) {
 
 export function resolveCopilotClose(context) {
   const details = context.connectFailure?.error?.details;
+  const tokenMismatch = details?.code === "AUTH_DEVICE_TOKEN_MISMATCH";
   return {
-    retry: details?.code === "PAIRING_REQUIRED" || details?.pauseReconnect !== true,
+    retry:
+      details?.code === "PAIRING_REQUIRED" || (!tokenMismatch && details?.pauseReconnect !== true),
     notify: !context.connectFailure,
     pendingError: context.connectFailure?.error,
   };
@@ -148,6 +150,7 @@ export class CopilotGatewayClient {
     this.listeners = new Set();
     this.statusListeners = new Set();
     this.lifecycle = null;
+    this.tokenRecovery = null;
   }
 
   onEvent(listener) {
@@ -223,7 +226,9 @@ export class CopilotGatewayClient {
       onConnectFailure: (error, { plan }) => {
         const details = error.details && typeof error.details === "object" ? error.details : {};
         if (details.code === "AUTH_DEVICE_TOKEN_MISMATCH") {
-          void lifecycle.clearStoredToken(plan);
+          const cleared = lifecycle.clearStoredToken(plan);
+          void cleared.catch(() => undefined);
+          this.tokenRecovery = { gatewayScope, protocol, cleared };
         }
         this.#emitStatus({
           state: details.code === "PAIRING_REQUIRED" ? "approval" : "error",
@@ -234,7 +239,9 @@ export class CopilotGatewayClient {
           closeCode: 4008,
           closeReason: "connect failed",
           reconnectDelayMs: details.code === "PAIRING_REQUIRED" ? 2_000 : undefined,
-          stop: details.pauseReconnect === true && details.code !== "PAIRING_REQUIRED",
+          stop:
+            details.code === "AUTH_DEVICE_TOKEN_MISMATCH" ||
+            (details.pauseReconnect === true && details.code !== "PAIRING_REQUIRED"),
         };
       },
       resolveClose: resolveCopilotClose,
@@ -247,6 +254,32 @@ export class CopilotGatewayClient {
         if (!decision.retry) {
           this.protocol = null;
           this.lifecycle = null;
+        }
+        const recovery = this.tokenRecovery;
+        if (!decision.retry && recovery?.protocol === protocol) {
+          void recovery.cleared.then(
+            () => {
+              if (
+                this.tokenRecovery !== recovery ||
+                this.protocol ||
+                this.url !== recovery.gatewayScope
+              ) {
+                return;
+              }
+              this.tokenRecovery = null;
+              this.start(recovery.gatewayScope);
+            },
+            (error) => {
+              if (this.tokenRecovery !== recovery) {
+                return;
+              }
+              this.tokenRecovery = null;
+              this.#emitStatus({
+                state: "error",
+                label: error?.message || "Could not clear the rejected device token",
+              });
+            },
+          );
         }
         if (decision.notify) {
           this.#emitStatus({ state: "connecting", label: "Gateway reconnecting" });
@@ -270,6 +303,7 @@ export class CopilotGatewayClient {
   stop() {
     this.ready = false;
     this.hello = null;
+    this.tokenRecovery = null;
     const protocol = this.protocol;
     this.protocol = null;
     protocol?.stop();

@@ -43,6 +43,22 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
 /** Gateway route path for the remote extension relay (see gateway-relay-route.ts). */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
 
+export function resolveLocalPairingGatewayUrl(params: {
+  configuredRemote?: string;
+  gatewayPort: number;
+  tlsEnabled: boolean;
+}): string {
+  if (params.configuredRemote) {
+    return params.configuredRemote;
+  }
+  if (params.tlsEnabled) {
+    throw new Error(
+      "Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]",
+    );
+  }
+  return `ws://127.0.0.1:${params.gatewayPort}`;
+}
+
 /** Resolve a safe direct-Gateway relay URL, preserving an optional proxy base path. */
 function buildRemoteGatewayRelayUrl(raw: string): string {
   let url: URL;
@@ -92,9 +108,11 @@ function buildPairingString(gatewayUrl?: string): {
     };
   }
   const configuredRemote = cfg.gateway?.mode === "remote" ? cfg.gateway.remote?.url?.trim() : "";
-  const directGatewayUrl =
-    configuredRemote ||
-    `${cfg.gateway?.tls?.enabled === true ? "wss" : "ws"}://127.0.0.1:${resolveGatewayPort(cfg)}`;
+  const directGatewayUrl = resolveLocalPairingGatewayUrl({
+    configuredRemote,
+    gatewayPort: resolveGatewayPort(cfg),
+    tlsEnabled: cfg.gateway?.tls?.enabled === true,
+  });
   const relayUrl = new URL(`ws://127.0.0.1:${relayPort}/extension`);
   relayUrl.searchParams.set("gateway", directGatewayUrl);
   return {

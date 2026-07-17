@@ -128,6 +128,15 @@ export class CopilotSessionRegistry {
     return Object.values(this.state.sessions);
   }
 
+  gatewayScopes() {
+    return [
+      ...new Set([
+        ...this.list().map((entry) => entry.gatewayScope),
+        ...this.state.pendingArchives.map((entry) => entry.gatewayScope),
+      ]),
+    ].filter((scope) => typeof scope === "string" && scope);
+  }
+
   pendingArchives(gatewayScope) {
     return this.state.pendingArchives.filter((entry) => entry.gatewayScope === gatewayScope);
   }
@@ -136,6 +145,8 @@ export class CopilotSessionRegistry {
     await this.#mutate(() => {
       const current = this.state.sessions[String(tabId)];
       if (current && current.gatewayScope !== entry.gatewayScope) {
+        // The write chain transfers old-scope custody to the durable archive
+        // queue before replacement, so concurrent recovery cannot lose it.
         this.#queueArchive(current);
       }
       this.state.sessions[String(tabId)] = {
@@ -154,6 +165,44 @@ export class CopilotSessionRegistry {
         current.binding = { ...binding };
       }
     });
+  }
+
+  async confirmSession(tabId, gatewayScope, sessionId) {
+    await this.#mutate(() => {
+      const current = this.get(tabId, gatewayScope);
+      if (!current) {
+        return;
+      }
+      if (typeof sessionId === "string" && sessionId) {
+        current.sessionId = sessionId;
+      }
+      delete current.provisional;
+      delete current.creationPending;
+    });
+    return this.get(tabId, gatewayScope);
+  }
+
+  async markSessionCreationPending(tabId, gatewayScope) {
+    await this.#mutate(() => {
+      const current = this.get(tabId, gatewayScope);
+      if (current?.provisional) {
+        current.creationPending = true;
+      }
+    });
+    return this.get(tabId, gatewayScope);
+  }
+
+  async discardProvisionalSession(tabId, gatewayScope) {
+    let discarded = false;
+    await this.#mutate(() => {
+      const current = this.get(tabId, gatewayScope);
+      if (!current?.provisional) {
+        return;
+      }
+      delete this.state.sessions[String(tabId)];
+      discarded = true;
+    });
+    return discarded;
   }
 
   async startRun(tabId, gatewayScope, runId) {
@@ -239,6 +288,18 @@ export class CopilotSessionRegistry {
     });
   }
 
+  async closeInactiveScope(gatewayScope) {
+    await this.#mutate(() => {
+      for (const [rawTabId, entry] of Object.entries(this.state.sessions)) {
+        if (entry?.gatewayScope !== gatewayScope || entry.activeRunId) {
+          continue;
+        }
+        this.#queueArchive(entry);
+        delete this.state.sessions[rawTabId];
+      }
+    });
+  }
+
   async resolveArchive(gatewayScope, sessionKey) {
     await this.#mutate(() => {
       this.state.pendingArchives = this.state.pendingArchives.filter(
@@ -251,6 +312,9 @@ export class CopilotSessionRegistry {
     if (!entry?.sessionKey || !entry?.gatewayScope) {
       return;
     }
+    if (entry.provisional && entry.creationPending !== true) {
+      return;
+    }
     const existing = this.state.pendingArchives.some(
       (candidate) =>
         candidate.gatewayScope === entry.gatewayScope && candidate.sessionKey === entry.sessionKey,
@@ -260,6 +324,8 @@ export class CopilotSessionRegistry {
         gatewayScope: entry.gatewayScope,
         sessionKey: entry.sessionKey,
         sessionId: entry.sessionId,
+        tabId: entry.tabId,
+        ensureCreated: entry.provisional === true,
         queuedAt: Date.now(),
       });
     }
