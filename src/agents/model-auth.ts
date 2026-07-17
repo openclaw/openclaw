@@ -69,6 +69,11 @@ export async function resolveApiKeyForProvider(params: {
   forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
+  /** Keep provider plugin synthetic-auth (e.g. GCP-ADC) reachable even when
+   *  auth-profile fallback is off. Defaults to tracking allowAuthProfileFallback
+   *  so existing callers are unchanged; gateway-isolated direct attempts pass
+   *  true to preserve plugin synthetic auth without re-opening stored profiles. */
+  allowPluginSyntheticAuth?: boolean;
   skipSetupProviderFallback?: boolean;
   modelId?: string;
   modelApi?: string;

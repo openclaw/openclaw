@@ -217,6 +217,7 @@ export async function getApiKeyForModel(params: {
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
+  allowPluginSyntheticAuth?: boolean;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -231,6 +232,7 @@ export async function getApiKeyForModel(params: {
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
     allowAuthProfileFallback: params.allowAuthProfileFallback,
+    allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
     skipSetupProviderFallback: params.skipSetupProviderFallback,
     modelId: params.model.id,
     modelApi: params.model.api,

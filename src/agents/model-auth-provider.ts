@@ -87,6 +87,11 @@ export async function resolveApiKeyForProvider(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
+  /** Keep provider plugin synthetic-auth (e.g. GCP-ADC) reachable even when
+   *  auth-profile fallback is off. Defaults to tracking allowAuthProfileFallback
+   *  so existing callers are unchanged; gateway-isolated direct attempts pass
+   *  true to preserve plugin synthetic auth without re-opening stored profiles. */
+  allowPluginSyntheticAuth?: boolean;
   /** Skip plugin setup fallback when the prepared route already excludes it. */
   skipSetupProviderFallback?: boolean;
   modelId?: string;
@@ -520,7 +525,11 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
-    allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
+    // Plugin synthetic-auth is a provider-owned credential hook, distinct from
+    // stored-profile discovery. Keep it available on its own flag so a gateway
+    // attempt can disable profile fallback yet still resolve GCP-ADC-style auth.
+    allowPluginSyntheticAuth:
+      params.allowPluginSyntheticAuth ?? params.allowAuthProfileFallback !== false,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
