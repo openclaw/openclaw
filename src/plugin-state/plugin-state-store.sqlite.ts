@@ -507,6 +507,7 @@ export function pluginStateRegister(params: {
   valueJson: string;
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
+  createdAt?: number;
   ttlMs?: number;
   // Migration-only override: eviction orders rows by created_at, so imported
   // legacy rows must keep their original age instead of the import time.
@@ -552,7 +553,7 @@ export function pluginStateRegister(params: {
             namespace: params.namespace,
             key: params.key,
             valueJson: params.valueJson,
-            createdAt: params.createdAtMs ?? now,
+            createdAt: params.createdAt ?? params.createdAtMs ?? now,
             expiresAt,
           }),
         );

@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createPluginStateKeyedStore,
   getPluginStateCapacity as resolvePluginStateCapacity,
+  importPluginStateEntriesForDoctor,
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import {
@@ -251,6 +252,12 @@ function createPluginDoctorStateMigrationContext(
   return {
     getPluginStateCapacity() {
       return resolvePluginStateCapacity(pluginId, env);
+    },
+    importPluginStateEntries(
+      options: OpenKeyedStoreOptions,
+      entries: readonly { key: string; value: unknown; createdAt: number }[],
+    ) {
+      importPluginStateEntriesForDoctor(pluginId, { ...options, env: options.env ?? env }, entries);
     },
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       return createPluginStateKeyedStore<T>(pluginId, {

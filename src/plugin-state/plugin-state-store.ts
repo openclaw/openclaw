@@ -64,6 +64,12 @@ type PreparedRegisterParams = {
   ttlMs?: number;
 };
 
+export type PluginStateImportEntry = {
+  key: string;
+  value: unknown;
+  createdAt: number;
+};
+
 const namespaceOptionSignatures = new Map<string, StoreOptionSignature>();
 function invalidInput(
   message: string,
@@ -466,6 +472,41 @@ export function createPluginStateSyncKeyedStore<T>(
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
   return createSyncKeyedStoreForPluginId<T>(pluginId, options);
+}
+
+/** Doctor-only import that preserves source age for retention ordering. */
+export function importPluginStateEntriesForDoctor(
+  pluginId: string,
+  options: OpenKeyedStoreOptions,
+  entries: readonly PluginStateImportEntry[],
+): void {
+  if (pluginId.startsWith("core:")) {
+    throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
+  }
+  const namespace = validateNamespace(options.namespace);
+  const maxEntries = validateMaxEntries(options.maxEntries);
+  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
+  const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
+  const env = options.env;
+  assertConsistentOptions(pluginId, namespace, { maxEntries, overflowPolicy, defaultTtlMs });
+
+  for (const entry of entries) {
+    if (!Number.isSafeInteger(entry.createdAt)) {
+      throw invalidInput("plugin state import createdAt must be a safe integer", "register");
+    }
+    const prepared = prepareRegisterParams(entry.key, entry.value, defaultTtlMs);
+    pluginStateRegister({
+      pluginId,
+      namespace,
+      key: prepared.key,
+      valueJson: prepared.valueJson,
+      maxEntries,
+      overflowPolicy,
+      createdAt: entry.createdAt,
+      ...(env ? { env } : {}),
+      ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
+    });
+  }
 }
 
 /** Opens a sync plugin-state namespace for a trusted core owner id. */

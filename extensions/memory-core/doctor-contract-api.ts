@@ -1342,9 +1342,21 @@ async function migrateLegacyMemoryHostEventSource(params: {
     );
     return;
   }
-  for (const record of missing) {
-    await store.register(record.key, record.value);
+  const importEntries = params.context.importPluginStateEntries;
+  if (!importEntries) {
+    params.warnings.push(
+      "Skipped Memory Core host event migration because retention-aware SQLite import is unavailable; left legacy source in place",
+    );
+    return;
   }
+  importEntries(
+    { namespace: MEMORY_HOST_EVENTS_NAMESPACE, maxEntries: MAX_MEMORY_HOST_EVENTS },
+    missing.map((record) => ({
+      key: record.key,
+      value: record.value,
+      createdAt: record.value.recordedAt,
+    })),
+  );
   const importedKeys = new Set((await store.entries()).map((entry) => entry.key));
   const missingKey = records.find((record) => !importedKeys.has(record.key))?.key;
   if (missingKey) {

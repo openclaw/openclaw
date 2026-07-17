@@ -11,6 +11,7 @@ import {
 import {
   createPluginStateKeyedStoreForTests,
   getPluginStateCapacityForTests,
+  importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -36,6 +37,13 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
   return {
     getPluginStateCapacity() {
       return getPluginStateCapacityForTests("memory-core", env);
+    },
+    importPluginStateEntries(options, entries) {
+      importPluginStateEntriesForDoctorForTests(
+        "memory-core",
+        { ...options, env: options.env ?? env },
+        entries,
+      );
     },
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       return createPluginStateKeyedStoreForTests<T>("memory-core", {
@@ -527,6 +535,9 @@ describe("memory-core doctor dreaming migration", () => {
       "runtime after upgrade",
     ]);
     expect(events[0]?.sequence).toBeLessThan(0);
+    expect(entries.find((entry) => entry.value.sequence < 0)?.createdAt).toBe(
+      Date.parse("2026-07-01T00:00:00.000Z"),
+    );
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
   });
 
