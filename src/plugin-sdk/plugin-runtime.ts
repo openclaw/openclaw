@@ -23,6 +23,7 @@ export type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
+  PluginInteractiveHandlerResult,
   PluginInteractiveRegistration,
 } from "../plugins/types.js";
 export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
