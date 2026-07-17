@@ -112,6 +112,13 @@ ambient `CODEX_HOME` (default `~/.codex`) causes `refresh_token_reused` errors
 that invalidate OpenClaw's provider auth. To prevent this, every Codex worker
 must use a dedicated `CODEX_HOME` scoped only to its command.
 
+A dedicated `CODEX_HOME` isolates credentials **and all other Codex state**
+(`config.toml`, model/provider overrides, MCP servers, hooks, skills, plugins).
+The worker home starts as a clean profile — it does not inherit settings from
+the ambient `~/.codex`. If the user has non-auth Codex configuration that workers
+need, copy the relevant settings to the worker home after the one-time login
+below.
+
 ### One-time setup per worker home
 
 ```bash
@@ -121,6 +128,21 @@ CODEX_HOME=~/.codex-openclaw-worker codex login
 Complete a separate ChatGPT OAuth authorization, even when using the same
 ChatGPT account as OpenClaw. This creates an independent refresh-token cycle
 that does not collide with OpenClaw's own OAuth profile.
+
+### Migrating non-auth settings (optional)
+
+If the user has Codex configuration in `~/.codex` that workers also need
+(model/provider overrides, MCP servers, hooks, etc.), copy the relevant
+`config.toml` entries to the worker home:
+
+```bash
+mkdir -p ~/.codex-openclaw-worker
+cp ~/.codex/config.toml ~/.codex-openclaw-worker/config.toml 2>/dev/null || true
+```
+
+Only `config.toml` needs to be copied — do **not** copy `auth.json` or any
+credential files. The worker home must use its own separate OAuth login from
+the step above.
 
 ### Preflight check
 
