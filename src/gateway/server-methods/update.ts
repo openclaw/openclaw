@@ -276,7 +276,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               handoffId,
               supervisor,
             });
-            ownsManagedServiceHandoff = started.ownsHandoff;
+            ownsManagedServiceHandoff = started.status === "started";
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
             // The owner pairs helper creation with parent exit before any
             // persistence can fail. Joiners leave both to the active owner.

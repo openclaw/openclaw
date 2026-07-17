@@ -596,13 +596,13 @@ type StartedManagedServiceUpdateHandoff = {
   handoffId?: string;
 };
 
-type ManagedServiceUpdateHandoffResult = StartedManagedServiceUpdateHandoff & {
-  ownsHandoff: boolean;
+type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff, "status"> & {
+  status: "started" | "joined";
 };
 
-// Keep the helper single-flight through its lifetime. Readiness only means it
-// loaded its parameters; spawning another helper before it exits races update
-// mutation, service recovery, and restart sentinel ownership.
+// Keep one helper per Gateway process through its lifetime. Readiness only
+// means it loaded its parameters; spawning another helper before it exits races
+// update mutation, service recovery, and restart sentinel ownership.
 let activeManagedServiceUpdateHandoff: Promise<StartedManagedServiceUpdateHandoff> | null = null;
 
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
@@ -934,8 +934,9 @@ async function spawnManagedServiceUpdateHandoff(
       stdio: ["ignore", "pipe", "ignore"],
     });
     child.once("exit", onExit);
-    // systemd-run can spawn before the user manager accepts the scope. Only let
-    // callers terminate the Gateway after the helper itself loads its params.
+    // systemd-run --scope remains synchronous until the helper exits, so this
+    // child's exit owns the full handoff lifetime. Readiness still must wait
+    // until the helper loads its params before callers terminate the Gateway.
     await waitForHandoffReady(child);
   } catch (err) {
     child?.removeListener("exit", onExit);
@@ -958,7 +959,7 @@ export async function startManagedServiceUpdateHandoff(
 ): Promise<ManagedServiceUpdateHandoffResult> {
   const active = activeManagedServiceUpdateHandoff;
   if (active) {
-    return { ...(await active), ownsHandoff: false };
+    return { ...(await active), status: "joined" };
   }
 
   const flight = spawnManagedServiceUpdateHandoff(params, () => {
@@ -968,7 +969,7 @@ export async function startManagedServiceUpdateHandoff(
   });
   activeManagedServiceUpdateHandoff = flight;
   try {
-    return { ...(await flight), ownsHandoff: true };
+    return await flight;
   } catch (err) {
     if (activeManagedServiceUpdateHandoff === flight) {
       activeManagedServiceUpdateHandoff = null;

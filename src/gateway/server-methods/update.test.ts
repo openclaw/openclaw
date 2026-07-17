@@ -34,13 +34,19 @@ const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
-const startManagedServiceUpdateHandoffMock = vi.fn(async (params?: { handoffId?: string }) => ({
-  status: "started" as const,
+type ManagedServiceUpdateHandoffResult = Awaited<
+  ReturnType<
+    typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+  >
+>;
+const startManagedServiceUpdateHandoffMock = vi.fn<
+  (params?: { handoffId?: string }) => Promise<ManagedServiceUpdateHandoffResult>
+>(async (params) => ({
+  status: "started",
   pid: 12345,
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
   handoffId: params?.handoffId,
-  ownsHandoff: true,
 }));
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
@@ -248,7 +254,6 @@ beforeEach(() => {
       command: "openclaw update --yes --timeout 1800",
       logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
       handoffId: params?.handoffId,
-      ownsHandoff: true,
     }),
   );
   scheduleGatewaySigusr1RestartMock.mockClear();
@@ -548,12 +553,11 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
     startManagedServiceUpdateHandoffMock.mockResolvedValueOnce({
-      status: "started",
+      status: "joined",
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
       logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
       handoffId: "handoff-existing",
-      ownsHandoff: false,
     });
 
     const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
