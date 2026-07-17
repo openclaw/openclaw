@@ -35,6 +35,14 @@ const workspaceSourceAliases = [
     replacement: path.resolve(repoRoot, "src/plugin-sdk/test-fixtures.ts"),
   },
   {
+    find: /^@openclaw\/localization-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/localization-core/src/$1.ts"),
+  },
+  {
+    find: "@openclaw/localization-core",
+    replacement: path.resolve(repoRoot, "packages/localization-core/src/index.ts"),
+  },
+  {
     find: /^@openclaw\/model-catalog-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
   },
