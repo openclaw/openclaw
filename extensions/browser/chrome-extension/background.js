@@ -42,12 +42,20 @@ function setBadge(kind) {
 }
 
 async function getConfig() {
-  const stored = await chrome.storage.local.get(["relayUrl", "gatewayUrl", "token", "groupColor"]);
+  const stored = await chrome.storage.local.get(["relayUrl", "token", "groupColor"]);
   return {
     relayUrl: typeof stored.relayUrl === "string" ? stored.relayUrl : "",
-    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
     token: typeof stored.token === "string" ? stored.token : "",
     groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
+  };
+}
+
+async function getCopilotConfig() {
+  const config = await getConfig();
+  const stored = await chrome.storage.local.get(["gatewayUrl"]);
+  return {
+    ...config,
+    gatewayUrl: typeof stored.gatewayUrl === "string" ? stored.gatewayUrl : "",
   };
 }
 
@@ -332,7 +340,7 @@ async function connectRelay() {
 }
 
 const copilot = createCopilotController({
-  getConfig,
+  getConfig: getCopilotConfig,
   isTabShared,
   addTabToOpenClawGroup,
   attachDebugger,
@@ -376,13 +384,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         await chrome.storage.local.set({
           relayUrl: parsed.relayUrl,
-          gatewayUrl: parsed.gatewayUrl ?? "",
           token: parsed.token,
           groupColor: nearestGroupColor(msg.groupColor),
         });
         reconnectAttempt = 0;
         relayWs?.close();
         relayWs = null;
+        await chrome.storage.local.set({ gatewayUrl: parsed.gatewayUrl ?? "" });
         await connectRelay();
         await copilot.refreshConfig();
         sendResponse({ ok: true });

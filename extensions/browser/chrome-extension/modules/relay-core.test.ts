@@ -10,10 +10,10 @@ import {
 
 describe("parsePairingString", () => {
   it("parses a valid pairing string the CLI emits", () => {
-    const parsed = parsePairingString("ws://127.0.0.1:18797/extension#deadbeefcafe");
+    const parsed = parsePairingString("ws://127.0.0.1:18797/extension#test-token");
     expect(parsed).toEqual({
       relayUrl: "ws://127.0.0.1:18797/extension",
-      token: "deadbeefcafe",
+      token: "test-token",
       gatewayUrl: undefined,
     });
   });

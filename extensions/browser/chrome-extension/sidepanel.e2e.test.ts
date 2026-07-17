@@ -134,7 +134,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
             },
           },
           auth: {
-            deviceToken: "issued-device-token-for-e2e",
+            deviceToken: "test-device-token",
             role: "operator",
             scopes: ["operator.read", "operator.write"],
           },
