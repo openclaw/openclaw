@@ -28,11 +28,17 @@ import {
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
-import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigFile } from "../config/io.runtime.js";
+import type {
+  AgentConfigEntry,
+  ConfigValidationIssue,
+  OpenClawConfig,
+} from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
@@ -1040,6 +1046,123 @@ const browserClawdProfileResidueCheck: HealthCheck = {
   },
 };
 
+const mainAgentCheck: HealthCheck = {
+  id: "core/doctor/main-agent",
+  kind: "core",
+  description: `Configuration includes the required "${DEFAULT_AGENT_ID}" agent entry.`,
+  source: "doctor",
+  async detect(ctx) {
+    const agentsList = ctx.cfg.agents?.list ?? [];
+    const hasMainAgent = agentsList.some(
+      (agent): agent is AgentConfigEntry =>
+        agent != null &&
+        typeof agent === "object" &&
+        "id" in agent &&
+        agent.id === DEFAULT_AGENT_ID,
+    );
+
+    if (hasMainAgent) {
+      return [];
+    }
+
+    return [
+      {
+        checkId: "core/doctor/main-agent",
+        severity: "error",
+        message:
+          `Missing required "${DEFAULT_AGENT_ID}" agent entry in agents.list. ` +
+          `The main agent is required for core routing and session management.`,
+        path: "agents.list",
+        fixHint:
+          `Run \`openclaw doctor --fix\` to automatically add a default "${DEFAULT_AGENT_ID}" agent entry, ` +
+          `or manually edit your configuration file to include it.`,
+      },
+    ];
+  },
+  async repair(ctx) {
+    const agentsList = ctx.cfg.agents?.list ?? [];
+    const hasMainAgent = agentsList.some(
+      (agent): agent is AgentConfigEntry =>
+        agent != null &&
+        typeof agent === "object" &&
+        "id" in agent &&
+        agent.id === DEFAULT_AGENT_ID,
+    );
+
+    if (hasMainAgent) {
+      return {
+        status: "skipped",
+        reason: `Main agent "${DEFAULT_AGENT_ID}" already present in configuration`,
+        changes: [],
+      };
+    }
+
+    // Create a minimal default main agent entry
+    const defaultMainAgent: AgentConfigEntry = {
+      id: DEFAULT_AGENT_ID,
+      name: "Main",
+      // Use minimal configuration to avoid overwriting user customizations
+    };
+
+    // Prepend main agent to the list
+    const recoveredAgentsList = [defaultMainAgent, ...agentsList];
+    const nextConfig: OpenClawConfig = {
+      ...ctx.cfg,
+      agents: {
+        ...ctx.cfg.agents,
+        list: recoveredAgentsList,
+      },
+    };
+
+    if (ctx.dryRun === true) {
+      return {
+        status: "repaired",
+        changes: [
+          `Would add default "${DEFAULT_AGENT_ID}" agent entry to agents.list with minimal configuration.`,
+        ],
+        effects: [
+          {
+            kind: "config",
+            action: "would-add-main-agent",
+            target: "agents.list",
+            dryRunSafe: true,
+          },
+        ],
+      };
+    }
+
+    // Write the updated config
+    try {
+      await writeConfigFile(nextConfig);
+      return {
+        status: "repaired",
+        changes: [
+          `Added default "${DEFAULT_AGENT_ID}" agent entry to agents.list. ` +
+            `Please review your configuration and customize as needed.`,
+        ],
+        effects: [
+          {
+            kind: "config",
+            action: "add-main-agent",
+            target: "agents.list",
+            dryRunSafe: true,
+          },
+        ],
+      };
+    } catch (writeError) {
+      return {
+        status: "failed",
+        reason: `Failed to write updated configuration: ${String(writeError)}`,
+        changes: [],
+        warnings: [
+          `Could not persist configuration changes. Please manually add the "${DEFAULT_AGENT_ID}" agent entry to your config file.`,
+        ],
+        effects: [],
+      };
+    }
+  },
+};
+
 const finalConfigValidationCheck: HealthCheck = {
   id: FINAL_CONFIG_VALIDATION_CHECK_ID,
   kind: "core",
@@ -1190,6 +1313,7 @@ export function createCoreHealthChecks(
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
+    mainAgentCheck,
     finalConfigValidationCheck,
   ];
 }
