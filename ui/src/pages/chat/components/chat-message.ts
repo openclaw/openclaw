@@ -574,7 +574,7 @@ type StreamGroupOptions = {
   planActive?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
   onQuestionChange?: () => void;
-  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void;
+  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
 
 function renderQuestionStreamPart(
