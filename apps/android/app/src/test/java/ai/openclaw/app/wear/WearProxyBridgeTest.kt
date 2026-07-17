@@ -11,9 +11,10 @@ import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runCurrent
@@ -27,16 +28,25 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Executors
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearProxyBridgeTest {
   private val actorScopes = mutableListOf<CoroutineScope>()
+  private val actorDispatchers = mutableListOf<ExecutorCoroutineDispatcher>()
 
-  private fun actorScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined).also(actorScopes::add)
+  private fun actorScope(): CoroutineScope {
+    // Robolectric's Android unit runner can retain Unconfined actors in runTest's scheduler.
+    // A real owned thread matches the production actor lifecycle and makes cleanup explicit.
+    val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    actorDispatchers += dispatcher
+    return CoroutineScope(SupervisorJob() + dispatcher).also(actorScopes::add)
+  }
 
   @After
   fun cancelActorScopes() {
     actorScopes.forEach(CoroutineScope::cancel)
+    actorDispatchers.forEach(ExecutorCoroutineDispatcher::close)
   }
 
   @Test
