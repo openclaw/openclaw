@@ -562,6 +562,7 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const aggregateToolResultPressureWarnings = new Set<string>();
+const MAX_TOOL_RESULT_PRESSURE_WARNINGS = 512;
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -4381,7 +4382,10 @@ export async function runEmbeddedAttempt(
               `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
               `sessionKey=${sessionLogKey}`;
             if (aggregatePressureEngaged) {
-              if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
+              if (
+                !aggregateToolResultPressureWarnings.has(sessionLogKey) &&
+                aggregateToolResultPressureWarnings.size < MAX_TOOL_RESULT_PRESSURE_WARNINGS
+              ) {
                 aggregateToolResultPressureWarnings.add(sessionLogKey);
                 log.warn(
                   `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
