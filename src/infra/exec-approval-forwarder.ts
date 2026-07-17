@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   getLoadedChannelPlugin,
@@ -435,7 +436,7 @@ function buildExecPendingPayload(params: {
       buildTypedApprovalPendingReplyPayload({
         approvalKind: "exec",
         approvalId: params.request.id,
-        approvalSlug: params.request.id.slice(0, 8),
+        approvalSlug: sliceUtf16Safe(params.request.id, 0, 8),
         text: buildExecApprovalRequestMessage(params.request, params.nowMs),
         agentId: params.request.request.agentId ?? null,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
@@ -456,7 +457,7 @@ function buildExecResolvedPayload(params: {
     buildFallback: () =>
       buildApprovalResolvedReplyPayload({
         approvalId: params.resolved.id,
-        approvalSlug: params.resolved.id.slice(0, 8),
+        approvalSlug: sliceUtf16Safe(params.resolved.id, 0, 8),
         text: buildResolvedMessage(params.resolved),
       }),
   });
