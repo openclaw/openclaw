@@ -12,6 +12,7 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import {
   filterSupplementalContextItems,
   resolveChannelContextVisibilityMode,
@@ -30,8 +31,7 @@ import {
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
 import { extractHtmlFromAttachment } from "../attachments/shared.js";
-import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
-import type { StoredConversationReference } from "../conversation-store.js";
+import { buildStoredConversationReference } from "../conversation-reference.js";
 import { formatUnknownError } from "../errors.js";
 import {
   fetchChannelMessage,
@@ -99,6 +99,10 @@ import {
 } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
+export type MSTeamsTurnAdoptionLifecycle = ReturnType<
+  typeof bindIngressLifecycleToReplyOptions
+>["turnAdoptionLifecycle"];
+
 function formatMSTeamsSenderReason(params: {
   reasonCode: string;
   dmPolicy?: string;
@@ -129,49 +133,6 @@ function formatMSTeamsSenderReason(params: {
     default:
       return params.reasonCode;
   }
-}
-
-function buildStoredConversationReference(params: {
-  activity: MSTeamsTurnContext["activity"];
-  conversationId: string;
-  conversationType: string;
-  teamId?: string;
-  /** Thread root message ID for channel thread messages. */
-  threadId?: string;
-}): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId, threadId } = params;
-  const from = activity.from;
-  const conversation = activity.conversation;
-  const agent = activity.recipient;
-  const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
-    | { timezone?: string }
-    | undefined;
-  // Bot Framework requires `tenantId` on outbound proactive activities so the
-  // connector can route them to the correct Azure AD tenant; missing it causes
-  // HTTP 403. Channel activities often leave `conversation.tenantId` unset, so
-  // prefer the canonical `channelData.tenant.id` source when available.
-  const channelDataTenantId = activity.channelData?.tenant?.id;
-  const tenantId = channelDataTenantId ?? conversation?.tenantId;
-  const aadObjectId = from?.aadObjectId;
-  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  return {
-    activityId: activity.id,
-    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
-    agent,
-    conversation: {
-      id: conversationId,
-      conversationType,
-      tenantId,
-    },
-    ...(tenantId ? { tenantId } : {}),
-    ...(aadObjectId ? { aadObjectId } : {}),
-    teamId,
-    channelId: activity.channelId,
-    ...(serviceUrl ? { serviceUrl } : {}),
-    locale: activity.locale,
-    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    ...(threadId ? { threadId } : {}),
-  };
 }
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
@@ -219,7 +180,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     implicitMentionKinds: Array<"reply_to_bot">;
   };
 
-  const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
+  const handleTeamsMessageNow = async (
+    params: MSTeamsDebounceEntry,
+    options?: {
+      rethrowDispatchFailure?: boolean;
+      notifyDispatchFailure?: boolean;
+      turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle;
+    },
+  ) => {
     const context = params.context;
     const activity = context.activity;
     const rawText = params.rawText;
@@ -997,7 +965,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
                 ctxPayload,
                 dispatcher,
                 onSettled: () => markDispatchIdle(),
-                replyOptions,
+                replyOptions: options?.turnAdoptionLifecycle
+                  ? { ...replyOptions, turnAdoptionLifecycle: options.turnAdoptionLifecycle }
+                  : replyOptions,
                 configOverride,
               }),
           }),
@@ -1020,10 +990,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     } catch (err) {
       log.error("dispatch failed", { error: formatUnknownError(err) });
       runtime.error(`msteams dispatch failed: ${formatUnknownError(err)}`);
-      try {
-        await context.sendActivity("⚠️ Something went wrong. Please try again.");
-      } catch {
-        // Best effort.
+      if (options?.notifyDispatchFailure !== false) {
+        try {
+          await context.sendActivity("⚠️ Something went wrong. Please try again.");
+        } catch {
+          // Best effort.
+        }
+      }
+      if (options?.rethrowDispatchFailure) {
+        throw err;
       }
     }
   };
@@ -1086,7 +1061,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     },
   });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  const buildDebounceEntry = async (
+    context: MSTeamsTurnContext,
+  ): Promise<MSTeamsDebounceEntry> => {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -1106,14 +1083,33 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         ? ["reply_to_bot"]
         : [];
 
-    await inboundDebouncer.enqueue({
+    return {
       context,
       rawText,
       text,
       attachments,
       wasMentioned,
       implicitMentionKinds,
-    });
+    };
   };
+
+  const handleTeamsMessage = async (context: MSTeamsTurnContext) => {
+    await inboundDebouncer.enqueue(await buildDebounceEntry(context));
+  };
+
+  return Object.assign(handleTeamsMessage, {
+    // Durable replays surface pre-adoption failures to the queue and bypass
+    // debounce so an enqueue cannot hide a later dispatch failure.
+    runImmediate: async (
+      context: MSTeamsTurnContext,
+      turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle,
+    ) => {
+      await handleTeamsMessageNow(await buildDebounceEntry(context), {
+        rethrowDispatchFailure: true,
+        notifyDispatchFailure: false,
+        turnAdoptionLifecycle,
+      });
+    },
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

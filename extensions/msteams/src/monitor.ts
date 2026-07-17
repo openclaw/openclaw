@@ -10,6 +10,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { createMSTeamsCardActionIngress } from "./card-action-ingress.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
@@ -224,8 +225,9 @@ export async function monitorMSTeamsProvider(
   // Lazy-load the SDK and create the App with ExpressAdapter. The SDK
   // registers POST /api/messages (or configured path) and handles JWT
   // validation + body parsing internally.
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
   const { app } = await loadMSTeamsSdkWithAuth(creds, {
-    ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
+    ...sdkCloudOptions,
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
     messagingEndpoint: configuredPath,
     ...(ssoConnectionName ? { oauthDefaultConnectionName: ssoConnectionName } : {}),
@@ -291,6 +293,42 @@ export async function monitorMSTeamsProvider(
     log,
   };
   registerMSTeamsHandlers(handler, handlerDeps);
+  const runCardAction = handler.runCardAction;
+  if (!runCardAction) {
+    throw new Error("Microsoft Teams card-action handler registration failed");
+  }
+  const cardActionIngress = createMSTeamsCardActionIngress({
+    app,
+    abortSignal: opts.abortSignal,
+    serviceUrlBoundary: sdkCloudOptions,
+    dispatch: async (context, turnAdoptionLifecycle) => {
+      await runCardAction(context, turnAdoptionLifecycle);
+    },
+    onLog: (message) => log.warn?.(`msteams ${message}`),
+  });
+  let cardActionDrainPass: Promise<void> | undefined;
+  let cardActionDrainRequested = false;
+  let cardActionDrainTimer: ReturnType<typeof setInterval> | undefined;
+  const requestCardActionDrain = () => {
+    cardActionDrainRequested = true;
+    if (!cardActionDrainPass) {
+      cardActionDrainPass = (async () => {
+        while (cardActionDrainRequested) {
+          cardActionDrainRequested = false;
+          await cardActionIngress.drainOnce();
+        }
+      })()
+        .catch((err: unknown) => {
+          runtime.error(`msteams card-action drain failed: ${formatUnknownError(err)}`);
+        })
+        .finally(() => {
+          cardActionDrainPass = undefined;
+          if (cardActionDrainRequested) {
+            requestCardActionDrain();
+          }
+        });
+    }
+  };
 
   // Handle adaptiveCard/action invokes (Action.Execute Universal Action Model).
   // We must return an InvokeResponse-shaped value so Teams updates the card UI;
@@ -300,18 +338,17 @@ export async function monitorMSTeamsProvider(
     const adaptedCtx = adaptSdkContext(ctx, app);
     try {
       const activity = adaptedCtx.activity;
+      if (!(await isCardActionInvokeAuthorized(adaptedCtx, handlerDeps))) {
+        return {
+          statusCode: 200,
+          type: "application/vnd.microsoft.activity.message",
+          value: "Not authorized.",
+        };
+      }
       const vote = extractMSTeamsPollVote(activity);
       if (vote) {
         const voterId = activity?.from?.aadObjectId ?? activity?.from?.id ?? "unknown";
         try {
-          if (!(await isCardActionInvokeAuthorized(adaptedCtx, handlerDeps))) {
-            return {
-              statusCode: 200,
-              type: "application/vnd.microsoft.activity.message",
-              value: "Not authorized.",
-            };
-          }
-
           const existingPoll = await pollStore.getPoll(vote.pollId);
           if (!existingPoll) {
             log.debug?.("poll vote ignored (poll not found)", { pollId: vote.pollId });
@@ -375,11 +412,10 @@ export async function monitorMSTeamsProvider(
           };
         }
       }
-      // Non-poll card actions may dispatch into the agent. Acknowledge the
-      // invoke immediately so Teams does not time out while that work runs.
-      void handler.run!(adaptedCtx).catch((err: unknown) => {
-        log.error("msteams card.action dispatch failed", { error: formatUnknownError(err) });
-      });
+      // Commit before ACK. The drain owns claim fencing, bounded retries, and
+      // recovery after a process stop between this response and dispatch.
+      await cardActionIngress.enqueue(activity);
+      requestCardActionDrain();
       return {
         statusCode: 200,
         type: "application/vnd.microsoft.activity.message",
@@ -535,12 +571,18 @@ export async function monitorMSTeamsProvider(
 
   // Initialize the SDK App — registers the POST route on Express and sets up
   // JWT validation middleware internally.
-  await app.initialize();
+  try {
+    await app.initialize();
+  } catch (err) {
+    cardActionIngress.dispose();
+    throw err;
+  }
 
   // Start listening and fail fast if bind/listen fails.
   const httpServer = await new Promise<Server>((resolve, reject) => {
     const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
   }).catch((err: unknown) => {
+    cardActionIngress.dispose();
     log.error("msteams server error", { error: formatUnknownError(err) });
     throw err;
   });
@@ -550,9 +592,17 @@ export async function monitorMSTeamsProvider(
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
   });
+  requestCardActionDrain();
+  cardActionDrainTimer = setInterval(requestCardActionDrain, 1_000);
+  cardActionDrainTimer.unref?.();
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
+    if (cardActionDrainTimer) {
+      clearInterval(cardActionDrainTimer);
+      cardActionDrainTimer = undefined;
+    }
+    cardActionIngress.dispose();
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {

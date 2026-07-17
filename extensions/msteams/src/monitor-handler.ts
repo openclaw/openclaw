@@ -4,7 +4,10 @@ import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
-import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import {
+  createMSTeamsMessageHandler,
+  type MSTeamsTurnAdoptionLifecycle,
+} from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
@@ -23,6 +26,10 @@ export type MSTeamsActivityHandler = {
     handler: (context: unknown, next: () => Promise<void>) => Promise<void>,
   ) => MSTeamsActivityHandler;
   run?: (context: unknown) => Promise<void>;
+  runCardAction?: (
+    context: MSTeamsTurnContext,
+    turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle,
+  ) => Promise<void>;
 };
 
 async function isInvokeAuthorized(params: {
@@ -136,6 +143,27 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
   const handleReaction = createMSTeamsReactionHandler(deps);
 
+  handler.runCardAction = async (
+    ctx: MSTeamsTurnContext,
+    turnAdoptionLifecycle?: MSTeamsTurnAdoptionLifecycle,
+  ) => {
+    const text = serializeMSTeamsAdaptiveCardActionValue(ctx.activity?.value);
+    if (!text) {
+      return;
+    }
+    await handleTeamsMessage.runImmediate(
+      {
+        ...ctx,
+        activity: {
+          ...ctx.activity,
+          type: "message",
+          text,
+        },
+      },
+      turnAdoptionLifecycle,
+    );
+  };
+
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
   if (originalRun) {
@@ -145,18 +173,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       // agent can react. Poll votes are intercepted in monitor.ts's
       // app.on("card.action") handler which returns the InvokeResponse to Teams.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
-        const text = serializeMSTeamsAdaptiveCardActionValue(ctx.activity?.value);
-        if (text) {
-          await handleTeamsMessage({
-            ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text,
-            },
-          });
-        }
-        return;
+        return handler.runCardAction?.(ctx);
       }
 
       return originalRun.call(handler, context);
