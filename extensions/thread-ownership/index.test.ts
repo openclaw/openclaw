@@ -305,7 +305,7 @@ describe("thread-ownership plugin", () => {
       expect(warningMessage).toContain("ownership check failed");
     });
 
-    it("fails open when a conflict response body exceeds the ownership error cap", async () => {
+    it("cancels when a conflict response body exceeds the ownership error cap", async () => {
       vi.unstubAllGlobals();
       await withLocalOwnershipServer(
         (_req, res) => {
@@ -325,10 +325,9 @@ describe("thread-ownership plugin", () => {
             )}`,
           );
 
-          expect(result).toBeUndefined();
-          expect(api.logger.info).not.toHaveBeenCalled();
-          expect(warningMessage).toContain("ownership check failed");
-          expect(warningMessage).toContain("exceeds");
+          expect(result).toEqual({ cancel: true });
+          expect(api.logger.info).toHaveBeenCalled();
+          expect(warningMessage).toContain("conflict response unreadable");
         },
       );
     });

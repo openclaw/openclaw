@@ -70,6 +70,17 @@ async function readOwnershipConflictOwner(response: Response): Promise<string | 
   return typeof body.owner === "string" ? body.owner : undefined;
 }
 
+function logOwnershipConflictOwner(
+  api: OpenClawPluginApi,
+  channelId: string,
+  threadTs: string,
+  owner: string | undefined,
+): void {
+  api.logger.info?.(
+    `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
+  );
+}
+
 function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
   const list = Array.isArray(config.agents?.list)
     ? config.agents.list.filter(
@@ -200,10 +211,15 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const owner = await readOwnershipConflictOwner(resp);
-            api.logger.info?.(
-              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
-            );
+            let owner: string | undefined;
+            try {
+              owner = await readOwnershipConflictOwner(resp);
+            } catch (error) {
+              api.logger.warn?.(
+                `thread-ownership: conflict response unreadable (${String(error)}), keeping cancellation`,
+              );
+            }
+            logOwnershipConflictOwner(api, channelId, threadTs, owner);
             return { cancel: true };
           }
           api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
