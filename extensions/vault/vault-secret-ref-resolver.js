@@ -215,6 +215,7 @@ async function resolveVaultTokenFromJwt(baseUrl, method) {
     }),
   });
   if (!response.ok) {
+    response.body?.cancel().catch(() => undefined);
     throw new Error(`Vault ${method} login failed (${response.status}).`);
   }
   return readVaultLoginToken(await response.json(), method);
@@ -254,6 +255,7 @@ async function readVaultSecret(baseUrl, vaultToken, id) {
   addVaultNamespaceHeader(headers);
   const response = await fetchVault(baseUrl, buildVaultUrl(baseUrl, parsedId), { headers });
   if (!response.ok) {
+    response.body?.cancel().catch(() => undefined);
     throw new Error(`Vault read failed for "${id}" (${response.status}).`);
   }
   return readStringField(await response.json(), parsedId);
