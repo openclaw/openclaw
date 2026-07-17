@@ -838,6 +838,9 @@ describe("ci workflow guards", () => {
     expect(diffBaseStep.run).toContain(
       "release_gate pull request head ${release_gate_head} does not match target ${target_head}",
     );
+    expect(diffBaseStep.run).toContain('base_sha="$(git rev-parse "${merge_ref}^1")"');
+    expect(diffBaseStep.run).toContain('head_sha="$(git rev-parse "$merge_ref")"');
+    expect(diffBaseStep.run).toContain('echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"');
     const changedScopeStep = preflightSteps.find(
       (step: WorkflowStep) => step.name === "Detect changed scopes",
     );
@@ -848,6 +851,10 @@ describe("ci workflow guards", () => {
       "github.event_name == 'workflow_dispatch'",
     );
     expect(changedScopeStep.run).toContain('elif [ "${{ github.event_name }}" = "pull_request" ]');
+    expect(changedScopeStep.run).toContain('HEAD_SHA="${{ steps.diff_base.outputs.head_sha }}"');
+    expect(changedScopeStep.run).toContain(
+      'node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"',
+    );
     expect(workflow.jobs.preflight.permissions).toEqual({ contents: "read" });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
