@@ -136,6 +136,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
 };
 
 const safeBinTrustedDirWarningCache = new Set<string>();
+const MAX_SAFE_BIN_TRUSTED_DIR_WARNINGS = 256;
 const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval cwd changed before execution";
 const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
@@ -154,7 +155,10 @@ type EffectiveSystemRunExecPolicy = {
 };
 
 function warnWritableTrustedDirOnce(message: string): void {
-  if (safeBinTrustedDirWarningCache.has(message)) {
+  if (
+    safeBinTrustedDirWarningCache.has(message) ||
+    safeBinTrustedDirWarningCache.size >= MAX_SAFE_BIN_TRUSTED_DIR_WARNINGS
+  ) {
     return;
   }
   safeBinTrustedDirWarningCache.add(message);
