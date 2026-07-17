@@ -1,5 +1,5 @@
 // Feishu plugin module implements reply dispatcher behavior.
-import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
+import { formatReasoningMessage, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -14,6 +14,7 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
@@ -637,245 +638,240 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return nextIdleSideEffects;
   };
 
-  const { dispatcher, replyOptions, markDispatchIdle } =
-    core.channel.reply.createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
-      silentReplyContext: {
-        cfg,
-        sessionKey: params.sessionKey,
-        surface: "feishu",
-        conversationType: chatId.startsWith("oc_") ? "group" : "direct",
-      },
-      onSkip: (_payload, info) => {
-        if (info.kind === "final") {
-          skippedFinalReason = info.reason;
-        }
-      },
-      onReplyStart: async () => {
-        if (!replyLifecycleStateInitialized) {
-          replyLifecycleStateInitialized = true;
-          deliveredFinalTexts.clear();
-          sentIndependentBlockText = false;
-          streamingClosedForReply = false;
-          streamingCloseErroredForReply = false;
-          visibleReplySent = false;
-          skippedFinalReason = null;
-        }
-        if (streamingEnabled && renderMode === "card") {
-          startStreaming();
-        }
-        await Promise.resolve(typingCallbacks?.onReplyStart?.());
-      },
-      deliver: async (payload: ReplyPayload, info) => {
-        if (info?.kind === "final") {
-          skippedFinalReason = null;
-        }
-        const payloadText =
-          payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
-        const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
-        const text =
-          info?.kind === "final"
-            ? mergeStreamingFinalText(
-                streamText,
-                reply.text,
-                payload.isError === true && hasStreamingFinalText,
-              )
-            : reply.text;
-        const hasText = reply.hasText;
-        const hasMedia = reply.hasMedia;
-        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-        const ttsTextAlreadyVisible = ttsSupplement?.visibleTextAlreadyDelivered === true;
-        const hasVoiceMedia =
-          hasMedia &&
-          reply.mediaUrls.some((mediaUrl) =>
-            shouldSuppressFeishuTextForVoiceMedia({
-              mediaUrl,
-              ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
-              ttsSupplement,
-            }),
-          );
-        const finalTextExceedsStreamingLimit =
-          info?.kind === "final" && hasText && text.length > textChunkLimit;
-        const useStaticCard =
-          hasText &&
-          (renderMode === "card" ||
-            (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-            (renderMode === "auto" && shouldUseCard(text)));
-        const useStreamingCard =
-          hasText &&
-          streamingEnabled &&
-          !finalTextExceedsStreamingLimit &&
-          (info?.kind === "final" || useStaticCard);
-        const finalTextWouldUseStreamingCard =
-          info?.kind === "final" && hasText && streamingEnabled;
-        const useCard = useStaticCard || useStreamingCard;
-        const skipTextForDuplicateFinal =
-          info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
-        const skipTextForClosedStreamingFinal =
-          info?.kind === "final" &&
-          hasText &&
-          streamingClosedForReply &&
-          !streamingCloseErroredForReply &&
-          finalTextWouldUseStreamingCard;
-        const shouldDeliverText =
-          hasText &&
-          !hasVoiceMedia &&
-          !skipTextForDuplicateFinal &&
-          !skipTextForClosedStreamingFinal;
-        const shouldDiscardStreamingPreview =
-          info?.kind === "final" &&
-          (finalTextExceedsStreamingLimit ||
-            (hasMedia &&
-              ((hasVoiceMedia && !shouldDeliverText && !ttsTextAlreadyVisible) ||
-                skipTextForDuplicateFinal)));
+  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    responsePrefix: prefixContext.responsePrefix,
+    responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+    humanDelay: resolveHumanDelayConfig(cfg, agentId),
+    silentReplyContext: {
+      cfg,
+      sessionKey: params.sessionKey,
+      surface: "feishu",
+      conversationType: chatId.startsWith("oc_") ? "group" : "direct",
+    },
+    onSkip: (_payload, info) => {
+      if (info.kind === "final") {
+        skippedFinalReason = info.reason;
+      }
+    },
+    onReplyStart: async () => {
+      if (!replyLifecycleStateInitialized) {
+        replyLifecycleStateInitialized = true;
+        deliveredFinalTexts.clear();
+        sentIndependentBlockText = false;
+        streamingClosedForReply = false;
+        streamingCloseErroredForReply = false;
+        visibleReplySent = false;
+        skippedFinalReason = null;
+      }
+      if (streamingEnabled && renderMode === "card") {
+        startStreaming();
+      }
+      await Promise.resolve(typingCallbacks?.onReplyStart?.());
+    },
+    deliver: async (payload: ReplyPayload, info) => {
+      if (info?.kind === "final") {
+        skippedFinalReason = null;
+      }
+      const payloadText =
+        payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
+      const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
+      const text =
+        info?.kind === "final"
+          ? mergeStreamingFinalText(
+              streamText,
+              reply.text,
+              payload.isError === true && hasStreamingFinalText,
+            )
+          : reply.text;
+      const hasText = reply.hasText;
+      const hasMedia = reply.hasMedia;
+      const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+      const ttsTextAlreadyVisible = ttsSupplement?.visibleTextAlreadyDelivered === true;
+      const hasVoiceMedia =
+        hasMedia &&
+        reply.mediaUrls.some((mediaUrl) =>
+          shouldSuppressFeishuTextForVoiceMedia({
+            mediaUrl,
+            ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+            ttsSupplement,
+          }),
+        );
+      const finalTextExceedsStreamingLimit =
+        info?.kind === "final" && hasText && text.length > textChunkLimit;
+      const useStaticCard =
+        hasText &&
+        (renderMode === "card" ||
+          (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
+          (renderMode === "auto" && shouldUseCard(text)));
+      const useStreamingCard =
+        hasText &&
+        streamingEnabled &&
+        !finalTextExceedsStreamingLimit &&
+        (info?.kind === "final" || useStaticCard);
+      const finalTextWouldUseStreamingCard = info?.kind === "final" && hasText && streamingEnabled;
+      const useCard = useStaticCard || useStreamingCard;
+      const skipTextForDuplicateFinal =
+        info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
+      const skipTextForClosedStreamingFinal =
+        info?.kind === "final" &&
+        hasText &&
+        streamingClosedForReply &&
+        !streamingCloseErroredForReply &&
+        finalTextWouldUseStreamingCard;
+      const shouldDeliverText =
+        hasText && !hasVoiceMedia && !skipTextForDuplicateFinal && !skipTextForClosedStreamingFinal;
+      const shouldDiscardStreamingPreview =
+        info?.kind === "final" &&
+        (finalTextExceedsStreamingLimit ||
+          (hasMedia &&
+            ((hasVoiceMedia && !shouldDeliverText && !ttsTextAlreadyVisible) ||
+              skipTextForDuplicateFinal)));
 
-        if (!shouldDeliverText && !hasMedia) {
-          return;
-        }
+      if (!shouldDeliverText && !hasMedia) {
+        return;
+      }
 
-        if (shouldDiscardStreamingPreview) {
-          await discardStreamingPreview();
-        }
+      if (shouldDiscardStreamingPreview) {
+        await discardStreamingPreview();
+      }
 
-        if (shouldDeliverText) {
-          if (info?.kind === "block") {
-            // Drop internal block chunks unless we can safely consume them as
-            // streaming-card fallback content or send them as independent
-            // messages for true progressive delivery.
-            if (!useStreamingCard) {
-              if (coreBlockStreamingEnabled) {
-                // Reuse normal text chunking, but notify mentions only on the first visible chunk.
-                const isFirstBlock = !sentIndependentBlockText;
-                const firstChunkMentions =
-                  isFirstBlock && mentionTargets?.length ? mentionTargets : undefined;
-                await sendChunkedTextReply({
-                  text,
-                  useCard: false,
-                  infoKind: "block",
-                  firstChunkMentions,
-                  sendChunk: async ({ chunk, isFirst }) => {
-                    await sendMessageFeishu({
-                      cfg,
-                      to: sendTarget,
-                      text: chunk,
-                      replyToMessageId: sendReplyToMessageId,
-                      replyInThread: effectiveReplyInThread,
-                      allowTopLevelReplyFallback,
-                      accountId,
-                      ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
-                    });
-                  },
-                });
-                sentIndependentBlockText = true;
-                if (hasMedia) {
-                  await sendMediaReplies(payload);
-                }
+      if (shouldDeliverText) {
+        if (info?.kind === "block") {
+          // Drop internal block chunks unless we can safely consume them as
+          // streaming-card fallback content or send them as independent
+          // messages for true progressive delivery.
+          if (!useStreamingCard) {
+            if (coreBlockStreamingEnabled) {
+              // Reuse normal text chunking, but notify mentions only on the first visible chunk.
+              const isFirstBlock = !sentIndependentBlockText;
+              const firstChunkMentions =
+                isFirstBlock && mentionTargets?.length ? mentionTargets : undefined;
+              await sendChunkedTextReply({
+                text,
+                useCard: false,
+                infoKind: "block",
+                firstChunkMentions,
+                sendChunk: async ({ chunk, isFirst }) => {
+                  await sendMessageFeishu({
+                    cfg,
+                    to: sendTarget,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    allowTopLevelReplyFallback,
+                    accountId,
+                    ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                  });
+                },
+              });
+              sentIndependentBlockText = true;
+              if (hasMedia) {
+                await sendMediaReplies(payload);
               }
-              return;
-            }
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
-
-          if (info?.kind === "final" && useStreamingCard) {
-            startStreaming();
-            if (streamingStartPromise) {
-              await streamingStartPromise;
-            }
-          }
-
-          const shouldStreamText = info?.kind === "block" || info?.kind === "final";
-          if (streaming?.isActive() && shouldStreamText) {
-            if (info?.kind === "block") {
-              // Some runtimes emit block payloads without onPartial/final callbacks.
-              // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
-            }
-            if (info?.kind === "final") {
-              // Final payloads can be cumulative snapshots or independent
-              // notices. Preserve both when the latter arrives after an answer.
-              streamText = text;
-              hasStreamingFinalText = true;
-              snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
-              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
-            }
-            // Send media even when streaming handled the text
-            if (hasMedia) {
-              await sendMediaReplies(payload);
             }
             return;
           }
-
-          if (useCard) {
-            const cardHeader = resolveCardHeader(agentId, identity);
-            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
-            await sendChunkedTextReply({
-              text,
-              useCard: true,
-              infoKind: info?.kind,
-              sendChunk: async ({ chunk }) => {
-                await sendStructuredCardFeishu({
-                  cfg,
-                  to: sendTarget,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  header: cardHeader,
-                  note: cardNote,
-                });
-              },
-            });
-          } else {
-            const firstChunkMentions =
-              info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
-            await sendChunkedTextReply({
-              text,
-              useCard: false,
-              infoKind: info?.kind,
-              firstChunkMentions,
-              sendChunk: async ({ chunk, isFirst }) => {
-                await sendMessageFeishu({
-                  cfg,
-                  to: sendTarget,
-                  text: chunk,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
-                  allowTopLevelReplyFallback,
-                  accountId,
-                  ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
-                });
-              },
-            });
+          startStreaming();
+          if (streamingStartPromise) {
+            await streamingStartPromise;
           }
         }
 
-        if (hasMedia) {
-          await sendMediaReplies(
-            payload,
-            hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
-          );
+        if (info?.kind === "final" && useStreamingCard) {
+          startStreaming();
+          if (streamingStartPromise) {
+            await streamingStartPromise;
+          }
         }
-      },
-      onError: async (error, info) => {
-        streamingCloseErroredForReply = true;
-        streamingClosedForReply = false;
-        params.runtime.error?.(
-          `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
+
+        const shouldStreamText = info?.kind === "block" || info?.kind === "final";
+        if (streaming?.isActive() && shouldStreamText) {
+          if (info?.kind === "block") {
+            // Some runtimes emit block payloads without onPartial/final callbacks.
+            // Mirror block text into streamText so onIdle close still sends content.
+            queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+          }
+          if (info?.kind === "final") {
+            // Final payloads can be cumulative snapshots or independent
+            // notices. Preserve both when the latter arrives after an answer.
+            streamText = text;
+            hasStreamingFinalText = true;
+            snapshotBaseText = "";
+            lastSnapshotTextLength = text.length;
+            flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+          }
+          // Send media even when streaming handled the text
+          if (hasMedia) {
+            await sendMediaReplies(payload);
+          }
+          return;
+        }
+
+        if (useCard) {
+          const cardHeader = resolveCardHeader(agentId, identity);
+          const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+          await sendChunkedTextReply({
+            text,
+            useCard: true,
+            infoKind: info?.kind,
+            sendChunk: async ({ chunk }) => {
+              await sendStructuredCardFeishu({
+                cfg,
+                to: sendTarget,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+                header: cardHeader,
+                note: cardNote,
+              });
+            },
+          });
+        } else {
+          const firstChunkMentions =
+            info?.kind === "final" && mentionTargets?.length ? mentionTargets : undefined;
+          await sendChunkedTextReply({
+            text,
+            useCard: false,
+            infoKind: info?.kind,
+            firstChunkMentions,
+            sendChunk: async ({ chunk, isFirst }) => {
+              await sendMessageFeishu({
+                cfg,
+                to: sendTarget,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                allowTopLevelReplyFallback,
+                accountId,
+                ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+              });
+            },
+          });
+        }
+      }
+
+      if (hasMedia) {
+        await sendMediaReplies(
+          payload,
+          hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
         );
-        await queueIdleSideEffects({ markClosedForReply: false });
-      },
-      onIdle: () => queueIdleSideEffects(),
-      onCleanup: () => {
-        typingCallbacks?.onCleanup?.();
-      },
-    });
+      }
+    },
+    onError: async (error, info) => {
+      streamingCloseErroredForReply = true;
+      streamingClosedForReply = false;
+      params.runtime.error?.(
+        `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
+      );
+      await queueIdleSideEffects({ markClosedForReply: false });
+    },
+    onIdle: () => queueIdleSideEffects(),
+    onCleanup: () => {
+      typingCallbacks?.onCleanup?.();
+    },
+  });
 
   return {
     dispatcher,

@@ -9,7 +9,7 @@ import {
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
-  dispatchChannelInboundReply,
+  dispatchChannelInboundTurn,
   type InboundReplyRecordOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -89,7 +89,6 @@ import { resolveSlackThreadTargets } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
-import { recordInboundSession } from "../conversation.runtime.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   createSlackReplyDeliveryPlan,
@@ -98,7 +97,6 @@ import {
   resolveDeliveredSlackReplyThreadTs,
   resolveSlackThreadTs,
 } from "../replies.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../reply.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -2074,16 +2072,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let queuedFinal = false;
   let counts: Partial<Record<ReplyDispatchKind, number>> = {};
   try {
-    const turnResult = await dispatchChannelInboundReply({
+    const turnResult = await dispatchChannelInboundTurn({
       cfg,
       channel: "slack",
       accountId: route.accountId,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath: prepared.turn.storePath,
+      route: { agentId: route.agentId, sessionKey: route.sessionKey },
       ctxPayload: prepared.ctxPayload,
-      recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher,
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),

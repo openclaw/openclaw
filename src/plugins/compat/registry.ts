@@ -806,7 +806,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage flat field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage flat field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
@@ -827,7 +827,7 @@ const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp monitorWebInbox onMessage callback",
       "WhatsApp monitorWebChannel listenerFactory injected messages",
     ],
-    diagnostics: ["TypeScript @deprecated WebInboundMessage admission field annotations"],
+    diagnostics: ["TypeScript deprecated WebInboundMessage admission field annotations"],
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",

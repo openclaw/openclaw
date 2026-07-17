@@ -1,5 +1,5 @@
 import {
-  dispatchInboundDirectDmWithRuntime,
+  dispatchInboundDirectDm,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -235,9 +235,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           });
           return;
         }
-        await dispatchInboundDirectDmWithRuntime({
+        await dispatchInboundDirectDm({
           cfg: ctx.cfg,
-          runtime,
           channel: "reef",
           channelLabel: "Reef",
           accountId: "default",
@@ -293,9 +292,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         async (notice) => {
           let resendText = "";
           let dispatchFailure: Error | undefined;
-          await dispatchInboundDirectDmWithRuntime({
+          await dispatchInboundDirectDm({
             cfg: ctx.cfg,
-            runtime,
             channel: "reef",
             channelLabel: "Reef",
             accountId: "default",

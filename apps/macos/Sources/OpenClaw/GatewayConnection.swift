@@ -155,6 +155,7 @@ actor GatewayConnection {
         case webLoginWait = "web.login.wait"
         case channelsLogout = "channels.logout"
         case modelsList = "models.list"
+        case agentIdentityGet = "agent.identity.get"
         case chatHistory = "chat.history"
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
@@ -1496,6 +1497,15 @@ extension GatewayConnection {
     }
 
     // MARK: - Chat
+
+    func agentIdentity(sessionKey: String, timeoutMs: Double = 10000) async throws -> AgentIdentityResult {
+        // Identity and chat.send must resolve aliases to the same canonical session target.
+        let resolvedKey = self.canonicalizeSessionKey(sessionKey)
+        return try await self.requestDecoded(
+            method: .agentIdentityGet,
+            params: ["sessionKey": AnyCodable(resolvedKey)],
+            timeoutMs: timeoutMs)
+    }
 
     func chatHistory(
         sessionKey: String,

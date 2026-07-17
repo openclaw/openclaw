@@ -23,7 +23,6 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
@@ -1453,12 +1452,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           raw: decision,
         }),
         resolveTurn: () => ({
+          cfg,
           channel: "imessage",
           accountId: decision.route.accountId,
-          routeSessionKey: decision.route.sessionKey,
-          storePath,
+          route: {
+            agentId: decision.route.agentId,
+            sessionKey: decision.route.sessionKey,
+          },
           ctxPayload,
-          recordInboundSession,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget

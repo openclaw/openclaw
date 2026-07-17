@@ -46,7 +46,9 @@ function createRuntime() {
           messageSid: string;
           accountSid: string;
         }) => unknown;
-        resolveTurn: (ingested: unknown) => Promise<{ routeSessionKey: string }>;
+        resolveTurn: (
+          ingested: unknown,
+        ) => Promise<{ route: { agentId: string; sessionKey: string } }>;
       };
     }) => void
   >();
@@ -172,6 +174,6 @@ describe("dispatchSmsInboundEvent", () => {
         }),
       }),
     );
-    expect(turn.routeSessionKey).toBe("agent:main:sms:direct:+15551234567");
+    expect(turn.route.sessionKey).toBe("agent:main:sms:direct:+15551234567");
   });
 });

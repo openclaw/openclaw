@@ -24,6 +24,7 @@ import { isSystemAgentInferenceUnavailableError } from "../../system-agent/infer
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { formatSystemAgentStartupMessage } from "../../system-agent/overview.js";
+import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
   buildRequestedApprovalEvent,
@@ -48,6 +49,7 @@ export type SystemAgentChatSession =
 
 const MAX_SYSTEM_AGENT_SESSIONS = 8;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
+const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
 const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
 const systemAgentSessionQueues = new WeakMap<
@@ -284,6 +286,80 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     );
     context.wizardSessions.set(sessionId, session);
     // Return ownership immediately so the client can cancel while provider auth waits.
+    respond(true, { sessionId, done: false, status: "running" }, undefined);
+  },
+  /** Run one provider-owned prepare flow over the shared wizard transport. */
+  "openclaw.setup.prepare.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSystemAgentSetupAuthStartParams,
+        "openclaw.setup.prepare.start",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (context.findRunningWizard()) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      return;
+    }
+    const sessionId = params.sessionId;
+    const session = new WizardSession(
+      async (prompter, signal) => {
+        await runExclusiveSystemAgentSetupActivation(async () =>
+          runSystemAgentGatewayTask(async () => {
+            const [{ applyAuthChoiceLoadedPluginProvider }, setupShared] = await Promise.all([
+              import("../../plugins/provider-auth-choice.js"),
+              import("../../wizard/setup.shared.js"),
+            ]);
+            const snapshot = await setupShared.readSetupConfigFileSnapshot();
+            if (!snapshot.valid) {
+              throw new Error("Config is invalid. Run `openclaw doctor` before preparing a model.");
+            }
+            // Match the classic wizard: mutate the authored shape, not runtimeConfig,
+            // so setup never writes resolved runtime defaults into openclaw.json.
+            const baseConfig = snapshot.exists ? snapshot.sourceConfig : {};
+            const workspaceDir = params.workspace?.trim()
+              ? resolveUserPath(params.workspace.trim())
+              : undefined;
+            const applied = await applyAuthChoiceLoadedPluginProvider({
+              authChoice: params.authChoice,
+              config: baseConfig,
+              prompter,
+              runtime: {
+                ...defaultRuntime,
+                exit: (code: number | undefined): never => {
+                  throw new Error(`setup step exited with code ${String(code)}`);
+                },
+              },
+              setDefaultModel: false,
+              preserveExistingDefaultModel: true,
+              ...(workspaceDir ? { workspaceDir } : {}),
+              signal,
+              isRemote: true,
+              beforePersistentEffect: () => {
+                signal.throwIfAborted();
+                session.lockCancellation();
+              },
+            });
+            if (!applied || applied.retrySelection) {
+              throw new Error(`Provider prepare method is unavailable: ${params.authChoice}`);
+            }
+            signal.throwIfAborted();
+            session.lockCancellation();
+            await setupShared.writeWizardConfigFile(applied.config, {
+              allowConfigSizeDrop: false,
+              baseSnapshot: snapshot,
+              ...(snapshot.hash ? { baseHash: snapshot.hash } : {}),
+              migrationBaseConfig: baseConfig,
+            });
+          }),
+        );
+      },
+      { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
+    );
+    context.wizardSessions.set(sessionId, session);
     respond(true, { sessionId, done: false, status: "running" }, undefined);
   },
   /**

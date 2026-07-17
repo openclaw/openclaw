@@ -209,6 +209,9 @@ type ChatSendOptions = {
   /** Lets the side-chat panel restore its typed follow-up when the detached
    * send is not accepted (the panel input is not a managed draft). */
   onSideQuestionSendRejected?: () => void;
+  /** Lets request-scoped UI actions recover when their local slash command
+   * fails before the Gateway accepts it. */
+  onLocalCommandSendRejected?: () => void;
 };
 
 function normalizeAckTimingValue(value: unknown): number | undefined {
@@ -2316,6 +2319,9 @@ export async function handleSendChat(
               sendResetSlashCommand(host, resetMessage, resetOpts),
           },
         );
+        if (dispatchResult === "failed") {
+          opts?.onLocalCommandSendRejected?.();
+        }
         if (dispatchResult === "failed" && messageOverride == null) {
           const restorePlan = pendingComposerRestorePlan(host, {
             previousAttachments: attachmentsToSend,

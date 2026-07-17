@@ -18759,6 +18759,16 @@
       "translated": "تمكين الومضات والحركات الخفيفة في أيقونة الحالة أثناء الخمول."
     },
     {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "اختصار الدردشة السريعة"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "اختصار عام يفتح شريط دردشة عائمًا للجلسة الرئيسية."
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "الإمكانات"
@@ -19444,6 +19454,11 @@
       "translated": "فتح الدردشة"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "الدردشة السريعة"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "إغلاق اللوحة"
@@ -19839,9 +19854,19 @@
       "translated": "لم يُعثر على وصول صالح للاستخدام إلى الذكاء الاصطناعي على Gateway هذا"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "لا بأس — يمكنك الاتصال باستخدام مفتاح API أو رمز مميز. ويمكنك أيضًا تسجيل الدخول إلى Claude Code أو Codex، أو تشغيل Ollama أو LM Studio مع نموذج مناسب، ثم الضغط على «التحقق مجددًا»."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "اربط أحد المزوّدين أدناه باستخدام مفتاح API أو رمز مميّز، ثم تحقّق مرة أخرى."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "ثبّت إحدى هذه الأدوات، ثم تحقّق مرة أخرى. يمكنك أيضًا ربط أحد المزوّدين أدناه."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "عمليات التثبيت الموصى بها"
     },
     {
       "id": "native.apple.e2749739df556643",
@@ -20539,9 +20564,9 @@
       "translated": "فتح لوحة شريط القوائم"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "انقر على أيقونة OpenClaw في شريط القوائم للدردشة السريعة والحالة."
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "انقر على أيقونة OpenClaw في شريط القوائم لعرض لوحة الدردشة المصغّرة والحالة."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20574,9 +20599,9 @@
       "translated": "استخدم اللوحة + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "افتح لوحة الدردشة المصغّرة؛ يمكن للوكيل عرض معاينات ومرئيات أكثر ثراءً في Canvas."
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20729,6 +20754,11 @@
       "translated": "وصول النظام"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "الموقع"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "الإعداد"
@@ -20842,46 +20872,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "طلب الوصول"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "الأتمتة (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "الإشعارات"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "إمكانية الوصول"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "تسجيل الشاشة"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "الميكروفون"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "التعرّف على الكلام"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "الكاميرا"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "الموقع"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -21097,6 +21087,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "متابعة"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "مراسلة \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.c1fec5e4735d8995",
+      "source": "main session",
+      "translated": "الجلسة الرئيسية"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "إرسال رسالة"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "يتطلب أذونات إضافية"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "منح الإذن"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "ليس الآن"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
