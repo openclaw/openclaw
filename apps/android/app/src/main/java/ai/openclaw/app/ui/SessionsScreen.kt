@@ -335,33 +335,43 @@ internal fun SessionsScreen(
               archived = session.archived == true,
               categories = categories,
               onClick = {
-                viewModel.switchChatSession(session.key)
+                viewModel.switchChatSession(session.key, session.ownerAgentId)
                 onOpenChat()
               },
               onSetPinned = { pinned ->
-                coroutineScope.launch { viewModel.patchChatSession(key = session.key, pinned = pinned) }
+                coroutineScope.launch {
+                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, pinned = pinned)
+                }
               },
               onSetUnread = { unread ->
-                coroutineScope.launch { viewModel.patchChatSession(key = session.key, unread = unread) }
+                coroutineScope.launch {
+                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, unread = unread)
+                }
               },
               onRename = { renameSessionKey = session.key },
               onFork = {
                 coroutineScope.launch {
-                  viewModel.forkChatSession(session.key)?.let { newKey ->
-                    viewModel.switchChatSession(newKey)
+                  viewModel.forkChatSession(session.key, session.ownerAgentId)?.let { newKey ->
+                    viewModel.switchChatSession(newKey, session.ownerAgentId)
                     onOpenChat()
                   }
                 }
               },
               onMoveToGroup = { category ->
-                coroutineScope.launch { viewModel.patchChatSession(key = session.key, category = category) }
+                coroutineScope.launch {
+                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, category = category)
+                }
               },
               onNewGroup = { groupSessionKey = session.key },
               onRemoveFromGroup = {
-                coroutineScope.launch { viewModel.patchChatSession(key = session.key, clearCategory = true) }
+                coroutineScope.launch {
+                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, clearCategory = true)
+                }
               },
               onSetArchived = { archived ->
-                coroutineScope.launch { viewModel.patchChatSession(key = session.key, archived = archived) }
+                coroutineScope.launch {
+                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, archived = archived)
+                }
               },
               onDelete = { deleteSessionKey = session.key },
             )
@@ -385,6 +395,7 @@ internal fun SessionsScreen(
         coroutineScope.launch {
           viewModel.patchChatSession(
             key = session.key,
+            ownerAgentId = session.ownerAgentId,
             label = label.takeIf(String::isNotEmpty),
             clearLabel = label.isEmpty(),
           )
@@ -405,7 +416,9 @@ internal fun SessionsScreen(
         groupSessionKey = null
         // Remember the name so the group survives locally even if the patch later empties it.
         viewModel.addChatSessionGroup(value)
-        coroutineScope.launch { viewModel.patchChatSession(key = session.key, category = value.trim()) }
+        coroutineScope.launch {
+          viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, category = value.trim())
+        }
       },
     )
   }
@@ -477,7 +490,7 @@ internal fun SessionsScreen(
         TextButton(
           onClick = {
             deleteSessionKey = null
-            coroutineScope.launch { viewModel.deleteChatSession(session.key) }
+            coroutineScope.launch { viewModel.deleteChatSession(session.key, session.ownerAgentId) }
           },
         ) {
           Text(nativeString("Delete"), color = ClawTheme.colors.danger)

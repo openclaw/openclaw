@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 
 internal sealed class ChatTimelineItem {
   data class Message(
@@ -12,6 +13,15 @@ internal sealed class ChatTimelineItem {
   /** Durable queued/failed offline command shown below the transcript until acked or deleted. */
   data class OutboxCommand(
     val item: ChatOutboxItem,
+  ) : ChatTimelineItem()
+
+  /** Gateway-level recovery row that cannot be placed in the visible owner/session. */
+  data class RecoveryOutboxCommand(
+    val item: ChatOutboxItem,
+  ) : ChatTimelineItem()
+
+  data class OutboxRecoveryHeader(
+    val count: Int,
   ) : ChatTimelineItem()
 
   data class StreamingAssistant(
@@ -40,12 +50,15 @@ internal fun buildChatTimeline(
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
   outboxItems: List<ChatOutboxItem> = emptyList(),
+  recoveryOutboxItems: List<ChatOutboxItem> = emptyList(),
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val items =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
+      recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
+      if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
       if (stream != null) add(ChatTimelineItem.StreamingAssistant(stream))
       if (pendingToolCalls.isNotEmpty()) add(ChatTimelineItem.PendingTools(pendingToolCalls))
       if (pendingRunCount > 0) add(ChatTimelineItem.Thinking)
@@ -83,20 +96,24 @@ internal fun buildChatTimeline(
     latestContentIndex = latestContentIndex,
     latestUserMessageId = latestUserMessage?.id,
     latestUserMessageVersion = latestUserMessage?.let(::stableMessageVersion),
-    latestContentVersion = latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream, outboxItems),
+    latestContentVersion =
+      latestContentVersion(messages, pendingRunCount, pendingToolCalls, stream, outboxItems + recoveryOutboxItems),
   )
 }
 
 /**
- * Outbox rows for the visible session. Rows enqueued under the "main" alias still belong to the
+ * Outbox rows for the visible session owner. Rows enqueued under the "main" alias still belong to the
  * canonical main session once the gateway hello rewrites the current key. Rows whose user turn
  * is already visible as a message (optimistic while a live run owns it, or the canonical history
- * copy right before the row retires) are hidden so one send never renders as two bubbles.
+ * copy right before the row retires) are hidden so one send never renders as two bubbles. Migrated
+ * ownerless and unreachable legacy-main rows are excluded here and rendered only in the
+ * gateway-level recovery section.
  */
 internal fun outboxItemsForSession(
   items: List<ChatOutboxItem>,
   sessionKey: String,
   mainSessionKey: String,
+  ownerAgentId: String,
   messages: List<ChatMessage> = emptyList(),
 ): List<ChatOutboxItem> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
@@ -107,9 +124,20 @@ internal fun outboxItemsForSession(
       .toSet()
   return items.filter { item ->
     val itemKey = item.sessionKey.let { if (it == "main") mainKey else it }
-    itemKey == current && "${item.id}:user" !in visibleUserKeys
+    val ownerMatches = item.ownerAgentId == ownerAgentId
+    ownerMatches && itemKey == current && "${item.id}:user" !in visibleUserKeys
   }
 }
+
+/** Rows that cannot be reached through the current canonical owner/session still need controls. */
+internal fun outboxItemsForRecovery(
+  items: List<ChatOutboxItem>,
+  ownerAgentId: String,
+): List<ChatOutboxItem> =
+  items.filter { item ->
+    item.ownerAgentId == null ||
+      (resolveAgentIdFromMainSessionKey(item.sessionKey) == null && item.ownerAgentId != ownerAgentId)
+  }
 
 private fun stableMessageVersion(message: ChatMessage): String {
   val role = message.role.trim().lowercase()
@@ -202,6 +230,8 @@ internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
   when (item) {
     is ChatTimelineItem.Message -> "message:${item.message.id}"
     is ChatTimelineItem.OutboxCommand -> "outbox:${item.item.id}"
+    is ChatTimelineItem.RecoveryOutboxCommand -> "outbox-recovery:${item.item.id}"
+    is ChatTimelineItem.OutboxRecoveryHeader -> "outbox-recovery-header"
     is ChatTimelineItem.PendingTools -> "tools"
     is ChatTimelineItem.StreamingAssistant -> "stream"
     ChatTimelineItem.Thinking -> "thinking"

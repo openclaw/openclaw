@@ -296,22 +296,28 @@ class ChatControllerCommandControlsTest {
           json = json,
           requestGateway = { method, paramsJson ->
             requests += method to paramsJson
-            if (method == "sessions.list") """{"sessions":[]}""" else "{}"
+            when (method) {
+              "sessions.list" -> """{"sessions":[]}"""
+              "sessions.delete" -> """{"deleted":true}"""
+              else -> "{}"
+            }
           },
         )
 
       controller.patchSession(
         key = "main",
+        ownerAgentId = "owner-a",
         clearLabel = true,
         clearCategory = true,
         pinned = true,
         archived = false,
         unread = true,
       )
-      controller.deleteSession("main")
+      controller.deleteSession("main", ownerAgentId = "main")
 
       val patch = requests.first { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
+      assertTrue(patch.contains("\"agentId\":\"owner-a\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
       assertTrue(patch.contains("\"pinned\":true"))
@@ -430,6 +436,12 @@ class ChatControllerCommandControlsTest {
       val scopedCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(scopedCreate.contains("\"parentSessionKey\":\"agent:ops:dashboard:abc\""))
       assertTrue(scopedCreate.contains("\"agentId\":\"ops\""))
+
+      // Unqualified list rows carry their captured owner through a later default-agent change.
+      controller.forkSession("custom", ownerAgentId = "owner-a")
+      val capturedOwnerCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(capturedOwnerCreate.contains("\"parentSessionKey\":\"custom\""))
+      assertTrue(capturedOwnerCreate.contains("\"agentId\":\"owner-a\""))
       assertTrue(requests.any { it.first == "sessions.list" })
       assertEquals(
         false,
@@ -564,6 +576,7 @@ class ChatControllerCommandControlsTest {
             requests += method to paramsJson
             when (method) {
               "sessions.list" -> """{"sessions":[{"key":"agent:main:side"}]}"""
+              "sessions.delete" -> """{"deleted":true}"""
               else -> "{}"
             }
           },

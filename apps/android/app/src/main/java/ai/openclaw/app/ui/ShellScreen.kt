@@ -311,8 +311,8 @@ fun ShellScreen(
               nav.openSettingsRoute(SettingsRoute.Home)
               commandOpen = false
             },
-            onOpenSession = { sessionKey ->
-              viewModel.switchChatSession(sessionKey)
+            onOpenSession = { sessionKey, ownerAgentId ->
+              viewModel.switchChatSession(sessionKey, ownerAgentId)
               nav.selectTab(Tab.Chat)
               commandOpen = false
             },
@@ -562,8 +562,8 @@ private fun OverviewScreen(
           item {
             RecentSessionList(
               rows = visibleRecentRows,
-              onOpen = { sessionKey ->
-                viewModel.switchChatSession(sessionKey)
+              onOpen = { sessionKey, ownerAgentId ->
+                viewModel.switchChatSession(sessionKey, ownerAgentId)
                 onSelectTab(Tab.Chat)
               },
             )
@@ -1382,6 +1382,7 @@ internal data class RecentSessionListItem(
   val title: String,
   val source: String,
   val metadata: String,
+  val ownerAgentId: String? = null,
 )
 
 internal fun overviewRecentSessionRows(
@@ -1394,6 +1395,7 @@ internal fun overviewRecentSessionRows(
       val title = displaySessionTitle(session.displayName)
       RecentSessionListItem(
         key = session.key,
+        ownerAgentId = session.ownerAgentId,
         title = title,
         source = sessionSourceLabel(session.key, channelsSummary),
         metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::overviewRelativeSessionTime) ?: "",
@@ -1422,7 +1424,7 @@ private fun RecentSessionListItem.withStableFieldsFrom(previousRow: RecentSessio
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
-  onOpen: (String) -> Unit,
+  onOpen: (String, String?) -> Unit,
 ) {
   OverviewLayeredPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
@@ -1431,7 +1433,7 @@ private fun RecentSessionList(
           title = row.title,
           source = row.source,
           metadata = row.metadata,
-          onClick = { onOpen(row.key) },
+          onClick = { onOpen(row.key, row.ownerAgentId) },
         )
         if (index != rows.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.48f), thickness = 1.dp)

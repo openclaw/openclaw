@@ -87,7 +87,8 @@ class NodeApp : Application() {
       runBlocking {
         database.withTransaction {
           database.dao().deleteMessages(gatewayId)
-          database.dao().deleteSessions(gatewayId)
+          database.dao().deleteSessionsForGateway(gatewayId)
+          database.dao().deleteGatewayOwner(gatewayId)
           // The outbox owns command/attachment cascade deletes; nested transactions join this one.
           RoomChatCommandOutbox(database).clearGateway(gatewayId)
         }

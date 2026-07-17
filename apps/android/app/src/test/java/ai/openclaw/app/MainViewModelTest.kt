@@ -121,6 +121,55 @@ class MainViewModelTest {
     assertEquals(listOf(gateway), prefs.gatewayRegistry.entries.value)
   }
 
+  @Test
+  fun assistantLaunchDraftCapturesItsProvisionalComposerOwner() {
+    val (viewModel, _) = createViewModel()
+
+    viewModel.handleAssistantLaunch(
+      AssistantLaunchRequest(
+        source = "app_action",
+        prompt = "captured prompt",
+        autoSend = false,
+      ),
+    )
+
+    val draft = requireNotNull(viewModel.chatDraft.value)
+    val captured = requireNotNull(draft.owner)
+    assertEquals("captured prompt", draft.text)
+    assertNull(
+      claimChatDraftForOwner(
+        draft = draft,
+        owner = captured.copy(gatewayStableId = "another-gateway", agentId = "another-agent"),
+        mainSessionKey = "agent:another-agent:main",
+      ),
+    )
+  }
+
+  @Test
+  fun assistantAutoSendCapturesAndMigratesItsProvisionalComposerOwner() {
+    val (viewModel, _) = createViewModel()
+
+    viewModel.handleAssistantLaunch(
+      AssistantLaunchRequest(
+        source = "app_action",
+        prompt = "send to the captured chat",
+        autoSend = true,
+      ),
+    )
+
+    val pending = requireNotNull(viewModel.pendingAssistantAutoSend.value)
+    val resolvedOwner =
+      pending.owner.copy(
+        agentId = "work",
+        sessionKey = "agent:work:device",
+        routingVerified = true,
+      )
+    viewModel.resolveChatComposerOwnerAliases(to = resolvedOwner, mainSessionKey = resolvedOwner.sessionKey)
+
+    assertEquals("send to the captured chat", viewModel.pendingAssistantAutoSend.value?.prompt)
+    assertEquals(resolvedOwner, viewModel.pendingAssistantAutoSend.value?.owner)
+  }
+
   private fun assertNodeServiceStopRequested() {
     val app = RuntimeEnvironment.getApplication()
     val intent: Intent? = shadowOf(app).nextStartedService

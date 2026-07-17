@@ -4,6 +4,7 @@ import androidx.room.Room
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,9 +32,17 @@ class RoomChatCommandOutboxTest {
     gatewayId: String = "gateway-a",
     sessionKey: String = "main",
     thinkingLevel: String = "off",
+    ownerAgentId: String = "main",
   ): ChatOutboxItem {
     val result =
-      enqueue(gatewayId = gatewayId, sessionKey = sessionKey, text = text, thinkingLevel = thinkingLevel, nowMs = nowMs)
+      enqueue(
+        gatewayId = gatewayId,
+        sessionKey = sessionKey,
+        text = text,
+        thinkingLevel = thinkingLevel,
+        nowMs = nowMs,
+        ownerAgentId = ownerAgentId,
+      )
     return (result as ChatOutboxEnqueueResult.Queued).item
   }
 
@@ -50,9 +59,55 @@ class RoomChatCommandOutboxTest {
       assertEquals(listOf("first", "second", "third"), loaded.map { it.text })
       assertTrue(loaded.all { it.status == ChatOutboxStatus.Queued && it.retryCount == 0 && it.lastError == null })
       assertEquals(listOf("main", "main", "main"), loaded.map { it.sessionKey })
+      assertEquals(listOf("main", "main", "main"), loaded.map { it.ownerAgentId })
       // Enqueue-time thinking level survives the round trip.
       assertEquals(listOf("high", "off", "off"), loaded.map { it.thinkingLevel })
       assertEquals(loaded.map { it.createdAtMs }.sorted(), loaded.map { it.createdAtMs })
+    }
+
+  @Test
+  fun callerSuppliedIdempotencyKeyCanReconcileComposerAdmissionAfterRestart() =
+    runTest {
+      val result =
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "agent:main:device",
+          text = "send once",
+          thinkingLevel = "off",
+          nowMs = 10,
+          ownerAgentId = "main",
+          idempotencyKey = "composer-command-a",
+        ) as ChatOutboxEnqueueResult.Queued
+
+      assertEquals("composer-command-a", result.item.id)
+      assertTrue(store.wasAdmitted("composer-command-a"))
+      store.delete("composer-command-a")
+      assertTrue(store.wasAdmitted("composer-command-a"))
+      assertFalse(store.wasAdmitted("never-admitted"))
+    }
+
+  @Test
+  fun admissionReceiptsStayBoundedPerComposerOwner() =
+    runTest {
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
+        val id = "composer-command-$index"
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "agent:main:device",
+          text = "message $index",
+          thinkingLevel = "off",
+          nowMs = index.toLong(),
+          ownerAgentId = "main",
+          idempotencyKey = id,
+        )
+        store.delete(id)
+      }
+
+      assertFalse(store.wasAdmitted("composer-command-0"))
+      assertFalse(store.wasAdmitted("composer-command-1"))
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER) { offset ->
+        assertTrue(store.wasAdmitted("composer-command-${offset + 2}"))
+      }
     }
 
   @Test
@@ -63,7 +118,14 @@ class RoomChatCommandOutboxTest {
       }
 
       val refused =
-        store.enqueue(gatewayId = "gateway-a", sessionKey = "main", text = "overflow", thinkingLevel = "off", nowMs = 999)
+        store.enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "main",
+          text = "overflow",
+          thinkingLevel = "off",
+          nowMs = 999,
+          ownerAgentId = "main",
+        )
 
       assertEquals(ChatOutboxEnqueueResult.QueueFull, refused)
       assertEquals(OUTBOX_MAX_QUEUED, store.load("gateway-a").size)
@@ -186,7 +248,14 @@ class RoomChatCommandOutboxTest {
     runTest {
       assertEquals(
         ChatOutboxEnqueueResult.Unavailable,
-        store.enqueue(gatewayId = " ", sessionKey = "main", text = "hi", thinkingLevel = "off", nowMs = 1),
+        store.enqueue(
+          gatewayId = " ",
+          sessionKey = "main",
+          text = "hi",
+          thinkingLevel = "off",
+          nowMs = 1,
+          ownerAgentId = "main",
+        ),
       )
       assertEquals(emptyList<ChatOutboxItem>(), store.load(" "))
 
@@ -199,10 +268,11 @@ class RoomChatCommandOutboxTest {
     runTest {
       store.enqueueQueued("for main", nowMs = 10)
       store.enqueueQueued("for other", nowMs = 20, sessionKey = "agent:other:main")
+      store.enqueueQueued("other owner", nowMs = 30, ownerAgentId = "other")
 
-      store.deleteForSession("gateway-a", "main")
+      store.deleteForSession("gateway-a", "main", "main")
 
-      assertEquals(listOf("for other"), store.load("gateway-a").map { it.text })
+      assertEquals(listOf("for other", "other owner"), store.load("gateway-a").map { it.text })
     }
 
   private fun payload(
@@ -226,6 +296,7 @@ class RoomChatCommandOutboxTest {
           text = "with media",
           thinkingLevel = "off",
           nowMs = 10,
+          ownerAgentId = "main",
           attachments =
             listOf(
               payload(big, fileName = "big.jpg"),
@@ -254,6 +325,7 @@ class RoomChatCommandOutboxTest {
           text = "too big",
           thinkingLevel = "off",
           nowMs = 10,
+          ownerAgentId = "main",
           attachments = listOf(payload(oversized)),
         )
       assertEquals(ChatOutboxEnqueueResult.AttachmentsTooLarge, refused)
@@ -274,6 +346,7 @@ class RoomChatCommandOutboxTest {
             text = "bulk $index",
             thinkingLevel = "off",
             nowMs = index.toLong(),
+            ownerAgentId = "main",
             attachments = listOf(payload(chunk)),
           )
         if (result !is ChatOutboxEnqueueResult.Queued) {
@@ -294,9 +367,36 @@ class RoomChatCommandOutboxTest {
           text = "fits again",
           thinkingLevel = "off",
           nowMs = 999,
+          ownerAgentId = "main",
           attachments = listOf(payload(chunk)),
         )
       assertTrue(retried is ChatOutboxEnqueueResult.Queued)
+    }
+
+  @Test
+  fun conditionalDeleteNeverRemovesAClaimedRow() =
+    runTest {
+      val first =
+        (
+          store.enqueue(
+            gatewayId = "gateway-a",
+            sessionKey = "main",
+            text = "delete queued",
+            thinkingLevel = "off",
+            nowMs = 1,
+            ownerAgentId = "main",
+            idempotencyKey = "rollback-receipt",
+          ) as ChatOutboxEnqueueResult.Queued
+        ).item
+      assertTrue(store.wasAdmitted("rollback-receipt"))
+      assertTrue(store.deleteIfQueued(first.id))
+      assertTrue(store.load("gateway-a").isEmpty())
+      assertFalse(store.wasAdmitted("rollback-receipt"))
+
+      val claimed = store.enqueueQueued(text = "already claimed", nowMs = 2)
+      assertEquals(1, store.claimForSending(claimed.id, retryCount = 0, lastError = null))
+      assertFalse(store.deleteIfQueued(claimed.id))
+      assertEquals(ChatOutboxStatus.Sending, store.load("gateway-a").single().status)
     }
 
   @Test
@@ -310,6 +410,7 @@ class RoomChatCommandOutboxTest {
           text = "confirmed",
           thinkingLevel = "off",
           nowMs = 10,
+          ownerAgentId = "main",
           attachments = listOf(payload(bytes)),
         ) as ChatOutboxEnqueueResult.Queued
       store.updateStatus(queued.item.id, ChatOutboxStatus.Accepted, retryCount = 0, lastError = null)
@@ -331,6 +432,7 @@ class RoomChatCommandOutboxTest {
           text = "a",
           thinkingLevel = "off",
           nowMs = 10,
+          ownerAgentId = "main",
           attachments = listOf(payload(byteArrayOf(1))),
         ) as ChatOutboxEnqueueResult.Queued
       val b =
@@ -340,10 +442,11 @@ class RoomChatCommandOutboxTest {
           text = "b",
           thinkingLevel = "off",
           nowMs = 20,
+          ownerAgentId = "main",
           attachments = listOf(payload(byteArrayOf(2))),
         ) as ChatOutboxEnqueueResult.Queued
 
-      store.deleteForSession("gateway-b", "other")
+      store.deleteForSession("gateway-b", "other", "main")
       store.clearGateway("gateway-a")
 
       assertTrue(store.load("gateway-a").isEmpty())
@@ -370,6 +473,7 @@ class RoomChatCommandOutboxTest {
           text = "/clear",
           thinkingLevel = "off",
           nowMs = 10,
+          ownerAgentId = "main",
           gatedEpoch = 7L,
         ) as ChatOutboxEnqueueResult.Queued
       assertEquals(7L, store.load("gateway-a").single().gatedEpoch)

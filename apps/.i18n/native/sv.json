@@ -7309,6 +7309,16 @@
       "translated": "Chatt"
     },
     {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
+    },
+    {
       "id": "native.android.882cc14a58e7e105",
       "source": "Loading session",
       "translated": "Läser in session"

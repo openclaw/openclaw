@@ -4,6 +4,7 @@ import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatCommandOutbox
+import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
@@ -12,6 +13,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
@@ -873,6 +875,21 @@ class NodeRuntime private constructor(
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
+  private val gatewayDefaultAgentRevision = AtomicLong(0)
+  private var gatewayDefaultAgentStableId: String? = null
+
+  private fun updateGatewayDefaultAgentId(agentId: String?) {
+    val normalized = agentId?.trim()?.ifEmpty { null }
+    val ownerStableId = normalized?.let { chatCacheGatewayId() }
+    if (_gatewayDefaultAgentId.value == normalized && gatewayDefaultAgentStableId == ownerStableId) return
+    // Revision first: a send may observe either side of the value write, but never a new
+    // owner paired with the previous epoch during an A -> B -> A transition.
+    gatewayDefaultAgentRevision.incrementAndGet()
+    _gatewayDefaultAgentId.value = normalized
+    gatewayDefaultAgentStableId = ownerStableId
+    chat.onDefaultAgentChanged(normalized)
+  }
+
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
 
@@ -1100,7 +1117,6 @@ class NodeRuntime private constructor(
     replaceGatewayMethods(emptySet())
     _operatorScopes.value = emptyList()
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-    _gatewayDefaultAgentId.value = null
     _gatewayAgents.value = emptyList()
     selectedChatAgentId = null
     _modelCatalog.value = emptyList()
@@ -1317,6 +1333,8 @@ class NodeRuntime private constructor(
           json = json,
           transcriptCache = chatTranscriptCache,
           cacheScope = ::chatCacheScope,
+          currentDefaultAgentId = { gatewayDefaultAgentId.value },
+          currentDefaultAgentRevision = gatewayDefaultAgentRevision::get,
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
         )
@@ -2208,6 +2226,8 @@ class NodeRuntime private constructor(
   @Volatile private var preferredGatewayReconnectSuppressed = false
 
   val chatSessionKey: StateFlow<String> = chat.sessionKey
+  val chatSessionOwnerAgentId: StateFlow<String?> = chat.sessionOwnerAgentId
+  internal val gatewayComposerDefaultAgentOwner: StateFlow<GatewayDefaultAgentOwner?> = chat.composerDefaultAgentOwner
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
   val chatHistoryLoading: StateFlow<Boolean> = chat.historyLoading
@@ -2234,7 +2254,7 @@ class NodeRuntime private constructor(
     _serverName.value = "OpenClaw Gateway"
     _remoteAddress.value = "Mac Studio on local network"
     _gatewayVersion.value = BuildConfig.VERSION_NAME
-    _gatewayDefaultAgentId.value = "main"
+    updateGatewayDefaultAgentId("main")
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
     _providerModelCatalog.value = AndroidScreenshotFixture.models
@@ -3535,6 +3555,9 @@ class NodeRuntime private constructor(
       if (gatewayAuthResetInProgress) return
     }
     // A user-selected connect target must never inherit notification content from another gateway.
+    if (gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
+      updateGatewayDefaultAgentId(null)
+    }
     notificationOutbox.clear()
     invalidateNodeCapabilityApprovalState()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
@@ -3938,6 +3961,7 @@ class NodeRuntime private constructor(
       gatewayDataGeneration += 1
       clearOperatorGatewayState(retirePendingCronRuns = true)
     }
+    if (retireRunState) updateGatewayDefaultAgentId(null)
     invalidateVoiceWakeWordsForGateway()
     chat.onGatewayScopeChanging(retireRunState)
     stopMessageSpeech()
@@ -4054,9 +4078,12 @@ class NodeRuntime private constructor(
 
   fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean = a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
 
-  fun loadChat(sessionKey: String) {
+  fun loadChat(
+    sessionKey: String,
+    ownerAgentId: String? = null,
+  ) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
-    chat.load(key)
+    chat.load(key, ownerAgentId)
   }
 
   fun refreshChat() {
@@ -4072,6 +4099,7 @@ class NodeRuntime private constructor(
 
   suspend fun patchChatSession(
     key: String,
+    ownerAgentId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -4082,6 +4110,7 @@ class NodeRuntime private constructor(
   ) {
     chat.patchSession(
       key = key,
+      ownerAgentId = ownerAgentId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -4103,11 +4132,17 @@ class NodeRuntime private constructor(
     chat.dissolveSessionGroup(group)
   }
 
-  suspend fun deleteChatSession(key: String) {
-    chat.deleteSession(key)
+  suspend fun deleteChatSession(
+    key: String,
+    ownerAgentId: String?,
+  ) {
+    chat.deleteSession(key, ownerAgentId)
   }
 
-  suspend fun forkChatSession(parentKey: String): String? = chat.forkSession(parentKey)
+  suspend fun forkChatSession(
+    parentKey: String,
+    ownerAgentId: String? = null,
+  ): String? = chat.forkSession(parentKey, ownerAgentId)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
@@ -4120,9 +4155,12 @@ class NodeRuntime private constructor(
     chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
   }
 
-  fun switchChatSession(sessionKey: String) {
+  fun switchChatSession(
+    sessionKey: String,
+    ownerAgentId: String? = null,
+  ) {
     stopMessageSpeech()
-    chat.switchSession(sessionKey)
+    chat.switchSession(sessionKey, ownerAgentId)
   }
 
   fun selectChatAgent(agentId: String) {
@@ -4173,6 +4211,23 @@ class NodeRuntime private constructor(
     thinking: String,
     attachments: List<OutgoingAttachment>,
   ): Boolean = chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
+
+  internal suspend fun sendChatForOwnerAwaitAcceptance(
+    owner: ChatComposerOwner,
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+    idempotencyKey: String,
+  ): Boolean =
+    chat.sendMessageForOwnerAwaitAcceptance(
+      message = message,
+      thinkingLevel = thinking,
+      attachments = attachments,
+      expectedOwner = owner,
+      idempotencyKey = idempotencyKey,
+    )
+
+  internal suspend fun wasChatOutboxCommandAdmitted(id: String): Boolean = chat.wasOutboxCommandAdmitted(id)
 
   fun refreshChatCommands() {
     chat.refreshCommands()
@@ -4577,7 +4632,7 @@ class NodeRuntime private constructor(
       val agents = parseGatewayAgentSummaries(root)
 
       publishGatewayData(gatewayScope) {
-        _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
+        updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
