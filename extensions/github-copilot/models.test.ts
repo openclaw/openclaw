@@ -247,6 +247,7 @@ describe("fetchCopilotUsage", () => {
     const body = new ReadableStream({
       cancel() {
         canceled = true;
+        throw new Error("stream already closed");
       },
     });
     const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
