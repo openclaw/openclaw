@@ -9310,18 +9310,21 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /start/onboarding-redesign
 - Headings:
-  - H1: Onboarding redesign — implementation plan
+  - H1: Onboarding redesign implementation plan
   - H2: North star
+  - H2: Current shipped flow (after phases 1-3)
   - H2: Phases
   - H2: Implementation notes per phase
   - H3: Phase 1 — app recommendations (PR #109668)
   - H3: Phase 2 — CLI custodian spine (PR #109841)
-  - H3: Phase 3 — browser-first handoff (implemented; PR pending)
+  - H3: Phase 3 — browser-first handoff (PR #110054, merged)
   - H3: Phase 4 — web custodian surface (planned)
   - H3: Phase 5 — hatch and bootstrap (planned)
   - H3: Phase 6 — custodian presence (planned)
   - H3: Phase 7 — resilience (follow-up)
+  - H2: Testing and landing playbook (hard-won; read before phases 4-6)
   - H2: Decision log
+  - H2: Known gaps and follow-ups
 
 ## start/onboarding.md
 
