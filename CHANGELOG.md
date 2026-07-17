@@ -17,36 +17,25 @@ Docs: https://docs.openclaw.ai
 
 - **External gateway supervision:** add `OPENCLAW_SUPERVISOR_MODE=external` for lifecycle owners such as OCM, preserving verified restart and deferral behavior without exposing native service authority, blocking native service mutation and self-update, and providing a versioned atomic restart-handoff consume contract. Thanks @shakkernerd.
 - **ClickClack guided setup:** configure ClickClack from `openclaw onboard` or `openclaw channels add clickclack` with URL, token, and workspace prompts, default-account env fallback, nonfatal live connection validation, and gateway-aware next steps that connect automatically when OpenClaw is already running. Thanks @shakkernerd.
-- **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd.
+- **ClickClack command menus:** publish each bot's native OpenClaw commands to ClickClack composer autocomplete at gateway startup, with per-account opt-out and nonfatal compatibility handling for older tokens and servers. Thanks @shakkernerd and @vincentkoc.
 - **Skill Workshop approvals:** run agent-initiated apply, reject, and quarantine actions without an additional approval prompt by default while preserving `skills.workshop.approvalPolicy: "pending"` as an opt-in approval gate. Thanks @shakkernerd.
 - **TUI fuzzy selectors:** delegate list matching to pi-tui, adding slash-token and alpha-number matching while removing the local matcher fork.
 - **macOS paired-node terminals:** advertise duplex Codex and Claude terminal resume commands from the embedded node host and forward interactive input and cancellation through the native app bridge. (#107335)
-- **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086)
+- **Control UI catalog terminals:** open eligible Codex and Claude Code sessions in the native CLI on their Gateway or paired-node host, with viewer-versus-terminal preferences, validated resume commands, and an interactive PTY relay. (#107086) Thanks @vincentkoc.
 - **Skill Workshop history review:** add a manual, newest-first session scan that progressively searches older substantial work for conservative skill ideas, stores only SQLite cursor metadata, and leaves up to three results as pending proposals even when autonomous self-learning is disabled. (#106182)
-- **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
-- **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
 - **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, default Sol to medium reasoning across both runtimes, and preserve existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
-- **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
-- **Android chat agent selector:** switch the active agent directly from the live chat screen while keeping chat, Talk mode, and home canvas on the same canonical session. (#80422) Thanks @bcperry.
-- **Gateway host status:** show the connected Gateway's host, network address, OS, runtime, uptime, CPU, memory, and disk details in Control UI Settings. (#100478)
 - **iOS offline chat:** pre-paint recent sessions and canonical transcripts from a protected, bounded per-gateway cache, keep sending disabled offline, and purge cached conversation text when pairing is reset. (#100194)
 - **Slack progress indicators:** use Slack's native assistant thread status and rotating loading messages by default while keeping acknowledgement reactions static; lifecycle reaction updates now require `messages.statusReactions.enabled: true`.
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
 - **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Control UI Settings shortcut:** open Settings with ⇧⌘, while leaving the browser-owned ⌘, shortcut unchanged. Thanks @shakkernerd.
-- **Control UI chat layout:** center the transcript on the composer axis, keep assistant and tool output left and user bubbles right within the same readable frame, and preserve custom message-width overrides. (#104474) Thanks @shakkernerd.
+- **Control UI chat layout:** center the transcript on the composer axis, keep assistant and tool output left and user bubbles right within the same readable frame, and preserve custom message-width overrides. (#104474) Thanks @shakkernerd, @vincentkoc, and @zw-xysk.
 - **Control UI composer footer:** center the chat settings chip and model controls between the divider and the card edge instead of pinning them to the divider. (#105866)
 - **Control UI assistant actions:** keep assistant name and time first while placing hover actions beside them on the left instead of at the far edge. Thanks @shakkernerd.
-- **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
-- **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
-- **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
 - **Control UI message context:** reveal per-message token, context, and model details from the timestamp on hover or activation instead of showing a separate Context button.
 - **Control UI session titles:** reveal truncated recent-session names with a reduced-motion-safe hover animation.
-- **Control UI sidebar navigation:** show a small customizable pinned destination set, keep the remaining pages under More, move Settings to the footer, and persist sidebar customization in the browser. (#100296)
-- **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd.
-- **Android chat code highlighting:** render fenced Kotlin, Swift, TypeScript, JavaScript, Python, Bash, and JSON blocks with bounded, theme-aware syntax colors while preserving plain rendering for unknown, partial, or oversized blocks. (#100217)
-- **Gateway TTS playback:** add an operator-scoped `tts.speak` RPC that returns configured-provider speech as inline whole-clip audio for remote clients. (#100708, #100770)
-- **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper.
+- **Control UI sidebar usage:** remove the provider usage quota row from the expanded sidebar while keeping usage details available in the chat composer and Usage page. Thanks @shakkernerd and @vincentkoc.
+- **Workboard dispatch cap:** add a request-scoped `--max-starts` override while preserving the default cap, sequential starts, and one-card-per-owner guard. (#100174) Thanks @souvikDevloper, @Souvikalp, and @jwest75674.
 - **Plugin install provenance warnings:** require explicit `--force` acknowledgement for arbitrary executable plugin sources in CLI and chat installs, keep trusted ClawHub, bundled, official-catalog, and tracked-update flows frictionless, and restrict Crestodian installs to trusted sources. (#102197) Thanks @jesse-merhi.
 - **Cloud workers:** add session placement, dispatch, and worker-turn routing for remote session execution. (#106332)
 - **Paired-node coding agents:** discover OpenCode and Pi sessions and continue Codex and Claude catalog sessions through streaming CLI agent runs. (#106941, #106927, #105833)
@@ -70,7 +59,7 @@ Docs: https://docs.openclaw.ai
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
-- **iOS fresh-install setup:** atomically redact spent setup credentials before Keychain cleanup so a deferred item deletion no longer disconnects a successfully paired device. Fixes #107591. Thanks @dagmarjeeves-lab.
+- **iOS fresh-install setup:** atomically redact spent setup credentials before Keychain cleanup so a deferred item deletion no longer disconnects a successfully paired device. Fixes #107591 Thanks @dagmarjeeves-lab and @vincentkoc.
 - **Tlon SSE connect cleanup:** disarm opening deadlines after failed HTTP responses and rejected stream opens so reconnect attempts cannot leave stale timers behind. (#104585) Thanks @hugenshen.
 - **LINE reply-token media kinds:** honor video and audio metadata on inbound replies, share the canonical media builder with proactive sends, and fail visibly instead of recording empty media-only deliveries. (#106515) Thanks @edenfunf.
 - **Mattermost websocket connection deadlines:** bound opening handshakes so stalled TCP peers cannot hang channel startup indefinitely and reconnect control resumes after timeout. (#105553) Thanks @hugenshen.
@@ -91,234 +80,114 @@ Docs: https://docs.openclaw.ai
 - **Nested resource ignores:** honor slash-free patterns and escaped literal exclamation marks in nested ignore files during skill and resource discovery. Thanks @moguangyu5-design.
 - **Proxy bypass precedence:** honor blank lower-case `no_proxy` values shadowing upper-case `NO_PROXY` consistently with Undici, and reuse the canonical matcher for Telegram fallback selection.
 - **Tokenjuice exec compaction:** avoid retaining raw command output inside compacted middleware metadata, preventing large successful compactions from failing the middleware details-size guard.
-- **Agent git package identities:** strip refs before hosted-repository parsing and reject traversal segments so GitLab branch refs resolve to the canonical managed install path.
+- **Agent git package identities:** strip refs before hosted-repository parsing and reject traversal segments so GitLab branch refs resolve to the canonical managed install path. Thanks @vincentkoc.
 - **Tlon custom S3 uploads:** pass storage endpoints through the AWS SDK's native parser so custom S3-compatible uploads no longer fail before presigning.
 - **Signal active-run controls:** keep authorized stop, status, approval, and queue-read controls responsive during active turns while preserving ordinary and stateful turns in canonical session admission, and cancel every pending group sender lane on stop. (#107422) Thanks @arduano.
 - **Agent auth storage locks:** surface normal release failures while avoiding redundant release attempts after `proper-lockfile` reports a compromised lock.
-- **Paired-node session catalogs:** authorize bundled Anthropic and Codex catalog requests to invoke their read-only node commands from Control UI read flows, restoring remote Claude/Codex rows and terminal resume availability. Fixes #107406.
+- **Paired-node session catalogs:** authorize bundled Anthropic and Codex catalog requests to invoke their read-only node commands from Control UI read flows, restoring remote Claude/Codex rows and terminal resume availability. Fixes #107406 Thanks @vincentkoc.
 - **Sandbox recreate confirmation:** treat Clack cancellation as a decline so Ctrl-C cannot proceed with container removal.
 - **Microsoft Teams HTML text:** decode HTML5 entities consistently in quoted and Graph-fetched messages while preserving literal escaped entity text.
 - **ClawHub plugin API ranges:** delegate each supported comparator to `semver` so tilde, partial-wildcard, and prerelease caret bounds are correct while preserving OpenClaw version normalization and the existing restricted range grammar. (#106877)
 - **Web Readability relative links:** seed parsed documents with the request URL so article links resolve correctly while removing the plugin's duplicate lazy-loader facade. (#106860)
 - **Browser auto-routing:** fall back to the Gateway host when an implicitly selected browser node reports that its control host is unreachable, while preserving explicit node pins and ambiguous action failures.
-- **Discord voice participant context:** maintain the live Gateway voice-state roster and include current channel participants in authorized voice agent turns so agents can answer who is present.
+- **Discord voice participant context:** maintain the live Gateway voice-state roster and include current channel participants in authorized voice agent turns so agents can answer who is present. Thanks @vincentkoc.
 - **OC Path JSONC insertion:** patch object and array insertions through `jsonc-parser` so comments, trailing commas, and CRLF formatting survive. (#106847)
 - **Windows winget installs:** continue in the current PowerShell session when winget installs Node.js before the machine PATH update becomes visible, avoiding a false `Node.js not found` failure. (#106862)
 - **Control UI realtime Talk feedback:** request browser echo cancellation, noise suppression, and automatic gain control for every microphone transport, and keep PCM capture processors connected through zero-gain sinks so microphone input cannot play locally.
-- **Agent source-reply recovery:** preserve current-chat delivery evidence for message sends executed through Code Mode, preventing successful replies from triggering a redundant retry and misleading delivery-failure diagnostic.
-- **Gateway in-process restarts:** clear stale SIGUSR1 restart state and resume prepared host suspensions before rebuilding runtime admission, preventing restart cooldowns or paused scheduling from leaking into the next lifecycle.
+- **Agent source-reply recovery:** preserve current-chat delivery evidence for message sends executed through Code Mode, preventing successful replies from triggering a redundant retry and misleading delivery-failure diagnostic. Thanks @vincentkoc.
+- **Gateway in-process restarts:** clear stale SIGUSR1 restart state and resume prepared host suspensions before rebuilding runtime admission, preventing restart cooldowns or paused scheduling from leaking into the next lifecycle. Thanks @vincentkoc.
 - **ClickClack durable media delivery:** route media replies through required delivery, reuse owner-scoped upload and message nonces across retries, repair persisted attachment state without rereading source media, fail closed when an older ClickClack server cannot prove an unknown send, and use the selected provider and model's runtime output budget instead of a channel-level token cap. Thanks @jjjhenriksen and @shakkernerd.
-- **Deepgram realtime custom endpoints:** validate Voice Call streaming base URLs with secret-safe errors, preserve explicit `ws://` and `wss://` endpoints, and map HTTP schemes to their matching WebSocket transport for dedicated and self-hosted deployments. (#105334) Thanks @dwc1997.
-- **Control UI New Session reconnects:** rediscover agents, nodes, repository branches, and folder-browser state, refresh derived workspaces, gate unvalidated devices, and block ambiguous retries after Gateway client replacement while preserving the typed task and explicit choices. Fixes #106372.
+- **Deepgram realtime custom endpoints:** validate Voice Call streaming base URLs with secret-safe errors, preserve explicit `ws://` and `wss://` endpoints, and map HTTP schemes to their matching WebSocket transport for dedicated and self-hosted deployments. (#105334) Thanks @dwc1997, @vincentkoc, and @zw-xysk.
+- **Control UI New Session reconnects:** rediscover agents, nodes, repository branches, and folder-browser state, refresh derived workspaces, gate unvalidated devices, and block ambiguous retries after Gateway client replacement while preserving the typed task and explicit choices. Fixes #106372 Thanks @vincentkoc.
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
-- **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
+- **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886 and @gorkem2020.
 - **Transcript read failures:** propagate permission and I/O failures from streaming JSONL session reads instead of treating unreadable transcripts as empty. (#106412) Thanks @zenglingbiao.
 - **Restart sentinel diagnostics:** report SQLite read/write and legacy-file cleanup failures while preserving best-effort restart recovery behavior. (#106385) Thanks @zenglingbiao and @wendy-chsy.
-- **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
-- **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway.
-- **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt.
+- **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state. Thanks @vincentkoc.
+- **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway. Thanks @vincentkoc.
+- **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt and @tdrose01.
 - **Provider network retries:** align provider read/poll/download and agent-wait recovery for transient connection errors, retry bounded provider `ENOTFOUND` failures while leaving gateway `ENOTFOUND` and non-idempotent create operations fail-fast. (#101496) Thanks @xialonglee.
-- **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
+- **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio and @yetval.
 - **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
 - **SQLite maintenance schema validation:** reject current-version global and agent databases with missing or drifted canonical tables, constraints, indexes, triggers, or table options before compaction, while accepting supported additive-migration layouts.
 - **Matrix bootstrap diagnostics:** preserve complete UTF-8 code points in bounded stdout and stderr tails so crypto dependency failures do not show replacement characters at retention boundaries. (#105475) Thanks @qingminlong.
-- **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface.
+- **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface. Thanks @vincentkoc.
 - **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
-- **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
 - **ClawHub retry timing:** reject fractional delay-seconds and calendar-normalized invalid Retry-After dates so runtime and release reads stay on their bounded fallback schedule. (#105479) Thanks @qingminlong.
-- **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
-- **Cron delivery status:** keep successful isolated agent turns at `status=ok` when downstream delivery fails, while preserving the send failure separately in delivery state and run logs. (#95419) Thanks @Alix-007.
-- **Channel ingress recovery:** tombstone and scrub malformed durable ingress payloads without letting corrupt rows hide or starve later valid messages. (#98402) Thanks @Pick-cat.
 - **Discord thread archive defaults:** inherit each parent channel's configured auto-archive duration for binding-created threads instead of forcing 60 minutes, while preserving explicit overrides. (#103413) Thanks @wings1029.
-- **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules.
+- **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules. Thanks @vincentkoc.
 - **QA profile channel execution:** partition mixed Crabline channel scenarios into one aggregate host suite so taxonomy-backed profile commands and evidence workflows no longer abort before execution.
-- **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation.
-- **Official plugin beta compatibility:** keep the exact beta.5 session-store helper imports working over SQLite through the documented deprecation window, preventing installed Codex and Feishu plugins from failing during package acceptance and upgrades. (#105287) Thanks @vincentkoc.
-- **SQLite terminal session recovery:** track physical transcript mutation time in the agent database so killed or timed-out main sessions rotate when transcript writes outlive the registry update, while preserving legacy transcript mtimes during doctor import.
-- **Gateway chat typecheck:** import chat event types from their owning protocol schema after the retired aggregate type module was removed, restoring full project typechecks.
-- **Packaged Crabbox commands:** include the lease-freshness helper imported by the published wrapper so `crabbox:*` commands do not fail with `ERR_MODULE_NOT_FOUND` in npm installs.
-- **Plugin session catalogs:** reject unknown catalog filters, report catalogs as plugin capabilities, and preserve them in SDK registration captures instead of silently returning empty results or classifying catalog-only plugins as capability-free.
+- **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation. Thanks @vincentkoc and @zw-xysk.
+- **SQLite terminal session recovery:** track physical transcript mutation time in the agent database so killed or timed-out main sessions rotate when transcript writes outlive the registry update, while preserving legacy transcript mtimes during doctor import. Thanks @vincentkoc.
+- **Gateway chat typecheck:** import chat event types from their owning protocol schema after the retired aggregate type module was removed, restoring full project typechecks. Thanks @vincentkoc.
+- **Packaged Crabbox commands:** include the lease-freshness helper imported by the published wrapper so `crabbox:*` commands do not fail with `ERR_MODULE_NOT_FOUND` in npm installs. Thanks @vincentkoc.
+- **Plugin session catalogs:** reject unknown catalog filters, report catalogs as plugin capabilities, and preserve them in SDK registration captures instead of silently returning empty results or classifying catalog-only plugins as capability-free. Thanks @vincentkoc.
 - **Gateway service audit:** treat POSIX shell `-c` wrappers as opaque for the gateway-subcommand check, avoiding false missing-command warnings for shell-wrapped macOS LaunchAgents without parsing inner commands or ports. Fixes #81751. (#81778) Thanks @liaoandi.
-- **Memory filename search:** index paths separately from chunk bodies so exact full-path, basename, and stem queries rank the intended memory file first without changing body BM25 scores, snippets, or embeddings. (#96052, #94102) Thanks @Pick-cat.
 - **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.
-- **OpenAI Realtime client-secret deadlines:** bound voice and transcription secret acquisition to 30 seconds through the guarded fetch boundary while preserving authentication and bounded response parsing. (#102860) Thanks @Alix-007.
+- **OpenAI Realtime client-secret deadlines:** bound voice and transcription secret acquisition to 30 seconds through the guarded fetch boundary while preserving authentication and bounded response parsing. (#102860) Thanks @Alix-007 and @Leon-SK668.
 - **Gateway client watchdog:** keep transport-stall detection active for unbounded and mixed pending requests so dead sockets reject pending requests, reconnect, and never replay rejected requests. (#103407) Thanks @NianJiuZst.
-- **iOS Share Extension drafts:** preserve legitimate shared text beginning with scaffold-like prefixes, remove only exact legacy scaffold lines, avoid treating scheme-like prose as a URL, and deduplicate host-mirrored content. (#103453) Thanks @lin-hongkuan.
-- **Telegram reasoning previews:** reposition split reasoning previews through deferred deletion so prior preview messages do not remain stale while preserving client scroll position. (#97828) Thanks @ly-wang19.
+- **iOS Share Extension drafts:** preserve legitimate shared text beginning with scaffold-like prefixes, remove only exact legacy scaffold lines, avoid treating scheme-like prose as a URL, and deduplicate host-mirrored content. (#103453) Thanks @lin-hongkuan and @harjothkhara.
+- **Telegram reasoning previews:** reposition split reasoning previews through deferred deletion so prior preview messages do not remain stale while preserving client scroll position. (#97828) Thanks @ly-wang19 and @kyle20026.
 - **Feishu native-card threading:** normalize whitespace reply targets once and reuse the shared reply mode for card and media parts so native-card topic replies stay in their thread. (#102804) Thanks @sunlit-deng.
-- **Plain-text XML tool calls:** repair zero-argument calls and keep byte/character-bounded stream normalization from leaking incomplete or oversized tool syntax while preserving visible suffix text. (#98984, #102240, #102933, #102975, #103220, #103585) Thanks @wangyan2026, @qingminglong, @wuqxuan, and @ZOOWH.
 - **QQBot token requests:** bound token acquisition with the shared 30-second guarded-fetch deadline so stalled singleflight callers fail together, clean up, and can retry. (#102897) Thanks @maweibin.
 - **Canvas A2UI validation:** reject malformed or unsupported JSONL at CLI, agent-tool, and final node-invoke boundaries while preserving native v0.8 dispatch. (#103713) Thanks @qingminglong.
 - **Twilio RCS inbound routing:** normalize RCS consumer addresses only after signed webhook validation so sender matching and sessions work without changing outbound RCS semantics. (#102373) Thanks @clawSean.
-- **ClickClack output sanitization:** strip internal tool and XML scaffolding at the sender boundary, suppress scaffold-only sends, and preserve optional modern delivery IDs. (#103142) Thanks @masatohoshino.
-- **CLI installer cleanup:** remove Node staging directories and pnpm workspace-rewrite temporary files on failure. (#103725) Thanks @SebTardif.
+- **ClickClack output sanitization:** strip internal tool and XML scaffolding at the sender boundary, suppress scaffold-only sends, and preserve optional modern delivery IDs. (#103142) Thanks @masatohoshino, @vincentkoc, and @zw-xysk.
 - **Agent-core truncation:** avoid empty-output crashes when head truncation receives negative line or byte ceilings. (#103425) Thanks @qingminglong.
-- **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss.
+- **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss and @vincentkoc.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.
-- **Control UI workspace avatars:** inline validated agent avatar files in bootstrap and identity responses so Personal card images render without unauthenticated avatar-route requests, while preserving configured emoji precedence. (#102892, #97602) Thanks @LZY3538.
+- **Control UI workspace avatars:** inline validated agent avatar files in bootstrap and identity responses so Personal card images render without unauthenticated avatar-route requests, while preserving configured emoji precedence. (#102892, #97602) Thanks @LZY3538 and @mtuwei.
 - **Exec safe-bin flags:** auto-approve curated read-only boolean flags for default stdin-only filters while keeping unknown flags, tail follow/retry modes, file operands, and custom profiles fail-closed. (#88953) Thanks @yetval.
 - **iOS session mutations:** scope rename, archive, pin, delete, and fork requests to the selected agent, preserving the parent agent for forked sessions so multi-agent chat actions cannot mutate or create sessions under the wrong agent. (#103366, #103415) Thanks @lin-hongkuan and @harjothkhara.
-- **Model pin hot reload and fallback:** keep explicit `/model` selections authoritative across Telegram config reloads and model fallback, capture one live config snapshot per assembled turn, and leave fallback candidates turn-local instead of persisting them over the user's pin. (#103324, #103417) Thanks @obviyus.
 - **Swift protocol initializers:** default every schema-optional generated initializer parameter to `nil` so additive protocol fields no longer break SDK construction call sites.
-- **Telegram DM conversation context:** correlate rendered outbound messages with stable transcript identities across chunked, rich-fallback, media, and streamed delivery, preventing Markdown replies from appearing twice while retaining the full transcript when a cached multipart projection is incomplete. (#100333, #102257, #102259, #102469) Thanks @crabkun, @consoleaf, and @chenyangjun-xy.
 - **OpenCode Go MiMo catalog:** stop exposing the deprecated `mimo-v2-omni` and `mimo-v2-pro` aliases that reject agent requests, and keep release validation on the active MiMo V2.5 routes. (#103311, #103329) Thanks @krissding.
 - **Audit time filters:** reject impossible calendar dates for `openclaw audit --after` and `--before` instead of rolling them into unintended intervals, while preserving timezone-less timestamp semantics. (#103433) Thanks @qingminglong.
-- **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
+- **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925 and @wszhhx.
 - **xAI provider aliases:** preserve Grok 4.3 and Grok 4.5 thinking profiles, fast-model routing, and encrypted reasoning replay when models use the shipped `x-ai` provider alias instead of clamping valid thinking requests to `minimal`. (#103315)
-- **Doctor state isolation:** prevent automated update and Gateway watch repair from importing and archiving default-home exec or plugin-binding approvals when `OPENCLAW_STATE_DIR` points elsewhere, keep implicit CLI preflight notice-only, and reserve cross-state imports for direct operator doctor runs. (#103247, #103317)
-- **Doctor clean-state guidance:** stop suggesting `openclaw doctor --fix` after a clean run with no config changes while preserving targeted repair hints. (#103233)
+- **Doctor state isolation:** prevent automated update and Gateway watch repair from importing and archiving default-home exec or plugin-binding approvals when `OPENCLAW_STATE_DIR` points elsewhere, keep implicit CLI preflight notice-only, and reserve cross-state imports for direct operator doctor runs. (#103247, #103317) Thanks @vincentkoc.
+- **Doctor clean-state guidance:** stop suggesting `openclaw doctor --fix` after a clean run with no config changes while preserving targeted repair hints. (#103233) Thanks @kewang-pika and @nonplace.
 - **Google music generation:** retry one unblocked Lyria response that omits its contractually required audio while keeping prompt blocks and terminal generation stops non-retryable. (#103318)
 - **OpenCode Zen model catalog:** refresh the provider-owned static seed for Claude Sonnet 5, Grok 4.5, Hy3 Free, Kimi K2.7 Code, and MiniMax M3 with verified routing, pricing, limits, and input capabilities, remove retired free-tier rows, and expose the same catalog through unauthenticated model listing. (#103184)
-- **Managed browser launch:** surface asynchronous Chrome bootstrap and runtime spawn failures as browser errors while keeping Gateway alive, and retain process error handling through later lifecycle failures.
+- **Managed browser launch:** surface asynchronous Chrome bootstrap and runtime spawn failures as browser errors while keeping Gateway alive, and retain process error handling through later lifecycle failures. Thanks @vincentkoc.
 - **Browser node-proxy downloads:** transfer every action-produced download to the Gateway media store, align a 10 MiB per-file and 16 MiB aggregate transport budget, and rewrite plural download paths to Gateway-local files without traversing page-controlled result data.
 - **Gateway startup migrations:** release the shared migration lease before exiting when the selected config changes during startup, allowing immediate retries instead of blocking readiness until the five-minute lease expires. (#103145)
 - **Apple timeout recovery:** return promptly from shared operation deadlines and caller cancellation even when platform work ignores cancellation, while isolating late Gateway handshakes and cleaning up location and permission waiters. (#103066) Thanks @NianJiuZst.
 - **Claude CLI warm sessions:** preserve managed stdio continuity when Claude writes no native transcript, fall back to bounded OpenClaw history only when the exact live child disappears or changes, and keep stateless runs from persisting CLI bindings. (#96841) Thanks @bradreaves.
 - **CLI plugin listing:** skip state-migration runtime loading when no legacy inputs exist, reducing packaged cold-start memory while preserving migrations for legacy plugin indexes and configured session stores.
-- **Unicode-safe bounded text:** preserve complete UTF-16 surrogate pairs when shortening previews, prompts, diagnostics, labels, session keys, link metadata, and identity values across Control UI, CLI, Gateway, plugins, QA, memory, and Android surfaces. (#102625, #102626, #102627, #102656, #102816, #102823, #102833, #102877, #102949, #102963, #102969, #102988, #103010, #103034, #103210, #103341, #103487, #103543, #103580, #103646) Thanks @zhangguiping-xydt, @wings1029, @wangyan2026, @Pandah97, @MoerAI, @SunnyShu0925, @zhangqueping, @zw-xysk, @cxbAsDev, @lzyyzznl, @coder-master-0915, @LeonidasLux, @mushuiyu886, @ly85206559, @Simon-XYDT, and @lsr911.
+- **Unicode-safe bounded text:** preserve complete UTF-16 surrogate pairs when shortening previews, prompts, diagnostics, labels, session keys, link metadata, and identity values across Control UI, CLI, Gateway, plugins, QA, memory, and Android surfaces. (#102625, #102626, #102627, #102816, #102823, #102833, #102877, #102949, #102963, #102969, #102988, #103010, #103034, #103210, #103341, #103487, #103543, #103580, #103646) Thanks @zhangguiping-xydt, @wings1029, @wangyan2026, @Pandah97, @MoerAI, @SunnyShu0925, @zhangqueping, @zw-xysk, @cxbAsDev, @lzyyzznl, @coder-master-0915, @LeonidasLux, @mushuiyu886, @ly85206559, @Simon-XYDT, @lsr911, @vincentkoc, @chengzhichao-xydt, and @wangmiao0668000666.
 - **Cron list table:** sanitize and size bounded cells by terminal display width so CJK, emoji, combining marks, and terminal-control input cannot corrupt alignment or output. (#103616) Thanks @mushuiyu886.
 - **CLI model tables:** sanitize, truncate, and pad model-list cells by rendered terminal width so emoji, CJK, and other wide graphemes keep columns aligned. (#102819) Thanks @Kevin23-design and @vincentkoc.
-- **Skills prompt compaction:** preserve every included skill identity before using the remaining prompt budget for shortened, UTF-16-safe descriptions, retaining trigger guidance without exceeding the hard limit. (#88426) Thanks @abel-zer0.
-- **Channel Markdown code tables:** size columns by rendered display width so CJK, emoji, and mixed-width cells stay aligned across shared Telegram and Discord output. (#55596, #55512) Thanks @sparkyrider.
-- **QQ Bot approval previews:** wrap long sanitized commands and metadata at grapheme boundaries with visible continuation markers and safe fences, keeping desktop QQ reviews readable without changing command content. (#102119, #101979) Thanks @Bartok9.
+- **Skills prompt compaction:** preserve every included skill identity before using the remaining prompt budget for shortened, UTF-16-safe descriptions, retaining trigger guidance without exceeding the hard limit. (#88426) Thanks @abel-zer0, @vincentkoc, @chengzhichao-xydt, @wangmiao0668000666, and @Pandah97.
+- **Channel Markdown code tables:** size columns by rendered display width so CJK, emoji, and mixed-width cells stay aligned across shared Telegram and Discord output. (#55596, #55512) Thanks @sparkyrider and @zjy282.
+- **QQ Bot approval previews:** wrap long sanitized commands and metadata at grapheme boundaries with visible continuation markers and safe fences, keeping desktop QQ reviews readable without changing command content. (#102119, #101979) Thanks @Bartok9 and @xuzhi5858.
 - **Codex computer control:** publish fixed-length coordinate pairs as homogeneous array schemas so Codex app-server can start threads with the `computer` tool instead of rejecting tuple-valued `items`.
 - **Google Chat request deadlines:** bound control calls to 30 seconds while giving media transfers size-aware total budgets and a separate 30-second stalled-body guard, preventing hung Chat API requests without breaking large attachment uploads. (#102227) Thanks @hugenshen.
-- **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125.
+- **Google Gemini prefixed model IDs:** recognize `google/gemini-*` and `models/gemini-*` when selecting multimodal function-response behavior, preserving the Gemini 2 image fallback without regressing Gemini 3 inline image responses. (#102382) Thanks @LiLan0125 and @yetval.
 - **Generated provider model catalogs:** keep MiniMax and NVIDIA catalog rows when they advertise audio or video metadata while projecting runtime model inputs to text/image, preventing configured multimodal primaries from being dropped and falling back. (#97858, #97048) Thanks @ly-wang19 and @zackchiutw.
 - **DeepSeek catalog metadata:** align V4 Flash and Pro pricing with DeepSeek's current cache-hit, cache-miss, and output rates; refresh exact catalog metadata written by older onboarding flows; and document the July 24 retirement of the legacy `deepseek-chat` and `deepseek-reasoner` compatibility names. (#103192)
 - **CLI audio transcript files:** treat inferred Whisper and Parakeet text files as authoritative so empty or missing output cannot expose progress/status stdout as user speech. (#87393, #87384) Thanks @kesslerio.
 - **Browser actions on Node 24:** keep browser request cancellation bound to the client and response lifetime instead of Node 24.16+'s prematurely aborted body-stream signal, preventing valid POST actions from failing after JSON parsing. Thanks @obviyus and @vincentkoc.
-- **SecretRef model credentials:** keep resolved provider secrets behind process-local sentinels through auth storage, stream setup, SDK configuration, and managed local-provider probing, then inject plaintext only at the final network or provider-plugin boundary while retaining exact-value log redaction. (#102008, #102009)
-- **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
-- **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
-- **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.
-- **Direct poll delivery:** route direct and hybrid channel polls through the owning outbound adapter while preserving gateway-mode routing and channel option checks. (#99950) Thanks @NianJiuZst.
-- **Agent wait hard-timeout snapshots:** preserve canonical hard-timeout phase and timestamps when the outer `agent.wait` timer wins the retry-grace race, while leaving queue, draining, and restart-cancelled waits correctable. (#89367) Thanks @Pick-cat.
-- **Control UI typed approvals:** send `/approve` commands immediately through the authorized Gateway command path while an agent run is blocked instead of queueing the command behind that run. (#77672) Thanks @vincentkoc.
-- **Microsoft Teams Graph response bounds:** cap successful file-upload and chat JSON reads so oversized Microsoft Graph responses cannot be buffered without limit. (#97784) Thanks @Alix-007.
-- **Packaged speech runtime:** stop treating package-backed `speech-core` as a bundled plugin sidecar, restoring TTS startup in npm installs while release checks keep true activation-bypassing facades package-complete. (#89899, #89425) Thanks @zhangguiping-xydt.
-- **Codex app-server protocol:** require app-server 0.142 or newer, remove pre-0.142 wire-shape compatibility, and teach Codex to retrieve deferred native `spawn_agent` through `tool_search` so native subagent task mirroring works on search-capable models. (#101221)
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator.
-- **CJK Markdown emphasis:** render adjacent Chinese, Japanese, and Korean emphasis punctuation through the shared Markdown pipeline instead of leaking literal markers across channels. (#101230, #101120) Thanks @nicknmorty.
-- **Backup retry cleanup:** close partial archive output handles and isolate each retry path after live-write failures, preventing Windows `EBUSY` locks from cascading across attempts or leaving stale temp archives. (#101397, #101449) Thanks @ZOOWH and @LiLan0125.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
-- **Delivery recovery pacing:** pace eligible outbound and restart-continuation replays after gateway startup so outage backlogs do not burst into channel rate limits, while preserving the wall-clock recovery budget. (#101118, #101058) Thanks @ZengWen-DT.
-- **Outbound pre-connect recovery:** clear stale platform-send evidence atomically when a connect or DNS failure proves no request was sent, allowing queued Discord and other channel messages to replay after connectivity returns without weakening the unknown-send duplicate guard. (#101024, #100979) Thanks @SunnyShu0925.
-- **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
-- **OpenAI-compatible SSE parsing:** recognize event streams mislabeled as JSON without prepending a second `data:` prefix, preserving valid streamed responses from non-conforming providers. (#96503) Thanks @ZengWen-DT.
-- **LM Studio embedding preload:** honor model- and provider-level context-window limits when preloading embedding models, preventing avoidable GPU out-of-memory failures. (#100750) Thanks @zak-li, @ZOOWH, and @hxz398.
-- **Provider overload messaging:** keep rate-limited responses classified for retry and fallback behavior while using overload wording when the provider supplies no explicit retry detail. (#98165) Thanks @SunnyShu0925.
-- **Microsoft Teams attachment metadata:** bound Bot Framework `attachmentInfo` JSON reads and cancel oversized streams before they can exhaust Gateway memory. (#99125) Thanks @ly85206559.
-- **Agent auth copy order:** preserve the source agent's portable auth-profile precedence when copying credentials to a new agent while excluding skipped profiles and transient auth state. (#100833) Thanks @machine3at.
-- **Memory session repair:** keep daily dreaming ingestion bookkeeping outside session-corpus audit and repair so `memory status --fix` preserves healthy daily state. (#93389) Thanks @Alix-007 and @vincentkoc.
-- **Remote browser CDP policy:** allow the configured CDP control host through an existing hostname allowlist without widening page navigation policy, while keeping strict-policy discovery bound to the configured control authority. (#100986, #100819) Thanks @NianJiuZst.
-- **Config unset diagnostics:** explain when an inherited or default configuration value cannot be unset instead of reporting a misleading successful deletion. (#96557) Thanks @moeghashim.
-- **Crestodian command probes:** contain stdout and stderr stream failures while keeping child-process close and spawn errors authoritative, preventing unhandled probe crashes. (#100741) Thanks @lsr911.
-- **Feishu mention forwarding:** fail closed when the bot Open ID is unavailable so group messages cannot be misclassified as explicit bot mentions. (#100891) Thanks @zhangguiping-xydt.
-- **Cron edit delivery:** preserve each job's implicit delivery mode when applying partial delivery updates, so disabling best-effort delivery no longer turns detached job announcements off. (#100846) Thanks @machine3at.
 - **Control UI session creation:** keep newly created sessions at the front of the stable sidebar order after selecting another session. Thanks @shakkernerd.
-- **Control UI file previews:** keep large Skill Workshop files responsive with cached, offscreen-contained text chunks while preserving wrapped content, stable file switching, full-file copy, and clean focus behavior. (#101319) Thanks @xianshishan and @shakkernerd.
 - **FTS-only memory startup:** skip plugin capability discovery when `memorySearch.provider` is explicitly `none`, avoiding an unnecessary cold-start scan.
-- **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
-- **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
-- **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
-- **Detail-less provider failures:** keep opaque upstream failures from cooling API-key auth profiles while preserving WHAM-backed OpenAI OAuth health checks and configured model fallback. (#100600, #100617) Thanks @fengjikui.
-- **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
-- **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
-- **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
-- **Control UI coalesced updates:** show a clear queued-restart completion banner when an update joins an already-running Gateway restart. (#93082) Thanks @goutamadwant.
-- **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
 - **iOS embedded terminal:** open the terminal-only Control surface directly while native Gateway authentication connects instead of exposing the Web UI login screen.
-- **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.
-- **Control UI restart recovery:** recover stale bundle pages through a bounded whole-document refresh after Gateway updates or restarts. (#99111) Thanks @ZengWen-DT.
-- **TUI active Gateway ports:** follow the verified active local Gateway port when no explicit URL, port, or remote target is configured. (#73338, #42461) Thanks @haishmg and @vincentkoc.
-- **Apple chat run recovery:** restore active responses from canonical Gateway history after reconnects, foreground resumes, and event gaps, while preserving gateway user-turn identity across Codex and Copilot transcript mirrors to prevent duplicate rows. (#100277)
-- **Claude CLI streamed replies:** preserve assistant text already received from Claude CLI when its terminal result envelope is empty, preventing false empty-response failover after a complete streamed answer. (#90450) Thanks @totobusnello.
-- **Phone identity normalization:** canonicalize stray plus signs, preserve non-phone iMessage handles, and reject digit-free Signal identities across shared channel routing. (#100467) Thanks @morluto.
-- **Tlon scry response bounds:** cap successful Urbit scry JSON reads and cancel oversized streams instead of buffering unbounded peer responses. (#100376) Thanks @hugenshen.
-- **Source build portability:** keep tsdown configuration self-contained so builds do not depend on resolving the tsdown package from unrun's temporary module directory.
-- **Agent tool-call decoding:** preserve surrogate-range numeric HTML entities as literal text while still decoding valid supplementary-plane values, preventing malformed model output from injecting lone UTF-16 surrogates into tool arguments. (#99564) Thanks @mikasa0818.
-- **Gateway event dispatch:** catch and log lazy subscriber setup and handler failures instead of leaking unhandled promise rejections. (#100401) Thanks @cxbAsDev.
-- **Ollama fallback routing:** classify incomplete native streams through the Ollama provider hook so configured model fallbacks can advance. (#100482) Thanks @TurboTheTurtle.
-- **Diffs rendering:** render viewer and image output from one SSR preload, preserve language-pack highlighting through hydration, normalize language hints case-insensitively, skip identical before/after inputs with an explicit `changed` result, report truthful file-render and input errors, cache hash-pinned viewer runtimes, and prefer canonical file settings over stale aliases. (#100487)
-- **Remote browser reliability:** bound persistent Playwright tab enumeration by the existing remote CDP timeout budget and retire timed-out connection attempts so late completions cannot restore a stuck connection. (#80147, #58968) Thanks @HemantSudarshan and @KeaneYan.
+- **Source build portability:** keep tsdown configuration self-contained so builds do not depend on resolving the tsdown package from unrun's temporary module directory. Thanks @vincentkoc.
 - **Browser tab adoption:** preserve the prior implicit tab and stable aliases when new MCP, Playwright, or CDP targets fail final safety validation, abort after creation, or cannot be rediscovered; validate labels before creating tabs and limit managed cleanup to adopted targets. (#105301) Thanks @hugenshen.
-- **Browser attachment downloads:** return managed URL, filename, and path metadata when direct Playwright navigation starts an attachment download, while validating final URLs before saving bytes and preserving single-owner explicit downloads. (#48045, #89416) Thanks @zhangguiping-xydt.
-- **Browser action downloads:** return managed URL, filename, and path metadata when agent actions trigger downloads, while preserving explicit ownership, validating final URLs before saving bytes, and quarantining policy-denied tabs without closing them. (#93250, #93307) Thanks @sunlit-deng.
-- **Managed browser cookie persistence:** initialize new isolated macOS headless profiles with a non-interactive encryption key while preserving existing profile keys, and close Chromium through CDP before bounded signal fallback so persistent logins survive graceful browser and Gateway restarts. (#96704, #98284) Thanks @TurboTheTurtle.
-- **MCP OAuth response bounds:** reject body-less foreign error bodies without calling their inherently unbounded `text()` fallback, while preserving HTTP status and headers for safe SDK diagnostics. (#98143) Thanks @Pick-cat.
-- **Tlon image upload bounds:** cap remote image fetches before upload and fail closed on oversized or stalled responses instead of buffering them without a limit. (#100374) Thanks @hugenshen.
-- **Mattermost block streaming:** preserve complete, non-duplicated text and tool blocks in draft preview mode, and honor normal block streaming when preview streaming is disabled. (#87449) Thanks @yetval.
-- **Control UI approval prompts:** keep stale resolve failures and busy-state cleanup from leaking across newer approvals or Gateway reconnects. (#98394) Thanks @haruaiclone-droid.
-- **macOS service SecretRefs:** preserve generated env-file values for SecretRefs that remain in config when stale Gateway LaunchAgents are repaired or reinstalled without those variables in the invoking shell. (#99124) Thanks @mushuiyu886.
-- **Anthropic OAuth callbacks:** keep the provider-required `localhost` redirect URI stable while allowing the local callback listener to bind an explicit loopback host. (#96917) Thanks @xialonglee.
-- **Prompt-release media delivery:** accept active-leaf-preserving side appends while an embedded run temporarily releases its session lock, so successive message-tool media replies merge without a false session-takeover failure. (#100033, #100490) Thanks @scotthuang.
-- **Control UI Skills filters:** align agent and search controls, use translated labels, and preserve native checkbox and radio sizing. (#100526, #99996) Thanks @evan-YM.
-- **Control UI completed-run state:** bind active and completed updates to run identities so stale completions keep Send available while newer runs remain active. (#100527, #91680) Thanks @tiffanychum.
-- **Control UI context usage:** keep stale cached totals visible as approximate without triggering warning styling or Compact actions. (#89772) Thanks @bladin.
-- **Control UI file previews:** remove the duplicate Escape header hint while retaining the Close-button shortcut hint and Escape behavior. (#100528, #99029) Thanks @xianshishan.
-- **Control UI autonomous tool failures:** preserve an earlier Tool error outcome across later autonomous recovery turns. (#100514, #98888) Thanks @qingminglong.
-- **Agent empty replies:** surface a visible failure when a completed interactive turn has no deliverable reply, including queued follow-ups, while preserving explicit silence, pending continuations, and committed side effects, honoring queued send policies, and treating compaction notices as progress. (#100456) Thanks @mushuiyu886.
-- **Child process output safety:** prevent stdout/stderr pipe failures from crashing agent exec sessions, local TUI shell commands, and bounded process execution. (#100407, #100406, #100410) Thanks @cxbAsDev.
-- **Docker sandbox command output:** fail and terminate Docker sandbox operations when stdout/stderr capture breaks instead of returning success with incomplete output. (#100523) Thanks @cxbAsDev.
-- **Background refresh isolation:** keep remote skill-bin refreshes running when one node fails, and contain periodic subagent-sweeper failures without hiding errors from direct callers. (#100393, #100390) Thanks @cxbAsDev.
-- **Skill scan diagnostics:** report directory enumeration failures through the existing resource diagnostics instead of silently dropping affected skills. (#100380) Thanks @wendy-chsy.
-- **Exec output sanitization:** remove complete ANSI sequences and render residual C0/C1 controls as visible escapes instead of silently discarding output bytes. (#100327) Thanks @LavyaTandel.
-- **Assistant visible text:** unwrap leaked standalone `<parameter>` tags while preserving their content and literal code/XML examples. (#100302) Thanks @nankingjing.
-- **Android microphone capture:** treat negative `AudioRecord.read` results as fatal shared-session errors so both transcription and Talk capture stop cleanly after device loss. (#100028) Thanks @NianJiuZst.
-- **Android push-to-talk lifecycle:** serialize gateway PTT preparation with app foreground and Manual Mic ownership so stale background or retry work cannot restart, replace, or tear down a newer capture. (#99840) Thanks @xialonglee.
-- **Lean local-model tools:** trim media generation, TTS, and PDF tools from lean agent surfaces while preserving explicit config and runtime opt-ins. (#88881) Thanks @vincentkoc.
+- **Mattermost block streaming:** preserve complete, non-duplicated text and tool blocks in draft preview mode, and honor normal block streaming when preview streaming is disabled. (#87449) Thanks @yetval and @Senseonics-AI.
 - **iOS development app identity:** keep the development app labeled OpenClaw while using its distinct debug icon to differentiate it from release builds.
 - **Android chat recovery:** preserve optimistic user messages and locally owned runs while reconnect and sequence-gap history snapshots catch up, preventing sent messages from disappearing or stale runs from taking ownership. (#100197)
-- **iOS QR gateway handoff:** stop VisionKit before delivering scanned setup codes, and keep deferred auth, approval, Watch, and foreground-node work bound to its originating gateway across reconnects. (#99572) Thanks @PollyBot13.
-- **Agent terminal failures:** surface a safe interactive reply when an agent run ends without visible output, while preserving completed message-tool delivery and heartbeat-specific guidance. (#99304) Thanks @moeedahmed.
-- **MCP loopback tool results:** preserve schema-valid text, image, and embedded-resource content through HTTP tool calls while rendering malformed or protocol-incompatible blocks as safe text. (#100336) Thanks @tzy-17.
-- **Control UI tool-result images:** render direct image content blocks from Gateway history and make the delayed-send scroll E2E setup deterministic. (#100295) Thanks @lzyyzznl.
-- **Control UI live tool ordering:** keep assistant stream text before its matching tool card when browser and Gateway timestamps disagree. (#93184) Thanks @Pick-cat.
-- **Plugin approval diagnostics:** distinguish request validation rejections, expired wait decisions, and unavailable Gateways while keeping approval failures fail-closed. (#100337) Thanks @tzy-17.
-- **IRC Unicode messages:** split outbound PRIVMSG payloads on UTF-16 code-point boundaries so emoji cannot be cut into lone surrogates. (#96572) Thanks @llagy009.
-- **OpenAI realtime voice greetings:** prevent server VAD from creating a second outbound greeting while an explicit greeting response owns the turn, without disabling caller interruption. (#86285) Thanks @giodl73-repo.
-- **Realtime voice tools:** filter malformed tool names at each OpenAI, Azure, and Google realtime payload boundary while preserving provider-specific valid names. (#89175) Thanks @vincentkoc.
-- **Discord voice status:** treat Discord error 10065 as a normal disconnected state while preserving unrelated REST failures. (#90969) Thanks @asock.
-- **Discord voice accounts:** isolate `@discordjs/voice` connections by Discord account and recover auto-join when gateway readiness predates listener registration. (#87530) Thanks @geekhuashan.
 - **iOS Voice Wake cleanup:** avoid initializing the microphone audio pipeline while disabling inactive Voice Wake, preventing simulator launch aborts and unnecessary audio setup.
-- **Cron duration validation:** reject positive durations that truncate below one millisecond instead of silently scheduling a zero-duration interval. (#100311) Thanks @qingminglong.
-- **Skill workshop proposals:** preserve the terminal newline in generated proposal Markdown while still rejecting blank raw content. (#100293) Thanks @anyech.
-- **Agent tool inputs and LSP startup:** treat blank optional integer arguments as absent, and fail embedded LSP startup immediately when its child process cannot spawn. (#100273, #99922) Thanks @snotty and @cxbAsDev.
-- **Gateway and memory diagnostics:** report failed start-session persistence and close-time memory work instead of silently discarding those failures. (#100313, #100308) Thanks @masatohoshino and @lin-hongkuan.
-- **Unicode and plugin package verification:** match native slice semantics for reversed UTF-16 bounds, and reject published plugin packages that omit `openclaw.plugin.json`. (#100014, #99904) Thanks @Simon-XYDT and @849261680.
-- **Android invoke cancellation:** preserve coroutine cancellation through camera handlers and the Gateway invoke boundary so cancelled work cannot emit a stale result. (#99916) Thanks @xialonglee.
-- **Codex native hook relay diagnostics:** avoid bridge registry writes before the local relay server begins listening. (#100300) Thanks @nankingjing.
-- **Voice Call completed status:** resolve finalized calls from the full retained event store across Gateway, tool, and CLI status paths while preserving active-call lookup performance. (#99797) Thanks @Darren2030.
 - **Agent stop recovery:** prevent late-aborting prompts from reacquiring orphaned session locks after teardown, so `/stop` leaves the conversation ready for the next turn.
-- **Message delivery status:** report failed and partially failed best-effort channel delivery instead of returning a success-shaped message-tool result. (#99928) Thanks @masatohoshino.
-- **WhatsApp credential recovery:** restore malformed primary auth state from a valid backup during startup. (#99070) Thanks @LeonidasLux.
-- **WhatsApp quoted replies:** preserve bot-authored outbound quote metadata so replies to those messages keep their reply bubble in WhatsApp Desktop. (#94879) Thanks @Bartok9.
-- **WhatsApp reconnect catch-up:** admit recently missed Baileys `append` messages during a bounded reconnect window while preserving startup stale-history guards. (#80642) Thanks @VishalJ99.
-- **WhatsApp restart recovery:** stop automatic restart loops after logged-out or connection-replaced disconnects until the account reconnects. (#78511) Thanks @openperf.
 - **Local Gateway CLI auth:** keep loopback CLI token/password calls off durable device scopes so read probes cannot block later write/admin commands behind a stale pairing baseline. (#95997) Thanks @vincentkoc.
-- **Plugin module identity:** keep OpenClaw package chunks on Node's native module graph when jiti transforms plugin entries, preventing duplicate evaluation and class identity drift. (#88384) Thanks @vincentkoc.
-- **Shell completion repair:** generate core-only caches during doctor and update repair while preserving full plugin command completion for onboarding and explicit user rebuilds. (#76235)
 - **MCP schema diagnostics:** attribute draft-2020-12 compiler failures to the external MCP schema so malformed patterns produce actionable setup errors. Thanks @vincentkoc.
-- **Windows Scheduled Task recovery:** keep clean early exits inside the existing bounded launch poll, falling back only when neither the task process nor Gateway listener becomes observable. (#76245)
-- **iMessage group warnings:** suppress the false drop-all startup warning when an effective group sender allowlist can admit groups, and point true empty-allowlist configurations at the correct remedy. (#100046)
-- **Control UI mobile login:** keep Gateway recovery guidance visible after connection failures, make the disconnected gate scroll safely on constrained screens, and improve mobile keyboard and tap-target behavior. (#100208)
-- **TUI streaming:** render delta-only assistant events in live Gateway and embedded TUI sessions instead of waiting for the final response. (#83000) Thanks @flashosophy.
-- **Model aliases:** resolve provider-qualified aliases during session and chat-command model switches without collisions when providers share a display alias. (#100209) Thanks @sahilsatralkar.
-- **TUI new-session hooks:** create `/new` sessions through the shared Gateway lifecycle so command and session hooks receive the completed parent transcript in both Gateway and embedded modes, while preventing rollover during an active turn. (#100241, #49918) Thanks @BingqingLyu.
-- **TUI abort diagnostics:** show sanitized tool argument-validation summaries for aborted runs in both Gateway and local TUI modes without exposing raw model arguments. (#91002) Thanks @wsyjh8.
-- **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
-- **iOS Gateway auth retry:** restrict stored device-token retry to parsed loopback hosts and reject wildcard bind addresses, preventing remote lookalike hostnames from receiving trusted retry credentials. (#99859) Thanks @ly85206559.
-- **Amazon Bedrock control-plane deadlines:** bound model discovery and application inference-profile lookups, preserve caller cancellation, and close short-lived SDK clients after each request path. Thanks @Alix-007.
-- **Bedrock Mantle discovery:** bound model-catalog fetch time and response size, and release rejected response bodies so stalled, oversized, or failed provider responses fall back safely. (#99961) Thanks @zhangguiping-xydt.
-- **Discord thread-title prompts:** truncate generated-title message and channel context on UTF-16 boundaries so emoji cannot leave malformed model prompt text. (#101551) Thanks @Alix-007.
-- **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
-- **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
-- **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
+- **Amazon Bedrock control-plane deadlines:** bound model discovery and application inference-profile lookups, preserve caller cancellation, and close short-lived SDK clients after each request path. Thanks @Alix-007 and @vincentkoc.
+- **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst and @BenjaminBrossi.
+- **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi and @vincentkoc.
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
-- **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt.
+- **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt and @Patt92.
 - **Terminal sessions:** preserve early keystrokes, enable paired-node terminal actions, authorize paired-node catalog reads, recover after stale Control UI connections, and keep slow clients attached under heavy output. (#107214, #107361, #107410, #107419, #107348) Thanks @vincentkoc and @zw-xysk.
 - **Control UI configuration:** auto-save validated edits, restore autosave gates, show unapplied-restart state, and keep normal content scrolling and selection behavior. (#107458, #107477, #107577, #107349)
 - **Signal recovery:** reconnect after stalled container handshakes, prevent overlapping daemons during restart, and preserve username targets during phone normalization. (#107386, #107409, #107365) Thanks @hugenshen, @ZHOUKAILIAN, @UberKitten, and @ly-wang19.
@@ -339,9 +208,9 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete b81666ca6af25c86cc099983a4358cdc5ea9ced8..c7bcc28371df3b94fa7b2d5dd7195c053cc7192a history: 2425 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete b81666ca6af25c86cc099983a4358cdc5ea9ced8..46b9d13a2f88f1a34366454d794c65ae8cee9186 history: 3245 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
-Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, #99756, #99960, #100648, #101685, #102087, #102289, #102344, #102444, #102600, #102610, #102732, #102780, #102858, #102873, #102896, #102948, #102980, #103070, #103095, #103132, #103157, #103163, #103222, #103244, #103281, #103467, #103549, #103556, #103581, #103596, #103608, #103635, #103650, #103654, #103664, #103680, #103681, #103685, #103695, #103718, #103725, #103760, #103775, #103861, #103906, #103916, #103923, #103946, #103952, #103965, #104000, #104162, #104186, #104230, #104433, #104441, #104491, #104504, #104529, #104555, #104706, #104778, #104848, #104892, #104905, #104956, #104957, #105055, #105401, #105405, #105444, #105488, #105493, #105500, #105518, #106065).
+Shipped baseline exclusions: v2026.7.1 (83 PRs: #90145, #91685, #98021, #98143, #98620, #98644, #99756, #99960, #100648, #101685, #101728, #102087, #102289, #102344, #102444, #102600, #102610, #102732, #102780, #102858, #102873, #102896, #102948, #102980, #103070, #103095, #103132, #103157, #103163, #103222, #103244, #103281, #103467, #103549, #103556, #103581, #103596, #103608, #103635, #103650, #103654, #103664, #103680, #103681, #103685, #103695, #103718, #103725, #103760, #103775, #103861, #103906, #103916, #103923, #103946, #103952, #103965, #104000, #104162, #104186, #104230, #104433, #104441, #104491, #104504, #104529, #104555, #104706, #104778, #104848, #104892, #104905, #104956, #104957, #105055, #105401, #105405, #105444, #105488, #105493, #105500, #105518, #106065).
 
 #### Pull requests
 
@@ -392,7 +261,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #102466** Thanks @chengzhichao-xydt.
 - **PR #102464** Thanks @lsr911.
 - **PR #102467** Thanks @lsr911.
-- **PR #102470** Thanks @zw-xysk.
+- **PR #102470** Thanks @zw-xysk and @Monkey-wusky.
 - **PR #102465**
 - **PR #102442** Thanks @ly85206559.
 - **PR #102489** Related #102460.
@@ -749,7 +618,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #102637** Related #102614.
 - **PR #103289** Related #99031. Thanks @odrobnik.
 - **PR #103328**
-- **PR #103252**
+- **PR #103252** Thanks @coolmanns.
 - **PR #103349** Related #63829, #81205, #103088. Thanks @SunnyShu0925 and @fclwtt and @cuihaijun and @yetval.
 - **PR #103351** Thanks @NianJiuZst.
 - **PR #103338** Related #103333.
@@ -1107,7 +976,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #103719** Related #103385. Thanks @cxbAsDev and @solavrc.
 - **PR #104045** Related #103235.
 - **PR #104228**
-- **PR #99086** Related #98620. Thanks @maweibin.
+- **PR #99086** Thanks @maweibin.
 - **PR #104215**
 - **PR #104213** Related #104208. Thanks @obviyus.
 - **PR #104247**
@@ -1908,7 +1777,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #105818** Thanks @lzw112.
 - **PR #105858**
 - **PR #105769** Thanks @mushuiyu886.
-- **PR #99007** Related #98879, #98865. Thanks @maweibin and @carterstebbins23-spec.
+- **PR #99007** Related #98865. Thanks @maweibin and @carterstebbins23-spec.
 - **PR #105876**
 - **PR #105902** Related #105898.
 - **PR #105808**
@@ -2463,7 +2332,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #107109**
 - **PR #107124**
 - **PR #107087** Related #103057. Thanks @yetval.
-- **PR #106926** Thanks @mushuiyu886.
+- **PR #106926** Thanks @mushuiyu886 and @wangmiao0668000666.
 - **PR #107102**
 - **PR #106986** Thanks @zhangguiping-xydt.
 - **PR #107130**
@@ -2497,7 +2366,7 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #107072** Thanks @zhangguiping-xydt.
 - **PR #107103** Thanks @zw-xysk.
 - **PR #107165**
-- **PR #106384** Thanks @ZengWen-DT.
+- **PR #106384** Thanks @ZengWen-DT and @wangmiao0668000666.
 - **PR #107169**
 - **PR #107168**
 - **PR #107101**
@@ -2766,10 +2635,830 @@ Shipped baseline exclusions: v2026.7.1 (80 PRs: #90145, #91685, #98021, #98620, 
 - **PR #99394** Related #97074. Thanks @xialonglee and @Lvan185.
 - **PR #107737**
 - **PR #107747**
-- **PR #106959**
-- **PR #107764**
+- **PR #107749**
+- **PR #107642**
+- **PR #107748**
+- **PR #107745**
+- **PR #107753**
 - **PR #107740**
+- **PR #107756**
+- **PR #107738**
+- **PR #107757**
+- **PR #107758**
+- **PR #107617** Thanks @mushuiyu886.
+- **PR #107760**
+- **PR #104901** Thanks @zhangguiping-xydt.
+- **PR #107763**
+- **PR #107767**
+- **PR #107759** Related #107755.
+- **PR #107454** Thanks @wahaha1223.
+- **PR #107774**
+- **PR #107775**
+- **PR #107776**
 - **PR #107772**
+- **PR #106484** Thanks @hugenshen.
+- **PR #104940** Related #104762. Thanks @jackjin1997.
+- **PR #107779**
+- **PR #107768**
+- **PR #107777** Related #107769.
+- **PR #107784**
+- **PR #107781**
+- **PR #104629** Thanks @hugenshen.
+- **PR #107783**
+- **PR #105066** Thanks @qingminglong.
+- **PR #107762**
+- **PR #107634**
+- **PR #107780**
+- **PR #107796**
+- **PR #107789** Related #107766.
+- **PR #107764**
+- **PR #107807** Related #107684. Thanks @shakkernerd.
+- **PR #107808**
+- **PR #107801**
+- **PR #107791** Related #107782.
+- **PR #101708** Thanks @Pick-cat.
+- **PR #107817**
+- **PR #107806**
+- **PR #107819**
+- **PR #107826**
+- **PR #107633**
+- **PR #107794** Thanks @fuller-stack-dev.
+- **PR #107827**
+- **PR #107799** Related #106594. Thanks @joshavant and @lockhartheavyindustries.
+- **PR #107828**
+- **PR #107830**
+- **PR #104824** Thanks @yetval.
+- **PR #107803** Thanks @fuller-stack-dev and @jalehman.
+- **PR #107822**
+- **PR #107809** Thanks @fuller-stack-dev and @jalehman.
+- **PR #107837**
+- **PR #107838**
+- **PR #107848** Related #107840.
+- **PR #107849**
+- **PR #107793**
+- **PR #107294** Related #106604. Thanks @harjothkhara and @Cyb3rb1ade.
+- **PR #107859**
+- **PR #107854**
+- **PR #107858**
+- **PR #107862** Thanks @fuller-stack-dev.
+- **PR #107844**
+- **PR #107754** Related #98633, #102932, #105427. Thanks @joshavant and @ooiuuii and @aniruddhaadak80.
+- **PR #107836** Thanks @fuller-stack-dev.
+- **PR #107869**
+- **PR #107870**
+- **PR #107884**
+- **PR #107874**
+- **PR #107471**
+- **PR #107887**
+- **PR #107893** Thanks @shakkernerd.
+- **PR #107865**
+- **PR #107892**
+- **PR #107900**
+- **PR #107820** Related #107818. Thanks @jalehman.
+- **PR #107898**
+- **PR #107773** Related #107770. Thanks @joshavant.
+- **PR #107907** Thanks @shakkernerd.
+- **PR #107912**
+- **PR #107913**
+- **PR #107798** Related #107797.
+- **PR #107923**
+- **PR #107924**
+- **PR #107688** Related #107627.
+- **PR #95996** Thanks @kklouzal and @fuller-stack-dev.
+- **PR #107906**
+- **PR #107936**
+- **PR #107940** Thanks @hannesrudolph.
+- **PR #107949**
+- **PR #107951**
+- **PR #107953**
+- **PR #107954**
+- **PR #107932**
+- **PR #107927**
+- **PR #107908**
+- **PR #107965** Thanks @shakkernerd.
+- **PR #107966**
+- **PR #107699** Thanks @Alix-007.
+- **PR #107938**
+- **PR #107700** Thanks @Alix-007.
+- **PR #107701** Thanks @Alix-007.
+- **PR #107702** Thanks @Alix-007.
+- **PR #107973**
+- **PR #107960**
+- **PR #107543** Thanks @mcaxtr.
+- **PR #107778** Related #107736. Thanks @jincheng-xydt and @crash2kx.
+- **PR #106959**
+- **PR #107786**
+- **PR #107993**
+- **PR #107987**
+- **PR #108003**
+- **PR #107997** Related #107992.
+- **PR #107604** Related #105683. Thanks @lee-xydt and @aniruddhaadak80.
+- **PR #108008**
+- **PR #107317** Thanks @zhangguiping-xydt.
+- **PR #107961** Thanks @Patrick-Erichsen.
+- **PR #107771** Related #106933. Thanks @ekinnee and @montajebii.
+- **PR #104516** Thanks @Monkey-wusky.
+- **PR #107066** Thanks @mcaxtr.
+- **PR #108013**
+- **PR #108017**
+- **PR #107989** Related #104108. Thanks @ObliviateRickLin and @yetval.
+- **PR #106473** Thanks @sunlit-deng.
+- **PR #107977**
+- **PR #107969**
+- **PR #107955**
+- **PR #105470** Thanks @qingminlong.
+- **PR #107063** Related #106189. Thanks @mushuiyu886 and @aaajiao.
+- **PR #106826** Related #106379. Thanks @snowzlmbot.
+- **PR #107976**
+- **PR #107983**
+- **PR #108020**
+- **PR #106293** Thanks @qingminglong and @omarshahine.
+- **PR #107285** Thanks @xydt-tanshanshan.
+- **PR #107703** Thanks @Alix-007.
+- **PR #107970** Related #107952.
+- **PR #108004**
+- **PR #107985**
+- **PR #108026**
+- **PR #108022**
+- **PR #107948**
+- **PR #106397** Thanks @Alix-007.
+- **PR #105584** Related #103078. Thanks @yetval.
+- **PR #107926** Related #107850.
+- **PR #107894**
+- **PR #108038**
+- **PR #108037**
+- **PR #108018** Related #108016.
+- **PR #107718** Thanks @Leon-SK668.
+- **PR #107393** Thanks @ZengWen-DT.
+- **PR #108040**
+- **PR #108045**
+- **PR #104853** Thanks @VectorPeak.
+- **PR #108052** Thanks @RomneyDa.
+- **PR #108041**
+- **PR #108043**
+- **PR #108048**
+- **PR #106737** Thanks @IWhatsskill.
+- **PR #108051**
+- **PR #108046**
+- **PR #107881** Thanks @RomneyDa.
+- **PR #106395** Thanks @Alix-007.
+- **PR #108054**
+- **PR #106994** Related #106870.
+- **PR #108057** Related #108055.
+- **PR #108047**
+- **PR #108067**
+- **PR #108032**
+- **PR #108058**
+- **PR #103369** Thanks @Alix-007.
+- **PR #108076**
+- **PR #108042** Related #106556, #106778. Thanks @nocode-ananas and @sebastian-openclaw.
+- **PR #108062** Related #108027, #108028.
+- **PR #108015** Thanks @RomneyDa.
+- **PR #107863** Related #107526. Thanks @ZengWen-DT and @aniruddhaadak80.
+- **PR #108078**
+- **PR #104430** Thanks @yetval.
+- **PR #108034**
+- **PR #108099**
+- **PR #108095**
+- **PR #107404** Thanks @IWhatsskill.
+- **PR #108093**
+- **PR #107717** Thanks @Leon-SK668.
+- **PR #108096**
+- **PR #108090**
+- **PR #107638** Thanks @sunlit-deng.
+- **PR #108111**
+- **PR #105381** Related #105380. Thanks @edenfunf.
+- **PR #108108**
+- **PR #92294** Thanks @yetval.
+- **PR #108112**
+- **PR #108118**
+- **PR #108113**
+- **PR #108035**
+- **PR #108125**
+- **PR #108105** Related #95597, #97913, #99268, #106277. Thanks @viernesmybot and @100yenadmin and @obviyus and @xudonggang123.
+- **PR #108132**
+- **PR #108123** Related #108097, #108098.
+- **PR #108139**
+- **PR #108121**
+- **PR #108100** Related #107290. Thanks @woohahahaaa.
+- **PR #108129**
+- **PR #108009** Thanks @miorbnli.
+- **PR #107719** Thanks @Leon-SK668.
+- **PR #108101** Thanks @Leon-SK668.
+- **PR #108091**
+- **PR #108094** Thanks @QiuYuang.
+- **PR #107478** Thanks @wangmiao0668000666.
+- **PR #108150**
+- **PR #103589** Thanks @RomneyDa.
+- **PR #108138**
+- **PR #108115**
+- **PR #108122** Thanks @yetval.
+- **PR #108159** Thanks @hannesrudolph.
+- **PR #108162**
+- **PR #108137**
+- **PR #108170**
+- **PR #108158** Thanks @RomneyDa.
+- **PR #108146**
+- **PR #103604** Thanks @RomneyDa.
+- **PR #108081**
+- **PR #108169**
+- **PR #108171**
+- **PR #108179**
+- **PR #108173**
+- **PR #108147** Related #102930. Thanks @yungchentang and @aniruddhaadak80.
+- **PR #108074**
+- **PR #107903**
+- **PR #108145** Thanks @ZengWen-DT.
+- **PR #108019** Thanks @mushuiyu886.
+- **PR #108191**
+- **PR #108102** Thanks @Leon-SK668.
+- **PR #108151** Thanks @mushuiyu886.
+- **PR #108181**
+- **PR #108201**
+- **PR #107986** Thanks @obviyus.
+- **PR #108203**
+- **PR #108219**
+- **PR #108202**
+- **PR #108221**
+- **PR #108210**
+- **PR #108223**
+- **PR #108130** Thanks @qingminglong.
+- **PR #108227**
+- **PR #108205**
+- **PR #108234**
+- **PR #108228**
+- **PR #108248**
+- **PR #108207**
+- **PR #108214**
+- **PR #108164** Thanks @Alix-007.
+- **PR #108239**
+- **PR #108243**
+- **PR #108240** Thanks @Leon-SK668.
+- **PR #108153**
+- **PR #86386** Related #48949. Thanks @larry-xue and @AndrzejXIAO.
+- **PR #97827** Related #95109. Thanks @VACInc and @kzzalews.
+- **PR #105780** Related #105787. Thanks @morluto.
+- **PR #108260**
+- **PR #107442**
+- **PR #95729** Thanks @Pick-cat and @altaywtf.
+- **PR #108259**
+- **PR #108254** Related #96815, #100556, #106375. Thanks @xxw77 and @CryptoKylan and @ximanuki.
+- **PR #108264** Thanks @obviyus.
+- **PR #108261**
+- **PR #108266**
+- **PR #108275**
+- **PR #108189** Thanks @RomneyDa.
+- **PR #108282**
+- **PR #108279** Thanks @RomneyDa.
+- **PR #108271** Thanks @shakkernerd.
+- **PR #108285**
+- **PR #97224** Thanks @marchpure.
+- **PR #108295**
+- **PR #102903** Thanks @chengzhichao-xydt.
+- **PR #108230** Thanks @QiuYuang.
+- **PR #108309**
+- **PR #108308**
+- **PR #103582** Related #103551. Thanks @lin-hongkuan and @obviyus.
+- **PR #107731** Related #107425. Thanks @wuqxuan and @Countermarch.
+- **PR #108290** Related #108289.
+- **PR #108301**
+- **PR #108296** Thanks @RomneyDa.
+- **PR #108317**
+- **PR #108325**
+- **PR #108311** Related #106719, #107305. Thanks @aniruddhaadak80 and @Kenmege.
+- **PR #108247**
+- **PR #108110** Related #107933. Thanks @Last-emo-boy.
+- **PR #108334**
+- **PR #108332** Thanks @shakkernerd.
+- **PR #108338**
+- **PR #108336** Related #107219, #107226, #107842. Thanks @marius-stauchner and @Marvinthebored and @Kian-Thomas-West.
+- **PR #108347**
+- **PR #107802** Related #107746. Thanks @jincheng-xydt and @kostrse.
+- **PR #108340**
+- **PR #108354** Related #98348, #107172, #107497. Thanks @billcshi and @collinsman and @aniruddhaadak80.
+- **PR #106803** Thanks @IWhatsskill.
+- **PR #107574** Thanks @IWhatsskill.
+- **PR #108199** Thanks @IWhatsskill.
+- **PR #108307** Thanks @IWhatsskill.
+- **PR #108363**
+- **PR #108346** Related #108318.
+- **PR #106538** Thanks @Pick-cat.
+- **PR #108376**
+- **PR #103116** Thanks @Leon-SK668.
+- **PR #104968** Thanks @wings1029.
+- **PR #108371**
+- **PR #108212** Related #108186. Thanks @lsr911 and @ooiuuii.
+- **PR #108390**
+- **PR #108157** Thanks @Alix-007.
+- **PR #108381** Related #108366.
+- **PR #104966** Thanks @wings1029.
+- **PR #108343** Thanks @RomneyDa.
+- **PR #108380**
+- **PR #89745** Related #89709. Thanks @TurboTheTurtle and @syfvb.
+- **PR #108375** Related #108288.
+- **PR #108400**
+- **PR #105089** Thanks @zw-xysk.
+- **PR #108377**
+- **PR #108385**
+- **PR #105556** Thanks @zw-xysk.
+- **PR #108410**
+- **PR #108415**
+- **PR #108414**
+- **PR #108398** Related #107962, #107964.
+- **PR #108417**
+- **PR #106497** Thanks @hugenshen and @Solvely-Colin.
+- **PR #102698** Thanks @zhangguiping-xydt and @RomneyDa.
+- **PR #104663** Thanks @Alix-007.
+- **PR #108437**
+- **PR #108426**
+- **PR #108416**
+- **PR #108024**
+- **PR #103294** Related #108399. Thanks @xydt-tanshanshan.
+- **PR #108430** Thanks @RomneyDa.
+- **PR #108418** Thanks @RomneyDa.
+- **PR #108450**
+- **PR #108420**
+- **PR #108451**
+- **PR #108429** Thanks @RomneyDa.
+- **PR #108454**
+- **PR #108424**
+- **PR #108448**
+- **PR #108458**
+- **PR #108457** Related #108445.
+- **PR #108433** Thanks @joshavant.
+- **PR #108468**
+- **PR #108463** Thanks @RomneyDa.
+- **PR #108467** Thanks @RomneyDa.
+- **PR #108472**
+- **PR #108476**
+- **PR #108434** Related #108431. Thanks @joshavant.
+- **PR #108481**
+- **PR #108386**
+- **PR #108478**
+- **PR #108479** Thanks @RomneyDa.
+- **PR #108484**
+- **PR #108253** Thanks @sunlit-deng.
+- **PR #108422**
+- **PR #108480**
+- **PR #108483**
+- **PR #108365** Thanks @zhangguiping-xydt.
+- **PR #108127** Thanks @sunlit-deng.
+- **PR #108492**
+- **PR #108493**
+- **PR #108497**
+- **PR #108487** Related #106961. Thanks @joshavant and @bruhsh.
+- **PR #104585** Thanks @hugenshen.
+- **PR #108500**
+- **PR #108503**
+- **PR #108464** Thanks @RomneyDa.
+- **PR #108419**
+- **PR #108160** Thanks @qingminglong.
+- **PR #105793** Thanks @morluto.
+- **PR #108515**
+- **PR #107230** Related #107225. Thanks @edenfunf.
+- **PR #105549** Thanks @hugenshen.
+- **PR #108465** Thanks @RomneyDa.
+- **PR #108516**
+- **PR #108204** Thanks @zhangguiping-xydt.
+- **PR #108521**
+- **PR #108523**
+- **PR #108510** Related #108507.
+- **PR #108504**
+- **PR #108513**
+- **PR #105553** Thanks @hugenshen.
+- **PR #106515** Related #106512. Thanks @edenfunf.
+- **PR #108512** Thanks @yyj-xydt.
+- **PR #108538**
+- **PR #104836** Thanks @Alix-007.
+- **PR #108518** Thanks @zhangguiping-xydt.
+- **PR #108547**
+- **PR #108268** Thanks @mushuiyu886.
+- **PR #108163** Thanks @Alix-007.
+- **PR #108258** Related #108250. Thanks @goutamadwant and @j7l9.
+- **PR #108499**
+- **PR #108531** Thanks @RomneyDa.
+- **PR #108539** Thanks @RomneyDa.
+- **PR #108564**
+- **PR #108563**
+- **PR #108589**
+- **PR #108423** Related #103636. Thanks @joshavant and @andududu.
+- **PR #108583**
+- **PR #108594**
+- **PR #107367** Related #107363. Thanks @edenfunf.
+- **PR #108603** Related #108595.
+- **PR #108609**
+- **PR #108612**
+- **PR #108611**
+- **PR #108617** Thanks @fuller-stack-dev.
+- **PR #108508** Related #107933.
+- **PR #108620** Related #108610.
+- **PR #108597**
+- **PR #108615** Related #108600.
+- **PR #108626** Related #99270, #105184, #107447. Thanks @obviyus and @sgh6688 and @compoodment.
+- **PR #108505**
+- **PR #108628** Related #108595.
+- **PR #108627** Related #108608.
+- **PR #108633**
+- **PR #108394** Thanks @keshavbotagent and @obviyus.
+- **PR #106412** Thanks @zenglingbiao.
+- **PR #108165** Thanks @Alix-007.
+- **PR #108592**
+- **PR #108161** Thanks @Alix-007.
+- **PR #108292** Thanks @qingminglong.
+- **PR #107883** Thanks @wahaha1223.
+- **PR #108551** Related #108550. Thanks @moguangyu5-design.
+- **PR #108641**
+- **PR #108166** Thanks @Alix-007.
+- **PR #108403** Thanks @SunnyShu0925.
+- **PR #108638**
+- **PR #108546** Thanks @krissding.
+- **PR #108064** Thanks @Alix-007.
+- **PR #108605** Related #108604.
+- **PR #108065** Thanks @Alix-007.
+- **PR #108063** Thanks @Alix-007.
+- **PR #108606** Thanks @Alix-007.
+- **PR #108648**
+- **PR #108616** Thanks @Alix-007.
+- **PR #108621** Thanks @Alix-007.
+- **PR #108283**
+- **PR #108619** Thanks @Alix-007.
+- **PR #106396** Thanks @Alix-007.
+- **PR #105893** Thanks @Alix-007.
+- **PR #106100** Related #105433. Thanks @MoerAI and @aniruddhaadak80.
+- **PR #108575** Thanks @RomneyDa.
+- **PR #108537** Thanks @RomneyDa.
+- **PR #108679** Related #108659.
+- **PR #108652** Related #107220. Thanks @liewjiajun.
+- **PR #108674**
+- **PR #108630** Related #108511. Thanks @zhangguiping-xydt and @snotty.
+- **PR #106398** Thanks @Alix-007.
+- **PR #108405** Thanks @IWhatsskill.
+- **PR #108634** Thanks @joshavant.
+- **PR #108103** Thanks @Leon-SK668.
+- **PR #108636** Related #108598. Thanks @hosanxiv and @lamkan0210.
+- **PR #108197** Related #108196. Thanks @xianshishan.
+- **PR #108167**
+- **PR #107619** Thanks @Pick-cat.
+- **PR #108455** Related #107415. Thanks @harjothkhara and @rodja.
+- **PR #108669** Thanks @fuller-stack-dev.
+- **PR #104841** Thanks @Alix-007.
+- **PR #107325** Thanks @maweibin.
+- **PR #107720** Thanks @Leon-SK668.
+- **PR #107346** Thanks @ZengWen-DT.
+- **PR #108717**
+- **PR #108715**
+- **PR #108661** Related #107224. Thanks @foxrainhy.
+- **PR #108643**
+- **PR #108680** Related #104977. Thanks @yetval.
+- **PR #104288** Thanks @Alix-007.
+- **PR #106850** Related #106824. Thanks @wuqxuan and @yetval.
+- **PR #104835** Thanks @Alix-007.
+- **PR #108696**
+- **PR #108721**
+- **PR #108668** Related #106920. Thanks @zyc-sudo.
+- **PR #95010** Thanks @zats.
+- **PR #106393** Thanks @zenglingbiao.
+- **PR #108697** Related #104721. Thanks @amknight and @SunnyShu0925 and @dennisd-hub.
+- **PR #108646**
+- **PR #107751** Related #107416. Thanks @wsyjh8 and @pipe-gale01.
+- **PR #95480** Related #89231. Thanks @mikasa0818 and @CameronWeller.
+- **PR #104580** Thanks @hugenshen.
+- **PR #108728**
+- **PR #108651**
+- **PR #108440**
+- **PR #108682** Related #108428. Thanks @yetval.
+- **PR #106036** Thanks @Alix-007.
+- **PR #108714** Related #108244. Thanks @Jeehut.
+- **PR #108736**
+- **PR #106385** Thanks @zenglingbiao and @wendy-chsy.
+- **PR #107847** Related #107846. Thanks @ooiuuii.
+- **PR #108649** Related #107224. Thanks @foxrainhy.
+- **PR #108672** Thanks @Alix-007.
+- **PR #107610** Thanks @hugenshen.
+- **PR #108745**
+- **PR #108650** Thanks @Alix-007.
+- **PR #108602** Thanks @RomneyDa.
+- **PR #108360** Related #107449. Thanks @lee-xydt and @Patt92.
+- **PR #105240** Thanks @zhangguiping-xydt and @Solvely-Colin.
+- **PR #108725**
+- **PR #106456** Thanks @Pick-cat.
+- **PR #106416** Related #106408. Thanks @baanish.
+- **PR #107644** Related #107579. Thanks @yu-xin-c and @oc-jarvis.
+- **PR #105263** Related #105187. Thanks @NianJiuZst and @aniruddhaadak80.
+- **PR #108752**
+- **PR #108739**
+- **PR #108694**
+- **PR #108756** Related #108753.
+- **PR #108750**
+- **PR #106376** Related #105523. Thanks @xialonglee and @Evgeniy-Rodin.
+- **PR #108330** Thanks @Pick-cat.
+- **PR #107735** Related #102206. Thanks @joshavant and @solavrc.
+- **PR #108678** Related #107682. Thanks @yetval.
+- **PR #108241** Thanks @NianJiuZst.
+- **PR #106485** Thanks @hugenshen.
+- **PR #108502** Related #108501. Thanks @masatohoshino.
+- **PR #108768**
+- **PR #108685** Thanks @Alix-007.
+- **PR #108775**
+- **PR #108700** Thanks @Alix-007.
+- **PR #108663**
+- **PR #108763**
+- **PR #108744** Related #108286. Thanks @jamiezigelbaum.
+- **PR #108780**
+- **PR #108778**
+- **PR #93293** Related #84139. Thanks @mushuiyu886 and @MarkMa84.
+- **PR #108772**
+- **PR #108765**
+- **PR #108351** Related #96163. Thanks @edenfunf and @tancolo.
+- **PR #105978** Thanks @zw-xysk.
+- **PR #108743** Thanks @Alix-007.
+- **PR #108770**
+- **PR #108760**
+- **PR #106541** Thanks @Pick-cat and @cursoragent.
+- **PR #108683** Related #95131, #105445, #107262. Thanks @a-m-a-r-a and @laurenceputra and @ndj888.
+- **PR #108701** Thanks @Alix-007.
+- **PR #106407** Thanks @zenglingbiao.
+- **PR #108699** Thanks @Alix-007.
+- **PR #108698** Thanks @Alix-007.
+- **PR #108543** Related #108535.
+- **PR #96267** Thanks @snowzlmbot.
+- **PR #108766** Thanks @Alix-007.
+- **PR #108785**
+- **PR #108755** Thanks @Alix-007.
+- **PR #107691** Related #107467. Thanks @LeonidasLux and @Valkster70.
+- **PR #108787**
+- **PR #108548** Thanks @VectorPeak.
+- **PR #108741** Thanks @Alix-007.
+- **PR #108667** Thanks @RileyJJY.
+- **PR #105544** Thanks @abnershang.
+- **PR #108718** Thanks @Alix-007.
+- **PR #108576** Thanks @zhangguiping-xydt.
+- **PR #108723** Thanks @Alix-007.
+- **PR #106864** Related #106863. Thanks @LeC-D.
+- **PR #108584** Related #107628. Thanks @joshavant and @ostehost.
+- **PR #108758**
+- **PR #108735**
+- **PR #108853**
+- **PR #108857**
+- **PR #108596** Thanks @wahaha1223.
+- **PR #108578** Related #108571. Thanks @zhanxingxin1998.
+- **PR #108875**
+- **PR #108791** Thanks @Alix-007.
+- **PR #108807**
+- **PR #108870**
+- **PR #108561** Thanks @wangmiao0668000666.
+- **PR #108879**
+- **PR #108886**
+- **PR #108805** Thanks @Alix-007.
+- **PR #105301** Thanks @hugenshen.
+- **PR #108556** Related #108524. Thanks @arkyu2077 and @JasmineZhangHM and @yetval.
+- **PR #95722** Thanks @Pick-cat.
+- **PR #108798**
+- **PR #108655** Thanks @Monkey-wusky.
+- **PR #105724** Related #104806. Thanks @algal.
+- **PR #108838**
+- **PR #108810** Thanks @Alix-007.
+- **PR #108730** Related #108427. Thanks @mushuiyu886 and @yetval.
+- **PR #108657** Thanks @yyj-xydt.
+- **PR #107979** Thanks @fuller-stack-dev.
+- **PR #107813** Thanks @wuqxuan.
+- **PR #103799** Related #103590. Thanks @lonexreb and @MoChouBlog.
+- **PR #106799** Thanks @henkterharmsel.
+- **PR #101730** Thanks @zhangguiping-xydt.
+- **PR #108871** Related #108786, #108824.
+- **PR #108348** Thanks @hugenshen.
+- **PR #108880**
+- **PR #108637** Related #108447. Thanks @hosanxiv and @yuso-agent-it-hal.
+- **PR #108788**
+- **PR #108114** Thanks @0xghost42.
+- **PR #106638** Related #106637. Thanks @edenfunf.
+- **PR #108855**
+- **PR #107734** Related #107732. Thanks @edenfunf.
+- **PR #108804** Thanks @Alix-007.
+- **PR #108684** Thanks @Alix-007.
+- **PR #108894** Thanks @Alix-007.
+- **PR #108397** Thanks @yetval.
+- **PR #108797**
+- **PR #108734** Related #108277. Thanks @ZengWen-DT and @chenyanchen.
+- **PR #108350** Related #107341. Thanks @ianalloway and @danieljimz.
+- **PR #108873** Thanks @Alix-007.
+- **PR #108579** Related #108572. Thanks @zhanxingxin1998.
+- **PR #108545** Thanks @zhangguiping-xydt.
+- **PR #108913**
+- **PR #108779** Related #107591. Thanks @dagmarjeeves-lab.
+- **PR #108364** Thanks @qingminglong.
+- **PR #108910**
+- **PR #108914**
+- **PR #104989** Thanks @yetval.
+- **PR #108917**
+- **PR #108761** Thanks @ZengWen-DT.
+- **PR #108903**
+- **PR #107480** Thanks @zhangguiping-xydt.
+- **PR #108895** Thanks @Alix-007.
+- **PR #108670** Thanks @Alix-007.
+- **PR #108911** Thanks @Alix-007.
+- **PR #108887** Related #108362. Thanks @buhrclaw.
+- **PR #108577** Related #108570. Thanks @zhanxingxin1998.
+- **PR #108485** Thanks @VACInc.
+- **PR #108868**
+- **PR #108926** Related #108432. Thanks @jincheng-xydt and @bluedepth.
+- **PR #108929**
+- **PR #108932**
+- **PR #108355** Thanks @qingminglong.
+- **PR #108930**
+- **PR #107657** Related #107434. Thanks @ZengWen-DT and @FayAndXan.
+- **PR #108938**
+- **PR #108935** Related #104413. Thanks @ObliviateRickLin and @gustav-bliss.
+- **PR #108942**
+- **PR #108941**
+- **PR #108072** Thanks @sunlit-deng.
+- **PR #108321** Thanks @wahaha1223.
+- **PR #108757** Thanks @sunlit-deng.
+- **PR #108706** Thanks @krissding.
+- **PR #108927**
+- **PR #108950** Thanks @Pick-cat.
+- **PR #108947**
+- **PR #108726** Related #107917. Thanks @ZengWen-DT and @geekforlife.
+- **PR #108921**
+- **PR #108815** Thanks @mushuiyu886.
+- **PR #108771** Thanks @Alix-007.
+- **PR #108889**
+- **PR #108964**
+- **PR #108960**
+- **PR #108949**
+- **PR #108298** Thanks @xydt-juyaohui.
+- **PR #108218** Thanks @qingminglong.
+- **PR #108567** Thanks @VectorPeak.
+- **PR #104495** Related #103954. Thanks @destire-mio and @casper-bot-wodinga.
+- **PR #106453** Thanks @ZOOWH.
+- **PR #108558** Thanks @lsr911.
+- **PR #108622** Related #82281. Thanks @lonexreb and @bolovinclaw.
+- **PR #108368** Thanks @hugenshen.
+- **PR #106421** Thanks @ZOOWH.
+- **PR #108276** Thanks @chengzhichao-xydt.
+- **PR #108369** Thanks @SunnyShu0925.
+- **PR #108759** Related #108255. Thanks @LZY3538 and @gorkem2020.
+- **PR #108983**
+- **PR #108382** Thanks @xydigitLybnnnn.
+- **PR #108937** Thanks @Alix-007.
+- **PR #108777** Thanks @sunlit-deng.
+- **PR #108990**
+- **PR #108449** Thanks @Yehonal.
+- **PR #108966** Related #97180, #104779, #108517. Thanks @inemtsev and @belfortfilho.
+- **PR #108335** Thanks @mushuiyu886.
+- **PR #108339** Related #107708. Thanks @wangyan2026 and @NossieUK.
+- **PR #108737**
+- **PR #108396** Thanks @SunnyShu0925.
+- **PR #108281** Thanks @Canvinus.
+- **PR #108992** Thanks @Alix-007.
+- **PR #108783** Thanks @lsr911.
+- **PR #108790** Thanks @Sedrak-Hovhannisyan.
+- **PR #106399** Thanks @ly85206559.
+- **PR #108972** Thanks @Alix-007.
+- **PR #109013**
+- **PR #108834** Related #107916. Thanks @geekforlife.
+- **PR #107327** Related #107292. Thanks @SymbolStar and @delimir.
+- **PR #108800** Thanks @lsr911.
+- **PR #108991** Related #108632.
+- **PR #109022**
+- **PR #108751** Related #108152. Thanks @LavyaTandel and @CarelvanHeerden.
+- **PR #106400** Thanks @ly85206559.
+- **PR #108392** Related #103802. Thanks @ekinnee and @sazora.
+- **PR #108401** Thanks @yetval.
+- **PR #109051**
+- **PR #109028**
+- **PR #107323** Related #107255. Thanks @paulpitchford.
+- **PR #108689** Related #107856. Thanks @destire-mio and @Igallta.
+- **PR #108825**
+- **PR #108708** Related #108665.
+- **PR #108833**
+- **PR #108863**
+- **PR #108940** Thanks @zhangguiping-xydt.
+- **PR #108922** Thanks @wahaha1223.
+- **PR #108877**
+- **PR #108023** Related #108021. Thanks @ooiuuii.
+- **PR #108928** Thanks @ZengWen-DT.
+- **PR #108050** Related #108049. Thanks @ooiuuii.
+- **PR #103829** Related #103773. Thanks @lonexreb and @mlyon-web.
+- **PR #109083**
+- **PR #108948** Thanks @wahaha1223.
+- **PR #108806** Thanks @RileyJJY.
+- **PR #108973** Thanks @Alix-007.
+- **PR #109110**
+- **PR #108209** Thanks @ZengWen-DT.
+- **PR #109102**
+- **PR #109119** Related #109105.
+- **PR #108156** Thanks @qingminglong.
+- **PR #108826** Thanks @zenglingbiao.
+- **PR #108848** Thanks @wahaha1223.
+- **PR #108816** Thanks @sunlit-deng.
+- **PR #109141**
+- **PR #108813** Thanks @zhangguiping-xydt.
+- **PR #108840** Thanks @wings1029.
+- **PR #109117**
+- **PR #109075** Related #108664. Thanks @chac4l.
+- **PR #108866**
+- **PR #109142** Related #109099.
+- **PR #108900**
+- **PR #109090**
+- **PR #109107** Thanks @Alix-007.
+- **PR #108742**
+- **PR #109127** Thanks @Alix-007.
+- **PR #108828**
+- **PR #109162** Thanks @shakkernerd.
+- **PR #109118**
+- **PR #109154**
+- **PR #108832** Thanks @zenglingbiao.
+- **PR #108408** Thanks @wangmiao0668000666.
+- **PR #109166**
+- **PR #109115** Thanks @Alix-007.
+- **PR #108817**
+- **PR #109005**
+- **PR #108882**
+- **PR #106545** Thanks @mmaps and @pgondhi987.
+- **PR #109157**
+- **PR #108675**
+- **PR #109188**
+- **PR #108252** Thanks @wahaha1223.
+- **PR #109181**
+- **PR #108784** Thanks @RomneyDa.
+- **PR #109182**
+- **PR #109195**
+- **PR #109144**
+- **PR #109192**
+- **PR #108862** Thanks @wings1029.
+- **PR #108904** Related #107917. Thanks @geekforlife.
+- **PR #108618** Thanks @Monkey-wusky.
+- **PR #109201**
+- **PR #108709**
+- **PR #109184**
+- **PR #108823** Thanks @Leon-SK668.
+- **PR #106370** Thanks @Monkey-wusky.
+- **PR #109169**
+- **PR #109140**
+- **PR #108827** Related #108587. Thanks @NianJiuZst and @andrea-kingautomation.
+- **PR #109211**
+- **PR #109146** Thanks @Alix-007.
+- **PR #108977**
+- **PR #109229**
+- **PR #108835** Thanks @sibbl.
+- **PR #108710** Thanks @bladin.
+- **PR #109223**
+- **PR #109238**
+- **PR #109147**
+- **PR #109052** Thanks @Pick-cat and @cursoragent.
+- **PR #109222**
+- **PR #108776**
+- **PR #106840** Related #106839. Thanks @bill-starfoundry.
+- **PR #109151**
+- **PR #109056** Thanks @sallyom.
+- **PR #109242**
+- **PR #108856** Thanks @wings1029.
+- **PR #109244**
+- **PR #109226**
+- **PR #109252**
+- **PR #109183**
+- **PR #109255**
+- **PR #109248**
+- **PR #105086** Thanks @xydigit-zt.
+- **PR #109257** Thanks @RomneyDa.
+- **PR #109246** Thanks @RomneyDa.
+- **PR #108858** Thanks @wings1029.
+- **PR #108801** Related #104377. Thanks @DaigoSoup and @Inhum.
+- **PR #109236**
+- **PR #108897** Thanks @tzy-17.
+- **PR #109259**
+- **PR #109271**
+- **PR #109260**
+- **PR #109266**
+- **PR #109064** Thanks @Alix-007.
+- **PR #109273** Thanks @shakkernerd.
+- **PR #108898** Thanks @tzy-17.
+- **PR #109202** Thanks @NianJiuZst.
+- **PR #109272** Thanks @RomneyDa.
+- **PR #108353** Related #108349. Thanks @MohandesD.
+- **PR #108955** Thanks @RileyJJY and @lilikobe.
+- **PR #109289**
+- **PR #109164** Thanks @wangmiao0668000666.
+- **PR #109298**
+- **PR #109296**
+- **PR #94697** Related #76259. Thanks @xydigit-zt and @GulfStreamOutdoors.
+- **PR #109297** Thanks @RomneyDa.
+- **PR #109239** Thanks @Alix-007.
+- **PR #109194**
+- **PR #109281** Related #109280.
+- **PR #109232** Thanks @mushuiyu886.
+- **PR #109160**
+- **PR #109000** Thanks @wangmiao0668000666.
+- **PR #109284**
+- **PR #101746** Thanks @wings1029.
+- **PR #109279** Related #109277.
+- **PR #109314**
+- **PR #109322**
+- **PR #109108** Thanks @zhangguiping-xydt.
+- **PR #109150**
+- **PR #109267** Thanks @RomneyDa.
+- **PR #109318**
 ## 2026.7.1
 
 OpenClaw v2026.7.1 brings major Control UI and onboarding overhauls, major updates to the official iOS, Android, and macOS apps, expanded model and provider support including GPT-5.6 compatibility, Tencent Hy3, and Meta Muse Spark 1.1, and stronger Codex and connected coding-agent workflows. Telegram, Slack, Discord, and Apple Messages each receive substantial updates, while Gateway crash loops, scheduled work, remote browser control, workspace terminals, sessions, and goals also improve. There are also many general fixes and refinements throughout OpenClaw.
