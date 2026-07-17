@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 const SESSION_WRITE_LOCK_TEST_API = Symbol.for("openclaw.sessionWriteLockTestApi");
 const testEnvKeys = [
@@ -11,12 +11,15 @@ const testEnvKeys = [
 
 it("registers the test API for a Vitest worker without VITEST", async () => {
   const previousEnv = Object.fromEntries(testEnvKeys.map((key) => [key, process.env[key]]));
+  const previousTestApi = (globalThis as Record<PropertyKey, unknown>)[SESSION_WRITE_LOCK_TEST_API];
 
   try {
     for (const key of testEnvKeys) {
       delete process.env[key];
     }
     process.env.VITEST_POOL_ID = "worker-only-regression";
+    delete (globalThis as Record<PropertyKey, unknown>)[SESSION_WRITE_LOCK_TEST_API];
+    vi.resetModules();
 
     await import("./session-write-lock.js");
 
@@ -35,5 +38,11 @@ it("registers the test API for a Vitest worker without VITEST", async () => {
         process.env[key] = value;
       }
     }
+    if (previousTestApi === undefined) {
+      delete (globalThis as Record<PropertyKey, unknown>)[SESSION_WRITE_LOCK_TEST_API];
+    } else {
+      (globalThis as Record<PropertyKey, unknown>)[SESSION_WRITE_LOCK_TEST_API] = previousTestApi;
+    }
+    vi.resetModules();
   }
 });
