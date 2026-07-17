@@ -210,9 +210,6 @@ export function resolveSkillDispatchTools(params: {
     }),
   });
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    // Deferred runtime selectors (bundle-mcp/MCP/lsp/group:plugins) never appear in
-    // the concrete skill tool set; preserve their tokens through the same policy
-    // layers so spawned children rebuild those runtimes without escalating. (#85030)
     const inheritedRuntimeToolAllowlist = filterRuntimeMaterializationAllowlistEntries({
       entries: explicitToolAllowlist,
       policies: [

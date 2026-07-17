@@ -1195,43 +1195,36 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
-  it(
-    "preserves runtime materialization tokens in inherited subagent tool allowlist",
-    () => {
-      const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-      createOpenClawToolsMock.mockClear();
+  it("preserves runtime materialization tokens for spawned sessions", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
 
-      createOpenClawCodingTools({
-        config: {
-          tools: {
-            allow: [
-              "read",
-              "sessions_spawn",
-              "bundle-mcp",
-              "probe__search",
-              "lsp_hover_typescript",
-              "group:plugins",
-            ],
-          },
+    createOpenClawCodingTools({
+      config: {
+        tools: {
+          allow: [
+            "read",
+            "sessions_spawn",
+            "bundle-mcp",
+            "probe__search",
+            "lsp_hover_typescript",
+            "group:plugins",
+          ],
         },
-      });
+      },
+    });
 
-      expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-      const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-      // Concrete tools survive.
-      expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
-      // Runtime materialization tokens survive — they carry the authorization for
-      // the child to materialize MCP/LSP/plugin runtimes.
-      expectListIncludes(inheritedAllow, [
-        "bundle-mcp",
-        "probe__search",
-        "lsp_hover_typescript",
-        "group:plugins",
-      ]);
-      // Concrete tools not in the allow list are absent.
-      expect(inheritedAllow?.includes("exec")).toBe(false);
-    },
-  );
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
+    expectListIncludes(inheritedAllow, ["read", "sessions_spawn"]);
+    expectListIncludes(inheritedAllow, [
+      "bundle-mcp",
+      "probe__search",
+      "lsp_hover_typescript",
+      "group:plugins",
+    ]);
+    expect(inheritedAllow?.includes("exec")).toBe(false);
+  });
 
   it("passes group-restricted tool surface to cron-created agent turns", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
