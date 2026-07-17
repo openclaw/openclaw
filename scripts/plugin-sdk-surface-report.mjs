@@ -259,9 +259,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
       // Harvest: retired dual-field plan payload builder -1.
-      // +24: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
-      // and memory config contracts, including the shipped memory compat mirror.
-      8069,
+      // +23: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
+      // and memory config contracts.
+      8068,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,9 +293,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // WhatsApp-split harvest (#108656).
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
       // Harvest: retired dual-field plan payload builder -1.
-      // +14: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
-      // and memory config operations, including the shipped memory compat mirror.
-      4502,
+      // +13: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
+      // and memory config operations.
+      4501,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -314,15 +314,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
       // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
-      // +1: modern memory config resolver mirrored by the shipped deprecated status barrel.
-      3006,
+      3005,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
       // Used-union narrowing removes 103 wildcard re-exports.
       // Harvest: freeze the compat config-schema barrel to explicit exports -1.
-      105,
+      104,
       env,
     ),
   };

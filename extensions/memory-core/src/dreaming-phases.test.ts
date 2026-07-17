@@ -5,8 +5,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resolveMemoryDreamingPluginConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingPluginConfig,
+  resolveSessionTranscriptsDirForAgent,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";

@@ -10,6 +10,7 @@ import {
   readFiniteNumberParam,
   readPositiveIntegerParam,
   readStringParam,
+  resolveMemoryDreamingPluginConfig,
   type MemoryCorpusSearchResult,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -18,7 +19,6 @@ import type {
   MemorySearchRuntimeDebug,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
-  resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
