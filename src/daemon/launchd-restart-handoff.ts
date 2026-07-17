@@ -23,6 +23,11 @@ type LaunchdRestartTarget = {
 
 const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
 const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
+// Post-bootout bootstrap can still race launchd's async unload (EIO). Retry
+// bootstrap + launchctl print verify instead of kickstart, which cannot restore
+// an already-unloaded label.
+const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
+const RELOAD_BOOTSTRAP_RETRY_DELAY_SECONDS = 0.2;
 
 type LaunchdRestartLogEnv = {
   HOME?: string;
@@ -138,10 +143,9 @@ exit "$status"
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
-    // After bootout we poll until launchd finishes the async unload before
-    // re-bootstrapping to avoid EIO (Bootstrap failed: 5) from the race.
-    // If bootstrap still fails, kickstart -k as a fallback to keep the service
-    // alive rather than leaving it deregistered.
+    // After bootout we poll until launchd finishes the async unload, then retry
+    // bootstrap with launchctl print verification. kickstart -k cannot restore
+    // a booted-out label, so never use it as reload recovery (#110137).
     const bootoutWaitLoop = `bootout_wait_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
 while [ "$bootout_wait_count" -gt 0 ]; do
   if ! launchctl print "$service_target" >/dev/null 2>&1; then
@@ -149,6 +153,27 @@ while [ "$bootout_wait_count" -gt 0 ]; do
   fi
   bootout_wait_count=$((bootout_wait_count - 1))
   sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+`;
+    const bootstrapRetryLoop = `bootstrap_retry_count="${RELOAD_BOOTSTRAP_RETRY_COUNT}"
+status=1
+while [ "$bootstrap_retry_count" -gt 0 ]; do
+  if launchctl bootstrap "$domain" "$plist_path"; then
+    if launchctl print "$service_target" >/dev/null 2>&1; then
+      status=0
+      break
+    fi
+    status=1
+  else
+    status=$?
+    # Bootstrap may report already-loaded / in-progress while the label is up.
+    if launchctl print "$service_target" >/dev/null 2>&1; then
+      status=0
+      break
+    fi
+  fi
+  bootstrap_retry_count=$((bootstrap_retry_count - 1))
+  sleep ${RELOAD_BOOTSTRAP_RETRY_DELAY_SECONDS}
 done
 `;
     return `service_target="$1"
@@ -159,13 +184,7 @@ status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
 ${bootoutWaitLoop}
-if launchctl bootstrap "$domain" "$plist_path"; then
-  status=0
-else
-  status=$?
-  launchctl kickstart -k "$service_target"
-  status=$?
-fi
+${bootstrapRetryLoop}
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
 else

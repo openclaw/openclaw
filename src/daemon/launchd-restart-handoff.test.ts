@@ -95,7 +95,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
-  it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
+  it("retries bootstrap and verifies launchctl print after reload bootout", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
@@ -114,9 +114,12 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     // polls until launchd finishes the async unload before re-bootstrapping
     expect(args[1]).toContain("bootout_wait_count=");
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
+    // Bounded bootstrap retry + print verify; kickstart cannot restore a booted-out label.
+    expect(args[1]).toContain("bootstrap_retry_count=");
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    // fallback: kickstart -k on bootstrap failure so service isn't left deregistered
-    expect(args[1]).toContain('launchctl kickstart -k "$service_target"');
+    expect(args[1]).toContain('if launchctl print "$service_target" >/dev/null 2>&1; then');
+    expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
+    expect(args[1]).not.toContain('launchctl kickstart -k "$service_target"');
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {
