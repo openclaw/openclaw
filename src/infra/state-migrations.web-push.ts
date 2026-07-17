@@ -600,12 +600,7 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
 
   let legacy: ParsedLegacyState;
   try {
-    legacy = await readLegacyState(
-      params.stateRoot,
-      params.stateDir,
-      params.detected,
-      params.env,
-    );
+    legacy = await readLegacyState(params.stateRoot, params.stateDir, params.detected, params.env);
   } catch (error) {
     warnings.push(`Failed reading legacy Web Push state: ${String(error)}`);
     return { changes, warnings };
