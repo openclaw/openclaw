@@ -486,6 +486,12 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
+      // Terminal and caller abort signals take precedence over the
+      // isSuccessfulResult guard so an active abort is never masked by a
+      // successful-result check (see #108262).
+      if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
+        throw toErrorObject(classifiedError, "Non-Error thrown");
+      }
       // Guard against classifier false positives: when the result has clear
       // evidence of a successful output (e.g. delivered messages, visible
       // assistant text), short-circuit the fallback chain. The classifier
@@ -501,9 +507,6 @@ async function runFallbackAttempt<T>(params: {
             attempts: params.attempts,
           }),
         };
-      }
-      if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
-        throw toErrorObject(classifiedError, "Non-Error thrown");
       }
       const preserveResultOnExhaustion =
         classification &&
