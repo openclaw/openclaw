@@ -4366,7 +4366,7 @@ class ChatController internal constructor(
     _sessions.value = _sessions.value.map { if (it.key == key) it.copy(unread = false) else it }
     scope.launch {
       // A failed read patch must unlatch the episode so later snapshots retry.
-      if (!patchSession(key = key, ownerAgentId = entry?.ownerAgentId, unread = false) && unreadPatchSessionKey == key) {
+      if (!patchSession(key = key, ownerAgentId = entry.ownerAgentId, unread = false) && unreadPatchSessionKey == key) {
         unreadPatchRequested = false
       }
     }

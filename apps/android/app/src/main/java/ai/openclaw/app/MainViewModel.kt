@@ -1700,7 +1700,7 @@ class MainViewModel private constructor(
       pendingAutoSend
         ?.owner
         ?.takeIf { source -> shouldMigrateComposerDraft(source, to, mainSessionKey) }
-    if (pendingAutoSendSource != null && pendingAutoSend != null) {
+    if (pendingAutoSendSource != null) {
       pendingAssistantAutoSendMutable.compareAndSet(pendingAutoSend, pendingAutoSend.copy(owner = to))
     }
     val noticeSources =
