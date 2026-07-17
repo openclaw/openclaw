@@ -438,7 +438,8 @@ export async function listManagedPlugins(params: {
       ? { source: "clawhub" as const, packageName: sourceLinkedOfficialClawHubPackage }
       : trustedOfficialNpmPackage
         ? { source: "npm" as const, packageName: trustedOfficialNpmPackage }
-        : currentOfficialClawHubPackage && record.packageName === currentOfficialClawHubPackage
+        : currentOfficialClawHubPackage &&
+            (!record.packageName || record.packageName === currentOfficialClawHubPackage)
           ? { source: "clawhub" as const, packageName: currentOfficialClawHubPackage }
           : bundledPublishedEntry && record.packageName
             ? { source: "npm" as const, packageName: record.packageName }

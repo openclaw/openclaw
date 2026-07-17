@@ -495,4 +495,32 @@ describe("plugin management Featured authority", () => {
       }),
     ]);
   });
+
+  it("accepts trusted official install provenance without discovered package metadata", async () => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        id: "new-tool",
+        name: "New Tool",
+        origin: "global",
+        packageName: null,
+        installRecord: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubChannel: "official",
+          clawhubPackage: "@openclaw/new-tool",
+        },
+      }),
+    );
+    mocks.officialCatalog.mockResolvedValue(hostedCatalog([]));
+
+    const catalog = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "new-tool",
+        featured: false,
+        order: 10,
+      }),
+    ]);
+  });
 });
