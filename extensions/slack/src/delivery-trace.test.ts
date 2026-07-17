@@ -548,7 +548,7 @@ async function setupSlackTrace(
     } catch (err) {
       // Mirrors the reply dispatcher: failed deliveries report onError and are
       // not counted as dispatched.
-      turn.options.onError?.(err, { kind });
+      await turn.options.onError?.(err, { kind });
     }
   };
 

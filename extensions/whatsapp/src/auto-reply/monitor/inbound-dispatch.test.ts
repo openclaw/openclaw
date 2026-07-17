@@ -1485,7 +1485,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.(error, { kind: "final" });
+    await getCapturedOnError()?.(error, { kind: "final" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       {
@@ -1535,7 +1535,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.(error, { kind: "final" });
+    await getCapturedOnError()?.(error, { kind: "final" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1574,7 +1574,7 @@ describe("whatsapp inbound dispatch", () => {
       replyLogger,
     });
 
-    getCapturedOnError()?.("plain string rejection", { kind: "block" });
+    await getCapturedOnError()?.("plain string rejection", { kind: "block" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1612,7 +1612,7 @@ describe("whatsapp inbound dispatch", () => {
       attempt: 2,
     };
 
-    getCapturedOnError()?.(objectRejection, { kind: "tool" });
+    await getCapturedOnError()?.(objectRejection, { kind: "tool" });
 
     expect(replyLogger["error"]).toHaveBeenCalledWith(
       expect.objectContaining({
