@@ -139,6 +139,7 @@ class WearProxyBridgeTest {
               sent += SentWearMessage(nodeId, path, data)
             },
           peerResolver = WearPeerResolver { setOf("watch-1") },
+          monotonicMillis = { 1_000L },
           handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
@@ -166,6 +167,7 @@ class WearProxyBridgeTest {
               }
               setOf("watch-1")
             },
+          monotonicMillis = { 1_000L },
           handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
 
@@ -598,6 +600,7 @@ class WearProxyBridgeTest {
         WearProxyBridge(
           scope = actorScope,
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
+          monotonicMillis = { 1_000L },
           handleRequest = { request ->
             requestStarted.complete(Unit)
             finishRequest.await()
@@ -739,6 +742,7 @@ class WearProxyBridgeTest {
               }
               sent += SentWearMessage(nodeId, path, data)
             },
+          monotonicMillis = { 1_000L },
           handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
         )
       bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
