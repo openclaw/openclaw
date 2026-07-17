@@ -40,6 +40,7 @@ type MockEmitter = {
   emit: (eventName: string | symbol, ...args: unknown[]) => boolean;
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
   once: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MockEmitter;
+  listenerCount: (eventName: string | symbol) => number;
 };
 
 type MockChildProcess = MockEmitter & {
@@ -47,6 +48,7 @@ type MockChildProcess = MockEmitter & {
   stdout: MockEmitter;
   stderr: MockEmitter;
   kill: ReturnType<typeof vi.fn>;
+  unref: ReturnType<typeof vi.fn>;
 };
 
 function createMockEmitter() {
