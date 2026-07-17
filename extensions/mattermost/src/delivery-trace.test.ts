@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createMattermostPost, type MattermostClient } from "./mattermost/client.js";
 import {
   createMattermostDraftPreviewBoundaryController,
@@ -270,4 +270,48 @@ describe("mattermost delivery trace goldens", () => {
       });
     });
   }
+});
+
+describe("mattermost finalized preview survives a trailing tool-error warning", () => {
+  // Real-path proof for #109471: drive the real draft stream + real delivery
+  // wiring (only the Mattermost HTTP endpoint is recorded) through the reported
+  // ordered sequence — a successful final that finalizes the preview in place,
+  // then a trailing isError tool-warning on the same draft. Before the fix the
+  // warning fallback cleared (deleted) the finalized answer post; after the fix
+  // the answer is preserved and the warning lands as a separate durable post.
+  it("edits the finalized answer in place and posts the warning separately without deleting the answer", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "final-then-error",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "partial", text: "Chrome is open at the Amazon" },
+          { kind: "advance", ms: 1300 },
+          {
+            kind: "final",
+            text: "Chrome is open at the Amazon KDP login page, ready for you to log in via remote desktop.",
+          },
+          {
+            kind: "final",
+            text: "⚠️ 🛠️ Bash failed: openclaw browser (agent)",
+            isError: true,
+          },
+          { kind: "idle" },
+        ],
+      },
+      setup: setupMattermostTrace,
+    });
+
+    const wireMethods = events.filter((event) => event.dir === "out").map((event) => event.kind);
+
+    // The successful final finalizes the preview by editing it in place.
+    expect(wireMethods).toContainEqual(expect.stringMatching(/^PUT \/posts\//));
+    // The trailing tool-error warning is delivered as its own durable post.
+    expect(wireMethods.filter((method) => method === "POST /posts").length).toBeGreaterThanOrEqual(
+      1,
+    );
+    // Regression invariant (#109471): the finalized answer post is never deleted
+    // by the warning fallback. Before the fix this emitted DELETE /posts/post-1.
+    expect(wireMethods.filter((method) => method.startsWith("DELETE /posts/"))).toEqual([]);
+  });
 });
