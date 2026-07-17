@@ -11,15 +11,25 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { setSignalRuntime } from "./runtime.js";
-import { clearSignalRuntimeForTest } from "./runtime.test-support.js";
 import {
-  createSignalIngressDrain,
-  enqueueSignalIngressEvent,
-  resolveSignalIngressEventId,
-  resolveSignalIngressLaneKey,
-  startSignalIngressMonitor,
+  clearSignalRuntimeForTest,
+  signalIngressTesting,
   type SignalIngressPayload,
-} from "./signal-ingress.js";
+} from "./runtime.test-support.js";
+import { startSignalIngressMonitor } from "./signal-ingress.js";
+
+const createSignalIngressDrain = (
+  ...args: Parameters<typeof signalIngressTesting.createSignalIngressDrain>
+) => signalIngressTesting.createSignalIngressDrain(...args);
+const enqueueSignalIngressEvent = (
+  ...args: Parameters<typeof signalIngressTesting.enqueueSignalIngressEvent>
+) => signalIngressTesting.enqueueSignalIngressEvent(...args);
+const resolveSignalIngressEventId = (
+  ...args: Parameters<typeof signalIngressTesting.resolveSignalIngressEventId>
+) => signalIngressTesting.resolveSignalIngressEventId(...args);
+const resolveSignalIngressLaneKey = (
+  ...args: Parameters<typeof signalIngressTesting.resolveSignalIngressLaneKey>
+) => signalIngressTesting.resolveSignalIngressLaneKey(...args);
 
 function signalEvent(params?: {
   senderNumber?: string;

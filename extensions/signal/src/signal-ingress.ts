@@ -31,7 +31,7 @@ type SignalIngressEventFacts = {
   laneKey: string;
 };
 
-export type SignalIngressPayload = {
+type SignalIngressPayload = {
   version: 1;
   receivedAt: number;
   event: SignalSseEvent;
@@ -152,11 +152,11 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   };
 }
 
-export function resolveSignalIngressEventId(event: SignalSseEvent): string | null {
+function resolveSignalIngressEventId(event: SignalSseEvent): string | null {
   return inspectSignalIngressEvent(event)?.eventId ?? null;
 }
 
-export function resolveSignalIngressLaneKey(event: SignalSseEvent): string | null {
+function resolveSignalIngressLaneKey(event: SignalSseEvent): string | null {
   return inspectSignalIngressEvent(event)?.laneKey ?? null;
 }
 
@@ -165,7 +165,7 @@ type SignalIngressEnqueueResult =
   | { kind: "ignored" };
 
 /** Durable receive chokepoint. Metadata comes from raw fields; payload stays byte-equivalent JSON. */
-export async function enqueueSignalIngressEvent(params: {
+async function enqueueSignalIngressEvent(params: {
   queue: ChannelIngressQueue<SignalIngressPayload>;
   event: SignalSseEvent;
   now?: number;
@@ -195,7 +195,7 @@ function resolveSignalIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-export function createSignalIngressDrain(params: {
+function createSignalIngressDrain(params: {
   queue: ChannelIngressQueue<SignalIngressPayload>;
   dispatch: SignalIngressDispatch;
   abortSignal?: AbortSignal;
@@ -295,5 +295,14 @@ export async function startSignalIngressMonitor(params: {
       await drainPass?.catch(() => undefined);
       drain.dispose();
     },
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.signalIngressTestApi")] = {
+    createSignalIngressDrain,
+    enqueueSignalIngressEvent,
+    resolveSignalIngressEventId,
+    resolveSignalIngressLaneKey,
   };
 }
