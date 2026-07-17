@@ -220,6 +220,67 @@ describe("elevenlabs tts diagnostics", () => {
     }
   });
 
+  it("releases an unread provider stream when the public release hook runs", async () => {
+    const cancel = vi.fn();
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream(createDefaultTtsRequest());
+    try {
+      expect(audioStream.locked).toBe(true);
+
+      await result.release();
+      await result.release();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+    } finally {
+      await result.audioStream.cancel().catch(() => undefined);
+      await result.release();
+    }
+  });
+
+  it("releases a partially consumed provider stream while its consumer holds a reader", async () => {
+    const cancel = vi.fn();
+    const audioStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(
+      async () => new Response(audioStream, { headers: { "content-type": "audio/mpeg" } }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSStream(createDefaultTtsRequest());
+    const reader = result.audioStream.getReader();
+    try {
+      await expect(reader.read()).resolves.toEqual({
+        done: false,
+        value: new Uint8Array([1, 2, 3]),
+      });
+
+      await result.release();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(audioStream.locked).toBe(false);
+      await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      await result.release();
+    }
+  });
+
   it("cancels streamed audio before delivering bytes beyond the audio limit", async () => {
     const cancel = vi.fn();
     const audioStream = new ReadableStream<Uint8Array>({
