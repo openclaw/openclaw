@@ -31,6 +31,7 @@ describe("renderPluginsHubTabs", () => {
     const container = await mount({
       active: "skills",
       installedCount: 4,
+      publisherFeedsAvailable: true,
       onSelect: () => undefined,
     });
     const tabs = [...container.querySelectorAll<HTMLElement>("wa-tab")];
@@ -38,6 +39,7 @@ describe("renderPluginsHubTabs", () => {
       "plugins-tab-installed",
       "plugins-tab-discover",
       "plugins-tab-skills",
+      "plugins-tab-following",
       "plugins-tab-workshop",
     ]);
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual([
@@ -45,8 +47,14 @@ describe("renderPluginsHubTabs", () => {
       "false",
       "true",
       "false",
+      "false",
     ]);
     expect(container.querySelector("#plugins-tab-installed")?.textContent).toContain("4");
+  });
+
+  it("hides following when publisher feed methods are unavailable", async () => {
+    const container = await mount({ active: "skills", onSelect: () => undefined });
+    expect(container.querySelector("#plugins-tab-following")).toBeNull();
   });
 
   it("omits the installed count badge when no catalog data is provided", async () => {

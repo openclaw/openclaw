@@ -11,6 +11,7 @@ import {
 } from "../../app/context.ts";
 import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -35,6 +36,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkills, type SkillDetailTab, type SkillsStatusFilter } from "./view.ts";
+import "../publisher-feeds/publisher-feeds-panel.ts";
 
 export type SkillsRouteData = {
   gateway: ApplicationContext["gateway"];
@@ -44,6 +46,7 @@ export type SkillsRouteData = {
   selectedAgentId: string | null;
   report: SkillStatusReport | null;
   error: string | null;
+  initialTab?: "skills" | "following";
 };
 
 class SkillsPage extends OpenClawLightDomElement {
@@ -91,6 +94,8 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() private activeHubTab: "skills" | "following" = "skills";
+  @state() private publisherFeedsAvailable = false;
 
   private clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
   private routeDataInitialized = false;
@@ -141,8 +146,20 @@ class SkillsPage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot, resetForSourceBind = false) {
     const clientChanged = resetForSourceBind || snapshot.client !== this.client;
     const connectionChanged = snapshot.connected !== this.connected;
+    const publisherFeedsWereAvailable = this.publisherFeedsAvailable;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
+    this.publisherFeedsAvailable =
+      isGatewayMethodAdvertised(snapshot, "publisherFeeds.list") === true;
+    if (
+      !publisherFeedsWereAvailable &&
+      this.publisherFeedsAvailable &&
+      this.routeData?.initialTab === "following"
+    ) {
+      this.activeHubTab = "following";
+    } else if (!this.publisherFeedsAvailable && this.activeHubTab === "following") {
+      this.activeHubTab = "skills";
+    }
     if (clientChanged || connectionChanged) {
       this.resetLoadedSkillState();
     }
@@ -214,6 +231,10 @@ class SkillsPage extends OpenClawLightDomElement {
     const snapshot = gateway.snapshot;
     this.client = snapshot.client;
     this.connected = snapshot.connected;
+    this.publisherFeedsAvailable =
+      isGatewayMethodAdvertised(snapshot, "publisherFeeds.list") === true;
+    this.activeHubTab =
+      data.initialTab === "following" && this.publisherFeedsAvailable ? "following" : "skills";
     if (
       data.gateway !== gateway ||
       data.gatewaySnapshot !== snapshot ||
@@ -236,6 +257,9 @@ class SkillsPage extends OpenClawLightDomElement {
 
   private ensureInitialData() {
     if (!this.connected || !this.client) {
+      return;
+    }
+    if (this.activeHubTab === "following") {
       return;
     }
     if (
@@ -337,7 +361,12 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private selectHubTab(tab: PluginsHubTab) {
-    if (tab === "skills") {
+    if (tab === "skills" || tab === "following") {
+      this.activeHubTab = tab;
+      this.context.navigate(
+        "skills",
+        tab === "following" ? { search: "?tab=following" } : undefined,
+      );
       return;
     }
     if (tab === "workshop") {
@@ -357,65 +386,78 @@ class SkillsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(html`
         <div class="plugins-hub-tabs-row">
-          ${renderPluginsHubTabs({ active: "skills", onSelect: (tab) => this.selectHubTab(tab) })}
-        </div>
-        <wa-tab-panel
-          id="plugins-hub-panel"
-          name="skills"
-          active
-          aria-labelledby="plugins-tab-skills"
-        >
-          ${renderSkills({
-            connected: this.connected,
-            loading: this.skillsLoading || this.agentsLoading,
-            report: this.skillsReport,
-            agentsList: this.agentsList,
-            selectedAgentId: this.skillsAgentId ?? this.agentsList?.defaultId ?? null,
-            error,
-            filter: this.skillsFilter,
-            statusFilter: this.skillsStatusFilter,
-            edits: this.skillEdits,
-            messages: this.skillMessages,
-            operation: this.skillOperation,
-            detailKey: this.skillsDetailKey,
-            detailTab: this.skillsDetailTab,
-            clawhubVerdicts: this.clawhubVerdicts,
-            clawhubVerdictsLoading: this.clawhubVerdictsLoading,
-            clawhubVerdictsError: this.clawhubVerdictsError,
-            skillCardContents: this.skillCardContents,
-            skillCardLoadingKey: this.skillCardLoadingKey,
-            skillCardErrors: this.skillCardErrors,
-            clawhubQuery: this.clawhubSearchQuery,
-            clawhubResults: this.clawhubSearchResults,
-            clawhubSearchLoading: this.clawhubSearchLoading,
-            clawhubSearchError: this.clawhubSearchError,
-            clawhubDetail: this.clawhubDetail,
-            clawhubDetailSlug: this.clawhubDetailSlug,
-            clawhubDetailLoading: this.clawhubDetailLoading,
-            clawhubDetailError: this.clawhubDetailError,
-            clawhubInstallMessage: this.clawhubInstallMessage,
-            onAgentChange: (agentId) => this.changeAgent(agentId),
-            onFilterChange: (next) => (this.skillsFilter = next),
-            onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
-            onRefresh: () => void this.refreshPage(),
-            onToggle: (key, enabled) => void updateSkillEnabled(this, key, enabled),
-            onEdit: (key, value) => updateSkillEdit(this, key, value),
-            onSaveKey: (key) => void saveSkillApiKey(this, key),
-            onInstall: (skillKey, name, installId) =>
-              void installSkill(this, skillKey, name, installId),
-            onDetailOpen: (key) => {
-              this.skillsDetailKey = key;
-              this.skillsDetailTab = "overview";
-            },
-            onDetailClose: () => (this.skillsDetailKey = null),
-            onDetailTabChange: (tab) => this.changeDetailTab(tab),
-            onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
-            onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
-            onClawHubDetailClose: () => closeClawHubDetail(this),
-            onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
-              void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
+          ${renderPluginsHubTabs({
+            active: this.activeHubTab,
+            publisherFeedsAvailable: this.publisherFeedsAvailable,
+            onSelect: (tab) => this.selectHubTab(tab),
           })}
-        </wa-tab-panel>
+        </div>
+        ${this.activeHubTab === "following"
+          ? html`<wa-tab-panel
+              id="plugins-hub-panel"
+              name="following"
+              active
+              aria-labelledby="plugins-tab-following"
+            >
+              <openclaw-publisher-feeds-panel></openclaw-publisher-feeds-panel>
+            </wa-tab-panel>`
+          : html`<wa-tab-panel
+              id="plugins-hub-panel"
+              name="skills"
+              active
+              aria-labelledby="plugins-tab-skills"
+            >
+              ${renderSkills({
+                connected: this.connected,
+                loading: this.skillsLoading || this.agentsLoading,
+                report: this.skillsReport,
+                agentsList: this.agentsList,
+                selectedAgentId: this.skillsAgentId ?? this.agentsList?.defaultId ?? null,
+                error,
+                filter: this.skillsFilter,
+                statusFilter: this.skillsStatusFilter,
+                edits: this.skillEdits,
+                messages: this.skillMessages,
+                operation: this.skillOperation,
+                detailKey: this.skillsDetailKey,
+                detailTab: this.skillsDetailTab,
+                clawhubVerdicts: this.clawhubVerdicts,
+                clawhubVerdictsLoading: this.clawhubVerdictsLoading,
+                clawhubVerdictsError: this.clawhubVerdictsError,
+                skillCardContents: this.skillCardContents,
+                skillCardLoadingKey: this.skillCardLoadingKey,
+                skillCardErrors: this.skillCardErrors,
+                clawhubQuery: this.clawhubSearchQuery,
+                clawhubResults: this.clawhubSearchResults,
+                clawhubSearchLoading: this.clawhubSearchLoading,
+                clawhubSearchError: this.clawhubSearchError,
+                clawhubDetail: this.clawhubDetail,
+                clawhubDetailSlug: this.clawhubDetailSlug,
+                clawhubDetailLoading: this.clawhubDetailLoading,
+                clawhubDetailError: this.clawhubDetailError,
+                clawhubInstallMessage: this.clawhubInstallMessage,
+                onAgentChange: (agentId) => this.changeAgent(agentId),
+                onFilterChange: (next) => (this.skillsFilter = next),
+                onStatusFilterChange: (next) => (this.skillsStatusFilter = next),
+                onRefresh: () => void this.refreshPage(),
+                onToggle: (key, enabled) => void updateSkillEnabled(this, key, enabled),
+                onEdit: (key, value) => updateSkillEdit(this, key, value),
+                onSaveKey: (key) => void saveSkillApiKey(this, key),
+                onInstall: (skillKey, name, installId) =>
+                  void installSkill(this, skillKey, name, installId),
+                onDetailOpen: (key) => {
+                  this.skillsDetailKey = key;
+                  this.skillsDetailTab = "overview";
+                },
+                onDetailClose: () => (this.skillsDetailKey = null),
+                onDetailTabChange: (tab) => this.changeDetailTab(tab),
+                onClawHubQueryChange: (query) => this.changeClawHubQuery(query),
+                onClawHubDetailOpen: (slug) => void loadClawHubDetail(this, slug),
+                onClawHubDetailClose: () => closeClawHubDetail(this),
+                onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
+                  void installFromClawHub(this, slug, acknowledgeClawHubRisk, version),
+              })}
+            </wa-tab-panel>`}
       `)}
     `;
   }

@@ -8,6 +8,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderPluginsHubTabs } from "../../components/plugins-hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionKey, searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts";
@@ -109,6 +110,8 @@ function renderSkillWorkshopPage(
     onSelfLearningToggle,
     onHistoryScan,
   } = renderContext;
+  const publisherFeedsAvailable =
+    isGatewayMethodAdvertised(context.gateway.snapshot, "publisherFeeds.list") === true;
   const pageClass =
     state.skillWorkshopMode === "today"
       ? "content--skill-workshop content--skill-workshop-today"
@@ -127,6 +130,7 @@ function renderSkillWorkshopPage(
       <div class="plugins-hub-tabs-row">
         ${renderPluginsHubTabs({
           active: "workshop",
+          publisherFeedsAvailable,
           onSelect: (tab) => selectPluginsHubTab(context, tab),
         })}
       </div>

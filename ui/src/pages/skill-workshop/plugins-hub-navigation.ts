@@ -12,5 +12,9 @@ export function selectPluginsHubTab(
     context.navigate("skills");
     return;
   }
+  if (tab === "following") {
+    context.navigate("skills", { search: "?tab=following" });
+    return;
+  }
   context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
 }

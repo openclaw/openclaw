@@ -1,0 +1,35 @@
+.publisher-feeds-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.publisher-feeds-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  color: var(--danger);
+}
+
+.publisher-feeds-sequence {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .publisher-feeds-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .publisher-feeds-form .btn {
+    justify-self: start;
+  }
+
+  .publisher-feeds-sequence {
+    white-space: normal;
+  }
+}
