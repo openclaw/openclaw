@@ -1,7 +1,7 @@
 {
   "version": 1,
   "locale": "ko",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
+  "glossaryHash": "31510f6398458d1da1b082b45b39b144b16b17a091cc64c02124e9563fd035be",
   "entries": [
     {
       "id": "native.android.85cc8de945e3929c",
@@ -1187,11 +1187,6 @@
       "id": "native.android.a79d6ccab877c9ca",
       "source": "OpenClaw Active",
       "translated": "OpenClaw 활성"
-    },
-    {
-      "id": "native.android.f7a4f3bbcb0b2090",
-      "source": "${firstLine.take(157)}…",
-      "translated": "${firstLine.take(157)}…"
     },
     {
       "id": "native.android.356609f717b92350",
@@ -7034,6 +7029,86 @@
       "translated": "이 이미지를 디코딩할 수 없습니다."
     },
     {
+      "id": "native.android.e2004e8205154dd2",
+      "source": "Couldn’t load background tasks",
+      "translated": "백그라운드 작업을 불러올 수 없습니다"
+    },
+    {
+      "id": "native.android.bfa286f1b0a3c526",
+      "source": "Couldn’t load task details",
+      "translated": "작업 세부 정보를 불러올 수 없습니다"
+    },
+    {
+      "id": "native.android.6811e525782306c1",
+      "source": "Background tasks",
+      "translated": "백그라운드 작업"
+    },
+    {
+      "id": "native.android.754676bf2d2a50e7",
+      "source": "Refresh background tasks",
+      "translated": "백그라운드 작업 새로고침"
+    },
+    {
+      "id": "native.android.99e93f4520a61356",
+      "source": "No background tasks for this agent.",
+      "translated": "이 에이전트에는 백그라운드 작업이 없습니다."
+    },
+    {
+      "id": "native.android.26f0aae060212535",
+      "source": "Finished",
+      "translated": "완료됨"
+    },
+    {
+      "id": "native.android.6f4ef7e03dd153f5",
+      "source": "Back to background tasks",
+      "translated": "백그라운드 작업으로 돌아가기"
+    },
+    {
+      "id": "native.android.193a6c8583fe0dfb",
+      "source": "${statusLabel} · ${task.runtime}",
+      "translated": "${statusLabel} · ${task.runtime}"
+    },
+    {
+      "id": "native.android.c00ea0e2c7802a9f",
+      "source": "Prompt",
+      "translated": "프롬프트"
+    },
+    {
+      "id": "native.android.4cdf83cd30fac87e",
+      "source": "Prompt unavailable",
+      "translated": "프롬프트를 사용할 수 없음"
+    },
+    {
+      "id": "native.android.a093c342398c1d62",
+      "source": "No output yet",
+      "translated": "아직 출력이 없습니다"
+    },
+    {
+      "id": "native.android.3adeec85d4a8e797",
+      "source": "Output",
+      "translated": "출력"
+    },
+    {
+      "id": "native.android.e378f4d3069dc5f4",
+      "source": "Queued",
+      "translated": "대기 중"
+    },
+    {
+      "id": "native.android.7e4ab752e691e19a",
+      "source": "Running",
+      "translated": "실행 중"
+    },
+    {
+      "id": "native.android.c3b1223090fc9f15",
+      "source": "Completed",
+      "translated": "완료됨"
+    },
+    {
+      "id": "native.android.7a5134f615d03ff9",
+      "source": "Failed",
+      "translated": "실패"
+    },
+    {
       "id": "native.android.6384b9802cfdacfe",
       "source": "$text ",
       "translated": "$text "
@@ -7299,14 +7374,19 @@
       "translated": "오프라인"
     },
     {
-      "id": "native.android.6b0f8ea129bca167",
-      "source": "More new chat options",
-      "translated": "더 많은 새 채팅 옵션"
+      "id": "native.android.6c2e520fd54edeb4",
+      "source": "Chat actions",
+      "translated": "채팅 작업"
     },
     {
       "id": "native.android.0066c3883e9eff15",
       "source": "Refresh chat",
       "translated": "채팅 새로고침"
+    },
+    {
+      "id": "native.android.b57a1b542cff8f55",
+      "source": "Background tasks",
+      "translated": "백그라운드 작업"
     },
     {
       "id": "native.android.707eccff20a79f65",
@@ -7457,6 +7537,21 @@
       "id": "native.android.98a0d4d5bba788c4",
       "source": "OpenClaw is preparing a response.",
       "translated": "OpenClaw가 응답을 준비하고 있습니다."
+    },
+    {
+      "id": "native.android.22d747642a3887cd",
+      "source": "$completedCount/${steps.size}",
+      "translated": "$completedCount/${steps.size}"
+    },
+    {
+      "id": "native.android.5d9378441e3bb86e",
+      "source": "Collapse plan checklist",
+      "translated": "계획 체크리스트 접기"
+    },
+    {
+      "id": "native.android.cc46adc71637695d",
+      "source": "Expand plan checklist",
+      "translated": "계획 체크리스트 펼치기"
     },
     {
       "id": "native.android.f3806d79e43f568f",
@@ -8511,7 +8606,7 @@
     {
       "id": "native.apple.4dcf36018847481d",
       "source": "Save or discard edits before running, pausing, or enabling this automation.",
-      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 취소하세요."
+      "translated": "이 자동화를 실행, 일시 중지 또는 활성화하기 전에 편집 내용을 저장하거나 버리세요."
     },
     {
       "id": "native.apple.9fb34a87dc5dd407",
@@ -9186,7 +9281,7 @@
     {
       "id": "native.apple.2cb500a4a64c9a05",
       "source": "No diary prose for this day.",
-      "translated": "No diary prose for this day."
+      "translated": "이 날의 일기 본문이 없습니다."
     },
     {
       "id": "native.apple.d6d76334ab8bbf86",
@@ -10184,6 +10279,111 @@
       "translated": "확인"
     },
     {
+      "id": "native.apple.013dc12863bed23b",
+      "source": "Background task",
+      "translated": "백그라운드 작업"
+    },
+    {
+      "id": "native.apple.d33ca570a77c6d6f",
+      "source": "Queued",
+      "translated": "대기 중"
+    },
+    {
+      "id": "native.apple.4e4498e6144974b7",
+      "source": "Completed",
+      "translated": "완료됨"
+    },
+    {
+      "id": "native.apple.8773684d27996e83",
+      "source": "Failed",
+      "translated": "실패함"
+    },
+    {
+      "id": "native.apple.92f69cf86443d64d",
+      "source": "Subagent",
+      "translated": "하위 에이전트"
+    },
+    {
+      "id": "native.apple.924830db78883b2d",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.apple.d5433fcd3232cd16",
+      "source": "Task",
+      "translated": "작업"
+    },
+    {
+      "id": "native.apple.0b972513797e7385",
+      "source": "Loading background tasks…",
+      "translated": "백그라운드 작업을 불러오는 중…"
+    },
+    {
+      "id": "native.apple.fb3147cbc796dd3a",
+      "source": "Tasks for this agent will appear here.",
+      "translated": "이 에이전트의 작업이 여기에 표시됩니다."
+    },
+    {
+      "id": "native.apple.336cf64ef5611816",
+      "source": "No running tasks",
+      "translated": "실행 중인 작업 없음"
+    },
+    {
+      "id": "native.apple.d5955a199881b73e",
+      "source": "Running",
+      "translated": "실행 중"
+    },
+    {
+      "id": "native.apple.a3c63b936f7f31a9",
+      "source": "No finished tasks",
+      "translated": "완료된 작업 없음"
+    },
+    {
+      "id": "native.apple.889ef61e5911c728",
+      "source": "Finished",
+      "translated": "완료됨"
+    },
+    {
+      "id": "native.apple.bb086e78b05fff33",
+      "source": "Background Tasks",
+      "translated": "백그라운드 작업"
+    },
+    {
+      "id": "native.apple.b109300cc5265643",
+      "source": "Refresh",
+      "translated": "새로 고침"
+    },
+    {
+      "id": "native.apple.51dd4026b0e770aa",
+      "source": "Prompt",
+      "translated": "프롬프트"
+    },
+    {
+      "id": "native.apple.e3268d00448fe1e3",
+      "source": "Loading…",
+      "translated": "불러오는 중…"
+    },
+    {
+      "id": "native.apple.56b9f7324f04a28d",
+      "source": "Prompt unavailable.",
+      "translated": "프롬프트를 사용할 수 없습니다."
+    },
+    {
+      "id": "native.apple.f8ed60c4d4b277ed",
+      "source": "Output",
+      "translated": "출력"
+    },
+    {
+      "id": "native.apple.f4545f1ff911f4e2",
+      "source": "No output yet.",
+      "translated": "아직 출력이 없습니다."
+    },
+    {
+      "id": "native.apple.e2c229b2828a7152",
+      "source": "Task Details",
+      "translated": "작업 세부 정보"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "대화 기록을 내보낼 수 없음"
@@ -10222,6 +10422,11 @@
       "id": "native.apple.1876037e64a74110",
       "source": "New Chat in Worktree",
       "translated": "Worktree에서 새 채팅"
+    },
+    {
+      "id": "native.apple.17c13312e7532c89",
+      "source": "Background Tasks",
+      "translated": "백그라운드 작업"
     },
     {
       "id": "native.apple.ced228bb4d20a726",
@@ -12411,7 +12616,7 @@
     {
       "id": "native.apple.32a85f247d3bc0af",
       "source": "Alerts Off",
-      "translated": "Alerts Off"
+      "translated": "알림 꺼짐"
     },
     {
       "id": "native.apple.906553130aa591f1",
@@ -13692,6 +13897,21 @@
       "id": "native.apple.cc304ba214b8a9df",
       "source": "Review this exec request before continuing. Your decision will be sent back to the gateway.",
       "translated": "계속하기 전에 이 exec 요청을 검토하세요. 결정은 gateway로 다시 전송됩니다."
+    },
+    {
+      "id": "native.apple.d861d4796fad795b",
+      "source": "Plugin",
+      "translated": "플러그인"
+    },
+    {
+      "id": "native.apple.3e8bff33a33da259",
+      "source": "Tool",
+      "translated": "도구"
+    },
+    {
+      "id": "native.apple.0122ae27422ef135",
+      "source": "Severity",
+      "translated": "심각도"
     },
     {
       "id": "native.apple.1f2576ef69108e39",
@@ -17024,6 +17244,36 @@
       "translated": "Gateway \\(found)이 앱 \\(required)과 일치하지 않습니다. 설정에서 업데이트합니다."
     },
     {
+      "id": "native.apple.86e7c86924ad0c70",
+      "source": "Repairing the OpenClaw Gateway update…",
+      "translated": "OpenClaw Gateway 업데이트를 복구하는 중…"
+    },
+    {
+      "id": "native.apple.b59713e1e3e7ee65",
+      "source": "Updating the OpenClaw Gateway to \\(targetVersion)…",
+      "translated": "OpenClaw Gateway를 \\(targetVersion)(으)로 업데이트하는 중…"
+    },
+    {
+      "id": "native.apple.7772913c171b78ac",
+      "source": "Gateway update needs attention.",
+      "translated": "Gateway 업데이트에 주의가 필요합니다."
+    },
+    {
+      "id": "native.apple.e831aa3b0ced39d4",
+      "source": "Gateway update failed.",
+      "translated": "Gateway 업데이트에 실패했습니다."
+    },
+    {
+      "id": "native.apple.681e41736dc87c67",
+      "source": "Gateway update finished, but verification failed.",
+      "translated": "Gateway 업데이트가 완료되었지만 확인에 실패했습니다."
+    },
+    {
+      "id": "native.apple.66f44c526206f5de",
+      "source": "OpenClaw Gateway \\(installedVersion) is installed.",
+      "translated": "OpenClaw Gateway \\(installedVersion)이(가) 설치되었습니다."
+    },
+    {
       "id": "native.apple.6f14c557e2573526",
       "source": "Camera",
       "translated": "카메라"
@@ -17402,26 +17652,6 @@
       "id": "native.apple.936bfd42a2f08232",
       "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
       "translated": "일부: \\(self.summary.totals.missingCostEntries)개 항목에 비용 누락"
-    },
-    {
-      "id": "native.apple.84f1d9ae4965cfe0",
-      "source": "Crestodian",
-      "translated": "Crestodian"
-    },
-    {
-      "id": "native.apple.4398066b42292ca3",
-      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
-      "translated": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels."
-    },
-    {
-      "id": "native.apple.648423d89aec0c13",
-      "source": "Chat",
-      "translated": "채팅"
-    },
-    {
-      "id": "native.apple.bd180b943ee89cfe",
-      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
-      "translated": "팁: “status”, “doctor”, “set default model …” 또는 “connect telegram”을(를) 사용해 보세요."
     },
     {
       "id": "native.apple.779f488d2ddd9eaf",
@@ -19099,6 +19329,11 @@
       "translated": "심각"
     },
     {
+      "id": "native.apple.75102378a6775180",
+      "source": "New Session",
+      "translated": "새 세션"
+    },
+    {
       "id": "native.apple.185a1b27c9859cc0",
       "source": "Settings...",
       "translated": "설정..."
@@ -19112,6 +19347,11 @@
       "id": "native.apple.c19b0989064c0020",
       "source": "Forward",
       "translated": "앞으로"
+    },
+    {
+      "id": "native.apple.ef646bce7927b2f0",
+      "source": "Command Palette…",
+      "translated": "명령 팔레트…"
     },
     {
       "id": "native.apple.13a7356f48278757",
@@ -19534,9 +19774,9 @@
       "translated": "OpenClaw는 추론 설정을 변경하기 전에 다시 확인합니다."
     },
     {
-      "id": "native.apple.c7a02803addf11fa",
-      "source": "Checking for Claude Code, Codex, Gemini, and saved API keys.",
-      "translated": "Claude Code, Codex, Gemini 및 저장된 API 키를 확인하는 중입니다."
+      "id": "native.apple.a0a8f45082d0ba99",
+      "source": "Checking CLI logins, saved API keys, and local model servers on the Gateway.",
+      "translated": "Gateway의 CLI 로그인, 저장된 API 키 및 로컬 모델 서버를 확인하는 중입니다."
     },
     {
       "id": "native.apple.0fd3e5267cdf8250",
@@ -19544,9 +19784,9 @@
       "translated": "이 Gateway에서 AI 계정을 확인할 수 없습니다"
     },
     {
-      "id": "native.apple.0af61b95d249c351",
-      "source": "Couldn’t check this Mac for AI accounts",
-      "translated": "이 Mac에서 AI 계정을 확인할 수 없습니다"
+      "id": "native.apple.82ba8c9a69fbb84b",
+      "source": "Couldn’t check this Gateway for AI access",
+      "translated": "이 Gateway의 AI 액세스를 확인할 수 없습니다"
     },
     {
       "id": "native.apple.ab05bb1569f89077",
@@ -19569,9 +19809,9 @@
       "translated": "자세한 내용은 위 각 옵션에 표시되어 있습니다. 로그인을 수정한 후 다시 시도하거나, 아래에서 API 키 또는 토큰으로 연결할 수 있습니다."
     },
     {
-      "id": "native.apple.11383227f922aaec",
-      "source": "Need help? Chat with Crestodian",
-      "translated": "도움이 필요하신가요? Crestodian과 채팅하세요"
+      "id": "native.apple.a0431b20c0650139",
+      "source": "Need help? Chat with OpenClaw",
+      "translated": "도움이 필요하신가요? OpenClaw와 채팅하세요"
     },
     {
       "id": "native.apple.6526ced182e1fe50",
@@ -19589,14 +19829,24 @@
       "translated": "설정 세부 정보 복사"
     },
     {
-      "id": "native.apple.f5a157404f7a0eff",
-      "source": "No AI accounts found on this Mac",
-      "translated": "이 Mac에서 AI 계정을 찾을 수 없습니다"
+      "id": "native.apple.e0458fcb8c0536ea",
+      "source": "No usable AI access found on this Gateway",
+      "translated": "이 Gateway에서 사용할 수 있는 AI 액세스를 찾지 못했습니다"
     },
     {
-      "id": "native.apple.76072d0308a553ca",
-      "source": "That’s fine — you can connect one with an API key or token. If you use Claude Code, Codex, or the Gemini CLI on this Mac, sign in there first and hit “Check again”.",
-      "translated": "괜찮습니다 — API 키 또는 토큰으로 연결할 수 있습니다. 이 Mac에서 Claude Code, Codex 또는 Gemini CLI를 사용한다면 먼저 거기에서 로그인한 후 “다시 확인”을 누르세요."
+      "id": "native.apple.06b98c6084617183",
+      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
+      "translated": "괜찮습니다. API 키나 토큰으로 연결할 수 있습니다. Claude Code 또는 Codex에 로그인하거나 적합한 모델로 Ollama 또는 LM Studio를 시작한 다음 “다시 확인”을 누를 수도 있습니다."
+    },
+    {
+      "id": "native.apple.e2749739df556643",
+      "source": "Detected, but not auto-tested",
+      "translated": "감지되었지만 자동 테스트되지 않음"
+    },
+    {
+      "id": "native.apple.5f604e17336ca8a7",
+      "source": "\\(candidate.label) — \\(candidate.detail)",
+      "translated": "\\(candidate.label) — \\(candidate.detail)"
     },
     {
       "id": "native.apple.5f28927fe23c11cb",
@@ -19614,11 +19864,6 @@
       "translated": "다시 확인"
     },
     {
-      "id": "native.apple.f179b0447a18bbf4",
-      "source": "Connect with an API key or token instead…",
-      "translated": "대신 API 키 또는 토큰으로 연결…"
-    },
-    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "공급자로 로그인"
@@ -19632,6 +19877,11 @@
       "id": "native.apple.14b23c357d7a9eff",
       "source": "More sign-in options",
       "translated": "추가 로그인 옵션"
+    },
+    {
+      "id": "native.apple.634c5b2f1e8ec40f",
+      "source": "API Keys",
+      "translated": "API Keys"
     },
     {
       "id": "native.apple.10971b41012d4f36",
@@ -19739,9 +19989,9 @@
       "translated": "해당 키가 작동하지 않았습니다"
     },
     {
-      "id": "native.apple.18c6f84a21b9d92f",
-      "source": "Crestodian — setup helper",
-      "translated": "Crestodian — 설정 도우미"
+      "id": "native.apple.e874bd0fad63f012",
+      "source": "OpenClaw — setup helper",
+      "translated": "OpenClaw — 설정 도우미"
     },
     {
       "id": "native.apple.bea852c8622c8214",
@@ -19769,39 +20019,59 @@
       "translated": "오류 복사"
     },
     {
-      "id": "native.apple.6f51ff950befb37a",
+      "id": "native.apple.7dee24e5bf088dd5",
+      "source": "\\(incomplete) \\(Self.memoryNoun(incomplete)) could not be imported.",
+      "translated": "\\(incomplete)개의 \\(Self.memoryNoun(incomplete))을(를) 가져올 수 없습니다."
+    },
+    {
+      "id": "native.apple.84189c39ea5803c6",
+      "source": "The Gateway returned an inconsistent provider plan. Try planning again.",
+      "translated": "Gateway에서 일관되지 않은 제공업체 계획을 반환했습니다. 다시 계획해 보세요."
+    },
+    {
+      "id": "native.apple.4c9e75d64cbc5cc2",
+      "source": "The Gateway did not return a usable import plan. Try planning again.",
+      "translated": "Gateway에서 사용할 수 있는 가져오기 계획을 반환하지 않았습니다. 다시 계획해 보세요."
+    },
+    {
+      "id": "native.apple.2070bf43a67680ee",
+      "source": "The Gateway could not plan \\(plan.summary.errors) \\(Self.memoryNoun(plan.summary.errors)). Try again.",
+      "translated": "Gateway에서 \\(plan.summary.errors)개의 \\(Self.memoryNoun(plan.summary.errors))을(를) 계획할 수 없습니다. 다시 시도해 보세요."
+    },
+    {
+      "id": "native.apple.1400567a01a8d7c0",
       "source": "<redacted secret>",
-      "translated": "<redacted secret>"
+      "translated": "<가려진 비밀 값>"
     },
     {
-      "id": "native.apple.722995710f90cfc6",
-      "source": "Crestodian was interrupted. Restart to try again.",
-      "translated": "Crestodian이 중단되었습니다. 다시 시도하려면 재시작하세요."
+      "id": "native.apple.b92f94ddc6bbc8e5",
+      "source": "OpenClaw was interrupted. Restart to try again.",
+      "translated": "OpenClaw가 중단되었습니다. 다시 시도하려면 재시작하세요."
     },
     {
-      "id": "native.apple.6596e00d4333081e",
-      "source": "The Gateway connection changed. Restart Crestodian to reconnect.",
-      "translated": "Gateway 연결이 변경되었습니다. 다시 연결하려면 Crestodian을 재시작하세요."
+      "id": "native.apple.829845818e97978a",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Gateway 연결이 변경되었습니다. 다시 연결하려면 OpenClaw를 재시작하세요."
     },
     {
-      "id": "native.apple.6124d93872cfcfe4",
-      "source": "Crestodian is working…",
-      "translated": "Crestodian이 작업 중입니다…"
+      "id": "native.apple.012861f82eff0ca9",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw가 작업 중입니다…"
     },
     {
-      "id": "native.apple.105683a219ce17d7",
+      "id": "native.apple.2f7ad21b747fbc15",
       "source": "Restart",
-      "translated": "다시 시작"
+      "translated": "재시작"
     },
     {
-      "id": "native.apple.839da8db3e4256b2",
+      "id": "native.apple.08f121b0b5f02195",
       "source": "Enter secret…",
       "translated": "비밀 값 입력…"
     },
     {
-      "id": "native.apple.3e9e9347173fffbc",
-      "source": "Reply to Crestodian… (yes sets everything up)",
-      "translated": "Crestodian에게 답장… (yes라고 하면 모든 설정이 완료됩니다)"
+      "id": "native.apple.35a542956f4f5497",
+      "source": "Reply to OpenClaw… (yes sets everything up)",
+      "translated": "OpenClaw에 답장… (yes를 입력하면 모든 설정이 완료됩니다)"
     },
     {
       "id": "native.apple.78d1ad73762a7ce8",
@@ -19812,6 +20082,106 @@
       "id": "native.apple.c8a2f8dc424fe447",
       "source": "Back",
       "translated": "뒤로"
+    },
+    {
+      "id": "native.apple.7ca0977d5f73356d",
+      "source": "Bring your memories along",
+      "translated": "추억을 함께 가져오세요"
+    },
+    {
+      "id": "native.apple.b57ee4f83cff23f3",
+      "source": "OpenClaw can bring useful context from AI tools you already use into your new assistant.",
+      "translated": "OpenClaw는 이미 사용 중인 AI 도구에서 유용한 컨텍스트를 새 어시스턴트로 가져올 수 있습니다."
+    },
+    {
+      "id": "native.apple.46cab71d748860b8",
+      "source": "Looking for memories…",
+      "translated": "추억을 찾는 중…"
+    },
+    {
+      "id": "native.apple.c9e5f1aebe85e201",
+      "source": "Checking supported AI tools on this Mac.",
+      "translated": "이 Mac에서 지원되는 AI 도구를 확인하는 중입니다."
+    },
+    {
+      "id": "native.apple.77290f36f36f00e5",
+      "source": "No memories to import",
+      "translated": "가져올 추억이 없습니다"
+    },
+    {
+      "id": "native.apple.e5cca7b9f082ace9",
+      "source": "You can import memories later from the dashboard.",
+      "translated": "나중에 대시보드에서 추억을 가져올 수 있습니다."
+    },
+    {
+      "id": "native.apple.963add2f12fd18cb",
+      "source": "Import memories",
+      "translated": "추억 가져오기"
+    },
+    {
+      "id": "native.apple.9db369e036a38a29",
+      "source": "Importing memories…",
+      "translated": "추억을 가져오는 중…"
+    },
+    {
+      "id": "native.apple.71b8e38a5e7040ef",
+      "source": "Refresh plan",
+      "translated": "계획 새로 고침"
+    },
+    {
+      "id": "native.apple.e87bec72cb9c9dbf",
+      "source": "Retry pending imports before refreshing the plan.",
+      "translated": "계획을 새로 고치기 전에 보류 중인 가져오기를 다시 시도하세요."
+    },
+    {
+      "id": "native.apple.f678888102fded6e",
+      "source": "You can skip this and import later from the dashboard’s Memory import page.",
+      "translated": "이 단계를 건너뛰고 나중에 대시보드의 추억 가져오기 페이지에서 가져올 수 있습니다."
+    },
+    {
+      "id": "native.apple.36108528c6acc448",
+      "source": "\\(provider.alreadyImportedCount) already imported",
+      "translated": "\\(provider.alreadyImportedCount)개를 이미 가져왔습니다"
+    },
+    {
+      "id": "native.apple.9b3444de8c9b2acc",
+      "source": "Imported \\(result.migrated) \\(self.memoryLabel(result.migrated)).",
+      "translated": "\\(result.migrated)개의 \\(self.memoryLabel(result.migrated))을(를) 가져왔습니다."
+    },
+    {
+      "id": "native.apple.3252fea4dac8669a",
+      "source": "Couldn’t check for memories",
+      "translated": "추억을 확인할 수 없습니다"
+    },
+    {
+      "id": "native.apple.d371deb696de9e6b",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
+      "id": "native.apple.406ae454540725d0",
+      "source": "You can do this later from the dashboard’s Memory import page.",
+      "translated": "나중에 대시보드의 추억 가져오기 페이지에서 이 작업을 수행할 수 있습니다."
+    },
+    {
+      "id": "native.apple.d1b5d99f67dae42e",
+      "source": "Your memories are ready",
+      "translated": "메모리가 준비되었습니다"
+    },
+    {
+      "id": "native.apple.6dbe5b174271b62a",
+      "source": "Imported \\(imported) \\(self.memoryLabel(imported)) into OpenClaw.",
+      "translated": "\\(imported)개의 \\(self.memoryLabel(imported))을 OpenClaw로 가져왔습니다."
+    },
+    {
+      "id": "native.apple.d47b887f98e13e24",
+      "source": "\\(result.migrated) imported",
+      "translated": "\\(result.migrated)개 가져옴"
+    },
+    {
+      "id": "native.apple.6ac3d513f0ec5da7",
+      "source": "You can manage imported memories anytime from the dashboard.",
+      "translated": "가져온 메모리는 언제든지 대시보드에서 관리할 수 있습니다."
     },
     {
       "id": "native.apple.ea8beaeecef15e54",
@@ -20549,6 +20919,181 @@
       "translated": "에이전트가 요청할 때 위치 공유"
     },
     {
+      "id": "native.apple.65c21de72f06fd33",
+      "source": "OpenClaw updated",
+      "translated": "OpenClaw 업데이트 완료"
+    },
+    {
+      "id": "native.apple.6197fc2d1ebd6b2e",
+      "source": "Finishing your OpenClaw update",
+      "translated": "OpenClaw 업데이트 마무리 중"
+    },
+    {
+      "id": "native.apple.226b698fbbfc3cc4",
+      "source": "Checking the Mac app and Gateway…",
+      "translated": "Mac 앱과 Gateway 확인 중…"
+    },
+    {
+      "id": "native.apple.e9b1899627402a15",
+      "source": "Gateway recovery failed.",
+      "translated": "Gateway 복구에 실패했습니다."
+    },
+    {
+      "id": "native.apple.91debe404bb7affc",
+      "source": "The managed OpenClaw runtime could not be reinstalled.",
+      "translated": "관리형 OpenClaw 런타임을 다시 설치할 수 없습니다."
+    },
+    {
+      "id": "native.apple.1cc391ec928070c4",
+      "source": "Restarting and verifying the Gateway…",
+      "translated": "Gateway를 재시작하고 확인하는 중…"
+    },
+    {
+      "id": "native.apple.37fe23aa33d9e76b",
+      "source": "Verifying the Mac node runtime…",
+      "translated": "Mac 노드 런타임을 확인하는 중…"
+    },
+    {
+      "id": "native.apple.73e001baeae8e873",
+      "source": "Letting your agent know you’re back…",
+      "translated": "에이전트에게 돌아왔음을 알리는 중…"
+    },
+    {
+      "id": "native.apple.3b2db6e4144742dd",
+      "source": "Welcome back",
+      "translated": "다시 오신 것을 환영합니다"
+    },
+    {
+      "id": "native.apple.69b54e24b90414dd",
+      "source": "OpenClaw \\(receipt.toVersion) and its Gateway are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) 및 해당 Gateway가 준비되었습니다."
+    },
+    {
+      "id": "native.apple.f9d6fa6d7aaf23b6",
+      "source": "OpenClaw \\(receipt.toVersion) and its Mac node runtime are ready.",
+      "translated": "OpenClaw \\(receipt.toVersion) 및 해당 Mac 노드 런타임이 준비되었습니다."
+    },
+    {
+      "id": "native.apple.a3fa88f5fd3c2732",
+      "source": "Your agent could not be notified yet. OpenClaw will retry after the next app launch.",
+      "translated": "에이전트에게 아직 알릴 수 없습니다. 다음 앱 실행 후 OpenClaw에서 다시 시도합니다."
+    },
+    {
+      "id": "native.apple.e9020028ddab1ba6",
+      "source": "OpenClaw could not notify your agent automatically. The app and Gateway update are complete.",
+      "translated": "OpenClaw가 에이전트에게 자동으로 알리지 못했습니다. 앱 및 Gateway 업데이트가 완료되었습니다."
+    },
+    {
+      "id": "native.apple.afc120cf0a96ea30",
+      "source": "OpenClaw could not notify your agent automatically. The app and Mac node update are complete.",
+      "translated": "OpenClaw가 에이전트에게 자동으로 알리지 못했습니다. 앱 및 Mac 노드 업데이트가 완료되었습니다."
+    },
+    {
+      "id": "native.apple.71ad85442725f45c",
+      "source": "OpenClaw could not confirm the agent notification. It will not retry, to avoid a duplicate welcome.",
+      "translated": "OpenClaw에서 에이전트 알림을 확인하지 못했습니다. 환영 메시지가 중복되지 않도록 다시 시도하지 않습니다."
+    },
+    {
+      "id": "native.apple.a3deea03e4870dd0",
+      "source": "The remote Gateway is older than this Mac app, so OpenClaw skipped the agent notification.",
+      "translated": "원격 Gateway가 이 Mac 앱보다 오래된 버전이므로 OpenClaw에서 에이전트 알림을 건너뛰었습니다."
+    },
+    {
+      "id": "native.apple.3636a8b503ff00d2",
+      "source": "The Gateway remains paused, so OpenClaw did not wake your agent.",
+      "translated": "Gateway가 계속 일시 중지된 상태이므로 OpenClaw에서 에이전트를 깨우지 않았습니다."
+    },
+    {
+      "id": "native.apple.0f533623878f3d67",
+      "source": "Gateway verification failed.",
+      "translated": "Gateway 확인에 실패했습니다."
+    },
+    {
+      "id": "native.apple.3ab92d342b4fa00b",
+      "source": "The managed runtime does not match the updated Mac app.",
+      "translated": "관리형 런타임이 업데이트된 Mac 앱과 일치하지 않습니다."
+    },
+    {
+      "id": "native.apple.2cfad583503a9a41",
+      "source": "The Mac node did not restart.",
+      "translated": "Mac 노드가 다시 시작되지 않았습니다."
+    },
+    {
+      "id": "native.apple.5b9061db451b644a",
+      "source": "The Mac node did not become ready.",
+      "translated": "Mac 노드가 준비 상태가 되지 않았습니다."
+    },
+    {
+      "id": "native.apple.54e76dabec1eb1c1",
+      "source": "The node service restarted but did not remain running.",
+      "translated": "노드 서비스가 다시 시작되었지만 실행 상태를 유지하지 못했습니다."
+    },
+    {
+      "id": "native.apple.51fe0a453f99f5ad",
+      "source": "The Gateway did not start.",
+      "translated": "Gateway가 시작되지 않았습니다."
+    },
+    {
+      "id": "native.apple.9e9e4278e553c144",
+      "source": "The update is installed, but Gateway health did not become ready.",
+      "translated": "업데이트가 설치되었지만 Gateway 상태가 준비 상태가 되지 않았습니다."
+    },
+    {
+      "id": "native.apple.91a105faed454e5a",
+      "source": "The Gateway could not reconnect.",
+      "translated": "Gateway에서 다시 연결하지 못했습니다."
+    },
+    {
+      "id": "native.apple.9ac2dfa295929a92",
+      "source": "OpenClaw installed the update but could not verify the Gateway connection.",
+      "translated": "OpenClaw에서 업데이트를 설치했지만 Gateway 연결을 확인하지 못했습니다."
+    },
+    {
+      "id": "native.apple.3abafcfb64b362fb",
+      "source": "The Gateway could not be checked.",
+      "translated": "Gateway를 확인할 수 없습니다."
+    },
+    {
+      "id": "native.apple.00e3d2037782506c",
+      "source": "OpenClaw could not read the Gateway service ownership record. Retry after checking the Gateway LaunchAgent.",
+      "translated": "OpenClaw에서 Gateway 서비스 소유권 기록을 읽을 수 없습니다. Gateway LaunchAgent를 확인한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.apple.c4b8806a570dad31",
+      "source": "The Mac node could not be checked.",
+      "translated": "Mac 노드를 확인할 수 없습니다."
+    },
+    {
+      "id": "native.apple.0483bf19d612560b",
+      "source": "OpenClaw could not read the node service ownership record. Retry after checking the node LaunchAgent.",
+      "translated": "OpenClaw에서 노드 서비스 소유권 기록을 읽을 수 없습니다. 노드 LaunchAgent를 확인한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.apple.d0f712a2ed470a3e",
+      "source": "Gateway update needs help",
+      "translated": "Gateway 업데이트에 도움이 필요함"
+    },
+    {
+      "id": "native.apple.e2ffc7753f75e1b8",
+      "source": "Update guide",
+      "translated": "업데이트 가이드"
+    },
+    {
+      "id": "native.apple.3a6aaa0aa0be82e7",
+      "source": "Ask Discord",
+      "translated": "Discord에 문의"
+    },
+    {
+      "id": "native.apple.11b9ee23142b1060",
+      "source": "Retry",
+      "translated": "다시 시도"
+    },
+    {
+      "id": "native.apple.144b21229f65f2a4",
+      "source": "Continue",
+      "translated": "계속"
+    },
+    {
       "id": "native.apple.1eeca02c45d3db5a",
       "source": "This gateway requires an auth token",
       "translated": "이 Gateway에는 인증 토큰이 필요합니다"
@@ -20859,9 +21404,9 @@
       "translated": "음성 및 대화"
     },
     {
-      "id": "native.apple.f5aa19bc071cf585",
-      "source": "Crestodian",
-      "translated": "Crestodian"
+      "id": "native.apple.59bed721dff1a25f",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.04b9c8402f19b8ce",
@@ -21147,6 +21692,26 @@
       "id": "native.apple.5bea2c67b8d4ccf9",
       "source": "Bundled",
       "translated": "번들됨"
+    },
+    {
+      "id": "native.apple.4b27b3be5f3f1f66",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.9427da914cdbfbf3",
+      "source": "Your AI-powered setup helper. It can check status, fix config, switch models, and connect channels.",
+      "translated": "AI 기반 설정 도우미입니다. 상태 확인, config 수정, 모델 전환, 채널 연결을 할 수 있습니다."
+    },
+    {
+      "id": "native.apple.ce77d7e393a4b860",
+      "source": "Chat",
+      "translated": "채팅"
+    },
+    {
+      "id": "native.apple.61bddd6a136b5e8b",
+      "source": "Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.",
+      "translated": "팁: “status”, “doctor”, “set default model …” 또는 “connect telegram”을 사용해 보세요."
     },
     {
       "id": "native.apple.9df0af709d3b38bf",
@@ -22122,6 +22687,16 @@
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "도구 실행 중…"
+    },
+    {
+      "id": "native.apple.3b932a47b4223a43",
+      "source": "Collapse plan",
+      "translated": "계획 접기"
+    },
+    {
+      "id": "native.apple.b6b3b9af4c618060",
+      "source": "Expand plan",
+      "translated": "계획 펼치기"
     },
     {
       "id": "native.apple.63320b6d5138c0db",

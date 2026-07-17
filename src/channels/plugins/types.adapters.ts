@@ -84,6 +84,12 @@ export type ChannelSetupAdapter = {
     accountId?: string;
     input?: ChannelSetupInput;
   }) => string;
+  prepareAccountConfigInput?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    input: ChannelSetupInput;
+    runtime: RuntimeEnv;
+  }) => Promise<ChannelSetupInput> | ChannelSetupInput;
   resolveBindingAccountId?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -884,3 +890,4 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
         }>
   >;
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

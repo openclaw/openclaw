@@ -49,6 +49,23 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const guard = vi.fn(async () => () => undefined);
+    harness.client.setThreadSessionRequestGuard(guard);
+
+    await expect(harness.client.request("thread/start", {})).rejects.toThrow(
+      "thread/start requires a positive finite timeout or abort signal",
+    );
+    await expect(
+      harness.client.request("thread/resume", {}, { timeoutMs: Number.POSITIVE_INFINITY }),
+    ).rejects.toThrow("thread/resume requires a positive finite timeout or abort signal");
+
+    expect(guard).not.toHaveBeenCalled();
+    expect(harness.writes).toEqual([]);
+  });
+
   it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -128,6 +145,33 @@ describe("CodexAppServerClient", () => {
         },
       ]),
     );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("recovers large app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+    const largePrefix = "x".repeat(1_100_000);
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"' +
+        largePrefix +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications).toEqual([
+      {
+        method: "item/commandExecution/outputDelta",
+        params: { delta: largePrefix + "\nsecond" },
+      },
+    ]);
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -383,6 +427,36 @@ describe("CodexAppServerClient", () => {
     );
     await expect(harness.client.request("another/method")).rejects.toThrow(
       "codex app-server exited: code=1 signal=null",
+    );
+  });
+
+  it("preserves split UTF-8 in app-server stderr exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+    const character = Buffer.from("猫", "utf8");
+
+    harness.process.stderr.write(Buffer.concat([Buffer.from("fatal "), character.subarray(0, 1)]));
+    harness.process.stderr.write(Buffer.concat([character.subarray(1), Buffer.from(" boot\n")]));
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal 猫 boot"',
+    );
+  });
+
+  it("keeps bounded stderr tails on UTF-16 boundaries", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const pending = harness.client.request("test/method");
+
+    harness.process.stderr.write(`🎉${"x".repeat(1_999)}`);
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      `codex app-server exited: code=1 signal=null stderr=${JSON.stringify(
+        `${"x".repeat(500)}...`,
+      )}`,
     );
   });
 

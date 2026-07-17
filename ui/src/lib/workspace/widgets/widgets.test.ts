@@ -6,6 +6,7 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
+import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
@@ -120,6 +121,143 @@ describe("activity mapping", () => {
   it("renders an empty state for no entries", () => {
     const container = renderToContainer(renderActivity(widget(), { entries: [] }));
     expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+  });
+});
+
+describe("chart mapping", () => {
+  it("renders single-point and constant series visibly", () => {
+    const line = renderToContainer(renderChart(widget({ props: { type: "line" } }), [5]));
+    expect(line.querySelector(".workspace-chart__point")).not.toBeNull();
+
+    const bars = renderToContainer(renderChart(widget({ props: { type: "bar" } }), [5, 5]));
+    expect(
+      [...bars.querySelectorAll(".workspace-chart__bars rect")].every(
+        (bar) => Number(bar.getAttribute("height")) > 0.5,
+      ),
+    ).toBe(true);
+
+    const zeroBars = renderToContainer(renderChart(widget({ props: { type: "bar" } }), [0, 0]));
+    expect(
+      [...zeroBars.querySelectorAll(".workspace-chart__bars rect")].every(
+        (bar) => Number(bar.getAttribute("height")) === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps extreme finite ranges within valid SVG coordinates", () => {
+    const container = renderToContainer(
+      renderChart(widget(), [-Number.MAX_VALUE, Number.MAX_VALUE]),
+    );
+    const points = container.querySelector("polyline")?.getAttribute("points") ?? "";
+    expect(points).not.toMatch(/NaN|Infinity/);
+
+    const constant = renderToContainer(renderChart(widget(), [Number.MAX_VALUE]));
+    expect(constant.querySelector("circle")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const gauge = renderToContainer(
+      renderChart(widget({ props: { type: "gauge" } }), [-Number.MAX_VALUE, Number.MAX_VALUE]),
+    );
+    expect(gauge.querySelector(".workspace-chart__gauge")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const bounded = renderToContainer(renderChart(widget({ props: { min: 0, max: 1 } }), [1e308]));
+    expect(bounded.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMin = renderToContainer(
+      renderChart(widget({ props: { min: Number.MIN_VALUE } }), [Number.MIN_VALUE]),
+    );
+    expect(subnormalMin.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    const subnormalMax = renderToContainer(
+      renderChart(widget({ props: { max: -Number.MIN_VALUE } }), [-Number.MIN_VALUE]),
+    );
+    expect(subnormalMax.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+
+    for (const [props, values] of [
+      [{ min: 10 }, [1, 2]],
+      [{ max: -10 }, [-2, -1]],
+    ] as const) {
+      const oneSided = renderToContainer(renderChart(widget({ props }), values));
+      expect(oneSided.querySelector("svg")?.outerHTML).not.toMatch(/NaN|Infinity/);
+      expect(oneSided.querySelector('[data-test-id="workspace-chart-error"]')).toBeNull();
+    }
+  });
+
+  it("announces data extrema rather than configured axis bounds", () => {
+    const container = renderToContainer(
+      renderChart(widget({ title: "Revenue", props: { min: 0, max: 10 } }), [2, 7]),
+    );
+    expect(container.querySelector("svg")?.getAttribute("aria-label")).toContain(
+      "ranging from 2 to 7",
+    );
+  });
+
+  it("renders responsive accessible line, bar, area, sparkline, and gauge charts", () => {
+    for (const type of ["line", "bar", "area", "sparkline", "gauge"] as const) {
+      const container = renderToContainer(
+        renderChart(widget({ title: "Revenue", props: { type, min: 0, max: 10 } }), [2, 7]),
+      );
+      const svg = container.querySelector('[data-test-id="workspace-chart"]');
+      expect(svg?.getAttribute("role")).toBe("img");
+      expect(svg?.getAttribute("aria-label")).toContain("Revenue");
+      expect(svg?.getAttribute("viewBox")).toBe("0 0 100 40");
+      expect(container.querySelector(`.workspace-chart--${type}`)).not.toBeNull();
+    }
+  });
+
+  it("renders localized empty and invalid-data states without an svg", () => {
+    const empty = renderToContainer(renderChart(widget(), []));
+    expect(empty.querySelector('[data-test-id="workspace-chart-empty"]')).not.toBeNull();
+    expect(empty.querySelector("svg")).toBeNull();
+
+    for (const props of [{ min: "bad" }, { min: 10, max: 2 }, { min: 4, max: 4 }]) {
+      const invalidEmpty = renderToContainer(renderChart(widget({ props }), []));
+      expect(invalidEmpty.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(invalidEmpty.querySelector("svg")).toBeNull();
+    }
+
+    const invalid = renderToContainer(renderChart(widget(), [1, "bad"]));
+    expect(invalid.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+    expect(invalid.querySelector("svg")).toBeNull();
+
+    for (const [configuredWidget, value] of [
+      [widget({ props: { type: "pie" } }), [1]],
+      [widget({ props: { type: null } }), [1]],
+      [widget({ props: { min: 10, max: 2 } }), [4]],
+      [widget(), { points: [{ label: "missing value" }] }],
+      [widget(), { points: Array.from({ length: 501 }, () => 1) }],
+    ] as const) {
+      const error = renderToContainer(renderChart(configuredWidget, value));
+      expect(error.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(error.querySelector("svg")).toBeNull();
+    }
+  });
+
+  it("accepts the documented point shapes through the 500-point limit", () => {
+    const wrapped = renderToContainer(
+      renderChart(widget(), { points: [1, { y: 2 }, { value: 3 }] }),
+    );
+    expect(wrapped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const capped = renderToContainer(
+      renderChart(
+        widget(),
+        Array.from({ length: 500 }, () => 1),
+      ),
+    );
+    expect(capped.querySelector('[data-test-id="workspace-chart"]')).not.toBeNull();
+
+    const denseBars = renderToContainer(
+      renderChart(
+        widget({ props: { type: "bar" } }),
+        Array.from({ length: 500 }, (_, index) => index % 2),
+      ),
+    );
+    const slotWidth = (100 - 2 * 2) / 500;
+    expect(
+      [...denseBars.querySelectorAll("rect")].every(
+        (bar) => Number(bar.getAttribute("width")) <= slotWidth,
+      ),
+    ).toBe(true);
   });
 });
 

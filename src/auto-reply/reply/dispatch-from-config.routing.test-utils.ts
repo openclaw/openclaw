@@ -752,7 +752,11 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       await opts?.onToolStart?.({ name: "exec", phase: "start" });
       await opts?.onItemEvent?.({ itemId: "1", kind: "tool", progressText: "running exec" });
-      await opts?.onPlanUpdate?.({ phase: "update", steps: ["Run command"] });
+      // Shipped pre-2026.8 producer shape: plain string steps.
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        steps: ["Run command"],
+      });
       await opts?.onApprovalEvent?.({ phase: "requested", command: "pnpm test" });
       await opts?.onCommandOutput?.({ phase: "end", name: "exec", status: "ok", exitCode: 0 });
       await opts?.onPatchSummary?.({ phase: "end", summary: "1 modified" });
@@ -787,7 +791,11 @@ describe("dispatchReplyFromConfig", () => {
       kind: "tool",
       progressText: "running exec",
     });
-    expect(onPlanUpdate).toHaveBeenCalledWith({ phase: "update", steps: ["Run command"] });
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      steps: ["Run command"],
+      planSteps: [{ step: "Run command", status: "pending" }],
+    });
     expect(onApprovalEvent).toHaveBeenCalledWith({
       phase: "requested",
       command: "pnpm test",
@@ -1181,3 +1189,4 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

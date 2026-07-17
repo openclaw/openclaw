@@ -1,5 +1,10 @@
 // Workboard plugin module implements dispatcher behavior.
 import path from "node:path";
+import type {
+  WorkboardCard,
+  WorkboardExecution,
+  WorkboardWorkspace,
+} from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
@@ -10,7 +15,6 @@ import {
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
-import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
@@ -20,7 +24,6 @@ import {
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
-const DEFAULT_DISPATCH_MODEL = "default";
 
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
@@ -90,16 +93,20 @@ function buildExecution(params: {
   card: WorkboardCard;
   sessionKey: string;
   runId: string;
-  model: string;
+  runtime: Awaited<ReturnType<WorkboardSubagentRuntime["run"]>>["runtime"];
   now: number;
 }): WorkboardExecution {
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:codex`,
+    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
     kind: "agent-session",
-    engine: "codex",
     mode: "autonomous",
     status: "running",
-    model: params.model,
+    ...(params.runtime
+      ? {
+          engine: params.runtime.harness,
+          model: `${params.runtime.provider}/${params.runtime.model}`,
+        }
+      : {}),
     sessionKey: params.sessionKey,
     runId: params.runId,
     startedAt: params.now,
@@ -268,7 +275,6 @@ export async function dispatchAndStartWorkboardCards(params: {
   );
   const started: WorkboardStartedRun[] = [];
   const startFailures: WorkboardStartFailure[] = [];
-  const model = params.options?.model?.trim() || DEFAULT_DISPATCH_MODEL;
   const cards = await params.store.list();
   const candidates = await params.store.list({ boardId });
 
@@ -426,7 +432,7 @@ export async function dispatchAndStartWorkboardCards(params: {
           card: claimed.card,
           sessionKey,
           runId: run.runId,
-          model,
+          runtime: run.runtime,
           now,
         }),
         ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),

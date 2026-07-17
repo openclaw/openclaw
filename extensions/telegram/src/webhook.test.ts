@@ -17,14 +17,16 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
   type TelegramSpooledReplaySettlementHold,
 } from "./bot-processing-outcome.js";
-import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
-import { TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS } from "./spooled-update-retry-policy.js";
 import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
+
+const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
 const handleUpdateSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -236,6 +238,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
@@ -1214,6 +1217,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("stops claimed completion retries when the webhook stops", async () => {
+    vi.useFakeTimers();
     let completeAttempts = 0;
     setTelegramRuntime({
       state: {
@@ -1251,7 +1255,7 @@ describe("startTelegramWebhook", () => {
     );
     await started.stop();
     const attemptsAfterStop = completeAttempts;
-    await sleep(400);
+    await vi.advanceTimersByTimeAsync(400);
 
     expect(completeAttempts).toBe(attemptsAfterStop);
   });
@@ -1305,7 +1309,7 @@ describe("startTelegramWebhook", () => {
       await writeTelegramSpooledUpdate({
         spoolDir: requireWebhookSpoolDir(),
         update,
-        now: Date.now() - TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
+        now: Date.now() - telegramSpooledRetryDeadLetterMinAgeMs,
       });
       handleUpdateSpy.mockRejectedValue(new Error("deterministic handler failure"));
 
@@ -1773,3 +1777,4 @@ describe("startTelegramWebhook", () => {
     expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -4,19 +4,19 @@ import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
-import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
-import {
-  implicitMentionKindWhen,
-  resolveInboundMentionDecision,
-} from "../channel-mention-gating.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
   removeAckReactionHandleAfterReply,
   shouldAckReaction,
-} from "../testing.js";
-import type { PluginRuntime } from "../testing.js";
+} from "../../channels/ack-reactions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "../channel-mention-gating.js";
 
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-5.6-sol";
@@ -344,11 +344,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       Surface: params.surface ?? params.provider ?? params.channel,
       OriginatingChannel: params.channel,
       OriginatingTo: params.reply.originatingTo,
-      CommandAuthorized: params.access?.commands
-        ? (params.access.commands.authorized ??
-          params.access.commands.authorizers?.some((entry) => entry.allowed) ??
-          false)
-        : false,
+      CommandAuthorized: params.access?.commands?.authorized ?? false,
       ...params.extra,
       UntrustedStructuredContext: untrustedStructuredContext,
     } as Awaited<BuildContextResult>;
@@ -418,6 +414,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       resolveThinkingDefault: vi.fn(
         () => "off",
       ) as unknown as PluginRuntime["agent"]["resolveThinkingDefault"],
+      resolveCliBackendDispatchEligibility: vi.fn(
+        () => undefined,
+      ) as unknown as PluginRuntime["agent"]["resolveCliBackendDispatchEligibility"],
       normalizeThinkingLevel: vi.fn(
         (raw?: string | null) => raw,
       ) as unknown as PluginRuntime["agent"]["normalizeThinkingLevel"],
@@ -661,6 +660,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             [],
           ) as unknown as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
+        removeAllowFromStoreEntry: vi.fn().mockResolvedValue({
+          changed: false,
+          allowFrom: [],
+        }) as unknown as PluginRuntime["channel"]["pairing"]["removeAllowFromStoreEntry"],
         upsertPairingRequest: vi.fn().mockResolvedValue({
           code: "TESTCODE",
           created: true,
@@ -785,7 +788,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           runtimeContexts.watch,
         ) as unknown as PluginRuntime["channel"]["runtimeContexts"]["watch"],
       },
-      activity: {} as PluginRuntime["channel"]["activity"],
+      activity: {
+        record: vi.fn(),
+        get: vi.fn(() => ({ inboundAt: null, outboundAt: null })),
+      },
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
@@ -804,6 +810,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+      openBlobStore: vi.fn(() => {
+        throw new Error("openBlobStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openBlobStore"],
       openKeyedStore: vi.fn(() => {
         throw new Error("openKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openKeyedStore"],
@@ -864,3 +873,4 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
 
   return mergeDeep(base, overrides);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

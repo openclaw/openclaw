@@ -141,6 +141,12 @@ describe("qa multipass runtime", () => {
     expect(script).toContain("pnpm install --frozen-lockfile");
     expect(script).toContain("pnpm build");
     expect(script).toContain("corepack prepare 'pnpm@");
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/SHASUMS256.txt" -o "${node_tmp_dir}/SHASUMS256.txt"',
+    );
+    expect(script).toContain(
+      'curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 120 "${base_url}/${tarball_name}" -o "${node_tmp_dir}/${tarball_name}"',
+    );
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
     expect(script).toContain("'--provider-mode' 'live-frontier'");
     expect(script).toContain("'--scenario' 'channel-chat-baseline'");

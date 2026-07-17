@@ -126,6 +126,19 @@ describe("Canvas plugin entry", () => {
     vi.clearAllMocks();
   });
 
+  it("allowlists Canvas on every native node platform, including Linux", () => {
+    const { nodeInvokePolicies } = registerCanvas();
+
+    expect(nodeInvokePolicies[0]?.defaultPlatforms).toEqual([
+      "ios",
+      "android",
+      "macos",
+      "windows",
+      "linux",
+      "unknown",
+    ]);
+  });
+
   it("defers Canvas host implementation until a registered route is used", async () => {
     const { routes, services } = registerCanvas();
 
@@ -176,6 +189,7 @@ describe("Canvas plugin entry", () => {
       const tool = (toolFactory as Exclude<typeof toolFactory, AnyAgentTool>)({
         config: {},
         workspaceDir: "/tmp/workspace",
+        sessionKey: "agent:main:canvas",
         sessionId: "session-1",
         agentId: "agent-1",
       });
@@ -192,6 +206,7 @@ describe("Canvas plugin entry", () => {
     expect(mocks.createCanvasTool).toHaveBeenCalledWith({
       config: {},
       workspaceDir: "/tmp/workspace",
+      agentSessionKey: "agent:main:canvas",
     });
     expect(mocks.toolExecute).toHaveBeenCalledWith("tool-call", { action: "hide" });
 
@@ -208,6 +223,13 @@ describe("Canvas plugin entry", () => {
       title: "Status",
       widget_code: "<p>ready</p>",
     });
+
+    const showWidgetRegistration = tools[1];
+    if (!showWidgetRegistration || typeof showWidgetRegistration.tool !== "function") {
+      throw new Error("expected show_widget factory registration");
+    }
+    const discordShowWidget = showWidgetRegistration.tool({ messageChannel: "discord" });
+    expect(discordShowWidget).toBeNull();
   });
 
   it.each([

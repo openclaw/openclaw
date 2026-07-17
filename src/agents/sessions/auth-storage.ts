@@ -11,17 +11,13 @@ import { dirname, join } from "node:path";
 import { findEnvKeys, getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import lockfile from "proper-lockfile";
 import { replaceFileAtomicSync } from "../../infra/replace-file.js";
-import {
-  getOAuthApiKey,
-  getOAuthProvider,
-  getOAuthProviders,
-} from "../../llm/utils/oauth/index.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 import { acquireLockSyncWithRetry } from "./storage-lock.js";
 
@@ -98,9 +94,8 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     this.ensureParentDir();
     this.ensureFileExists();
 
-    let release: (() => void) | undefined;
+    const release = acquireLockSyncWithRetry(this.authPath);
     try {
-      release = acquireLockSyncWithRetry(this.authPath);
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = fn(current);
       if (next !== undefined) {
@@ -108,9 +103,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       }
       return result;
     } finally {
-      if (release) {
-        release();
-      }
+      release();
     }
   }
 
@@ -118,47 +111,31 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     this.ensureParentDir();
     this.ensureFileExists();
 
-    let release: (() => Promise<void>) | undefined;
-    let lockCompromised = false;
     let lockCompromisedError: Error | undefined;
-    const throwIfCompromised = () => {
-      if (lockCompromised) {
-        throw lockCompromisedError ?? new Error("Auth storage lock was compromised");
-      }
-    };
-
+    const release = await lockfile.lock(this.authPath, {
+      retries: {
+        minTimeout: 100,
+        maxTimeout: 10000,
+        randomize: true,
+      },
+      stale: 30000,
+      onCompromised: (err) => {
+        lockCompromisedError = err;
+      },
+    });
     try {
-      release = await lockfile.lock(this.authPath, {
-        retries: {
-          retries: 10,
-          factor: 2,
-          minTimeout: 100,
-          maxTimeout: 10000,
-          randomize: true,
-        },
-        stale: 30000,
-        onCompromised: (err) => {
-          lockCompromised = true;
-          lockCompromisedError = err;
-        },
-      });
-
-      throwIfCompromised();
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = await fn(current);
-      throwIfCompromised();
+      if (lockCompromisedError) {
+        throw lockCompromisedError;
+      }
       if (next !== undefined) {
         this.replaceAuthFileAtomic(next);
       }
-      throwIfCompromised();
       return result;
     } finally {
-      if (release) {
-        try {
-          await release();
-        } catch {
-          // Ignore unlock errors when lock is compromised.
-        }
+      if (!lockCompromisedError) {
+        await release();
       }
     }
   }
@@ -388,7 +365,7 @@ export class AuthStorage {
    * Login to an OAuth provider.
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getOAuthProvider(providerId);
+    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
     if (!provider) {
       throw new Error(`Unknown OAuth provider: ${providerId}`);
     }
@@ -411,7 +388,7 @@ export class AuthStorage {
   private async refreshOAuthTokenWithLock(
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-    const provider = getOAuthProvider(providerId);
+    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
     if (!provider) {
       return null;
     }
@@ -437,7 +414,10 @@ export class AuthStorage {
         }
       }
 
-      const refreshed = await getOAuthApiKey(providerId, oauthCreds);
+      const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
+        providerId,
+        oauthCreds,
+      );
       if (!refreshed) {
         return { result: null };
       }
@@ -480,7 +460,7 @@ export class AuthStorage {
     }
 
     if (cred?.type === "oauth") {
-      const provider = getOAuthProvider(providerId);
+      const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
       if (!provider) {
         // Unknown OAuth provider, can't get API key
         return undefined;
@@ -532,9 +512,9 @@ export class AuthStorage {
   }
 
   /**
-   * Get all registered OAuth providers
+   * Get all OAuth providers registered for this auth/session runtime.
    */
   getOAuthProviders() {
-    return getOAuthProviders();
+    return getAuthStorageOAuthProviderRegistry(this).getAll();
   }
 }

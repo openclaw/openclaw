@@ -859,8 +859,12 @@ function isTrustedOfficialPluginInstall(params: {
           record: installRecord,
         })
       : undefined;
+  // Local npm-pack archives also persist source="npm". Only registry installs
+  // may inherit catalog trust; local artifacts and source links stay untrusted.
   if (
     installRecord.source === "npm" &&
+    installRecord.artifactKind === undefined &&
+    installRecord.sourcePath === undefined &&
     officialInstall?.npmSpec === packageName &&
     [
       installRecord.resolvedName,
@@ -1220,3 +1224,4 @@ export function loadPluginManifestRegistry(
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };
   return registry;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

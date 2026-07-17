@@ -444,7 +444,7 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciStreamTimeoutsMock(...args),
 }));
 
-vi.mock("../../../tts/tts.js", () => ({
+vi.mock("../../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: () => undefined,
 }));
 
@@ -1419,3 +1419,4 @@ export async function createContextEngineAttemptRunner(params: {
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import "./app-host.ts";
 import type {
@@ -57,6 +58,10 @@ type ShellLazySurfaceState = ShellKeyboardState & {
   terminalPanelElement: TestOptionalCustomElement;
 };
 
+type ShellUiCommandState = ShellKeyboardState & {
+  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
+};
+
 let lazyElementSequence = 0;
 
 function createLazyElementSpec(label: string): TestOptionalCustomElement {
@@ -77,6 +82,7 @@ type ShellNavigationState = {
   };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
+  handleNativeToggleSearch: (event: Event) => void;
   handleNativeNewSession: () => void;
   handleNativeHistoryState: (event: Event) => void;
   nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
@@ -403,6 +409,73 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     });
   });
 
+  it("routes UI commands to navigation, panels, and chat fallback", () => {
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    const uiCommandEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = {
+      context: {
+        navigation: { update },
+        gateway: { setSessionKey },
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: { command: { kind: "sidebar", visible: false } },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: {
+          kind: "panel",
+          panel: "terminal",
+          open: true,
+          dock: "right",
+          terminalSessionId: "terminal-agent-1",
+        },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "focus", sessionKey: "agent:main:other" },
+        sessionKey: "agent:main:source",
+      },
+    });
+
+    expect(update).toHaveBeenCalledWith({ navCollapsed: true });
+    expect(panelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: { open: true, dock: "right", terminalSessionId: "terminal-agent-1" },
+      }),
+    );
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:other");
+    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Aother" });
+    expect(uiCommandEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: {
+          command: { kind: "focus", sessionKey: "agent:main:other" },
+          sessionKey: "agent:main:source",
+        },
+      }),
+    );
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+  });
+
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellKeyboardState;
@@ -447,10 +520,11 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("opens search and starts a session from native titlebar events", () => {
     const navigate = vi.fn();
     const openPalette = vi.fn();
+    const togglePalette = vi.fn();
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
     Object.defineProperty(shell, "commandPalette", {
       configurable: true,
-      value: { openPalette },
+      value: { openPalette, togglePalette },
     });
     shell.runtime = {
       context: {
@@ -459,10 +533,32 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       } as unknown as ApplicationContext,
     };
     shell.handleNativeOpenSearch();
+    const toggleEvent = new CustomEvent("openclaw:native-toggle-search", { cancelable: true });
+    shell.handleNativeToggleSearch(toggleEvent);
     shell.handleNativeNewSession();
 
     expect(openPalette).toHaveBeenCalledOnce();
+    expect(togglePalette).toHaveBeenCalledOnce();
+    // preventDefault is the handled signal for the native legacy fallback.
+    expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+  });
+
+  it("retains a native new-session request until a context exists", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+
+    shell.handleNativeNewSession();
+
+    shell.runtime = {
+      context: {
+        navigate,
+        agentSelection: { state: { selectedId: "main" } },
+      } as unknown as ApplicationContext,
+    };
+    shell.handleNativeNewSession();
+
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
   });
 
   it("does not start a native session during onboarding", () => {

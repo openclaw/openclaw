@@ -144,7 +144,7 @@ If the node retries with changed auth details, re-run `openclaw devices list` an
 
 Naming options:
 
-- `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
+- `--display-name` on `openclaw node run` / `openclaw node install` (persists in the shared `node_host_config` SQLite row alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
 ### Node-hosted MCP servers
@@ -231,15 +231,15 @@ operators can ignore skills from every paired node with
 
 ### Headless identity state
 
-The headless node keeps three separate state files:
+The headless node keeps three separate state records:
 
-- `~/.openclaw/node.json`: the legacy client instance ID (stored as `nodeId`), display name, and Gateway connection metadata.
+- `~/.openclaw/state/openclaw.sqlite` (`node_host_config`): the client instance ID, display name, and Gateway connection metadata.
 - `~/.openclaw/identity/device.json`: the signed device keypair and derived cryptographic device ID.
 - `~/.openclaw/identity/device-auth.json`: paired device auth tokens keyed by cryptographic device ID and role.
 
 For a signed node, the Gateway uses the cryptographic device ID for pairing and
 node routing. The client instance ID is only connection metadata. Changing
-`--node-id` or deleting only `node.json` therefore does not reset pairing. See
+`--node-id` or migrating a retired `node.json` therefore does not reset pairing. See
 [Identity and pairing state](/cli/node#identity-and-pairing-state) for the
 supported revoke-and-re-pair flow and upgrade notes.
 
@@ -403,6 +403,12 @@ Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
 
+### Terminal file uploads
+
+The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
+
+Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
 ## Invoking commands
 
 Low-level (raw RPC):
@@ -444,7 +450,7 @@ Default allowlists by platform (before plugin defaults and `allowCommands`/`deny
 
 These rows describe the Gateway policy ceiling, not the commands implemented by every node app. A command is usable only when the connected node also declares it. In particular, the current macOS app does not declare the device and personal-data families listed in the macOS policy row.
 
-`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, and unknown platforms (not Linux); all of them are foreground-restricted on iOS.
+`canvas.*` commands (`canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`) are a plugin default on iOS, Android, macOS, Windows, Linux, and unknown platforms. Linux nodes declare them only when the desktop app's local Canvas socket is present. All Canvas commands are foreground-restricted on iOS.
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
@@ -535,7 +541,7 @@ openclaw nodes canvas eval --node <idOrNameOrIp> --js "document.title"
 
 Notes:
 
-- `canvas present` accepts URLs or local file paths (`--target`), plus optional `--x/--y/--width/--height` for positioning.
+- `canvas present` accepts URLs or local file paths (`--target`) on nodes that support local paths, plus optional `--x/--y/--width/--height` for positioning. Linux Canvas accepts HTTP(S) URLs or its bundled A2UI renderer.
 - `canvas eval` accepts inline JS (`--js`) or a positional arg.
 
 ### A2UI (Canvas)
@@ -548,10 +554,11 @@ openclaw nodes canvas a2ui reset --node <idOrNameOrIp>
 
 Notes:
 
-- Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
+- Mobile and Linux desktop nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
 - macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
+- Linux dispatches actions only from the bundled A2UI page. Other HTTP/HTTPS pages remain render-only, and a headless Linux node without the desktop app does not advertise Canvas.
 
 ## Photos + videos (node camera)
 

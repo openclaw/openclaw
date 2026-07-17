@@ -19,6 +19,10 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import {
+  formatExternalSupervisorActionRequired,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
+import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
@@ -96,6 +100,12 @@ export function mergeInstallInvocationEnv(params: {
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
+    return;
+  }
+  if (isGatewayExternallySupervised()) {
+    fail(
+      `Gateway install blocked: ${formatExternalSupervisorActionRequired("install or rewrite the gateway service")}`,
+    );
     return;
   }
 

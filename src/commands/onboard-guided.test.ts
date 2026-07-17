@@ -90,6 +90,7 @@ function detection(
 ) {
   return {
     candidates: [candidate("claude-cli", "Claude Code")],
+    unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
     workspace: "/tmp/openclaw-workspace",
@@ -102,11 +103,12 @@ function setupDeps(params: {
   prompter: WizardPrompter;
   detect?: GuidedOnboardingDeps["detect"];
   activate?: GuidedOnboardingDeps["activate"];
-  runCrestodianChat?: GuidedOnboardingDeps["runCrestodianChat"];
+  runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
+  runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
 }) {
-  const runCrestodianChat = vi.fn<NonNullable<GuidedOnboardingDeps["runCrestodianChat"]>>(
-    params.runCrestodianChat ?? (async () => {}),
+  const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
+    params.runSystemAgentChat ?? (async () => {}),
   );
   return {
     createPrompter: () => params.prompter,
@@ -120,7 +122,8 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
-    runCrestodianChat,
+    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
+    runSystemAgentChat,
   } satisfies GuidedOnboardingDeps;
 }
 
@@ -174,10 +177,66 @@ describe("runGuidedOnboarding", () => {
     );
     expect(text).not.toHaveBeenCalled();
     expect(select).not.toHaveBeenCalled();
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runCrestodianChat.mock.invocationCallOrder[0]!,
+      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("offers memory import after successful inference using the persisted config", async () => {
+    const persistedConfig: OpenClawConfig = {
+      agents: { defaults: { workspace: "/tmp/persisted-workspace" } },
+    };
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        exists: false,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        issues: [],
+        config: {},
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        issues: [],
+        config: persistedConfig,
+      });
+    const prompter = createWizardPrompter();
+    const runSetupMemoryImportStep = vi.fn(
+      async ({ prompter: stepPrompter }: { prompter: WizardPrompter }) => {
+        await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
+      },
+    );
+    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
+      expect.objectContaining({ config: persistedConfig, prompter }),
+    );
+    const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
+    const appliedIndex = notes.findIndex((call) => call[1] === "Inference ready");
+    const memoryIndex = notes.findIndex((call) => call[1] === "Memories found");
+    expect(appliedIndex).toBeGreaterThanOrEqual(0);
+    expect(memoryIndex).toBeGreaterThan(appliedIndex);
+    expect(runSetupMemoryImportStep.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("shows no memory page when the memory step finds no offers", async () => {
+    const prompter = createWizardPrompter();
+    const runSetupMemoryImportStep = vi.fn(async () => undefined);
+    const deps = setupDeps({ prompter, runSetupMemoryImportStep });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
+    expect((prompter.note as ReturnType<typeof vi.fn>).mock.calls).not.toContainEqual([
+      expect.anything(),
+      "Memories found",
+    ]);
   });
 
   it("persists the one-time risk acknowledgement before inference detection", async () => {
@@ -196,7 +255,7 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("uses the configured workspace only as inference and Crestodian context", async () => {
+  it("uses the configured workspace only as inference and OpenClaw context", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: true,
@@ -215,7 +274,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/configured" }),
     );
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/configured", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/configured", runtime, true);
   });
 
   it("uses the default workspace as context when none is configured", async () => {
@@ -230,7 +289,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/openclaw-workspace" }),
     );
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/openclaw-workspace", runtime, true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/openclaw-workspace", runtime, true);
   });
 
   it("live-tests an unverified CLI before automatic setup", async () => {
@@ -349,7 +408,7 @@ describe("runGuidedOnboarding", () => {
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(deps.runCrestodianChat).toHaveBeenCalledOnce();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
   });
 
   it("falls through after an auth failure and surfaces both outcomes", async () => {
@@ -424,7 +483,7 @@ describe("runGuidedOnboarding", () => {
         ],
       }),
     );
-    expect(deps.runCrestodianChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -549,7 +608,7 @@ describe("runGuidedOnboarding", () => {
       expect.objectContaining({ includeSkip: true }),
     );
     expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
@@ -569,7 +628,7 @@ describe("runGuidedOnboarding", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
-    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("No inference option is available yet"),
@@ -577,18 +636,18 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("keeps Crestodian unavailable until a manual key passes", async () => {
+  it("keeps OpenClaw unavailable until a manual key passes", async () => {
     promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     const text = vi.fn().mockResolvedValueOnce("bad-key").mockResolvedValueOnce("good-key");
     const prompter = createWizardPrompter({
       text: text as WizardPrompter["text"],
       confirm: vi.fn(async () => false),
     });
-    const runCrestodianChat = vi.fn(async () => {});
+    const runSystemAgentChat = vi.fn(async () => {});
     const activate = vi
       .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
       .mockImplementationOnce(async () => {
-        expect(runCrestodianChat).not.toHaveBeenCalled();
+        expect(runSystemAgentChat).not.toHaveBeenCalled();
         return { ok: false, status: "auth", error: "bad key" };
       })
       .mockResolvedValueOnce({
@@ -606,7 +665,7 @@ describe("runGuidedOnboarding", () => {
         }),
       ),
       activate,
-      runCrestodianChat,
+      runSystemAgentChat,
     });
     const runtime = makeRuntime();
 
@@ -614,23 +673,23 @@ describe("runGuidedOnboarding", () => {
 
     expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(runCrestodianChat).toHaveBeenCalledOnce();
+    expect(runSystemAgentChat).toHaveBeenCalledOnce();
   });
 
-  it("opens Crestodian chat with the explicit workspace after activation", async () => {
+  it("opens OpenClaw chat with the explicit workspace after activation", async () => {
     const text = vi.fn(async () => "unexpected");
     const prompter = createWizardPrompter({ text });
-    const runCrestodianChat = vi.fn(async () => {});
+    const runSystemAgentChat = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
-      runCrestodianChat,
+      runSystemAgentChat,
     });
     const runtime = makeRuntime();
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(text).not.toHaveBeenCalled();
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -667,12 +726,12 @@ describe("runGuidedOnboarding", () => {
       expect.stringContaining("openclaw config validate"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(deps.runCrestodianChat).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });
 
-  it("converges remote inference before remote Crestodian without mutating local config", async () => {
+  it("converges remote inference before remote OpenClaw without mutating local config", async () => {
     const localConfig = {
       wizard: { securityAcknowledgedAt: "2026-07-11T00:00:00.000Z" },
       agents: {
@@ -704,7 +763,7 @@ describe("runGuidedOnboarding", () => {
       expect(options.ignoreEnvUrlOverride).toBe(true);
       expect(options.config?.gateway?.remote?.url).toBe("wss://selected.example/ws");
       order.push(options.method);
-      if (options.method === "crestodian.setup.detect") {
+      if (options.method === "openclaw.setup.detect") {
         return {
           candidates: [
             {
@@ -729,7 +788,7 @@ describe("runGuidedOnboarding", () => {
           setupComplete: false,
         };
       }
-      if (options.method === "crestodian.setup.activate") {
+      if (options.method === "openclaw.setup.activate") {
         expect(options.params).toEqual({
           kind: "claude-cli",
           modelRef: "claude-cli/opus",
@@ -743,11 +802,11 @@ describe("runGuidedOnboarding", () => {
           lines: ["Default model: claude-cli/opus"],
         };
       }
-      if (options.method === "crestodian.setup.verify") {
+      if (options.method === "openclaw.setup.verify") {
         expect(remoteConfig.modelRef).toBe("claude-cli/opus");
         return { ok: true, modelRef: remoteConfig.modelRef, latencyMs: 100 };
       }
-      if (options.method === "crestodian.chat") {
+      if (options.method === "openclaw.chat") {
         expect(remoteConfig.modelRef).toBe("claude-cli/opus");
         expect(options.params).toEqual({
           sessionId: expect.any(String),
@@ -800,10 +859,10 @@ describe("runGuidedOnboarding", () => {
     );
 
     expect(order).toEqual([
-      "crestodian.setup.detect",
-      "crestodian.setup.activate",
-      "crestodian.setup.verify",
-      "crestodian.chat",
+      "openclaw.setup.detect",
+      "openclaw.setup.activate",
+      "openclaw.setup.verify",
+      "openclaw.chat",
       "tui",
     ]);
     expect(remoteConfig.modelRef).toBe("claude-cli/opus");

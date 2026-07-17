@@ -16,6 +16,8 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
+        case 4:
+            self.memoryImportPage(contentHeight: contentHeight)
         case 5:
             self.permissionsPage(contentHeight: contentHeight)
         case 9:
@@ -147,7 +149,7 @@ extension OnboardingView {
         .disabled(self.installingCLI)
         .onChange(of: self.state.connectionMode) { _, newValue in
             // The root view's mode observer calls handleConnectionModeChange(), which
-            // retires route-owned AI/Crestodian state. This nested observer owns probe copy only.
+            // retires route-owned AI/OpenClaw state. This nested observer owns probe copy only.
             guard Self.shouldResetRemoteProbeFeedback(
                 for: newValue,
                 suppressReset: self.suppressRemoteProbeReset)

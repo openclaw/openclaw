@@ -12,6 +12,7 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  type AgentPlanStep,
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -165,13 +166,6 @@ type MatrixDraftStreamHandle = {
   reset: () => void;
 };
 
-export class MatrixRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "MatrixRetryableInboundError";
-  }
-}
-
 async function redactMatrixDraftEvent(
   client: MatrixClient,
   roomId: string,
@@ -218,7 +212,7 @@ type MatrixMonitorHandlerParams = {
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
+  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -583,7 +577,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let claimedInboundEvent = false;
+    let inboundReplayClaim:
+      | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
+      | undefined;
     let draftStreamRef: MatrixDraftStreamHandle | undefined;
     let draftConsumed = false;
     try {
@@ -620,11 +616,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       const commitInboundEventIfClaimed = async () => {
-        if (!claimedInboundEvent || !inboundDeduper || !eventId) {
+        if (!inboundReplayClaim) {
           return;
         }
-        await inboundDeduper.commitEvent({ roomId, eventId });
-        claimedInboundEvent = false;
+        await inboundReplayClaim.commit();
+        inboundReplayClaim = undefined;
       };
       const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
@@ -670,8 +666,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
-          if (!claimedInboundEvent) {
+          const claim = await inboundDeduper.claim({ roomId, eventId });
+          // Missing identifiers fail open; committed and in-flight events do not.
+          if (claim.kind === "claimed") {
+            inboundReplayClaim = claim.handle;
+          } else if (claim.kind !== "invalid") {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
           }
@@ -1713,7 +1712,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
-      let retryableReplyDeliveryFailed = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: _route.agentId,
@@ -1787,13 +1785,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
       let previewToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
+      let latestPlan: AgentPlanStep[] | undefined;
+      let latestPlanExplanation: string | undefined;
       const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
       const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
       // so subsequent finals go through normal delivery.
 
       const renderProgressDraft = () => {
-        if (!draftStream || !progressDraftStreaming) {
+        if (!draftStream) {
           return;
         }
         const previewText = formatChannelProgressDraftText({
@@ -1802,6 +1802,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           seed: progressSeed,
           formatLine: formatMatrixToolProgressMarkdownCode,
           bullet: "-",
+          narration: latestPlanExplanation,
+          plan: latestPlan,
         });
         if (!previewText) {
           return;
@@ -1845,6 +1847,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               seed: progressSeed,
               formatLine: formatMatrixToolProgressMarkdownCode,
               bullet: "-",
+              narration: latestPlanExplanation,
+              plan: latestPlan,
             }),
           );
           return;
@@ -1865,17 +1869,41 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       };
 
+      const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
+        latestPlan = steps?.length ? steps.map((entry) => ({ ...entry })) : undefined;
+        latestPlanExplanation = explanation?.replace(/\s+/g, " ").trim() || undefined;
+        if (!draftStream || previewToolProgressSuppressed) {
+          return;
+        }
+        if (!progressDraftStreaming) {
+          renderProgressDraft();
+          return;
+        }
+        const alreadyStarted = progressDraftGate.hasStarted;
+        await progressDraftGate.startNow();
+        if (alreadyStarted && progressDraftGate.hasStarted) {
+          // An empty-render clear keeps the prior draft visible on purpose:
+          // deleting mid-turn drops the edit anchor, and zero-step snapshots
+          // only arrive from label:false configs with retracting producers.
+          renderProgressDraft();
+        }
+      };
+
       const suppressPreviewToolProgressForAnswerText = (text: string | undefined) => {
         if (!text?.trim()) {
           return;
         }
         previewToolProgressSuppressed = true;
         previewToolProgressLines = [];
+        latestPlan = undefined;
+        latestPlanExplanation = undefined;
       };
 
       const resetPreviewToolProgress = () => {
         previewToolProgressSuppressed = false;
         previewToolProgressLines = [];
+        latestPlan = undefined;
+        latestPlanExplanation = undefined;
       };
 
       const buildPreviewToolProgressReplyOptions = (): Partial<GetReplyOptions> => {
@@ -1929,15 +1957,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             if (payload.phase !== "update") {
               return;
             }
-            await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
-                event: "plan",
-                phase: payload.phase,
-                title: payload.title,
-                explanation: payload.explanation,
-                steps: payload.steps,
-              }),
-            );
+            await pushPlanProgress(payload.planSteps, payload.explanation);
           },
           onApprovalEvent: async (payload) => {
             if (payload.phase !== "requested") {
@@ -2050,6 +2070,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         currentDraftMessageGeneration += 1;
         currentDraftBlockOffset = 0;
         latestDraftFullText = "";
+      };
+
+      const resetDraftDeliveryState = async () => {
+        await draftStream?.discardPending();
+        draftStream?.reset();
+        draftConsumed = false;
+        currentDraftMessageGeneration = 0;
+        currentDraftBlockOffset = 0;
+        latestDraftFullText = "";
+        pendingDraftBoundaries.length = 0;
+        latestQueuedDraftBoundaryOffsets.clear();
+        currentDraftReplyToId = draftReplyToId;
+        progressDraftGate.reset();
+        resetPreviewToolProgress();
       };
 
       const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -2321,9 +2355,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             }
           },
           onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
-            if (err instanceof MatrixRetryableInboundError) {
-              retryableReplyDeliveryFailed = true;
-            }
             if (info.kind === "final") {
               finalReplyDeliveryFailed = true;
             } else {
@@ -2492,6 +2523,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                               resetPreviewToolProgress();
                             }
                           : undefined,
+                        onQueuedFollowupAdmitted: draftStream ? resetDraftDeliveryState : undefined,
                         ...buildPreviewToolProgressReplyOptions(),
                         onModelSelected,
                       },
@@ -2518,13 +2550,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
       if (finalReplyDeliveryFailed) {
-        if (retryableReplyDeliveryFailed) {
-          logVerboseMessage(
-            `matrix: final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
-          );
-          // Explicit retryable failures reopen replay so the same history can be retried.
-          return;
-        }
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
@@ -2532,13 +2557,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
       if (!queuedFinal && nonFinalReplyDeliveryFailed) {
-        if (retryableReplyDeliveryFailed) {
-          logVerboseMessage(
-            `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; leaving event uncommitted`,
-          );
-          // Explicit retryable failures reopen replay.
-          return;
-        }
         logVerboseMessage(
           `matrix: non-final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
@@ -2577,9 +2595,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }
-      if (claimedInboundEvent && inboundDeduper && eventId) {
-        inboundDeduper.releaseEvent({ roomId, eventId });
-      }
+      inboundReplayClaim?.release();
     }
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

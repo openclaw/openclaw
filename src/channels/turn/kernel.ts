@@ -39,7 +39,6 @@ export {
 export type {
   DurableInboundReplyDeliveryOptions,
   DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
 } from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
@@ -793,3 +792,4 @@ async function runChannelTurn<
 }
 
 export const runChannelInboundEvent = runChannelTurn;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

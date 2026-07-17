@@ -7,12 +7,15 @@ export type SessionCreateOutcome = {
 };
 
 export type SessionCreateParams = {
+  key?: string;
   agentId?: string;
+  catalogId?: string;
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;
@@ -24,6 +27,8 @@ export type SessionCreateParams = {
   cwd?: string;
   /** First message; the gateway creates the session and starts the run in one call. */
   message?: string;
+  /** Attachments for the first message, using the chat.send wire format. */
+  attachments?: unknown[];
   task?: string;
 };
 

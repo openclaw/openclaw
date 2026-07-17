@@ -134,6 +134,24 @@ export const zh_TW = {
       sourcePathHint: "下一步輸入來源路徑",
       targetWorkspace: "目標工作區目錄",
     },
+    memoryImport: {
+      applyFailed:
+        "{label} memory 匯入失敗：{reason}\n請在儀表板的 Memory 匯入頁面（設定 → 匯入 Memory）重試。",
+      confirm: "將這些 memory 匯入你的 OpenClaw 工作區？",
+      conflictSuffix: "，{count} 個已匯入",
+      errorTitle: "Memory 匯入失敗",
+      failureLine: "{label} 失敗：{reason}。請在 Memory 匯入頁面重試。",
+      imported: "已匯入 {label} memory",
+      importFailed: "無法匯入 {label} memory",
+      importing: "正在匯入 {label} memory...",
+      offerLine: "{label} — {source}（{count} 個 memory{conflictSuffix}）",
+      partialFailure: "{count} 個 memory 項失敗",
+      selectSources: "選擇要匯入的 memory 來源",
+      skipHint: "稍後可在儀表板的 Memory 匯入頁面（設定 → 匯入 Memory）匯入。",
+      summaryLine: "{label}：已遷移 {migrated}，已略過 {skipped} → {target}",
+      summaryTitle: "Memory 匯入摘要",
+      title: "發現 memory",
+    },
     plugins: {
       configureBackHint: "返回分區選單",
       configureEmpty: "沒有找到帶可設定欄位的插件。",
@@ -259,7 +277,7 @@ export const zh_TW = {
       invalidConfigUnknown: "- 無法解析設定。",
       manualChoice: "你想如何連接 AI？",
       nextSteps:
-        "工作區：{workspace}\n新增頻道：`openclaw channels add`\n偏好聊天？執行 `openclaw crestodian`，然後說 `connect telegram`（或 `connect slack`）。\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
+        "工作區：{workspace}\n新增頻道：`openclaw channels add`\n偏好聊天？執行 `openclaw setup`，然後說 `connect telegram`（或 `connect slack`）。\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
       nextStepsWithoutAi:
         "工作區：{workspace}\n稍後新增 AI：重新執行 `openclaw onboard`\n連接 AI 後新增頻道：`openclaw channels add`\n開啟 dashboard：`openclaw dashboard`",
       nextStepsTitle: "下一步",
@@ -272,6 +290,8 @@ export const zh_TW = {
       testFailed: "AI 檢查失敗。",
       testFailure: "✗ {label}：{reason}\n{detail}",
       testPassed: "AI 檢查通過。",
+      unavailableTitle: "已偵測到但未自動測試",
+      unavailableCandidate: "{label} — {detail}。{reason}",
       testingCandidate: "正在測試 {label}（{modelRef}）— 真實 completion，並非 ping…",
       testingManualProvider: "正在測試 {label} — 真實 completion，並非 ping…",
       tryCandidate: "嘗試 {label}（{detail}）",
@@ -621,6 +641,25 @@ export const zh_TW = {
       helpBotMember: "提示：bot 必須加入任何你希望它監控的頻道。",
       helpCreateBot: "2) 建立 bot 並複製它的 token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
+    },
+    clickclack: {
+      baseUrlPrompt: "ClickClack 伺服器 URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "輸入 ClickClack bot token",
+      botTokenKeep: "ClickClack bot token 已設定。保留目前值？",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed: "連線檢查失敗：{error}。設定已儲存；修正連線後重新執行設定。",
+      connectionTitle: "ClickClack 連線",
+      connected: "已連線為 @{handle} — 工作區 {workspace} 已解析。",
+      envPrompt: "偵測到 CLICKCLACK_BOT_TOKEN。使用環境變數？",
+      helpCreateToken:
+        "在 ClickClack 中：工作區設定 → Integrations → OpenClaw → 建立 bot → 複製 token",
+      invalidToken: "ClickClack 拒絕了 bot token（401）。複製目前 token 後重新執行設定。",
+      validationWarningTitle: "ClickClack 連線檢查",
+      workspaceHelp: "可使用 wsp_… ID、工作區 slug 或顯示名稱。",
+      workspaceNotFound:
+        "找不到工作區「{workspace}」。請檢查 ID、slug 或名稱，列出可用工作區後重新執行設定。",
+      workspacePrompt: "工作區（ID、slug 或名稱）",
     },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom（使用者 ID）",

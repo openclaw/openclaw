@@ -1,15 +1,15 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
+import type { RuntimeEnv } from "../runtime.js";
 // Guided onboarding: detect AI access, live-test it, then persist only a working route.
 import type {
   ActivateSetupInferenceResult,
   SetupInferenceCandidate,
   SetupInferenceDetection,
   SetupInferenceFailureStatus,
-} from "../crestodian/setup-inference.js";
-import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
-import type { RuntimeEnv } from "../runtime.js";
+} from "../system-agent/setup-inference.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
@@ -22,19 +22,21 @@ import {
 import type { OnboardOptions } from "./onboard-types.js";
 
 type ActivateSetupInference =
-  typeof import("../crestodian/setup-inference.js").activateSetupInference;
-type DetectSetupInference = typeof import("../crestodian/setup-inference.js").detectSetupInference;
+  typeof import("../system-agent/setup-inference.js").activateSetupInference;
+type DetectSetupInference =
+  typeof import("../system-agent/setup-inference.js").detectSetupInference;
 
 export type GuidedOnboardingDeps = {
   detect?: DetectSetupInference;
   activate?: ActivateSetupInference;
-  runCrestodianChat?: (
+  runSystemAgentChat?: (
     workspace: string,
     runtime: RuntimeEnv,
     acceptRisk: boolean,
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<void>;
+  runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
 };
 
 type GuidedOnboardingHandoff = { workspace: string };
@@ -43,14 +45,14 @@ type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
   | { kind: "failure" };
 
-async function openCrestodianChat(
+async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
   workspace: string,
   runtime: RuntimeEnv,
   acceptRisk: boolean,
 ): Promise<void> {
   const runChat =
-    deps.runCrestodianChat ??
+    deps.runSystemAgentChat ??
     (async (setupWorkspace: string, chatRuntime: RuntimeEnv, riskAccepted: boolean) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
       await runConversationalOnboarding(
@@ -333,8 +335,8 @@ async function runGuidedOnboardingFlow(
     await (deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement)(acknowledgedConfig);
   }
 
-  // Inference is the only prerequisite for Crestodian. Use the caller's or
-  // current default workspace as isolated probe context; Crestodian owns any
+  // Inference is the only prerequisite for OpenClaw. Use the caller's or
+  // current default workspace as isolated probe context; OpenClaw owns any
   // workspace choice and persistence after the live completion succeeds.
   const workspace = resolveUserPath(
     opts.workspace?.trim() ||
@@ -343,7 +345,7 @@ async function runGuidedOnboardingFlow(
   );
 
   const detect =
-    deps.detect ?? (await import("../crestodian/setup-inference.js")).detectSetupInference;
+    deps.detect ?? (await import("../system-agent/setup-inference.js")).detectSetupInference;
   const detectionProgress = prompter.progress(t("wizard.guided.detecting"));
   const detection = await detect();
   detectionProgress.stop(t("wizard.guided.detected"));
@@ -358,9 +360,19 @@ async function runGuidedOnboardingFlow(
     );
     await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
   }
+  if (detection.unavailableCandidates.length > 0) {
+    const unavailable = detection.unavailableCandidates.map((candidate) =>
+      t("wizard.guided.unavailableCandidate", {
+        label: candidate.label,
+        detail: candidate.detail,
+        reason: candidate.reason,
+      }),
+    );
+    await prompter.note(unavailable.join("\n"), t("wizard.guided.unavailableTitle"));
+  }
 
   const activate =
-    deps.activate ?? (await import("../crestodian/setup-inference.js")).activateSetupInference;
+    deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
   const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
   let resultLines: string[] | undefined;
   // Logged-out CLIs stay visible as manual choices, but auto-testing them would
@@ -398,6 +410,14 @@ async function runGuidedOnboardingFlow(
   }
 
   await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
+  const persistedSnapshot = await readConfigFileSnapshot();
+  const persistedConfig = persistedSnapshot.valid
+    ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
+    : acknowledgedConfig;
+  const runMemoryImport =
+    deps.runSetupMemoryImportStep ??
+    (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
+  await runMemoryImport({ config: persistedConfig, prompter, runtime });
   return { workspace };
 }
 
@@ -418,7 +438,7 @@ export async function runGuidedOnboarding(
   const handoff = state.handoff;
   if (handoff) {
     // The live completion makes conversational setup safe. Start only after
-    // the wizard lifecycle restores stdin so Crestodian receives a clean TTY.
-    await openCrestodianChat(deps, handoff.workspace, runtime, true);
+    // the wizard lifecycle restores stdin so OpenClaw receives a clean TTY.
+    await openSystemAgentChat(deps, handoff.workspace, runtime, true);
   }
 }

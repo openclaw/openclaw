@@ -16,28 +16,6 @@ const DEFAULT_INPUTS = {
   rerun_group: "all",
   reuse_evidence: "true",
 };
-const WORKFLOW_RUN_CHECK_SUITE_QUERY = `
-query($owner: String!, $repo: String!, $oid: GitObjectID!, $after: String) {
-  repository(owner: $owner, name: $repo) {
-    object(oid: $oid) {
-      ... on Commit {
-        checkSuites(first: 100, after: $after) {
-          nodes {
-            status
-            conclusion
-            workflowRun {
-              url
-            }
-          }
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-        }
-      }
-    }
-  }
-}`;
 
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
@@ -123,8 +101,16 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--") {
-      for (const extra of argv.slice(i + 1)) {
-        const assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+      const extras = argv.slice(i + 1);
+      for (let extraIndex = 0; extraIndex < extras.length; extraIndex += 1) {
+        const extra = extras[extraIndex];
+        let assignment;
+        if (extra === "-f") {
+          assignment = readOptionValue(extras, extraIndex, extra);
+          extraIndex += 1;
+        } else {
+          assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
+        }
         const [key, ...valueParts] = assignment.split("=");
         if (!key || valueParts.length === 0) {
           throw new Error(`Unsupported extra argument after --: ${extra}`);
@@ -157,6 +143,12 @@ export function parseArgs(argv) {
 
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
+  }
+  if (
+    Object.hasOwn(args.inputs, "allow_unreleased_changelog") &&
+    !["true", "false"].includes(args.inputs.allow_unreleased_changelog)
+  ) {
+    throw new Error("allow_unreleased_changelog must be true or false");
   }
   if (
     args.inputs.release_profile &&
@@ -268,50 +260,19 @@ function findLatestRunId(branch, sha) {
   return match?.databaseId ? String(match.databaseId) : "";
 }
 
-export function selectWorkflowRunCheckSuite(nodes, parentRunId) {
+function readWorkflowRun(parentRunId, workflowSha) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
   }
-  const expectedUrl = `https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`;
-  return nodes.find((node) => node?.workflowRun?.url === expectedUrl);
-}
-
-function readWorkflowRunCheckSuite(parentRunId, workflowSha) {
-  let after;
-  for (let page = 0; page < 20; page += 1) {
-    const queryArgs = [
-      "api",
-      "graphql",
-      "-F",
-      "owner=openclaw",
-      "-F",
-      "repo=openclaw",
-      "-F",
-      `oid=${workflowSha}`,
-      "-f",
-      `query=${WORKFLOW_RUN_CHECK_SUITE_QUERY}`,
-    ];
-    if (after) {
-      queryArgs.push("-F", `after=${after}`);
-    }
-    const response = JSON.parse(run("gh", queryArgs));
-    const checkSuites = response?.data?.repository?.object?.checkSuites;
-    if (!checkSuites || !Array.isArray(checkSuites.nodes)) {
-      throw new Error("GraphQL response did not include commit check suites");
-    }
-    const match = selectWorkflowRunCheckSuite(checkSuites.nodes, parentRunId);
-    if (match) {
-      return match;
-    }
-    if (!checkSuites.pageInfo?.hasNextPage) {
-      return undefined;
-    }
-    after = checkSuites.pageInfo.endCursor;
-    if (!after) {
-      throw new Error("GraphQL check-suite pagination omitted its end cursor");
-    }
+  const workflowRun = JSON.parse(
+    run("gh", ["api", `repos/openclaw/openclaw/actions/runs/${parentRunId}`]),
+  );
+  if (workflowRun.head_sha !== workflowSha) {
+    throw new Error(
+      `Full Release Validation run ${parentRunId} head ${String(workflowRun.head_sha)} does not match trusted workflow SHA ${workflowSha}`,
+    );
   }
-  throw new Error("Full Release Validation check suite was not found within 20 pages");
+  return workflowRun;
 }
 
 function waitForWorkflowRun(parentRunId, workflowSha) {
@@ -320,7 +281,7 @@ function waitForWorkflowRun(parentRunId, workflowSha) {
   for (let attempt = 0; attempt < 480; attempt += 1) {
     let suite;
     try {
-      suite = readWorkflowRunCheckSuite(parentRunId, workflowSha);
+      suite = readWorkflowRun(parentRunId, workflowSha);
       consecutiveErrors = 0;
     } catch (error) {
       consecutiveErrors += 1;
@@ -331,15 +292,13 @@ function waitForWorkflowRun(parentRunId, workflowSha) {
       console.warn(`Parent run status query failed; retrying: ${message}`);
     }
 
-    const summary = suite
-      ? `${String(suite.status).toLowerCase()}/${String(suite.conclusion ?? "pending").toLowerCase()}`
-      : "awaiting-check-suite";
+    const summary = `${String(suite?.status ?? "pending").toLowerCase()}/${String(suite?.conclusion ?? "pending").toLowerCase()}`;
     if (summary !== lastSummary) {
       console.log(`Parent run status: ${summary}`);
       lastSummary = summary;
     }
-    if (suite?.status === "COMPLETED") {
-      if (suite.conclusion === "SUCCESS") {
+    if (suite?.status === "completed") {
+      if (suite.conclusion === "success") {
         return;
       }
       throw new Error(
@@ -407,6 +366,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
   args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);

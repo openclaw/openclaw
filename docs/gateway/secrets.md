@@ -28,6 +28,10 @@ Plaintext credentials remain agent-readable if they sit in files the agent can i
 
 This keeps secret-provider outages off hot request paths.
 
+<Note>
+Target policy for the SecretRef ownership-isolation migration: failures isolate to the smallest known owner. Only unavailable Gateway ingress protection, structurally invalid config, or unknown ownership will block startup; other affected capabilities, accounts, or routes will become configured-unavailable with typed redacted diagnostics and no implicit credential fallback. Reload will retain last-known-good only for an unchanged ref and provider, while a changed unresolved ref will make that owner cold. Doctor and status will list every degraded owner. This migration is not fully implemented; the current activation rules on this page remain in effect.
+</Note>
+
 ## Egress-time injection (sentinels)
 
 For model-provider credentials backed by SecretRefs, OpenClaw mints an opaque, process-local sentinel during model-auth resolution. Auth storage, stream options, SDK configuration, logs, error objects, and most runtime introspection therefore see a value such as `oc-sent-v1-...`, not the provider credential. The guarded model fetch and managed local-provider health probes replace known sentinels in URL and header values immediately before each request leaves the process.

@@ -145,6 +145,11 @@ type AgentHarnessRunCapability = {
   label: string;
   pluginId?: string;
   /**
+   * Exhaustive provider ids eligible for automatic selection. Omitting this hint preserves
+   * dynamic probing; an empty list marks an explicit-only harness.
+   */
+  autoSelection?: { providerIds: readonly string[] };
+  /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
    */
@@ -196,12 +201,29 @@ type AgentHarnessAuthBindingCapability = {
   };
 };
 
+type AgentHarnessProviderUsageCapability = {
+  /**
+   * Contributes runtime-owned quota data without registering a text provider.
+   * Provider usage hooks remain authoritative when both surfaces exist.
+   */
+  fetchUsageSnapshot?: (
+    ctx: import("../../plugins/provider-runtime.types.js").ProviderFetchUsageSnapshotContext,
+  ) =>
+    | Promise<
+        import("../../infra/provider-usage.types.js").ProviderUsageSnapshot | null | undefined
+      >
+    | import("../../infra/provider-usage.types.js").ProviderUsageSnapshot
+    | null
+    | undefined;
+};
+
 export type AgentHarness = AgentHarnessRunCapability &
   AgentHarnessSideQuestionCapability &
   AgentHarnessClassificationCapability &
   AgentHarnessCompactionCapability &
   AgentHarnessRuntimeArtifactCapability &
   AgentHarnessAuthBindingCapability &
+  AgentHarnessProviderUsageCapability &
   AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {
