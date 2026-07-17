@@ -60,15 +60,19 @@ function normalizeInterfaceName(name: unknown): string {
   return typeof name === "string" ? name.trim().toLowerCase() : "";
 }
 
-function normalizeMetric(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+function normalizeMetric(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
   }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^\d+$/u.test(trimmed)) {
+      return null;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isSafeInteger(parsed) ? parsed : null;
   }
-  return 0;
+  return null;
 }
 
 function listAdvertisedLanHostCandidates(
@@ -131,6 +135,9 @@ function parseWindowsDefaultRouteHints(stdout: string): AdvertisedLanRouteHint[]
     if (interfaceName) {
       const routeMetric = normalizeMetric(route.RouteMetric);
       const interfaceMetric = normalizeMetric(route.InterfaceMetric);
+      if (routeMetric === null || interfaceMetric === null) {
+        continue;
+      }
       rankedRows.push({
         interfaceName,
         effectiveMetric: routeMetric + interfaceMetric,

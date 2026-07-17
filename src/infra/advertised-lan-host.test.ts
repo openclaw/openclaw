@@ -77,6 +77,31 @@ describe("advertised LAN host", () => {
     );
   });
 
+  it("does not truncate malformed Windows route metrics", async () => {
+    const runner = createRouteRunner(
+      JSON.stringify([
+        { InterfaceAlias: "Ethernet", RouteMetric: "1abc", InterfaceMetric: 1 },
+        { InterfaceAlias: "Ethernet 3", RouteMetric: 0.5, InterfaceMetric: 0 },
+        { InterfaceAlias: "Ethernet 4", RouteMetric: null, InterfaceMetric: "" },
+        { InterfaceAlias: "Ethernet 2", RouteMetric: "10", InterfaceMetric: "1" },
+      ]),
+    );
+
+    await expect(
+      resolveAdvertisedLanHost({
+        platform: "win32",
+        runCommandWithTimeout: runner,
+        networkInterfaces: () =>
+          ({
+            Ethernet: [ipv4("10.37.129.4")],
+            "Ethernet 2": [ipv4("10.211.55.3")],
+            "Ethernet 3": [ipv4("192.168.1.20")],
+            "Ethernet 4": [ipv4("192.168.2.20")],
+          }) as NetworkInterfacesSnapshot,
+      }),
+    ).resolves.toBe("10.211.55.3");
+  });
+
   it("falls back to interface order when Linux route hints do not match", async () => {
     await expect(
       resolveAdvertisedLanHost({
