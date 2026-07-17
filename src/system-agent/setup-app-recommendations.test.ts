@@ -81,6 +81,25 @@ describe("setup app recommendation candidates", () => {
   });
 });
 
+describe("official catalog candidates", () => {
+  it("produces channel candidates from the real package-shaped catalogs", async () => {
+    // Regression: real catalog entries carry no top-level id; keying by it
+    // used to collapse the whole catalog and drop every official candidate.
+    const groups = await gatherSetupAppCandidates({
+      apps: [{ label: "Discord" }, { label: "WhatsApp" }],
+      deps: { searchSkills: async () => [] },
+    });
+    const discord = groups.find((group) => group.app.label === "Discord");
+    const whatsapp = groups.find((group) => group.app.label === "WhatsApp");
+    expect(discord?.candidates).toContainEqual(
+      expect.objectContaining({ id: "discord", source: "official-channel" }),
+    );
+    expect(whatsapp?.candidates).toContainEqual(
+      expect.objectContaining({ id: "whatsapp", source: "official-channel" }),
+    );
+  });
+});
+
 describe("setup app recommendation matcher", () => {
   const inventorySource = async () => [{ label: "Notes", bundleId: "com.example.notes" }];
   const candidateDeps = {

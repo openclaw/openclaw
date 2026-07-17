@@ -230,16 +230,24 @@ export async function gatherSetupAppCandidates(params: {
   const channels = deps.listChannels?.() ?? listOfficialExternalChannelCatalogEntries();
   const providers = deps.listProviders?.() ?? listOfficialExternalProviderCatalogEntries();
   const allEntries = deps.listPlugins?.() ?? listOfficialExternalPluginCatalogEntries();
-  const channelIds = new Set(channels.map((entry) => entry.id));
-  const providerIds = new Set(providers.map((entry) => entry.id));
+  // Catalog entries are package manifests without a stable top-level `id`;
+  // key everything by the resolved plugin id or the map collapses to one
+  // undefined-keyed entry and no official candidate is ever produced.
+  const entryKey = (entry: OfficialExternalPluginCatalogEntry): string | undefined =>
+    resolveOfficialExternalPluginId(entry) ?? entry.name;
+  const channelIds = new Set(channels.map(entryKey));
+  const providerIds = new Set(providers.map(entryKey));
   const entriesById = new Map(
-    [...allEntries, ...channels, ...providers].map((entry) => [entry.id, entry] as const),
+    [...allEntries, ...channels, ...providers].flatMap((entry) => {
+      const key = entryKey(entry);
+      return key ? ([[key, entry]] as const) : [];
+    }),
   );
-  const officialEntries = [...entriesById.values()].map((entry) => ({
+  const officialEntries = [...entriesById.entries()].map(([key, entry]) => ({
     entry,
-    source: channelIds.has(entry.id)
+    source: channelIds.has(key)
       ? ("official-channel" as const)
-      : providerIds.has(entry.id)
+      : providerIds.has(key)
         ? ("official-provider" as const)
         : ("official-plugin" as const),
   }));
