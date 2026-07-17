@@ -1355,7 +1355,9 @@ describe("amazon-bedrock provider plugin", () => {
         role: string;
         content: Array<Record<string, unknown>>;
       }>;
-      expect(messages[0].content[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(expectDefined(messages[0], "cached user message").content[1]).toEqual({
+        cachePoint: { type: "default" },
+      });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
       expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
     });
