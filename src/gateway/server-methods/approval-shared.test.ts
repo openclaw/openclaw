@@ -434,6 +434,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     const decisionPromise = manager.register(record, 60_000);
     const respond = vi.fn();
+    const getApprovalClientConnIds = vi.fn(() => new Set<string>());
     const requestPromise = handlePendingApprovalRequest({
       manager,
       record,
@@ -441,6 +442,8 @@ describe("handlePendingApprovalRequest", () => {
       respond,
       context: {
         broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getApprovalClientConnIds,
         hasExecApprovalClients: () => false,
       } as unknown as GatewayRequestContext,
       requestEventName: "plugin.approval.requested",
@@ -456,6 +459,9 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
+    expect(getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "plugin" }),
+    );
     expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
       turnSourceChannel: "whatsapp",
       turnSourceAccountId: "default",
@@ -1145,6 +1151,7 @@ describe("handlePendingApprovalRequest", () => {
     const respond = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1270,6 +1277,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1328,6 +1336,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1387,6 +1396,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1448,6 +1458,7 @@ describe("handlePendingApprovalRequest", () => {
     const broadcastToConnIds = vi.fn();
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1501,6 +1512,7 @@ describe("handlePendingApprovalRequest", () => {
     const visibleConnIds = new Set(["conn-owner-approval"]);
 
     await handleApprovalResolve({
+      approvalKind: "exec",
       manager,
       inputId: record.id,
       decision: "allow-once",
@@ -1659,6 +1671,7 @@ describe("handlePendingApprovalRequest", () => {
 
     try {
       await handleApprovalResolve({
+        approvalKind: "exec",
         manager,
         inputId: record.id,
         decision: "deny",

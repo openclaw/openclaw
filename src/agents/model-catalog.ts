@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -133,10 +134,6 @@ const providerApiKeyResolverLoader = createLazyImportLoader(
   () => import("./models-config.providers.secrets.js"),
 );
 
-function shouldLogModelCatalogTiming(): boolean {
-  return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
-}
-
 function loadModelSuppression() {
   return modelSuppressionLoader.load();
 }
@@ -164,9 +161,6 @@ export function resetModelCatalogCacheForTest() {
 export function setModelCatalogImportForTest(loader?: () => Promise<AgentDiscoveryModule>) {
   importAgentDiscovery = loader ?? defaultImportAgentDiscovery;
 }
-
-/** @deprecated Use `setModelCatalogImportForTest`. */
-export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
 
 function catalogEntryDedupeKey(provider: string, id: string): string {
   const normalizedProvider = normalizeProviderId(provider);
@@ -706,7 +700,8 @@ export async function loadModelCatalogSnapshot(
   const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
     const routeVariants = createModelCatalogRouteVariantCollector();
-    const timingEnabled = shouldLogModelCatalogTiming();
+    const cfg = params?.config ?? getRuntimeConfig();
+    const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
     const startMs = timingEnabled ? Date.now() : 0;
     const logStage = (stage: string, extra?: string) => {
       if (!timingEnabled) {
@@ -716,7 +711,6 @@ export async function loadModelCatalogSnapshot(
       log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
     };
     try {
-      const cfg = params?.config ?? getRuntimeConfig();
       const workspaceDir = params?.workspaceDir ?? resolveModelWorkspaceDir(cfg, undefined);
       let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];

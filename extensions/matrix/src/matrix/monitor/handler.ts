@@ -1,6 +1,7 @@
 // Matrix plugin module implements handler behavior.
 import {
   buildChannelInboundEventContext,
+  resolveInboundMentionDecision,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -212,7 +213,7 @@ type MatrixMonitorHandlerParams = {
   startupMs: number;
   startupGraceMs: number;
   dropPreStartupMessages: boolean;
-  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claimEvent" | "commitEvent" | "releaseEvent">;
+  inboundDeduper?: Pick<MatrixInboundEventDeduper, "claim">;
   directTracker: {
     isDirectMessage: (params: {
       roomId: string;
@@ -577,7 +578,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
-    let claimedInboundEvent = false;
+    let inboundReplayClaim:
+      | import("openclaw/plugin-sdk/persistent-dedupe").ChannelReplayClaimHandle
+      | undefined;
     let draftStreamRef: MatrixDraftStreamHandle | undefined;
     let draftConsumed = false;
     try {
@@ -614,11 +617,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const eventTs = event.origin_server_ts;
       const eventAge = event.unsigned?.age;
       const commitInboundEventIfClaimed = async () => {
-        if (!claimedInboundEvent || !inboundDeduper || !eventId) {
+        if (!inboundReplayClaim) {
           return;
         }
-        await inboundDeduper.commitEvent({ roomId, eventId });
-        claimedInboundEvent = false;
+        await inboundReplayClaim.commit();
+        inboundReplayClaim = undefined;
       };
       const readIngressPrefix = async () => {
         const selfUserId = await client.getUserId();
@@ -664,8 +667,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
-          if (!claimedInboundEvent) {
+          const claim = await inboundDeduper.claim({ roomId, eventId });
+          // Missing identifiers fail open; committed and in-flight events do not.
+          if (claim.kind === "claimed") {
+            inboundReplayClaim = claim.handle;
+          } else if (claim.kind !== "invalid") {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
           }
@@ -1151,16 +1157,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
-        const shouldBypassMention =
-          allowTextCommands &&
-          isRoom &&
-          shouldRequireMention &&
-          !wasMentioned &&
-          !hasExplicitMention &&
-          commandAuthorized &&
-          hasControlCommandInMessage;
+        const mentionDecision = resolveInboundMentionDecision({
+          facts: {
+            // Matrix native mention metadata lets us reliably decide absence even
+            // when no custom mention regex is configured.
+            canDetectMention: true,
+            wasMentioned,
+            hasAnyMention: hasExplicitMention,
+          },
+          policy: {
+            isGroup: isRoom,
+            requireMention: shouldRequireMention,
+            allowTextCommands,
+            hasControlCommand: hasControlCommandInMessage,
+            commandAuthorized,
+          },
+        });
+        const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+        if (mentionDecision.shouldSkip) {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
@@ -1363,6 +1378,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
           shouldRequireMention,
           wasMentioned,
+          effectiveWasMentioned,
           shouldBypassMention,
           canDetectMention,
           commandAuthorized,
@@ -1433,6 +1449,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isRoom,
         shouldRequireMention,
         wasMentioned,
+        effectiveWasMentioned,
         shouldBypassMention,
         canDetectMention,
         commandAuthorized,
@@ -1675,7 +1692,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isMentionableGroup: isRoom,
             requireMention: shouldRequireMention,
             canDetectMention,
-            effectiveWasMentioned: wasMentioned || shouldBypassMention,
+            effectiveWasMentioned,
             shouldBypassMention,
           }),
         );
@@ -2590,9 +2607,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await redactMatrixDraftEvent(client, roomId, draftEventId);
         }
       }
-      if (claimedInboundEvent && inboundDeduper && eventId) {
-        inboundDeduper.releaseEvent({ roomId, eventId });
-      }
+      inboundReplayClaim?.release();
     }
   };
 }

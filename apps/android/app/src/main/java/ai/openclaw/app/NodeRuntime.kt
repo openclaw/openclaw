@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatCommandEntry
@@ -8,6 +9,7 @@ import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
@@ -92,6 +94,10 @@ import ai.openclaw.app.voice.VoiceWakeManager
 import ai.openclaw.app.voice.VoiceWakeMatch
 import ai.openclaw.app.voice.VoiceWakePreferences
 import ai.openclaw.app.voice.VoiceWakeSuppressionReason
+import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearProxyController
+import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.wear.shared.WearMessage
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -1058,6 +1064,7 @@ class NodeRuntime private constructor(
           operatorStatusText = "Connected"
         }
         micCapture.onGatewayConnectionChanged(true)
+        wearProxyBridge()?.publishConnection(connected = true, status = "Connected")
         scope.launch {
           subscribeOperatorSessionEvents()
           refreshWakeWordsFromGateway()
@@ -1078,17 +1085,59 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = message)
       },
       onConnectFailure = { error, pauseReconnect ->
+        val problem = gatewayConnectionProblem(error, pauseReconnect)
         updateStatus {
-          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+          operatorConnected = false
+          operatorStatusText = problem.message
+          operatorConnectionProblem = problem
         }
+        micCapture.onGatewayConnectionChanged(false)
+        wearProxyBridge()?.publishConnection(connected = false, status = problem.message)
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private val wearProxyController by lazy {
+    WearProxyController(
+      requestGateway = ::requestWearGateway,
+      isGatewayConnected = operatorSession::isReady,
+      gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+    )
+  }
+
+  internal suspend fun handleWearProxyRequest(request: WearMessage.Request): WearMessage.Response = wearProxyController.handle(request)
+
+  private suspend fun requestWearGateway(
+    method: String,
+    params: JsonObject,
+  ): JsonElement {
+    val lease =
+      operatorSession.captureRequestLease()
+        ?: throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+    val response =
+      try {
+        lease.request(method, params.toString())
+      } catch (err: GatewayRequestRejected) {
+        throw WearProxyGatewayException(err.gatewayError.code, err.gatewayError.message)
+      } catch (_: GatewayRequestNotEnqueued) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+      } catch (_: GatewayRequestOutcomeUnknown) {
+        throw WearProxyGatewayException("unavailable", "Phone gateway request outcome is unknown")
+      }
+    return try {
+      json.parseToJsonElement(response)
+    } catch (_: Throwable) {
+      throw WearProxyGatewayException("invalid_response", "$method returned invalid JSON")
+    }
+  }
+
+  private fun wearProxyBridge(): WearProxyBridge? = (appContext as? NodeApp)?.wearProxyBridge
 
   private fun clearOperatorGatewayState(retirePendingCronRuns: Boolean) {
     invalidateNodeCapabilityApprovalState()
@@ -2218,10 +2267,15 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+
+  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
+
+  suspend fun getBackgroundTask(taskId: String): BackgroundTask = chat.getBackgroundTask(taskId)
 
   fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
 
@@ -4190,6 +4244,11 @@ class NodeRuntime private constructor(
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    if (event == "chat" && !payloadJson.isNullOrBlank()) {
+      runCatching { json.parseToJsonElement(payloadJson) }
+        .getOrNull()
+        ?.let { wearProxyBridge()?.publishChat(it) }
+    }
   }
 
   private fun handleNodeGatewayEvent(
@@ -6547,7 +6606,7 @@ class NodeRuntime private constructor(
       sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
-        .take(240)
+        .takeUtf16Safe(240)
         .ifEmpty { "Log entry" }
     return GatewayLogEntry(
       time = time,

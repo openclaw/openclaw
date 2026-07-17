@@ -18,6 +18,7 @@ import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { sidebarSessionMetaId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -270,7 +271,7 @@ function renderCatalogHostGroup(
           >${host.error ? icons.alertTriangle : host.sessions.length}</span
         >
       </div>
-      <div class="sidebar-session-catalog-host__sessions">
+      <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${host.sessions.map((session) =>
           renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
         )}
@@ -308,6 +309,9 @@ function renderCatalogSessionRow(
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
   const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
+  const label = session.name || session.threadId;
+  const meta = formatSidebarTimestamp(timestamp);
+  const metaId = meta ? sidebarSessionMetaId(key) : undefined;
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
@@ -326,6 +330,7 @@ function renderCatalogSessionRow(
         ? "sidebar-recent-session--active"
         : ""}"
       data-session-key=${key}
+      role="listitem"
       @contextmenu=${(event: MouseEvent) => {
         event.preventDefault();
         openMenu(event.clientX, event.clientY);
@@ -334,7 +339,9 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${`${session.name || session.threadId} · ${host.label}`}
+        title=${`${label} · ${host.label}`}
+        aria-current=${active ? "page" : nothing}
+        aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -348,13 +355,11 @@ function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.name || session.threadId}</span
-          >
+          <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
+        <span class="session-row-trail" id=${metaId ?? nothing}>${meta}</span>
         <span class="session-row-actions">
           <button
             class="session-action"

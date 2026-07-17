@@ -100,6 +100,8 @@ import {
   ApprovalExpiredReasonSchema,
   ApprovalGetParamsSchema,
   ApprovalGetResultSchema,
+  ApprovalHistoryParamsSchema,
+  ApprovalHistoryResultSchema,
   ApprovalKindSchema,
   ApprovalPresentationSchema,
   ApprovalResolveParamsSchema,
@@ -462,6 +464,17 @@ import {
 } from "./tasks.js";
 import { TerminalProtocolSchemas } from "./terminal-protocol-schemas.js";
 import {
+  UiClosePaneCommandSchema,
+  UiCommandParamsSchema,
+  UiCommandResultSchema,
+  UiCommandSchema,
+  UiFocusCommandSchema,
+  UiNavigateCommandSchema,
+  UiPanelCommandSchema,
+  UiSidebarCommandSchema,
+  UiSplitCommandSchema,
+} from "./ui-command.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -582,6 +595,15 @@ export const ProtocolSchemas = {
   // Push and secret-resolution payloads used by mobile/control integrations.
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  UiSplitCommand: UiSplitCommandSchema,
+  UiClosePaneCommand: UiClosePaneCommandSchema,
+  UiFocusCommand: UiFocusCommandSchema,
+  UiSidebarCommand: UiSidebarCommandSchema,
+  UiPanelCommand: UiPanelCommandSchema,
+  UiNavigateCommand: UiNavigateCommandSchema,
+  UiCommand: UiCommandSchema,
+  UiCommandParams: UiCommandParamsSchema,
+  UiCommandResult: UiCommandResultSchema,
   SecretsReloadParams: SecretsReloadParamsSchema,
   SecretsResolveParams: SecretsResolveParamsSchema,
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,
@@ -873,6 +895,8 @@ export const ProtocolSchemas = {
   TerminalApprovalSnapshot: TerminalApprovalSnapshotSchema,
   ApprovalGetParams: ApprovalGetParamsSchema,
   ApprovalGetResult: ApprovalGetResultSchema,
+  ApprovalHistoryParams: ApprovalHistoryParamsSchema,
+  ApprovalHistoryResult: ApprovalHistoryResultSchema,
   ApprovalResolveParams: ApprovalResolveParamsSchema,
   ApprovalResolveResult: ApprovalResolveResultSchema,
   PendingSessionApprovalEvent: PendingSessionApprovalEventSchema,

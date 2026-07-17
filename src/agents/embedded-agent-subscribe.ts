@@ -1254,7 +1254,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.itemActiveIds.clear();
     state.itemStartedCount = 0;
     state.itemCompletedCount = 0;
-    state.lastToolError = undefined;
+    // Compaction retries restart presentation state, not attempt-wide mutation truth.
+    // Retain unresolved side effects so the retry cannot falsely finish as success.
+    if (state.lastToolError?.mutatingAction !== true) {
+      state.lastToolError = undefined;
+    }
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;

@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
-import { renderWorkspace } from "./workspace-view.ts";
+import { renderWorkspace as renderWorkspaceView } from "./workspace-view.ts";
+
+function renderWorkspace(
+  props: Omit<Parameters<typeof renderWorkspaceView>[0], "onRequestUpdate">,
+) {
+  return renderWorkspaceView({ ...props, onRequestUpdate: () => undefined });
+}
 
 function renderView(host: object): HTMLElement {
   const container = document.createElement("div");

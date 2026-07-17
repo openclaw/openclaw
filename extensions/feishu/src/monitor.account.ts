@@ -12,11 +12,7 @@ import {
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
 import { isRecord, readString } from "./comment-shared.js";
-import {
-  hasProcessedFeishuMessage,
-  recordProcessedFeishuMessage,
-  warmupDedupFromPluginState,
-} from "./dedup.js";
+import { hasProcessedFeishuMessage, warmupDedupFromPluginState } from "./dedup.js";
 import { applyBotIdentityState, startBotIdentityRecovery } from "./monitor.bot-identity.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -171,6 +167,8 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  /** Owning account signal; retrying handlers must propagate it. */
+  abortSignal?: AbortSignal;
   /**
    * Optional status sink. When provided, the message handler will publish
    * `lastEventAt` on every inbound message for message recency. Transport
@@ -278,7 +276,8 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget, abortSignal } =
+    context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -307,7 +306,6 @@ function registerEventHandlers(
       resolveDebounceText: ({ event, botOpenId, botName }) =>
         parseFeishuMessageEvent(event, botOpenId, botName).content,
       hasProcessedMessage: hasProcessedFeishuMessage,
-      recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
       resolveSequentialKey: getFeishuSequentialKey,
@@ -346,6 +344,7 @@ function registerEventHandlers(
       accountId,
       runtime,
       fireAndForget,
+      abortSignal,
     }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
@@ -511,6 +510,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      abortSignal,
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 

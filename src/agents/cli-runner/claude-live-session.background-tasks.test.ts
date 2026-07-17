@@ -1,4 +1,4 @@
-/** Claude live session: interim result while native background subagents run. */
+/** Claude live session: provisional results while native or queued work continues. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setDiagnosticsEnabledForProcess,
@@ -158,7 +158,12 @@ function jsonl(lines: unknown[]): string {
   return lines.map((line) => JSON.stringify(line)).join("\n") + "\n";
 }
 
-function startLiveTurn(params: { runId: string; timeoutMs?: number; noOutputTimeoutMs?: number }) {
+function startLiveTurn(params: {
+  runId: string;
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  useResume?: boolean;
+}) {
   const context = buildPreparedCliRunContext({
     runId: params.runId,
     timeoutMs: params.timeoutMs,
@@ -168,7 +173,7 @@ function startLiveTurn(params: { runId: string; timeoutMs?: number; noOutputTime
     args: context.preparedBackend.backend.args ?? [],
     env: {},
     prompt: "hi",
-    useResume: false,
+    useResume: params.useResume ?? false,
     noOutputTimeoutMs: params.noOutputTimeoutMs ?? 5_000,
     getProcessSupervisor: getProcessSupervisorForTest,
     onAssistantDelta: () => {},
@@ -176,7 +181,7 @@ function startLiveTurn(params: { runId: string; timeoutMs?: number; noOutputTime
   });
 }
 
-describe("claude live session background tasks", () => {
+describe("claude live session provisional results", () => {
   it.each([
     { taskType: "local_agent", label: "subagent" },
     { taskType: "local_workflow", label: "workflow" },
@@ -369,6 +374,341 @@ describe("claude live session background tasks", () => {
     const result = await startLiveTurn({ runId: "run-bg-none" });
     expect(result.output.text).toBe("plain answer");
     expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps the turn open after a synthetic placeholder until the real result arrives", async () => {
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-synthetic-placeholder",
+      useResume: true,
+    });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic",
+          result: "",
+        },
+      ]),
+    );
+
+    let settled = false;
+    void resultPromise.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(driver.cancel).not.toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+    expect(
+      getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:bg" }).lastProgressReason,
+    ).toBe("cli_live:result_deferred_synthetic_placeholder");
+
+    driver.stdout.emit(
+      jsonl([
+        {
+          type: "assistant",
+          session_id: "live-synthetic",
+          message: {
+            model: "claude-fable-5",
+            role: "assistant",
+            content: [{ type: "text", text: "The background work is complete." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic",
+          result: "The background work is complete.",
+        },
+      ]),
+    );
+
+    const result = await resultPromise;
+    expect(result.output.text).toBe("The background work is complete.");
+    expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("does not defer ordinary or non-empty results that resemble a synthetic placeholder", async () => {
+    const ordinaryDriver = installLiveStdoutDriver({
+      onWrite: (stdout) => {
+        stdout(
+          jsonl([
+            { type: "system", subtype: "init", session_id: "live-ordinary-placeholder" },
+            {
+              type: "assistant",
+              session_id: "live-ordinary-placeholder",
+              message: {
+                model: "claude-fable-5",
+                role: "assistant",
+                content: [{ type: "text", text: "No response requested." }],
+              },
+            },
+            {
+              type: "result",
+              subtype: "success",
+              session_id: "live-ordinary-placeholder",
+              result: "",
+            },
+          ]),
+        );
+      },
+    });
+    const ordinary = await startLiveTurn({ runId: "run-ordinary-placeholder" });
+    expect(ordinary.output.text).toBe("");
+    expect(ordinaryDriver.cancel).not.toHaveBeenCalled();
+
+    resetClaudeLiveSessionsForTest();
+    const nonEmptyDriver = installLiveStdoutDriver({
+      onWrite: (stdout) => {
+        stdout(
+          jsonl([
+            { type: "system", subtype: "init", session_id: "live-synthetic-nonempty" },
+            {
+              type: "assistant",
+              session_id: "live-synthetic-nonempty",
+              message: {
+                model: "<synthetic>",
+                role: "assistant",
+                content: [{ type: "text", text: "No response requested." }],
+              },
+            },
+            {
+              type: "result",
+              subtype: "success",
+              session_id: "live-synthetic-nonempty",
+              result: "real answer",
+            },
+          ]),
+        );
+      },
+    });
+    const nonEmpty = await startLiveTurn({
+      runId: "run-synthetic-nonempty",
+      useResume: true,
+    });
+    expect(nonEmpty.output.text).toBe("real answer");
+    expect(nonEmptyDriver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("does not defer a synthetic placeholder on a fresh live process", async () => {
+    const driver = installLiveStdoutDriver({
+      onWrite: (stdout) => {
+        stdout(
+          jsonl([
+            { type: "system", subtype: "init", session_id: "live-synthetic-fresh" },
+            {
+              type: "assistant",
+              session_id: "live-synthetic-fresh",
+              message: {
+                model: "<synthetic>",
+                role: "assistant",
+                content: [{ type: "text", text: "No response requested." }],
+              },
+            },
+            {
+              type: "result",
+              subtype: "success",
+              session_id: "live-synthetic-fresh",
+              result: "",
+            },
+          ]),
+        );
+      },
+    });
+
+    const result = await startLiveTurn({ runId: "run-synthetic-fresh" });
+    expect(result.output.text).toBe("");
+    expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("expires a terminal resumed placeholder through the existing empty-result path", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-synthetic-grace-expiry",
+      timeoutMs: 60_000,
+      noOutputTimeoutMs: 60_000,
+      useResume: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-expiry" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-expiry",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic-expiry",
+          result: "",
+        },
+      ]),
+    );
+
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+    expect(result.output.text).toBe("");
+    expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("expires the synthetic grace before a matching short no-output watchdog", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-synthetic-short-watchdog",
+      timeoutMs: 60_000,
+      noOutputTimeoutMs: 1_000,
+      useResume: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-short-watchdog" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-short-watchdog",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic-short-watchdog",
+          result: "",
+        },
+      ]),
+    );
+
+    await vi.advanceTimersByTimeAsync(999);
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await resultPromise;
+    expect(result.output.text).toBe("");
+    expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("still aborts on the turn timeout while waiting after a synthetic placeholder", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-synthetic-timeout",
+      timeoutMs: 5_000,
+      noOutputTimeoutMs: 60_000,
+      useResume: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-timeout" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-timeout",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "Continue from where you left off." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-synthetic-timeout",
+          result: "",
+        },
+      ]),
+    );
+
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      name: "FailoverError",
+      message: expect.stringMatching(/exceeded timeout/i),
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
+  });
+
+  it("fails immediately when an error result follows a synthetic placeholder", async () => {
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-synthetic-error",
+      useResume: true,
+    });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-synthetic-error" },
+        {
+          type: "assistant",
+          session_id: "live-synthetic-error",
+          message: {
+            model: "<synthetic>",
+            role: "assistant",
+            content: [{ type: "text", text: "No response requested." }],
+          },
+        },
+        {
+          type: "result",
+          subtype: "error_during_execution",
+          is_error: true,
+          session_id: "live-synthetic-error",
+          result: "provider failed",
+        },
+      ]),
+    );
+
+    await expect(resultPromise).rejects.toMatchObject({
+      name: "FailoverError",
+      rawError: expect.stringMatching(/provider failed/i),
+    });
   });
 
   it("fails the turn on an error result even when background tasks are outstanding", async () => {

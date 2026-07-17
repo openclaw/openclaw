@@ -138,10 +138,13 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('package_install_source="openclaw@$(read_package_version');
     expect(script).toContain('-v "$resolved_package_dir:/package-under-test:ro"');
     expect(script).toContain(
-      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-npm-registry-server.mjs:ro"',
+      '-v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"',
+    );
+    expect(script).toContain(
+      '-v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"',
     );
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
-    expect(script).toContain("node /tmp/openclaw-npm-registry-server.mjs");
+    expect(script).toContain("node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs");
     expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
     expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
   });

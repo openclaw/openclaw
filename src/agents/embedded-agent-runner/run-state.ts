@@ -31,6 +31,8 @@ export type EmbeddedAgentQueueHandle = {
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
+  /** True only when queueMessage preserves images supplied in its options. */
+  supportsQueueMessageImages?: boolean;
   cancel?: (reason?: EmbeddedAgentAbortReason) => void;
   abort: (reason?: EmbeddedAgentAbortReason) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

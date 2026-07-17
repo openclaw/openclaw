@@ -21,7 +21,7 @@ scenario:
   execution:
     kind: flow
     summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
-    driver: qa-channel
+    channel: qa-channel
     config:
       target: "channel:qa-room"
       seedText: "seed message"

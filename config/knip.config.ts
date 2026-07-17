@@ -25,6 +25,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/codex-media-path/client.mjs!",
   "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs!",
   "scripts/e2e/lib/codex-media-path/write-config.mjs!",
+  "scripts/e2e/lib/codex-npm-plugin-live/followthrough-turn.mjs!",
   "scripts/e2e/lib/config-reload/assert-log.mjs!",
   "scripts/e2e/lib/config-reload/mutate-metadata.mjs!",
   "scripts/e2e/lib/docker-artifact-proof/write-identities.ts!",
@@ -97,6 +98,7 @@ const rootEntries = [
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   "scripts/repro/code-mode-namespace-live.ts!",
+  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-sqlite-reliability.ts!",
@@ -156,8 +158,6 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
-  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
-  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -169,7 +169,6 @@ const bundledPluginEntries = [
   "cli-metadata.ts!",
   "channel-entry.ts!",
   // Manifest and SDK loaders resolve these public artifacts by basename.
-  "configured-state.ts!",
   "auth-presence.ts!",
   "thread-bindings-runtime.ts!",
   "document-extractor.ts!",
@@ -201,7 +200,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@openai/codex",
   "@pierre/theme",
   "@tloncorp/tlon-skill",
-  "@zed-industries/codex-acp",
+  "@agentclientprotocol/codex-acp",
   "jiti",
   "json5",
   "lit",
