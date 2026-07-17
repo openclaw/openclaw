@@ -158,7 +158,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
     });
   });
 
-  it("still refuses startup when an unresolved SecretRef owner is unknown", async () => {
+  it("reaches /readyz with cron webhook delivery isolated", async () => {
     await withEnvAsync({ MISSING_WEBHOOK_TOKEN: undefined }, async () => {
       await writeConfig({
         ...baseConfig(),
@@ -171,9 +171,23 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      await expect(
-        startGatewayServer(await getFreePort(), { auth: { mode: "none" } }),
-      ).rejects.toThrow(/Startup failed: required secrets are unavailable/);
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      await expect(ready.json()).resolves.toMatchObject({ ready: true });
+      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+        { ownerKind: "capability", ownerId: "cron-webhook", state: "unavailable" },
+      ]);
+      expect(getActiveSecretsRuntimeSnapshot()?.warnings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            code: "SECRETS_OWNER_UNAVAILABLE",
+            path: "cron.webhookToken",
+          }),
+        ]),
+      );
     });
   });
 });

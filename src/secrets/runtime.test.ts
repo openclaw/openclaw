@@ -677,20 +677,27 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
-  it("refuses cold-start isolation when an assignment owner is unknown", async () => {
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          cron: {
-            webhookToken: { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  it("isolates cron webhook delivery when its token cannot resolve", async () => {
+    const ref = { source: "env", provider: "default", id: "MISSING_WEBHOOK_TOKEN" } as const;
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        cron: { webhookToken: ref },
       }),
-    ).rejects.toThrow('Environment variable "MISSING_WEBHOOK_TOKEN" is missing or empty.');
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    });
+
+    expect(snapshot.config.cron?.webhookToken).toEqual(ref);
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "cron-webhook",
+        state: "unavailable",
+        paths: ["cron.webhookToken"],
+      },
+    ]);
   });
 
   it("fails when an active exec ref id contains traversal segments", async () => {

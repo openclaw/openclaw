@@ -587,12 +587,18 @@ function collectCronAssignments(params: {
   if (!isRecord(cron)) {
     return;
   }
-  collectSecretInputAssignment({
+  collectRuntimeSecretInputAssignment({
     value: cron.webhookToken,
     path: "cron.webhookToken",
     expected: "string",
     defaults: params.defaults,
     context: params.context,
+    owner: {
+      ownerKind: "capability",
+      ownerId: "cron-webhook",
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       cron.webhookToken = value;
     },

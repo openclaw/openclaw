@@ -10,6 +10,7 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({ release: vi.fn() })),
@@ -90,6 +91,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
   afterEach(() => {
     resetGatewayWorkAdmission();
+    setActiveDegradedSecretOwners([]);
   });
 
   it("independently admits detached completion webhook delivery", async () => {
@@ -127,6 +129,44 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
 
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     deferred.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("keeps webhook delivery cold when its token owner is unavailable", async () => {
+    const logger = { warn: vi.fn() };
+    const job = createWebhookJob({
+      mode: "webhook",
+      to: "https://example.invalid/cron",
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "cron-webhook",
+        state: "unavailable",
+        paths: ["cron.webhookToken"],
+        refKeys: ["env:default:MISSING_WEBHOOK_TOKEN"],
+        reason: "secret provider failed",
+      },
+    ]);
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok", summary: "done" },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobId: job.id,
+          err: expect.stringContaining("Secret owner capability:cron-webhook"),
+        }),
+        "cron: webhook delivery failed",
+      ),
+    );
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
