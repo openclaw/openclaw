@@ -86,8 +86,11 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
         isConfigured: async (account) => {
-          const channelRuntime = await loadWhatsAppChannelRuntime();
-          return (await channelRuntime.readWebAuthState(account.authDir)) === "linked";
+          // Import auth-store directly (like channel.setup.ts): probing through the
+          // full channel.runtime graph races its own module evaluation during gateway
+          // startup, and the first account probed sees an undefined auth-store binding.
+          const { readWebAuthState } = await import("./auth-store.js");
+          return (await readWebAuthState(account.authDir)) === "linked";
         },
       }),
       agentTools: () => [createWhatsAppLoginTool()],
