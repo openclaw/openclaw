@@ -1,4 +1,5 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
 import OpenClawKit
@@ -59,6 +60,10 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
+            self.state.applyPeekabooBridgeHostState()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -89,8 +94,15 @@ struct GeneralSettings: View {
                 SettingsCardToggleRow(
                     title: "Play menu bar icon animations",
                     subtitle: "Enable idle blinks and wiggles on the status icon.",
-                    binding: self.$state.iconAnimationsEnabled,
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main session.",
                     showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
             }
 
             SettingsCardGroup("Capabilities") {
@@ -114,9 +126,13 @@ struct GeneralSettings: View {
 
                 SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
-                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                    binding: self.$state.peekabooBridgeEnabled,
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
                     showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
             }
 
             SettingsCardGroup("Browser") {
@@ -245,6 +261,14 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
     }
 
     private func updateActiveWork(active: Bool) {

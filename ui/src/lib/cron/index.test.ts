@@ -1,6 +1,5 @@
 // Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -9,6 +8,7 @@ import {
   toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
+  loadCronScopeStats,
   loadMoreCronRuns,
   normalizeCronFormState,
   resolveConfiguredCronModelSuggestions,
@@ -19,6 +19,7 @@ import {
   validateCronForm,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 
 function createState(overrides: Partial<CronState> = {}): CronState {
   return {
@@ -39,7 +40,10 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronJobsLastStatusFilter: "all",
     cronJobsSortBy: "nextRunAtMs",
     cronJobsSortDir: "asc",
+    cronAgentId: null,
     cronStatus: null,
+    cronScopedTotal: null,
+    cronScopedNextWakeAtMs: null,
     cronFailingCount: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
@@ -1364,6 +1368,102 @@ describe("cron controller", () => {
     ).not.toHaveProperty("cooldownMs");
   });
 
+  it("clears persisted failure alert routing fields when their edit inputs are blanked", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-alert-fields" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-alert-fields" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-clear-alert-fields",
+      name: "Clear failure alert fields",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      delivery: { mode: "announce" as const },
+      failureAlert: {
+        after: 2,
+        channel: "telegram",
+        to: "123456",
+        cooldownMs: 60_000,
+        accountId: "bot-a",
+      },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertAfter = "";
+    state.cronForm.failureAlertTo = "";
+    state.cronForm.failureAlertCooldownSeconds = "";
+    state.cronForm.failureAlertAccountId = "";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectRecordFields(requireRecord(requestPatch(updateCall).failureAlert, "failureAlert"), {
+      after: null,
+      to: null,
+      cooldownMs: null,
+      accountId: null,
+    });
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the websocket JSON wire shape
+    const serializedPayload = JSON.parse(JSON.stringify(requestPayload(updateCall))) as unknown;
+    expectRecordFields(
+      requireRecord(
+        requireRecord(requireRecord(serializedPayload, "payload").patch, "patch").failureAlert,
+        "failureAlert",
+      ),
+      { after: null, to: null, cooldownMs: null, accountId: null },
+    );
+  });
+
+  it("clears a persisted failure alert override when switching back to inherit", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-inherit-alert" };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-inherit-alert",
+      name: "Inherit failure alerts",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "cron" as const, expr: "0 * * * *" },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "run" },
+      failureAlert: { after: 2, channel: "telegram" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.failureAlertMode = "inherit";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expect(requestPatch(updateCall).failureAlert).toBeNull();
+  });
+
   it("includes failureAlert=false when disabled per job", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.update") {
@@ -1481,6 +1581,85 @@ describe("cron controller", () => {
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
+
+  it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
+    "rejects invalid recurring amounts before submit: %s",
+    async (everyAmount) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return { id: "job-nondecimal" };
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "decimal interval",
+          everyAmount,
+          payloadText: "run",
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(false);
+      expect(state.cronFieldErrors.everyAmount).toBe("cron.errors.everyAmountInvalid");
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["1.5", "minutes", 90_000],
+    ["4.1", "minutes", 246_000],
+    ["0.1", "hours", 360_000],
+    ["0.000125", "hours", 450],
+    ["0.1", "days", 8_640_000],
+    ["0.0009765625", "days", 84_375],
+  ] as const)(
+    "converts %s %s to safe integer milliseconds",
+    async (everyAmount, everyUnit, expectedEveryMs) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.add") {
+          return { id: "job-decimal" };
+        }
+        if (method === "cron.list") {
+          return { jobs: [] };
+        }
+        if (method === "cron.status") {
+          return { enabled: true, jobs: 0, nextWakeAtMs: null };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronForm: {
+          ...DEFAULT_CRON_FORM,
+          name: "decimal interval",
+          everyAmount,
+          everyUnit,
+          payloadText: "run",
+          deliveryMode: "none",
+        },
+      });
+
+      const saved = await addCronJob(state);
+
+      expect(saved.saved).toBe(true);
+      const addCall = findRequestCall(request.mock.calls, "cron.add");
+      expect(requestPayload(addCall).schedule).toEqual({
+        kind: "every",
+        everyMs: expectedEveryMs,
+      });
+    },
+  );
 
   it("does not require cron expression fields for on-exit schedules", () => {
     const errors = validateCronForm({
@@ -1885,6 +2064,30 @@ describe("cron controller", () => {
     expect(state.cronRuns[1]?.summary).toBe("older");
   });
 
+  it("scopes jobs and run history requests to the selected agent", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "cron.runs"
+        ? { entries: [], total: 0, hasMore: false, nextOffset: null }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null },
+    );
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronAgentId: "writer",
+    });
+
+    await loadCronJobsPage(state);
+    await loadCronRuns(state, null);
+
+    expect(request).toHaveBeenCalledWith(
+      "cron.list",
+      expect.objectContaining({ agentId: "writer" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ agentId: "writer" }),
+    );
+  });
+
   it("returns an error status when run history loading fails", async () => {
     const request = vi.fn(async () => {
       throw new Error("cron.runs unavailable");
@@ -1905,7 +2108,7 @@ describe("cron controller", () => {
           id: "job-due",
           mode: "due",
         });
-        return { ok: true };
+        return { ok: true, enqueued: true, runId: "run-due" };
       }
       if (method === "cron.runs") {
         return { entries: [], total: 0, hasMore: false, nextOffset: null };
@@ -1920,6 +2123,60 @@ describe("cron controller", () => {
     await runCronJob(state, "job-due", "due");
 
     expect(request).toHaveBeenCalledWith("cron.run", { id: "job-due", mode: "due" });
+    expect(request).toHaveBeenCalledWith("cron.runs", expect.any(Object));
+  });
+
+  it.each([
+    ["not-due", "This automation is not due yet."],
+    ["already-running", "This automation is already running."],
+    ["restart-recovery-pending", "Scheduler recovery is still in progress."],
+    ["stopped", "The scheduler is stopped."],
+  ] as const)(
+    "surfaces cron.run %s outcomes without reloading run history",
+    async (reason, message) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.run") {
+          return { ok: true, ran: false, reason };
+        }
+        return {};
+      });
+      const state = createState({
+        client: { request } as unknown as CronState["client"],
+        cronRunsScope: "job",
+        cronRunsJobId: "job-blocked",
+      });
+
+      await runCronJob(state, "job-blocked", "force");
+
+      expect(state.cronError).toBe(message);
+      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-blocked", mode: "force" });
+      expect(request).not.toHaveBeenCalledWith("cron.runs", expect.anything());
+    },
+  );
+
+  it("reloads the skipped run recorded for an invalid persisted specification", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.run") {
+        return { ok: true, ran: false, reason: "invalid-spec" };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, hasMore: false, nextOffset: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronRunsScope: "job",
+      cronRunsJobId: "job-invalid",
+    });
+
+    await runCronJob(state, "job-invalid", "force");
+
+    expect(state.cronError).toBe("This automation has an invalid schedule or payload.");
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ id: "job-invalid" }),
+    );
   });
 });
 
@@ -1974,3 +2231,27 @@ describe("loadCronFailingCount", () => {
     expect(state.cronError).toBeNull();
   });
 });
+
+describe("loadCronScopeStats", () => {
+  it("loads filter-independent totals and next wake time for the selected agent", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ jobs: [], total: 7 })
+      .mockResolvedValueOnce({ jobs: [{ state: { nextRunAtMs: 1234 } }], total: 1 });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronAgentId: "writer",
+    });
+
+    await loadCronScopeStats(state);
+
+    expect(state.cronScopedTotal).toBe(7);
+    expect(state.cronScopedNextWakeAtMs).toBe(1234);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "cron.list",
+      expect.objectContaining({ agentId: "writer", includeDisabled: true }),
+    );
+  });
+});
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

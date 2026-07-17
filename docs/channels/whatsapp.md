@@ -598,7 +598,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    WhatsApp gateway runtime should use Node. Bun is flagged as incompatible for stable WhatsApp/Telegram gateway operation.
+    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

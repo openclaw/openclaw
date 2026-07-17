@@ -11,11 +11,8 @@ import type {
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
-import {
-  testing as cliBackendsTesting,
-  resolveCliBackendConfig,
-  resolveCliBackendLiveTest,
-} from "./cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -28,6 +25,7 @@ let runtimeBackendEntries: RuntimeBackendEntry[] = [];
 let setupBackendEntries: SetupBackendEntry[] = [];
 
 function createBackendEntry(params: {
+  autoSelectAuthProfile?: boolean;
   pluginId: string;
   id: string;
   config: CliBackendConfig;
@@ -56,6 +54,9 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.autoSelectAuthProfile !== undefined
+        ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+        : {}),
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
@@ -275,6 +276,7 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      autoSelectAuthProfile: false,
       ownsNativeCompaction: true,
       config: {
         command: "claude",
@@ -603,6 +605,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.output).toBe("jsonl");
     expect(resolved?.config.args).toContain("stream-json");
     expect(resolved?.config.args).toContain("--include-partial-messages");
@@ -981,6 +984,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.args).toEqual([
       "-p",
       "--output-format",
@@ -1186,3 +1190,4 @@ describe("resolveCliBackendConfig alias precedence", () => {
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

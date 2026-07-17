@@ -20,10 +20,7 @@ import {
 import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -47,6 +44,10 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+// No explicit hook timeout: the suite harness cold-imports the full gateway
+// server graph, which can legitimately exceed 60s on contended CI runners.
+// Sibling gateway suites rely on the shared project hookTimeout (120s, 180s on
+// Windows) for the same boot; tightening it here caused flaky hook timeouts.
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
@@ -55,7 +56,7 @@ beforeAll(async () => {
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
@@ -566,7 +567,7 @@ describe("session.message websocket events", () => {
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
-      emitInternalSessionTranscriptUpdate({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "sess-main",
@@ -1249,6 +1250,7 @@ describe("session.message websocket events", () => {
       credentialHash: ["fanout", "credential", "hash"].join("-"),
       bundleHash: "f".repeat(64),
       sessionId,
+      runId: "run-fanout",
       ownerEpoch: 4,
       rpcSetVersion: 1,
       protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
@@ -1442,3 +1444,4 @@ describe("session.message websocket events", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

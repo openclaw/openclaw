@@ -91,7 +91,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">
@@ -350,6 +350,12 @@ inputs and archive/support artifacts.
 Some channels are delivered as plugins. When selected during setup, the wizard
 prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
+
+### Installed app recommendations
+
+After the model access check succeeds, classic interactive onboarding on macOS scans application names and bundle IDs without requesting macOS privacy permissions. It searches the official plugin catalogs and ClawHub, then asks the configured model to reject false name matches and recommend relevant plugins or skills. Recommended matches are selected by default; optional matches require an explicit selection.
+
+The results screen lists the detected applications and shows: "App names were matched using your configured model and ClawHub search." Set `wizard.appRecommendations` to `false` to disable both this onboarding step and Gateway access to node app inventories. The scan is not used in quickstart or non-macOS onboarding.
 
 ## Non-interactive setup
 

@@ -22,6 +22,10 @@ The official Android app is available on [Google Play](https://play.google.com/s
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
+## Wear OS companion
+
+The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can browse sessions, read bounded transcripts, send text or dictated replies, abort an active run, and start realtime Talk inside the selected session. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
+
 ## Install outside Google Play
 
 Regular final and correction GitHub Releases include a universal `OpenClaw-Android.apk` and `OpenClaw-Android-SHA256SUMS.txt`. The APK is built from the release tag, signed with the OpenClaw Android release key, and carries GitHub Actions provenance.
@@ -150,7 +154,7 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 - Preferred: Tailscale Serve / Funnel with `https://<magicdns>` / `wss://<magicdns>`
 - Also supported: any other `wss://` Gateway URL with a real TLS endpoint
-- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`)
+- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`); non-loopback setup automatically uses limited operator access
 
 ### Prerequisites
 
@@ -217,6 +221,15 @@ In the Android app:
 - If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+Official setup codes connect Android as a node and grant full Gateway operator
+access by default over `wss://`. Plaintext non-loopback `ws://` setup
+automatically uses limited access for bearer-token safety. **Settings → Gateway**
+shows **Full** or **Limited** access. For a limited connection, configure
+`wss://` or Tailscale Serve, generate a new full-access code in Control UI or
+with `openclaw qr`, then scan or paste it on that page and reconnect. Operators
+who want the reduced profile can select **Limited access** in Control UI or run
+`openclaw qr --limited`.
 
 ### Multiple gateways
 

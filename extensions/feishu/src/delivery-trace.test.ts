@@ -14,12 +14,16 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
+type CreateFeishuReplyDispatcher =
+  typeof import("./reply-dispatcher.js").createFeishuReplyDispatcher;
+type StreamingStartBackoffMap =
+  typeof import("./reply-dispatcher-state.js").streamingStartBackoffUntilByAccount;
 
 type FeishuDispatcherOptions = {
   onReplyStart?: () => Promise<void> | void;
@@ -84,6 +88,17 @@ vi.mock("./client.js", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: (options: FeishuDispatcherOptions) => {
+      traceState.dispatcherOptions = options;
+      return { dispatcher: {}, replyOptions: {}, markDispatchIdle: () => {} };
+    },
+  };
+});
+
 // Module-scoped runtime stub (not the shared global runtime slot) so
 // isolate=false workers never leak this stub into other feishu test files.
 // channel.text uses the real chunking/table helpers because overflow
@@ -101,13 +116,6 @@ vi.mock("./runtime.js", async () => {
         chunkMarkdownTextWithMode: replyChunking.chunkMarkdownTextWithMode,
         convertMarkdownTables: textChunking.convertMarkdownTables,
         resolveMarkdownTableMode: markdownTables.resolveMarkdownTableMode,
-      },
-      reply: {
-        createReplyDispatcherWithTyping: (options: FeishuDispatcherOptions) => {
-          traceState.dispatcherOptions = options;
-          return { dispatcher: {}, replyOptions: {}, markDispatchIdle: () => {} };
-        },
-        resolveHumanDelayConfig: () => undefined,
       },
     },
     logging: { shouldLogVerbose: () => false },
@@ -137,16 +145,23 @@ vi.mock("./streaming-card.js", async (importOriginal) => {
   return { ...actual, FeishuStreamingSession: RecordingFeishuStreamingSession };
 });
 
-import {
-  clearFeishuStreamingStartBackoffForTests,
-  createFeishuReplyDispatcher,
-} from "./reply-dispatcher.js";
+let createFeishuReplyDispatcher: CreateFeishuReplyDispatcher;
+let streamingStartBackoffUntilByAccount: StreamingStartBackoffMap;
+
+beforeAll(async () => {
+  // Collection can share a worker with suites that mock the same Feishu modules.
+  // Reload only after this file's hoisted mocks are registered.
+  vi.resetModules();
+  ({ createFeishuReplyDispatcher } = await import("./reply-dispatcher.js"));
+  ({ streamingStartBackoffUntilByAccount } = await import("./reply-dispatcher-state.js"));
+});
 
 afterAll(() => {
   vi.doUnmock("./accounts.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
   vi.doUnmock("./streaming-card.js");
+  vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
   vi.resetModules();
 });
 
@@ -156,7 +171,7 @@ afterEach(() => {
   traceState.cardKitFetch = null;
   traceState.dispatcherOptions = null;
   traceState.wireFaults = [];
-  clearFeishuStreamingStartBackoffForTests();
+  streamingStartBackoffUntilByAccount.clear();
 });
 
 function jsonResponse(payload: unknown, status = 200, headers?: Record<string, string>): Response {
@@ -339,7 +354,9 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
     appId: `app-${scenario}-${traceState.setupCount}`,
     appSecret: "test-secret",
     domain: "feishu",
-    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: true }),
+    // Nested streaming.mode "partial" matches the retired `streaming: true`
+    // boolean, so the recorded wire goldens stay byte-identical.
+    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: { mode: "partial" } }),
   };
 }
 

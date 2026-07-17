@@ -125,7 +125,7 @@ Block streaming sends partial replies as the model produces text blocks; chunkin
 - `agents.defaults.blockStreamingChunk` (`minChars|maxChars|breakPreference`)
 - `agents.defaults.blockStreamingCoalesce` (idle-based batching)
 - `agents.defaults.humanDelay` (human-like pause between block replies)
-- Channel overrides: `*.streaming.block.enabled` and `*.streaming.block.coalesce` on bundled channels (Matrix and Feishu still use the flat `*.blockStreaming` / `*.blockStreamingCoalesce` spellings); stale flat keys elsewhere are migrated by `openclaw doctor --fix`. Block streaming is off unless explicitly enabled, on every channel including Telegram.
+- Channel overrides: `*.streaming.block.enabled` and `*.streaming.block.coalesce` on bundled channels; stale flat keys are migrated by `openclaw doctor --fix`. Block streaming is off unless explicitly enabled, on every channel including Telegram. QQ Bot is the exception: it has no `streaming.block` keys and streams block replies unless `channels.qqbot.streaming.mode` is `"off"`.
 
 Details: [Streaming + chunking](/concepts/streaming).
 

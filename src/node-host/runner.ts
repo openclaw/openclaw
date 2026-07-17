@@ -15,12 +15,13 @@ import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
-import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { coerceNodeInvokePayload, buildNodeInvokeResultParams } from "./invoke.js";
+import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
+import {
+  coerceNodeInvokeCancelPayload,
+  coerceNodeInvokeInputPayload,
+  coerceNodeInvokePayload,
+} from "./invoke-payload.js";
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
-
-export { buildNodeInvokeResultParams };
-export { buildNodeEventParams } from "./invoke.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -31,9 +32,10 @@ type NodeHostRunOptions = {
   gatewayContextPath?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
 };
 
-export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
+function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): string {
   switch (platform) {
     case "darwin":
       return "macos";
@@ -46,7 +48,7 @@ export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): strin
   }
 }
 
-export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
   switch (platform) {
     case "darwin":
       return "Mac";
@@ -77,7 +79,7 @@ type NodeHostReconnectPausedDeps = {
   exit?: (code: number) => void;
 };
 
-export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
+function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
   return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
 }
 
@@ -91,7 +93,7 @@ function formatNodeHostReconnectPausedMessage(
   return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
 }
 
-export function handleNodeHostReconnectPaused(
+function handleNodeHostReconnectPaused(
   info: GatewayReconnectPausedInfo,
   deps: NodeHostReconnectPausedDeps = {},
 ): void {
@@ -146,7 +148,7 @@ async function publishNodeSkills(client: GatewayClient, skills: unknown[]): Prom
   }
 }
 
-export async function resolveNodeHostGatewayCredentials(params: {
+async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ token?: string; password?: string }> {
@@ -178,33 +180,40 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  const config = await ensureNodeHostConfig();
-  const nodeId = opts.nodeId?.trim() || config.nodeId;
-  if (nodeId !== config.nodeId) {
-    config.nodeId = nodeId;
-  }
-  const displayName =
-    opts.displayName?.trim() || config.displayName || (await getMachineDisplayName());
-  config.displayName = displayName;
-
-  const gateway: NodeHostGatewayConfig = {
+  const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
     tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
     contextPath: opts.gatewayContextPath,
   };
-  config.gateway = gateway;
-  await saveNodeHostConfig(config);
+  const fallbackDisplayName = await getMachineDisplayName();
+  const config = await configureNodeHost({
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    fallbackDisplayName,
+    gateway: plannedGateway,
+    installedAppsSharing: opts.installedAppsSharing,
+  });
+  const nodeId = config.nodeId;
+  const displayName = config.displayName ?? fallbackDisplayName;
+  const gateway = config.gateway ?? plannedGateway;
 
   const cfg = getRuntimeConfig();
-  const preparedRuntime = await prepareNodeHostRuntime({ config: cfg, env: process.env });
+  const preparedRuntime = await prepareNodeHostRuntime({
+    config: cfg,
+    env: process.env,
+    enableAgentRuns: true,
+    installedAppsSharingEnabled: config.installedAppsSharing,
+  });
   const { token, password } = await resolveNodeHostGatewayCredentials({
     config: cfg,
     env: process.env,
   });
 
   const host = gateway.host ?? "127.0.0.1";
+  const urlHost =
+    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const contextPath = gateway.contextPath
@@ -212,7 +221,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       ? gateway.contextPath
       : `/${gateway.contextPath}`
     : "";
-  const url = `${scheme}://${host}:${port}${contextPath}`;
+  const url = `${scheme}://${urlHost}:${port}${contextPath}`;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
 
@@ -249,6 +258,20 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gateway.tlsFingerprint,
     onEvent: (evt) => {
+      if (evt.event === "node.invoke.cancel") {
+        const payload = coerceNodeInvokeCancelPayload(evt.payload);
+        if (payload) {
+          activeRuntime.cancel(payload.invokeId);
+        }
+        return;
+      }
+      if (evt.event === "node.invoke.input") {
+        const payload = coerceNodeInvokeInputPayload(evt.payload);
+        if (payload) {
+          activeRuntime.handleInput(payload.invokeId, payload.seq, payload.payloadJSON);
+        }
+        return;
+      }
       if (evt.event !== "node.invoke.request") {
         return;
       }
@@ -278,6 +301,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       });
     },
     onClose: (code, reason) => {
+      gatewayHelloReceived = false;
+      activeRuntime.cancelAll();
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
@@ -286,6 +311,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;
       publishInventory();
+    },
+    onManifestChanged: (manifest) => {
+      gatewayHelloReceived = false;
+      client.updateNodeManifest(manifest);
     },
   });
 

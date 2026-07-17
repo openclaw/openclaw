@@ -2,15 +2,18 @@
 // hand-rolled pointer drag/drop + resize, empty states. Pure render fns — the
 // controller owns lifecycle and `lib/workspace` owns data logic.
 
-import { html, nothing, render, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/web-awesome.ts";
+import "../../components/web-awesome-tabs.ts";
 import {
   loadWidgetManifestView,
   type CustomWidgetHostContext,
 } from "../../components/workspace-custom-widget.ts";
 import {
+  renderWorkspaceWidgetBody,
   renderWidgetCell,
   type WorkspaceCustomWidgetContext,
   type WorkspaceWidgetCellCallbacks,
@@ -30,6 +33,7 @@ import {
 } from "../../lib/workspace/grid.ts";
 import {
   approveWidget,
+  cancelWorkspaceLoadIntent,
   clearActiveDrag,
   customWidgetName,
   customWidgetStatus,
@@ -42,9 +46,9 @@ import {
   moveWidgetToTab,
   orderedTabs,
   removeWidgetFromTab,
-  resolveActiveSlug,
   registerActiveDrag,
   resolveBinding,
+  setActiveWorkspaceSlug,
   setWidgetCollapsed,
   startBindingPolling,
   subscribeToWorkspaceEvents,
@@ -60,21 +64,28 @@ import type {
   WorkspaceDocument,
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
+import { buildCustomWidgetApprovalsSource } from "../../lib/workspace/widgets/custom-widget-approvals.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
+import type { PreviewViewport } from "../../lib/workspace/widgets/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
 
-export type WorkspaceProps = {
+type WorkspaceProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
-  /** Control UI embed policy for the iframe-embed builtin (defaults to strict). */
+  /** Control UI embed policy for iframe-based builtins (defaults to strict). */
   embed?: BuiltinWidgetContext["embed"];
-  onRequestUpdate?: () => void;
+  onRequestUpdate: () => void;
   /** Gateway HTTP base path for custom-widget iframe sources (L5). */
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
   sessionKey?: string;
+  /** Advances when the shared session capability publishes a canonical list. */
+  sessionListRevision?: number;
+  /** Controls custom-widget decisions; reads remain available without this scope. */
+  canApproveWidgets?: boolean;
 };
 
 const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
@@ -87,6 +98,12 @@ const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
 type WorkspaceViewState = {
   openMenuWidgetId: string | null;
   drag: WorkspaceDragState | null;
+  /** Per-host preview viewport choices; intentionally not persisted in workspace data. */
+  previewViewports: Map<string, PreviewViewport>;
+  /** Last shared sessions.list revision folded into the binding cache. */
+  sessionListRevision: number | undefined;
+  sessionListRevisionSeen: boolean;
+  sessionBindingGeneration: number;
   /** Resolved binding cache keyed by widgetId; refreshed when the doc changes. */
   bindingResults: Map<string, WorkspaceBindingResult>;
   bindingLoads: Set<string>;
@@ -215,6 +232,10 @@ function getViewState(host: object): WorkspaceViewState {
     state = {
       openMenuWidgetId: null,
       drag: null,
+      previewViewports: new Map(),
+      sessionListRevision: undefined,
+      sessionListRevisionSeen: false,
+      sessionBindingGeneration: 0,
       bindingResults: new Map(),
       bindingLoads: new Set(),
       bindingVersion: -1,
@@ -233,19 +254,19 @@ function getViewState(host: object): WorkspaceViewState {
 }
 
 /** Advance the data-refresh counter so the next render re-resolves bindings. */
-export function bumpWorkspaceDataVersion(host: object): void {
+function bumpWorkspaceDataVersion(host: object): void {
   getViewState(host).dataVersion += 1;
 }
 
 /** The workspace tab slug requested via the `?ws=` deep-link query param. */
-export function requestedWorkspaceSlug(search: string): string | null {
+function requestedWorkspaceSlug(search: string): string | null {
   const params = new URLSearchParams(search);
   const ws = params.get("ws")?.trim();
   return ws ? ws : null;
 }
 
 /** Deep-link to a workspace tab: update `?ws=` and drive the router via popstate. */
-export function navigateToWorkspaceTab(slug: string): void {
+function navigateToWorkspaceTab(slug: string): void {
   const url = new URL(window.location.href);
   const ref = pluginTabRefFromSearch(url.search);
   url.searchParams.set("plugin", ref.pluginId);
@@ -263,6 +284,25 @@ function primaryBinding(widget: WorkspaceWidget): WorkspaceBinding | null {
   }
   const first = Object.values(bindings)[0];
   return first ?? null;
+}
+
+function isCanonicalSessionBinding(binding: WorkspaceBinding | null): boolean {
+  return binding?.source === "rpc" && binding.method === "sessions.list";
+}
+
+function invalidateCanonicalSessionBindings(
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument | null,
+): void {
+  for (const tab of workspace?.tabs ?? []) {
+    for (const widget of tab.widgets) {
+      if (!isCanonicalSessionBinding(primaryBinding(widget))) {
+        continue;
+      }
+      viewState.bindingResults.delete(widget.id);
+      viewState.bindingLoads.delete(widget.id);
+    }
+  }
 }
 
 /**
@@ -298,8 +338,15 @@ function ensureBindings(
       continue;
     }
     viewState.bindingLoads.add(widget.id);
+    const sessionBindingGeneration = isCanonicalSessionBinding(binding)
+      ? viewState.sessionBindingGeneration
+      : undefined;
     void resolveBinding(client, binding).then((result) => {
-      if (viewState.bindingVersion !== key) {
+      if (
+        viewState.bindingVersion !== key ||
+        (sessionBindingGeneration !== undefined &&
+          viewState.sessionBindingGeneration !== sessionBindingGeneration)
+      ) {
         return;
       }
       viewState.bindingResults.set(widget.id, result);
@@ -313,49 +360,6 @@ function gridMetrics(host: object): { width: number } {
   const grid =
     host instanceof HTMLElement ? host.querySelector<HTMLElement>(".workspace-grid") : null;
   return { width: grid?.clientWidth ?? 0 };
-}
-
-/**
- * Close the hidden-tabs overflow `<details>` on Escape (#3). Native details close
- * on summary click but not on Escape, so wire it explicitly.
- */
-function onHiddenTabsKeydown(event: KeyboardEvent): void {
-  if (event.key !== "Escape") {
-    return;
-  }
-  const details = (event.currentTarget as HTMLElement).closest("details");
-  if (details?.open) {
-    event.preventDefault();
-    details.open = false;
-    (details.querySelector("summary") as HTMLElement | null)?.focus();
-  }
-}
-
-/**
- * When the hidden-tabs overflow opens, arm a one-shot document pointerdown that
- * closes it on an outside click (#3); native details never dismiss on outside
- * click. Self-removing on close so no listener leaks.
- */
-function onHiddenTabsToggle(event: Event): void {
-  const details = event.currentTarget as HTMLDetailsElement;
-  if (!details.open) {
-    return;
-  }
-  const onOutside = (pointerEvent: PointerEvent) => {
-    if (pointerEvent.target instanceof Node && details.contains(pointerEvent.target)) {
-      return;
-    }
-    details.open = false;
-    document.removeEventListener("pointerdown", onOutside, true);
-  };
-  const onClosed = () => {
-    if (!details.open) {
-      document.removeEventListener("pointerdown", onOutside, true);
-      details.removeEventListener("toggle", onClosed);
-    }
-  };
-  document.addEventListener("pointerdown", onOutside, true);
-  details.addEventListener("toggle", onClosed);
 }
 
 /**
@@ -403,18 +407,24 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
   const tabs = visibleTabs(workspace);
   const hidden = hiddenTabs(workspace);
   return html`
-    <nav class="workspace-tabs" role="tablist" aria-label=${t("workspaces.tabs.label")}>
+    <wa-tab-group
+      class="workspace-tabs"
+      aria-label=${t("workspaces.tabs.label")}
+      .active=${state.activeSlug}
+      activation="auto"
+      without-scroll-controls
+      @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+        navigateToWorkspaceTab(event.detail.name)}
+    >
       ${tabs.map((tab) => {
-        const active = tab.slug === state.activeSlug;
         return html`
-          <button
-            class="workspace-tab ${active ? "workspace-tab--active" : ""}"
-            type="button"
-            role="tab"
-            aria-selected=${active ? "true" : "false"}
+          <wa-tab
+            id=${`workspace-tab-${tab.slug}`}
+            class="workspace-tab"
+            panel=${tab.slug}
+            aria-controls="workspace-tab-panel"
             data-test-id="workspace-tab"
             data-ws=${tab.slug}
-            @click=${() => navigateToWorkspaceTab(tab.slug)}
           >
             ${tab.icon && Object.hasOwn(icons, tab.icon)
               ? html`<span class="workspace-tab__icon" aria-hidden="true"
@@ -422,40 +432,39 @@ function renderTabStrip(state: WorkspaceUiState, workspace: WorkspaceDocument): 
                 >`
               : nothing}
             <span class="workspace-tab__label">${tab.title}</span>
-          </button>
+          </wa-tab>
         `;
       })}
       ${hidden.length > 0
         ? html`
-            <details
+            <wa-dropdown
+              slot="nav"
               class="workspace-tabs__hidden"
-              @toggle=${onHiddenTabsToggle}
-              @keydown=${onHiddenTabsKeydown}
+              placement="bottom-end"
+              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                const slug = event.detail.item.value;
+                if (slug) {
+                  navigateToWorkspaceTab(slug);
+                }
+              }}
             >
-              <summary class="workspace-tab workspace-tab--overflow">
+              <button slot="trigger" class="workspace-tab workspace-tab--overflow" type="button">
                 <span class="workspace-tab__icon" aria-hidden="true">${icons.eyeOff}</span>
                 <span class="workspace-tab__label"
                   >${t("workspaces.tabs.hidden", { count: String(hidden.length) })}</span
                 >
-              </summary>
-              <div class="workspace-tabs__hidden-menu" role="menu">
-                ${hidden.map(
-                  (tab) => html`
-                    <button
-                      class="workspace-tabs__hidden-item"
-                      type="button"
-                      role="menuitem"
-                      @click=${() => navigateToWorkspaceTab(tab.slug)}
-                    >
-                      ${tab.title}
-                    </button>
-                  `,
-                )}
-              </div>
-            </details>
+              </button>
+              ${hidden.map(
+                (tab) => html`
+                  <wa-dropdown-item class="workspace-tabs__hidden-item" .value=${tab.slug}>
+                    ${tab.title}
+                  </wa-dropdown-item>
+                `,
+              )}
+            </wa-dropdown>
           `
         : nothing}
-    </nav>
+    </wa-tab-group>
   `;
 }
 
@@ -509,7 +518,7 @@ function ensureManifests(
       viewState.manifestLoads.delete(name);
       if (manifest) {
         viewState.manifestCache.set(name, manifest);
-        props.onRequestUpdate?.();
+        props.onRequestUpdate();
       }
     });
   }
@@ -543,6 +552,36 @@ function buildCustomContext(
   };
 }
 
+/** Shared ambient builtin state; full-bleed tabs must preserve every grid capability. */
+function buildBuiltinContext(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+): BuiltinWidgetContext {
+  const decideCustomWidget = props.canApproveWidgets
+    ? (name: string, decision: "approved" | "rejected") => {
+        void approveWidget(state, props.client, { name, decision });
+      }
+    : undefined;
+  return {
+    basePath: props.basePath ?? "",
+    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    preview: {
+      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
+      setViewport: (widgetId, viewport) => {
+        viewState.previewViewports.set(widgetId, viewport);
+        props.onRequestUpdate?.();
+      },
+    },
+    customWidgetApprovals: buildCustomWidgetApprovalsSource(
+      workspace,
+      state.pendingApprovalNames,
+      decideCustomWidget,
+    ),
+  };
+}
+
 function renderGrid(
   props: WorkspaceProps,
   state: WorkspaceUiState,
@@ -563,11 +602,11 @@ function renderGrid(
       </div>
     `;
   }
+  if (tab.layout === "full") {
+    return renderFullBleed(props, state, viewState, workspace, tab);
+  }
   const callbacks = makeCallbacks(props, state, viewState, tab);
-  const builtinContext: BuiltinWidgetContext = {
-    basePath: props.basePath ?? "",
-    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
-  };
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
   return html`
@@ -588,6 +627,33 @@ function renderGrid(
       ${renderDragGhost(viewState, tab)}
     </div>
   `;
+}
+
+/** App-like tabs render their first widget through the same approval and sandbox path. */
+function renderFullBleed(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  tab: WorkspaceTab,
+): TemplateResult {
+  const widget = tab.widgets[0]!;
+  const callbacks = makeCallbacks(props, state, viewState, tab);
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
+  const custom = buildCustomContext(props, state, viewState, workspace, widget);
+  return html`<div
+    class="workspace-fullbleed"
+    data-test-id="workspace-fullbleed"
+    data-widget-id=${widget.id}
+  >
+    ${renderWorkspaceWidgetBody(
+      widget,
+      viewState.bindingResults.get(widget.id) ?? null,
+      builtinContext,
+      callbacks,
+      custom ?? undefined,
+    )}
+  </div>`;
 }
 
 /**
@@ -702,6 +768,10 @@ function makeCallbacks(
       viewState.openMenuWidgetId = viewState.openMenuWidgetId === widget.id ? null : widget.id;
       requestUpdate();
     },
+    onCloseMenu: () => {
+      viewState.openMenuWidgetId = null;
+      requestUpdate();
+    },
     onHide: (widget) => {
       viewState.openMenuWidgetId = null;
       // Hiding removes the widget from view and persists the hidden flag; distinct
@@ -710,6 +780,7 @@ function makeCallbacks(
     },
     onRemove: (widget) => {
       viewState.openMenuWidgetId = null;
+      viewState.previewViewports.delete(widget.id);
       void removeWidgetFromTab(state, props.client, { slug: tab.slug, widgetId: widget.id });
     },
     onEditTitle: (widget) => {
@@ -874,6 +945,15 @@ function renderDialog(
 export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   const state = getWorkspaceState(props.host);
   const viewState = getViewState(props.host);
+  const sessionListRevision = props.sessionListRevision;
+  if (viewState.sessionListRevisionSeen && sessionListRevision !== viewState.sessionListRevision) {
+    // The shared session capability already coalesced the canonical event refresh.
+    // Drop only sessions.list values; unrelated data widgets keep their caches.
+    viewState.sessionBindingGeneration += 1;
+    invalidateCanonicalSessionBindings(viewState, state.workspace);
+  }
+  viewState.sessionListRevision = sessionListRevision;
+  viewState.sessionListRevisionSeen = true;
   state.requestUpdate = props.onRequestUpdate ?? null;
   // Keep the outside-click / Escape dismiss listeners in sync with the open kebab
   // menu (#3). Cheap no-op when the open state is unchanged.
@@ -903,8 +983,10 @@ export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   }
 
   // Deep-link: a changed `?ws=` re-points the active tab without a refetch.
-  if (state.workspace && requestedSlug && requestedSlug !== state.activeSlug) {
-    state.activeSlug = resolveActiveSlug(state.workspace, requestedSlug);
+  if (!requestedSlug) {
+    cancelWorkspaceLoadIntent(state);
+  } else if (state.workspace) {
+    setActiveWorkspaceSlug(state, state.workspace, requestedSlug);
   }
 
   return html`
@@ -934,7 +1016,10 @@ function renderBody(
         <button
           class="btn btn--small"
           type="button"
-          @click=${() => void loadWorkspace(state, props.client)}
+          @click=${() =>
+            void loadWorkspace(state, props.client, {
+              requestedSlug: requestedWorkspaceSlug(window.location.search),
+            })}
         >
           ${t("common.reload")}
         </button>
@@ -968,23 +1053,28 @@ function renderBody(
   return html`
     ${renderWorkspacesHeader(tab)}
     ${renderOnboardingBanner(viewState, () => props.onRequestUpdate?.())}
-    ${renderTabStrip(state, workspace)} ${renderGrid(props, state, viewState, workspace, tab)}
+    ${renderTabStrip(state, workspace)}
+    <wa-tab-panel
+      id="workspace-tab-panel"
+      name=${tab.slug}
+      active
+      aria-labelledby=${`workspace-tab-${tab.slug}`}
+    >
+      ${renderGrid(props, state, viewState, workspace, tab)}
+    </wa-tab-panel>
   `;
 }
 
 /**
  * Page-header treatment for the Workspaces view (#7): the active workspace tab as
- * the title with a subtitle line, matching the app's .page-title / .page-sub
+ * the title, matching the app's .page-title header pattern
  * idiom used by the other top-level pages.
  */
 function renderWorkspacesHeader(tab: WorkspaceTab): TemplateResult {
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
       <div class="page-title">${tab.title}</div>
-      <div class="page-sub">${t("workspaces.header.subtitle")}</div>
     </div>
   `;
 }
-
-// Re-exported for tests that render the view into a detached container.
-export { render };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

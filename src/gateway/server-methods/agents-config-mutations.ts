@@ -12,7 +12,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions.js";
 import type { IdentityConfig } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-export type AgentDeleteMutationResult = {
+type AgentDeleteMutationResult = {
   workspaceDir: string;
   agentDir: string;
   sessionsDir: string;
@@ -72,7 +72,7 @@ export async function updateAgentConfigEntry(params: {
   agentId: string;
   name?: string;
   workspace?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Promise<void> {
   await mutateConfigFileWithRetry({
@@ -85,7 +85,7 @@ export async function updateAgentConfigEntry(params: {
         agentId: params.agentId,
         ...(params.name ? { name: params.name } : {}),
         ...(params.workspace ? { workspace: params.workspace } : {}),
-        ...(params.model ? { model: params.model } : {}),
+        ...(params.model !== undefined ? { model: params.model } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
       });
       Object.assign(draft, latestNextConfig);

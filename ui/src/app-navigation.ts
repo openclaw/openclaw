@@ -14,15 +14,13 @@ type NavigationItem = {
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
-  "sessions",
   "usage",
   "cron",
   "tasks",
-  "agents",
   "plugins",
-  "nodes",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -130,20 +128,40 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["ai-agents", "model-providers", "automation", "mcp"],
+    routes: [
+      "agents",
+      "ai-agents",
+      "sessions",
+      "memory-import",
+      "model-setup",
+      "model-providers",
+      "automation",
+      "mcp",
+    ],
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs", "activity", "about"],
+    routes: [
+      "infrastructure",
+      "nodes",
+      "approvals",
+      "worktrees",
+      "debug",
+      "logs",
+      "activity",
+      "about",
+    ],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
-  SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGATION_GROUPS.flatMap(
+  (group) => group.routes,
+);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
+  approvals: "shieldCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -155,7 +173,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitor",
+  nodes: "monitorSmartphone",
   chat: "messageSquare",
   config: "settings",
   profile: "lobster",
@@ -166,7 +184,9 @@ const NAVIGATION_ICONS: NavigationItem = {
   infrastructure: "globe",
   about: "fileText",
   "ai-agents": "brain",
+  "model-setup": "spark",
   "model-providers": "plug",
+  "memory-import": "download",
   debug: "bug",
   logs: "scrollText",
   plugin: "puzzle",
@@ -232,6 +252,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
@@ -260,10 +281,12 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
+  "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
     titleKey: "tabs.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
+  "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

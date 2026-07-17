@@ -41,8 +41,6 @@ const readSchema = Type.Object({
   offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
   limit: Type.Optional(Type.Number({ description: "Max lines." })),
 });
-export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
-
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
   label: string;
@@ -89,7 +87,9 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
     return "";
   }
   const startLine = args.offset ?? 1;
-  const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
+  const normalizedLimit =
+    args.limit !== undefined ? normalizePositiveLimit(args.limit, DEFAULT_MAX_LINES) : undefined;
+  const endLine = normalizedLimit !== undefined ? startLine + normalizedLimit - 1 : "";
   return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 

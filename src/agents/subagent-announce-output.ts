@@ -5,6 +5,7 @@
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -22,7 +23,7 @@ import {
 import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
-import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+import { isAnnounceSkip, selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -366,14 +367,25 @@ type ChildCompletionRow = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  return (
-    child.completion?.resultText ??
-    child.delivery?.payload?.frozenResultText ??
+  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
+  const fallback =
     child.completion?.fallbackResultText ??
     child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText ??
-    undefined
-  )?.trim();
+    child.frozenResultText;
+  if (child.outcome?.status === "ok") {
+    return selectDeliverableSessionsReply(primary, fallback);
+  }
+  return (primary ?? fallback)?.trim() || undefined;
+}
+
+function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
+  return [
+    child.completion?.resultText,
+    child.delivery?.payload?.frozenResultText,
+    child.completion?.fallbackResultText,
+    child.delivery?.payload?.fallbackFrozenResultText,
+    child.frozenResultText,
+  ].some((value) => Boolean(value?.trim()));
 }
 
 export function buildChildCompletionFindings(
@@ -392,11 +404,7 @@ export function buildChildCompletionFindings(
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
-    if (
-      child.outcome?.status === "ok" &&
-      resultText &&
-      (isAnnounceSkip(resultText) || isSilentReplyText(resultText, SILENT_REPLY_TOKEN))
-    ) {
+    if (child.outcome?.status === "ok" && !resultText && hasCapturedChildCompletionReply(child)) {
       continue;
     }
     const title =
@@ -499,23 +507,6 @@ export function filterCurrentDirectChildCompletionRows(
   });
 }
 
-function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
 function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
@@ -571,7 +562,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       : undefined;
 
   const parts = [
-    `runtime ${formatDurationShort(runtimeMs)}`,
+    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
   ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
@@ -580,7 +571,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   return `Stats: ${parts.join(" • ")}`;
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
     subagentAnnounceOutputDeps = overrides
       ? {
@@ -590,3 +581,8 @@ export const testing = {
       : defaultSubagentAnnounceOutputDeps;
   },
 };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceOutputTestApi")
+  ] = testing;
+}

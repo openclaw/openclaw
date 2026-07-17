@@ -12,6 +12,10 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
+import {
+  EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+  isGatewayExternallySupervised,
+} from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
@@ -197,7 +201,20 @@ export const updateHandlers: GatewayRequestHandlers = {
         : false;
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
-      if (configChannel === "extended-stable" && installSurface.kind === "git") {
+      if (isGatewayExternallySupervised()) {
+        const beforeVersion = installSurface.root
+          ? await readPackageVersion(installSurface.root)
+          : null;
+        result = {
+          status: "skipped",
+          mode: installSurface.mode,
+          ...(installSurface.root ? { root: installSurface.root } : {}),
+          reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
+          ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (configChannel === "extended-stable" && installSurface.kind === "git") {
         result = {
           status: "error",
           mode: "git",

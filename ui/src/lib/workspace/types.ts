@@ -11,9 +11,10 @@ export const WORKSPACE_GRID_COLUMNS = 12;
 /** Provenance stamp: who authored a tab or widget. `agent:<id>` renders a chip. */
 export type WorkspaceCreatedBy = string;
 
-export type WorkspaceWidgetKind = string;
+type WorkspaceWidgetKind = string;
+type WorkspaceTabLayout = "grid" | "full";
 
-export type WorkspaceBindingSource = "rpc" | "file" | "static";
+type WorkspaceBindingSource = "rpc" | "file" | "static";
 
 export type WorkspaceBinding = {
   source: WorkspaceBindingSource;
@@ -51,11 +52,12 @@ export type WorkspaceTab = {
   title: string;
   icon?: string;
   hidden: boolean;
+  layout?: WorkspaceTabLayout;
   createdBy?: WorkspaceCreatedBy;
   widgets: WorkspaceWidget[];
 };
 
-export type WorkspacePrefs = {
+type WorkspacePrefs = {
   tabOrder: string[];
 };
 

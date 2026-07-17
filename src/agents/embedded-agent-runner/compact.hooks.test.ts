@@ -5,6 +5,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
+  acquireSessionWriteLockMock,
   applyExtraParamsToAgentMock,
   applyAgentCompactionSettingsFromConfigMock,
   buildAgentRuntimePlanMock,
@@ -61,6 +62,7 @@ let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmb
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
+let withOwnedSessionTranscriptWrites: typeof import("../../config/sessions/transcript-write-context.js").withOwnedSessionTranscriptWrites;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -307,6 +309,7 @@ beforeAll(async () => {
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
+  withOwnedSessionTranscriptWrites = loaded.withOwnedSessionTranscriptWrites;
 });
 
 beforeEach(() => {
@@ -329,6 +332,36 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       details: { ok: true },
     });
     resetCompactSessionStateMocks();
+  });
+
+  it("acquires the normal session lock without process-wide reentry", async () => {
+    const result = await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    const lockOptions = mockCallArg(acquireSessionWriteLockMock);
+    expect(lockOptions).toMatchObject({ sessionFile: TEST_SESSION_FILE });
+    expect(lockOptions).not.toHaveProperty("allowReentrant");
+  });
+
+  it("reuses the matching logical writer lock during direct compaction", async () => {
+    const withSessionWriteLockCall = vi.fn();
+    const withSessionWriteLock = async <T>(run: () => Promise<T> | T): Promise<T> => {
+      withSessionWriteLockCall();
+      return await run();
+    };
+
+    const result = await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile: TEST_SESSION_FILE,
+        sessionKey: TEST_SESSION_KEY,
+        withSessionWriteLock,
+      },
+      async () => await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs()),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(withSessionWriteLockCall).toHaveBeenCalledOnce();
+    expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
   });
 
   it("fails closed before generic compaction for a model-locked native session", async () => {
@@ -460,6 +493,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           | { authProfileId?: string }
           | undefined;
         return options?.authProfileId === "openai:backup";
+      }),
+    ).toBe(true);
+    expect(
+      resolveModelAsyncMock.mock.calls.some((call) => {
+        const options = (call as unknown as readonly unknown[])[4] as
+          | { authProfileId?: string }
+          | undefined;
+        return options?.authProfileId === "openai:missing";
       }),
     ).toBe(true);
     expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
@@ -800,7 +841,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("routes compaction through shared stream resolution and extra params", () => {
+  it("routes compaction through shared stream resolution and extra params", async () => {
     const resolvedStreamFn = vi.fn();
     resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
     applyExtraParamsToAgentMock.mockReturnValue({
@@ -813,7 +854,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       messages: [{ role: "user", content: "hello" }],
     };
 
-    compactTesting.prepareCompactionSessionAgent({
+    await compactTesting.prepareCompactionSessionAgent({
       session: session as never,
       providerStreamFn: vi.fn(),
       sessionId: "session-1",
@@ -873,9 +914,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
-  it("maps logical Ultra to max before compaction provider hooks", () => {
+  it("maps logical Ultra to max before compaction provider hooks", async () => {
     const resolveExtraParams = vi.fn(() => undefined);
-    compactTesting.prepareCompactionSessionAgent({
+    await compactTesting.prepareCompactionSessionAgent({
       session: {
         agent: { streamFn: vi.fn() },
         messages: [{ role: "user", content: "hello" }],
@@ -1275,6 +1316,76 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("routes unbound ChatGPT OAuth direct compaction through auth-aware codex selection", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    } as never);
+    // Only ChatGPT OAuth is available — no API-key profile. Auth-aware
+    // selection must pick codex (harness-owned) instead of forced openclaw.
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "test-auth-token",
+          refresh: "test-auth-token",
+          expires: Date.now() + 10 * 60_000,
+        },
+      },
+      order: { openai: ["openai:chatgpt"] },
+    });
+    getApiKeyForModelMock.mockImplementation(async (params?: { profileId?: string }) => ({
+      apiKey: "test-auth-token",
+      mode: "oauth",
+      source: `profile:${params?.profileId ?? "openai:chatgpt"}`,
+      profileId: params?.profileId ?? "openai:chatgpt",
+    }));
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        // Do not pin provider-level api to openai-responses: that collapses
+        // route resolution to api-key-only and hides ChatGPT OAuth.
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: undefined,
+      }),
+    );
+    expect(selectAgentHarnessMock.mock.results[0]?.value).toEqual(
+      expect.objectContaining({ id: "codex", authBootstrap: "harness" }),
+    );
+    expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessRuntimeOverride: undefined,
+        modelProviders: expect.arrayContaining([
+          expect.objectContaining({
+            preparedAuth: expect.objectContaining({
+              source: "profile",
+              mode: "oauth",
+              requirement: "subscription",
+            }),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("keeps custom OpenAI-compatible compaction on OpenAI logical context", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
 
@@ -1383,6 +1494,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
+      runtimeAuthPlan: {
+        providerForAuth: "openai",
+        modelId: "gpt-5.5",
+        authProfileProviderForAuth: "openai",
+        selectedAuthMode: "api-key",
+      },
       config: {
         models: {
           providers: {
@@ -1396,6 +1513,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai");
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual({
+      authProfileMode: "api_key",
+    });
   });
 
   it("uses the compaction model override with a pinned Codex harness", async () => {
@@ -1433,6 +1553,35 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       provider: "openai",
       modelId: "gpt-5.4-mini",
     });
+  });
+
+  it("does not reuse a source-provider profile for cross-provider compaction", async () => {
+    const result = await compactEmbeddedAgentSessionDirect({
+      ...wrappedCompactionArgs(),
+      provider: "openai",
+      model: "gpt-5.5",
+      authProfileId: "openai:work",
+      runtimeAuthPlan: {
+        providerForAuth: "openai",
+        modelId: "gpt-5.5",
+        authProfileProviderForAuth: "openai",
+        forwardedAuthProfileId: "openai:work",
+      },
+      config: {
+        agents: {
+          defaults: {
+            compaction: { model: "github-copilot/gpt-5.6-sol" },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    const initialResolveCall = resolveModelAsyncMock.mock.calls[0] as
+      | [string, string, string, unknown, { authProfileId?: string }?]
+      | undefined;
+    expect(initialResolveCall?.[0]).toBe("github-copilot");
+    expect(initialResolveCall?.[4]?.authProfileId).toBeUndefined();
   });
 
   it("materializes subscription-auth OpenAI compaction while preserving logical context", async () => {
@@ -3042,6 +3191,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       }),
     );
 
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual(
+      expect.objectContaining({ authProfileId: "openai:token" }),
+    );
     expect(resolveModelAsyncMock).toHaveBeenLastCalledWith(
       "openai",
       "gpt-5.5",
@@ -3086,6 +3238,8 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("prepares queued native harness auth without a host profile", async () => {
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "");
     resolveAgentHarnessPolicyMock.mockReturnValue({
       runtime: "codex",
       runtimeSource: "model",
@@ -3156,6 +3310,141 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       provider: "openai",
       runtimeProvider: undefined,
       model: "gpt-5.5",
+    });
+  });
+
+  it("routes unbound ChatGPT OAuth queued compaction through auth-aware codex selection", async () => {
+    // Implicit policy may prefer codex, but with no bound/planned harness the
+    // override must stay undefined so prepared OAuth can select the harness.
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    } as never);
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth",
+          provider: "openai",
+          access: "test-auth-token",
+          refresh: "test-auth-token",
+          expires: Date.now() + 10 * 60_000,
+        },
+      },
+      order: { openai: ["openai:chatgpt"] },
+    });
+    getApiKeyForModelMock.mockImplementation(async (params?: { profileId?: string }) => ({
+      apiKey: "test-auth-token",
+      mode: "oauth",
+      source: `profile:${params?.profileId ?? "openai:chatgpt"}`,
+      profileId: params?.profileId ?? "openai:chatgpt",
+    }));
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        // Do not pin provider-level api to openai-responses: that collapses
+        // route resolution to api-key-only and hides ChatGPT OAuth.
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: undefined,
+      }),
+    );
+    expect(selectAgentHarnessMock.mock.results[0]?.value).toEqual(
+      expect.objectContaining({ id: "codex", authBootstrap: "harness" }),
+    );
+    expect(selectAgentHarnessForPreparedModelProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessRuntimeOverride: undefined,
+        modelProviders: expect.arrayContaining([
+          expect.objectContaining({
+            preparedAuth: expect.objectContaining({
+              source: "profile",
+              mode: "oauth",
+              requirement: "subscription",
+            }),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("keeps unbound api-key queued compaction on openclaw without native harness compaction", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "openclaw",
+      runtimeSource: "implicit",
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    expect(selectAgentHarnessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: undefined,
+      }),
+    );
+    expect(selectAgentHarnessMock.mock.results[0]?.value).toEqual(
+      expect.objectContaining({ id: "openclaw" }),
+    );
+  });
+
+  it("resolves reusable queued direct auth without a stored profile", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "openclaw",
+      runtimeSource: "implicit",
+    } as never);
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        runtimeAuthPlan: {
+          providerForAuth: "openai",
+          modelId: "gpt-5.5",
+          authProfileProviderForAuth: "openai",
+          selectedAuthMode: "api-key",
+        },
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelAsyncMock, 0, 4)).toEqual({
+      authProfileMode: "api_key",
     });
   });
 
@@ -3979,3 +4268,4 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

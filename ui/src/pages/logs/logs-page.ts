@@ -2,18 +2,25 @@ import { consume } from "@lit/context";
 import { html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import {
+  beginPanelRefresh,
+  completePanelRefresh,
+  createPanelRefreshStatus,
+  failPanelRefresh,
+} from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
@@ -39,7 +46,7 @@ class LogsPage extends OpenClawLightDomElement {
   @state() private client: GatewayBrowserClient | null = null;
   @state() private connected = false;
   @state() private logsLoading = false;
-  @state() private logsError: string | null = null;
+  @state() private logsStatus = createPanelRefreshStatus();
   @state() private logsFile: string | null = null;
   @state() private logsEntries: LogEntry[] = [];
   @state() private logsFilterText = "";
@@ -51,7 +58,14 @@ class LogsPage extends OpenClawLightDomElement {
   private logsCursor: number | null = null;
   private readonly logsLimit = 500;
   private readonly logsMaxBytes = 250_000;
-  private logsPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly polling = new PollController(
+    this,
+    LOGS_POLL_INTERVAL_MS,
+    () => {
+      void this.loadLogs({ quiet: true });
+    },
+    false,
+  );
   private logsScrollFrame: number | null = null;
   private contentScrollFrame: number | null = null;
   private hasBoundGatewaySource = false;
@@ -95,7 +109,6 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.stopPolling();
     this.subscriptions.clear();
     this.requestGeneration += 1;
     this.activeRequest = null;
@@ -140,7 +153,7 @@ class LogsPage extends OpenClawLightDomElement {
 
   private resetServerState() {
     this.logsLoading = false;
-    this.logsError = null;
+    this.logsStatus = createPanelRefreshStatus();
     this.logsFile = null;
     this.logsEntries = [];
     this.logsTruncated = false;
@@ -150,23 +163,10 @@ class LogsPage extends OpenClawLightDomElement {
 
   private syncPolling() {
     if (!this.connected || !this.client) {
-      this.stopPolling();
+      this.polling.stop();
       return;
     }
-    if (this.logsPollInterval !== null) {
-      return;
-    }
-    this.logsPollInterval = globalThis.setInterval(() => {
-      void this.loadLogs({ quiet: true });
-    }, LOGS_POLL_INTERVAL_MS);
-  }
-
-  private stopPolling() {
-    if (this.logsPollInterval === null) {
-      return;
-    }
-    globalThis.clearInterval(this.logsPollInterval);
-    this.logsPollInterval = null;
+    this.polling.start();
   }
 
   private ensureInitialLogs() {
@@ -218,7 +218,7 @@ class LogsPage extends OpenClawLightDomElement {
     if (!quiet) {
       this.logsLoading = true;
     }
-    this.logsError = null;
+    this.logsStatus = beginPanelRefresh(this.logsStatus, { clearError: !quiet });
     try {
       const res = await scope.client.request("logs.tail", {
         cursor: opts?.reset ? undefined : (this.logsCursor ?? undefined),
@@ -246,6 +246,7 @@ class LogsPage extends OpenClawLightDomElement {
       this.logsCursor = typeof payload.cursor === "number" ? payload.cursor : this.logsCursor;
       this.logsFile = typeof payload.file === "string" ? payload.file : this.logsFile;
       this.logsTruncated = Boolean(payload.truncated);
+      this.logsStatus = completePanelRefresh();
       return true;
     } catch (err) {
       if (!isCurrentOperation()) {
@@ -253,9 +254,12 @@ class LogsPage extends OpenClawLightDomElement {
       }
       if (isMissingOperatorReadScopeError(err)) {
         this.logsEntries = [];
-        this.logsError = formatMissingOperatorReadScopeMessage("logs");
+        this.logsStatus = failPanelRefresh(
+          createPanelRefreshStatus(),
+          formatMissingOperatorReadScopeMessage("logs"),
+        );
       } else {
-        this.logsError = String(err);
+        this.logsStatus = failPanelRefresh(this.logsStatus, String(err));
       }
       return true;
     } finally {
@@ -330,7 +334,7 @@ class LogsPage extends OpenClawLightDomElement {
   override render() {
     const body = renderLogs({
       loading: this.logsLoading,
-      error: this.logsError,
+      status: this.logsStatus,
       file: this.logsFile,
       entries: this.logsEntries,
       filterText: this.logsFilterText,
@@ -355,7 +359,6 @@ class LogsPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("logs")}</div>
-          <div class="page-sub">${subtitleForRoute("logs")}</div>
         </div>
       </section>
       ${renderSettingsWorkspace(body, { fillHeight: true })}

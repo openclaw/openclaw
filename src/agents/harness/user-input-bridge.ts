@@ -1,3 +1,4 @@
+import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
 export type AgentHarnessUserInputOption = {
@@ -23,6 +24,7 @@ export type AgentHarnessUserInputPromptOptions = {
   formatText?: (text: string) => string;
   secretWarning?: string;
   otherLabel?: string;
+  presentation?: MessagePresentation;
 };
 
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -69,7 +71,7 @@ export async function deliverAgentHarnessUserInputPrompt(
 ): Promise<void> {
   const text = formatAgentHarnessUserInputPrompt(questions, options);
   if (params.onBlockReply) {
-    await params.onBlockReply({ text });
+    await params.onBlockReply({ text, presentation: options.presentation });
     return;
   }
   await params.onPartialReply?.({ text });

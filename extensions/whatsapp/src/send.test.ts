@@ -84,7 +84,10 @@ describe("web outbound", () => {
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
       await import("./send.js"));
-    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+    const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
+      await import("openclaw/plugin-sdk/runtime-env");
+    resetLogger = loadedResetLogger;
+    setLoggerOverride = loadedSetLoggerOverride;
   });
 
   beforeEach(() => {
@@ -539,7 +542,7 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers explicit mediaUrl over mediaUrls when both are present", async () => {
+  it("keeps direct API mediaUrl ahead of additive mediaUrls", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: buf,

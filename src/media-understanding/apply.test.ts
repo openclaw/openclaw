@@ -33,7 +33,7 @@ const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
-let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
+let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.test-support.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
@@ -358,7 +358,7 @@ describe("applyMediaUnderstanding", () => {
       };
     });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
-    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.js"));
+    ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.test-support.js"));
 
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });
@@ -1501,6 +1501,55 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
+  it("limits native-harness preprocessing to audio", async () => {
+    const dir = await createTempMediaDir();
+    const imagePath = path.join(dir, "photo.jpg");
+    const audioPath = path.join(dir, "note.ogg");
+    const filePath = path.join(dir, "notes.txt");
+    await fs.writeFile(imagePath, "image-bytes");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    await fs.writeFile(filePath, "file text");
+
+    const describeImage = vi.fn(async () => ({ text: "image ok" }));
+    const transcribeAudio = vi.fn(async () => ({ text: "audio ok" }));
+    const ctx: MsgContext = {
+      Body: "<media:mixed>",
+      MediaPaths: [imagePath, audioPath, filePath],
+      MediaTypes: ["image/jpeg", "audio/ogg", "text/plain"],
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.4" }] },
+          audio: { enabled: true, models: [{ provider: "groq" }] },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      processingMode: "audio-only",
+      providers: {
+        openai: { id: "openai", describeImage },
+        groq: { id: "groq", transcribeAudio },
+      },
+    });
+
+    expect(describeImage).not.toHaveBeenCalled();
+    expect(transcribeAudio).toHaveBeenCalledOnce();
+    expect(result).toEqual(
+      expect.objectContaining({
+        appliedImage: false,
+        appliedAudio: true,
+        appliedVideo: false,
+        appliedFile: false,
+        extractedFileImages: [],
+      }),
+    );
+    expect(ctx.Body).toBe("[Audio]\nTranscript:\naudio ok");
+  });
+
   it("orders synthetic too-small audio output between image and video", async () => {
     const dir = await createTempMediaDir();
     const imagePath = path.join(dir, "photo.jpg");
@@ -1870,6 +1919,24 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('mime="application/json"');
   });
 
+  it.each(["application/", "application/json garbage", 'application/json" onclick="alert(1)'])(
+    "rejects malformed MIME before file extraction: %j",
+    async (mediaType) => {
+      const filePath = await createTempMediaFile({
+        fileName: "payload.bin",
+        content: Buffer.alloc(256, 0x81),
+      });
+
+      const { ctx, result } = await applyWithDisabledMedia({
+        body: "<media:document>",
+        mediaPath: filePath,
+        mediaType,
+      });
+
+      expectFileNotApplied({ ctx, result, body: "<media:document>" });
+    },
+  );
+
   it("handles path traversal attempts in filenames safely", async () => {
     // Even if a file somehow got a path-like name, it should be handled safely
     const filePath = await createTempMediaFile({
@@ -2006,3 +2073,4 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("vendor-json");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

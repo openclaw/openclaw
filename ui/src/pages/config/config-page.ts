@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
@@ -13,18 +14,29 @@ import {
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
+  loadLocalUserIdentity,
   loadSettings,
+  normalizeCatalogOpenTarget,
   normalizeTextScale,
+  normalizeChatSendShortcut,
   patchSettings,
+  saveLocalUserIdentity,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  discoverRealtimeTalkInputs,
+  type RealtimeTalkInputDevice,
+} from "../chat/realtime-talk-input.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
   AUTOMATION_SECTION_KEYS,
@@ -52,6 +64,7 @@ export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type LocalUiSetting = "textScale" | "chatSendShortcut" | "chatFollowUpMode" | "catalogOpenTarget";
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -106,12 +119,6 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   throw new Error("Unknown config page");
 }
 
-function asConfigRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function normalizeConfigSelection(
   pageId: ConfigPageId,
   activeSection: string | null,
@@ -141,10 +148,6 @@ function configPageTitle(pageId: ConfigPageId): string {
   return pageId === "config"
     ? t("nav.settingsGeneral")
     : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
-}
-
-function configPageSubtitle(pageId: ConfigPageId): string {
-  return t(`subtitles.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
 
 function mcpServerCount(config: unknown): number {
@@ -239,9 +242,14 @@ export class ConfigPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
+  @state() private userAvatar: string | null = loadLocalUserIdentity().avatar;
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
+  @state() private microphoneLoading = false;
+  @state() private microphoneError: string | null = null;
+  private microphoneLoaded = false;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -250,15 +258,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     mcp: "form",
     infrastructure: "form",
     "ai-agents": "form",
-  };
-  @state() private searchQueries: Record<ConfigPageId, string> = {
-    config: "",
-    communications: "",
-    appearance: "",
-    automation: "",
-    mcp: "",
-    infrastructure: "",
-    "ai-agents": "",
   };
   @state() private selections: Record<ConfigPageId, ConfigSelection> = {
     config: defaultConfigSelection("config"),
@@ -282,7 +281,14 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
-  private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => {
+      void this.loadSystemInfo();
+    },
+    false,
+  );
   private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -318,11 +324,20 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
+    this.userAvatar = loadLocalUserIdentity().avatar;
     this.syncRouteData();
   }
 
+  private setLocalUserAvatar(avatar: string | null) {
+    const identity = saveLocalUserIdentity({
+      ...loadLocalUserIdentity(),
+      avatar,
+    });
+    this.userAvatar = identity.avatar;
+  }
+
   override disconnectedCallback() {
-    this.stopSystemInfoPolling();
+    this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
@@ -346,6 +361,28 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     this.syncSystemInfoPolling();
     this.scrollToPendingRouteTarget();
+    // Device labels stay hidden until the user grants mic permission; the
+    // refresh button next to the picker requests it explicitly.
+    if (this.pageId === "appearance" && !this.microphoneLoaded) {
+      this.microphoneLoaded = true;
+      void this.refreshMicrophones(false);
+    }
+  }
+
+  private async refreshMicrophones(requestPermission: boolean) {
+    this.microphoneLoading = true;
+    this.microphoneError = null;
+    try {
+      const result = await discoverRealtimeTalkInputs(requestPermission);
+      this.microphoneDevices = result.devices;
+      this.microphoneError = result.warning;
+    } catch (error) {
+      // Discovery is best-effort in blocked/inactive contexts; a rejection
+      // must not wedge the picker in its loading state.
+      this.microphoneError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.microphoneLoading = false;
+    }
   }
 
   private syncRouteData() {
@@ -409,7 +446,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
     if (gateway !== this.systemInfoGatewaySource) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       this.invalidateSystemInfoRequest();
       this.systemInfoGatewaySource = gateway;
       this.resetConfigViewState();
@@ -457,24 +494,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       return;
     }
-    if (this.systemInfoPollInterval !== null) {
-      return;
-    }
-    void this.loadSystemInfo();
-    this.systemInfoPollInterval = globalThis.setInterval(() => {
+    if (this.systemInfoPolling.start()) {
       void this.loadSystemInfo();
-    }, SYSTEM_INFO_POLL_INTERVAL_MS);
-  }
-
-  private stopSystemInfoPolling() {
-    if (this.systemInfoPollInterval === null) {
-      return;
     }
-    globalThis.clearInterval(this.systemInfoPollInterval);
-    this.systemInfoPollInterval = null;
   }
 
   private invalidateSystemInfoRequest() {
@@ -531,7 +556,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
-        this.stopSystemInfoPolling();
+        this.systemInfoPolling.stop();
       }
     } finally {
       if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
@@ -546,10 +571,6 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private setFormMode(mode: ConfigFormMode) {
     this.formModes = { ...this.formModes, [this.pageId]: mode };
-  }
-
-  private setSearchQuery(query: string) {
-    this.searchQueries = { ...this.searchQueries, [this.pageId]: query };
   }
 
   private setActiveSection(section: string | null) {
@@ -572,6 +593,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      chatSendShortcut: next.chatSendShortcut,
+      chatFollowUpMode: next.chatFollowUpMode,
+      catalogOpenTarget: next.catalogOpenTarget,
+      realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -614,8 +639,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
   }
 
-  private setTextScale(value: number) {
-    this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
+  private setSetting<K extends LocalUiSetting>(key: K, value: UiSettings[K]) {
+    this.applySettings({ ...this.settings, [key]: value });
+  }
+
+  private selectMicrophone(deviceId: string) {
+    this.applySettings({
+      ...this.settings,
+      realtimeTalkInputDeviceId: deviceId.trim() || undefined,
+    });
   }
 
   private openCustomThemeImport() {
@@ -711,11 +743,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       saving: configState.configSaving,
       applying: configState.configApplying,
       updating: this.isUpdateBusy(),
+      autoSaveStatus: configState.configAutoSaveStatus,
+      needsApply: configState.configNeedsApply,
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
       uiHints: configState.configUiHints,
       formMode: this.formModes[this.pageId],
+      rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
       viewState: this.configViewState,
       rawAvailable: Boolean(
         configState.configSnapshot?.config || configState.configForm || configState.configRaw,
@@ -723,21 +758,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       showModeToggle: this.pageId === "config",
       formValue: configState.configForm,
       originalValue: configState.configFormOriginal,
-      searchQuery: this.searchQueries[this.pageId],
       activeSection,
       activeSubsection,
       onRawChange: (next) => runtimeConfig.setRaw(next),
       onFormModeChange: (mode) => this.setFormMode(mode),
       onViewStateChange: () => this.requestUpdate(),
       onFormPatch: (path, value) => runtimeConfig.patchForm(path, value),
-      onSearchChange: (query) => this.setSearchQuery(query),
       onSectionChange: (section) => this.setActiveSection(section),
       onSubsectionChange: (section) => this.setActiveSubsection(section),
-      onReload: () => void runtimeConfig.refresh({ discardPendingChanges: true }),
-      onReset: () => runtimeConfig.resetDraft(),
       onSave: () => void runtimeConfig.save(),
       onApply: () => void runtimeConfig.apply(),
-      onUpdate: () => void this.context.overlays.runUpdate(),
+      onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       version:
         this.context.config.current.serverVersion ??
@@ -765,7 +796,26 @@ export class ConfigPage extends OpenClawLightDomElement {
       onClearCustomTheme: () => this.clearCustomTheme(),
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
+      chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
+      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      chatFollowUpMode: this.settings.chatFollowUpMode,
+      serverQueueMode: configState.configSnapshot
+        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
+            configNeedsApply: configState.configNeedsApply,
+          })
+        : undefined,
+      setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
+      catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
+      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
+      microphone: {
+        devices: this.microphoneDevices,
+        selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
+        loading: this.microphoneLoading,
+        error: this.microphoneError,
+      },
+      onMicrophoneRefresh: () => void this.refreshMicrophones(true),
+      onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
@@ -785,13 +835,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     return renderMcp({
       configObject,
-      configDirty: configState.configFormDirty,
-      configSaving: configState.configSaving,
-      configApplying: configState.configApplying,
-      connected: configState.connected,
       pluginsHref: pathForRoute("plugins", this.context.basePath),
-      onSaveConfig: () => void runtimeConfig.save(),
-      onApplyConfig: () => void runtimeConfig.apply(),
       editor: renderConfig({
         ...props,
         activeSection: "mcp",
@@ -841,7 +885,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         };
         this.navigate("ai-agents");
       },
-      setTextScale: (value) => this.setTextScale(value),
+      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       lobsterPetVisits: this.settings.lobsterPetVisits !== false,
       setLobsterPetVisits: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetVisits: enabled }),
@@ -851,7 +895,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => {
         this.pageId = "appearance";
         this.setFormMode("form");
-        this.setSearchQuery("");
         this.selections = {
           ...this.selections,
           appearance: { activeSection: "__appearance__", activeSubsection: null },
@@ -863,15 +906,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: appConfig.assistantIdentity.name,
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
-      configDirty: runtimeConfig.state.configFormDirty,
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
       configUpdating: this.isUpdateBusy(),
-      configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
-      onResetConfig: () => runtimeConfig.resetDraft(),
-      onSaveConfig: () => void runtimeConfig.save(),
+      configNeedsApply: runtimeConfig.state.configNeedsApply,
+      configRawDraftPending:
+        runtimeConfig.state.configFormMode === "raw" && runtimeConfig.state.configFormDirty,
+      configAutoSaveStatus: runtimeConfig.state.configAutoSaveStatus,
       onApplyConfig: () => void runtimeConfig.apply(),
+      onRetrySaveConfig: () => void runtimeConfig.save(),
+      onDiscardConfig: () => void runtimeConfig.discardDraft(),
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
@@ -899,6 +944,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantAvatarStatus: appConfig.assistantIdentity.avatarStatus,
       assistantAvatarReason: appConfig.assistantIdentity.avatarReason,
       assistantAvatarOverride: null,
+      userAvatar: this.userAvatar,
+      onUserAvatarChange: (avatar) => this.setLocalUserAvatar(avatar),
       basePath: this.context.basePath,
     });
   }
@@ -907,30 +954,19 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (this.pageId !== "config") {
       return nothing;
     }
-    const modes = [
-      ["quick", t("configPage.simple")],
-      ["advanced", t("configPage.advanced")],
-    ] as const;
     return html`
-      <div
-        class="config-view-toggle qs-segmented"
-        role="tablist"
-        aria-label=${t("configPage.settingsView")}
-      >
-        ${modes.map(
-          ([mode, label]) => html`
-            <button
-              class="qs-segmented__btn ${this.settingsMode === mode
-                ? "qs-segmented__btn--active"
-                : ""}"
-              role="tab"
-              aria-selected=${this.settingsMode === mode}
-              @click=${() => (this.settingsMode = mode)}
-            >
-              ${label}
-            </button>
-          `,
-        )}
+      <div class="config-view-toggle">
+        ${renderSettingsSegmented({
+          value: this.settingsMode,
+          options: [
+            { value: "quick", label: t("configPage.simple") },
+            { value: "advanced", label: t("configPage.advanced") },
+          ],
+          ariaLabel: t("configPage.settingsView"),
+          onChange: (mode) => {
+            this.settingsMode = mode;
+          },
+        })}
       </div>
     `;
   }
@@ -947,16 +983,24 @@ export class ConfigPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
-          <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
       </section>
       ${this.pageId === "config"
         ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
         : nothing}
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(
+        body,
+        this.pageId === "config"
+          ? {
+              id: "config-settings-panel",
+              ariaLabel: t("configPage.content"),
+            }
+          : {},
+      )}
     `;
   }
 }
 
 customElements.define("openclaw-config-page", ConfigPage);
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

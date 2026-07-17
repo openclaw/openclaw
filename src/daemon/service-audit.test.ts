@@ -9,8 +9,23 @@ import {
   checkTokenDrift,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
-import { buildMinimalServicePath } from "./service-env.js";
+import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+
+function buildMinimalServicePath(options: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+}): string {
+  const servicePath = buildServiceEnvironment({
+    env: options.env,
+    platform: options.platform,
+    port: 18789,
+  }).PATH;
+  if (!servicePath) {
+    throw new Error("expected managed service PATH");
+  }
+  return servicePath;
+}
 
 function hasIssue(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
@@ -97,6 +112,9 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
+    expect(
+      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
+    ).toContain("runtime state requires node:sqlite");
   });
 
   it("flags version-managed node paths", async () => {
@@ -435,6 +453,44 @@ describe("auditGatewayServiceConfig", () => {
     });
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+  });
+
+  it("audits the final repeated gateway port flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "entry.js",
+          "gateway",
+          "--port",
+          "18789",
+          "--port=18888",
+        ],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+  });
+
+  it("does not reinterpret a consumed gateway port value as another flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "--port=18888"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue?.detail).toBe("--port=18888 -> 18888");
   });
 
   it("flags gateway token mismatch when service token is stale", async () => {

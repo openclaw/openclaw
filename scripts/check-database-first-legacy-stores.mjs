@@ -39,6 +39,7 @@ const legacyWriteCallees = new Set([
 const fsModuleSpecifiers = new Set(["node:fs", "node:fs/promises", "fs", "fs/promises"]);
 
 const helperWriteCallees = new Set([
+  "acquireFileLock",
   "appendRegularFile",
   "appendRegularFileSync",
   "replaceFileAtomic",
@@ -49,6 +50,7 @@ const helperWriteCallees = new Set([
   "writeJsonFileAtomically",
   "writeJsonSync",
   "writeTextAtomic",
+  "withFileLock",
 ]);
 
 const fsSafeStoreFactoryCallees = new Set([
@@ -77,7 +79,7 @@ const fsSafeStoreWriteMethods = new Set([
 const fsSafeJsonStoreWriteMethods = new Set(["update", "updateOr", "write"]);
 
 const helperWriteModulePattern =
-  /(?:^|\/)(?:fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
+  /(?:^|\/)(?:file-lock|fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
 const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
@@ -89,28 +91,54 @@ const legacyStorePatterns = [
   /\bacp\/event-ledger\.json\b/u,
   /\bcache\/[^"'`]*\.json\b/u,
   /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
-  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|workspace-state)\.json\b/u,
+  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|(?:openclaw-)?workspace-state)\.json\b/u,
+  // Dynamic template spans resolve to `*`, so the start alternative also
+  // catches `${workspaceKey}.attested` and `${workspaceDir}.attested`.
+  /(?:^|[/\\])[^/\\"'`]+\.attested\b/u,
+  /\btui\/last-session\.json\b/u,
+  /\bcommitments\/commitments\.json\b/u,
+  /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+  /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
+  /\bmcp-oauth\/[^"'`]*\.json\b/u,
+  /\bnode\.json\b/u,
+  /\bsubagents\/runs\.json\b/u,
+  /\btmp\/skill-uploads\b/u,
+  /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|audit\/file-transfer|audit\/crestodian)\.jsonl\b/u,
+  /\b(?:calls|ref-index|audit\/file-transfer|audit\/openclaw)\.jsonl\b/u,
   /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
   /\bplugin-state\/state\.sqlite\b/u,
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
   /\bopenclaw-state\.sqlite\b/u,
+  /\bopenclaw-native-hook-relays\b/u,
+  /(?:^|\/)(?:meta|file-meta)\.json$/u,
+  /(?:^|\/)viewer\.html$/u,
+  /(?:^|\/)qmd\/embed\.lock(?:\.lock)?$/u,
+  /(?:^|\/)qmd-write\.lock(?:\.lock)?$/u,
 ];
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
+  "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
+  "src/infra/state-migrations.acp-replay.ts",
+  "src/infra/state-migrations.tui-last-session.ts",
+  "src/infra/state-migrations.commitments.ts",
+  "src/infra/state-migrations.managed-outgoing-images.ts",
+  "src/infra/state-migrations.apns.ts",
+  "src/infra/state-migrations.mcp-oauth.ts",
+  "src/infra/state-migrations.workspace-setup.ts",
+  "src/infra/state-migrations.web-push.ts",
+  "src/infra/state-migrations.node-host.ts",
+  "src/infra/state-migrations.subagent-registry.ts",
+  "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
   "src/commands/doctor-state-migrations.test.ts",
 ];
 
-const allowedFixturePaths = new Set([
-  "extensions/qa-lab/src/providers/shared/auth-store.ts",
-  "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
-]);
+const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
 const allowedCurrentLegacyWriteViolations = [
   "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",

@@ -40,6 +40,8 @@ type TestSessionsPage = HTMLElement & {
   loadCheckpoint: (sessionKey: string) => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
+  stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
@@ -145,7 +147,12 @@ function createContext(
     sessions,
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
-    agentSelection: { state: { selectedId: "main" }, subscribe },
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      set: () => undefined,
+      setScope: () => undefined,
+      subscribe,
+    },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
     workboard: {
@@ -200,11 +207,17 @@ describe("sessions page lifecycle", () => {
       hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
     });
     const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:launch" }],
+    } as SessionsListResult;
 
     page.updateTranscriptSearchQuery("  launch code  ");
     const pending = page.runTranscriptSearch();
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("sessions.search", {
+      agentId: "main",
+      sessionKeys: ["agent:main:launch"],
       query: "launch code",
       limit: 25,
     });
@@ -237,6 +250,53 @@ describe("sessions page lifecycle", () => {
     });
   });
 
+  it("fans all-agent transcript search out by owning agent and merges ranked results", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+      results: [
+        {
+          sessionKey: `agent:${params.agentId}:one`,
+          sessionId: `${params.agentId}-one`,
+          messageId: `${params.agentId}-message`,
+          role: "assistant" as const,
+          timestamp: params.agentId === "writer" ? 2 : 1,
+          snippet: params.agentId,
+          score: params.agentId === "writer" ? 2 : 1,
+        },
+      ],
+    }));
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const context = createContext(mutableGateway.gateway, createSessions());
+    context.agentSelection.state.scopeId = null;
+    const page = await createPage(context);
+    page.result = {
+      count: 2,
+      sessions: [{ key: "agent:main:one" }, { key: "agent:writer:one" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("needle");
+    await page.runTranscriptSearch();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:one"] }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "sessions.search",
+      expect.objectContaining({ agentId: "writer", sessionKeys: ["agent:writer:one"] }),
+    );
+    expect(page.transcriptSearch.status).toBe("results");
+    if (page.transcriptSearch.status === "results") {
+      expect(page.transcriptSearch.results.map((result) => result.sessionKey)).toEqual([
+        "agent:writer:one",
+        "agent:main:one",
+      ]);
+    }
+  });
+
   it("does not request empty or unadvertised transcript searches", async () => {
     const request = vi.fn();
     const page = await createPage(
@@ -263,6 +323,10 @@ describe("sessions page lifecycle", () => {
       hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
     });
     const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:stale" }],
+    } as SessionsListResult;
 
     page.updateTranscriptSearchQuery("old query");
     const pending = page.runTranscriptSearch();
@@ -284,6 +348,52 @@ describe("sessions page lifecycle", () => {
     await pending;
 
     expect(page.transcriptSearchQuery).toBe("new query");
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+  });
+
+  it("drops transcript results and in-flight work when agent scope changes", async () => {
+    const response = deferred<SessionsSearchResult>();
+    const request = vi.fn(() => response.promise);
+    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const context = createContext(mutableGateway.gateway, createSessions());
+    let notifyScopeChange: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
+      undefined;
+    context.agentSelection.subscribe = (listener) => {
+      notifyScopeChange = listener;
+      return () => undefined;
+    };
+    const page = await createPage(context);
+    page.result = {
+      count: 1,
+      sessions: [{ key: "agent:main:stale" }],
+    } as SessionsListResult;
+
+    page.updateTranscriptSearchQuery("needle");
+    const pending = page.runTranscriptSearch();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    context.agentSelection.state.scopeId = null;
+    notifyScopeChange(context.agentSelection.state);
+
+    expect(page.transcriptSearchQuery).toBe("needle");
+    expect(page.transcriptSearch).toEqual({ status: "idle" });
+
+    response.resolve({
+      results: [
+        {
+          sessionKey: "agent:main:stale",
+          sessionId: "stale",
+          messageId: "message-stale",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "needle",
+          score: 1,
+        },
+      ],
+    });
+    await pending;
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
@@ -369,6 +479,21 @@ describe("sessions page lifecycle", () => {
     expect(page.checkpointLoadingKey).toBeNull();
   });
 
+  it("scopes list requests while preserving an all-agents escape", async () => {
+    const sessions = createSessions();
+    const context = createContext(createGateway({} as GatewayBrowserClient).gateway, sessions);
+    const page = await createPage(context);
+
+    await page.loadSessions();
+    expect(sessions.list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
+
+    context.agentSelection.state.scopeId = null;
+    await page.loadSessions();
+    expect(sessions.list).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+  });
+
   it("invalidates checkpoint work and mutation locks on same-client disconnect", async () => {
     const checkpoints = deferred<SessionCompactionCheckpoint[]>();
     const sessions = createSessions({
@@ -447,6 +572,57 @@ describe("sessions page lifecycle", () => {
     expect(page.result?.sessions).toEqual([]);
   });
 
+  it("stops an active cloud worker and refreshes the session roster", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const list = vi.fn(async () => ({ count: 0, sessions: [] }) as unknown as SessionsListResult);
+    const sessions = createSessions({ list });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const row = {
+      key: "agent:main:cloud",
+      label: "Cloud task",
+      placement: {
+        state: "active",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "0".repeat(64),
+        workspaceBaseManifestRef: "base-ref",
+        remoteWorkspaceDir: "/workspace",
+      },
+    } as GatewaySessionRow;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await page.stopCloudWorker(row);
+
+    expect(confirm).toHaveBeenCalledWith('Stop the cloud worker for "Cloud task"?');
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:cloud", agentId: "main" },
+      { timeoutMs: 10 * 60_000 },
+    );
+    expect(list).toHaveBeenCalledOnce();
+    expect(page.sessionMutationPending).toBe(false);
+  });
+
+  it("surfaces a rejected custom-group creation on the Sessions page", async () => {
+    const groupsPut = vi.fn(async () => {
+      throw new Error("group name exceeds 512 characters");
+    });
+    const sessions = createSessions({ groupsPut });
+    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const page = await createPage(createContext(gateway, sessions));
+    const name = "X".repeat(513);
+
+    await page.rememberCustomGroup(name);
+
+    expect(groupsPut).toHaveBeenCalledWith([name]);
+    expect(page.error).toBe("Error: group name exceeds 512 characters");
+  });
+
   it("drops stale mutation state, errors, and navigation after disconnect", async () => {
     const deleted = deferred<{
       deleted: string[];
@@ -458,12 +634,14 @@ describe("sessions page lifecycle", () => {
     const branched = deferred<{ key: string }>();
     const restored = deferred<unknown>();
     const captured = deferred<unknown>();
+    const groupsPut = deferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
     const sessions = createSessions({
       deleteMany: vi.fn(() => deleted.promise),
       patch: vi.fn(() => patched.promise as never),
       create: vi.fn(() => forked.promise),
       branchCheckpoint: vi.fn(() => branched.promise as never),
       restoreCheckpoint: vi.fn(() => restored.promise as never),
+      groupsPut: vi.fn(() => groupsPut.promise),
     });
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
@@ -490,6 +668,7 @@ describe("sessions page lifecycle", () => {
       page.branchCheckpoint("main", "branch-checkpoint"),
       page.restoreCheckpoint("main", "restore-checkpoint"),
       page.addToWorkboard({ key: "main" } as GatewaySessionRow),
+      page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
@@ -502,6 +681,7 @@ describe("sessions page lifecycle", () => {
     branched.resolve({ key: "branched" });
     restored.reject(new Error("stale restore error"));
     captured.reject(new Error("stale capture error"));
+    groupsPut.reject(new Error("stale group error"));
     await Promise.all(requests);
 
     expect(page.result?.sessions.map((row) => row.key)).toEqual(["main"]);

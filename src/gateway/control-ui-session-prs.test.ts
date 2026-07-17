@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadControlUiSessionPullRequests,
   parseControlUiSessionPullRequestsParams,
-  parseGitHubRemoteUrl,
-  resetControlUiSessionPullRequestCacheForTests,
-  type SessionPullRequestGitContext,
 } from "./control-ui-session-prs.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+type GitContext = { owner: string; repo: string; branch: string };
 
 function githubJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -54,13 +54,15 @@ function pullListItem(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-const context: SessionPullRequestGitContext = {
+const context: GitContext = {
   owner: "openclaw",
   repo: "openclaw",
   branch: "claude/browser-tabs-tighter-header",
 };
 
 const resolveGitContext = async () => context;
+let cacheEpochMs = Date.now();
+let cacheEvictionEpoch = 0;
 
 describe("parseGitHubRemoteUrl", () => {
   it("parses https, scp-like, and ssh remotes", () => {
@@ -78,6 +80,24 @@ describe("parseGitHubRemoteUrl", () => {
     expect(parseGitHubRemoteUrl("/local/path/repo.git")).toBeNull();
   });
 });
+
+async function evictPullRequestCache(): Promise<void> {
+  const epoch = (cacheEvictionEpoch += 1);
+  await Promise.all(
+    Array.from({ length: 101 }, (_, index) =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:main" },
+        {
+          fetchImpl: async () => githubJson([]),
+          resolveGitContext: async () => ({
+            ...context,
+            branch: `test/cache-eviction-${epoch}-${index}`,
+          }),
+        },
+      ),
+    ),
+  );
+}
 
 describe("parseControlUiSessionPullRequestsParams", () => {
   it("requires a non-empty session key", () => {
@@ -101,11 +121,13 @@ describe("parseControlUiSessionPullRequestsParams", () => {
 
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
-    resetControlUiSessionPullRequestCacheForTests();
     vi.useFakeTimers();
+    cacheEpochMs += 10 * 60_000;
+    vi.setSystemTime(cacheEpochMs);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await evictPullRequestCache();
     vi.useRealTimers();
   });
 
@@ -210,7 +232,7 @@ describe("loadControlUiSessionPullRequests", () => {
       running: 1,
     });
 
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "timed_out" };
     const failing = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -226,7 +248,7 @@ describe("loadControlUiSessionPullRequests", () => {
 
     // A stale conclusion means GitHub invalidated the run; it must not be
     // rolled up as green.
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "stale" };
     const stale = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -452,11 +474,11 @@ describe("session branch diff stats", () => {
     });
 
   beforeEach(async () => {
-    resetControlUiSessionPullRequestCacheForTests();
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
   });
 
   afterEach(async () => {
+    await evictPullRequestCache();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -574,7 +596,7 @@ describe("session branch diff stats", () => {
     expect(result.branch).toBeUndefined();
   });
 
-  it("omits the branch payload until the branch exists on origin", async () => {
+  it("reports local changes without createUrl until the branch exists on origin", async () => {
     await git("init", "--initial-branch=main", ".");
     await fs.writeFile(path.join(root, "a.txt"), "one\n");
     await git("add", "a.txt");
@@ -602,8 +624,53 @@ describe("session branch diff stats", () => {
       },
     );
 
-    // GitHub's pull/new page 404s for unpushed branches, so no Create PR row.
-    expect(result.branch).toBeUndefined();
+    // GitHub's pull/new page 404s for unpushed branches, so no Create PR
+    // link — but the session's changed files still get a row.
+    expect(result.branch).toEqual({
+      owner: "openclaw",
+      repo: "openclaw",
+      branch: "feature",
+      additions: 1,
+      deletions: 0,
+    });
+  });
+
+  it("reports uncommitted changes when the remote branch has nothing to compare", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await fs.appendFile(path.join(root, "a.txt"), "pending\n");
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
+      },
+    );
+
+    // origin/feature == origin/main, so no Create PR link yet, but the dirty
+    // working tree is visible work the row must surface.
+    expect(result.branch).toEqual({
+      owner: "openclaw",
+      repo: "openclaw",
+      branch: "feature",
+      additions: 1,
+      deletions: 0,
+    });
   });
 
   it("omits the branch payload when the default branch is unknown", async () => {

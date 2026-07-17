@@ -51,9 +51,16 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
+
+type TrustedCatalogSessionTarget = {
+  model: string;
+  agentRuntime: string;
+  pluginOwnerId: string;
+};
 
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
@@ -181,6 +188,9 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
+  /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
+  catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
@@ -209,6 +219,15 @@ export async function createGatewaySession(params: {
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
+  const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
+  const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
+  const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
+  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
+    };
+  }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
     if (
@@ -235,6 +254,19 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+  if (
+    params.catalogTarget &&
+    explicitTargetKey &&
+    !explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "catalog sessions require a generated dashboard key",
+      ),
+    };
+  }
 
   const authorizedHarnessCreation = Boolean(
     explicitTargetKey &&
@@ -350,6 +382,9 @@ export async function createGatewaySession(params: {
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    // Catalog targets need a fresh locked row; resetting main would return before
+    // the catalog-owned model/runtime pair is persisted.
+    !params.catalogTarget &&
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(
@@ -509,6 +544,15 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        if (params.catalogTarget && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "catalog session target requires a new session",
+            ),
+          };
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -517,7 +561,8 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: normalizeOptionalString(params.model),
+            model: catalogModel ?? normalizeOptionalString(params.model),
+            thinkingLevel: normalizeOptionalString(params.thinkingLevel),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -554,8 +599,21 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const catalogResolvedModel = params.catalogTarget
+          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
+          : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(catalogResolvedModel && catalogAgentRuntime
+            ? {
+                providerOverride: catalogResolvedModel.provider,
+                modelOverride: catalogResolvedModel.model,
+                modelOverrideSource: "user" as const,
+                agentRuntimeOverride: catalogAgentRuntime,
+                modelSelectionLocked: true,
+                pluginOwnerId: catalogPluginOwnerId,
+              }
+            : {}),
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
@@ -591,9 +649,10 @@ export async function createGatewaySession(params: {
         if (!canonicalParentSessionKey) {
           return initialized;
         }
-        const inheritedSelection = normalizeOptionalString(params.model)
-          ? {}
-          : inheritSessionSelection(currentParentSessionEntry);
+        const inheritedSelection =
+          catalogModel || normalizeOptionalString(params.model)
+            ? {}
+            : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,
@@ -642,14 +701,7 @@ export async function createGatewaySession(params: {
         }
         return {
           ...initialized,
-          entry: {
-            ...entry,
-            sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
-            forkedFromParent: true,
-            totalTokens: undefined,
-            totalTokensFresh: false,
-          },
+          entry: buildForkedGatewaySessionEntry(entry, fork),
         };
       },
       params.initialEntry
@@ -742,3 +794,4 @@ export async function createGatewaySession(params: {
   }
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

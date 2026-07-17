@@ -65,7 +65,16 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
   ),
 );
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
-  vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
+  vi.fn(
+    async (): Promise<{
+      changes: string[];
+      warnings: string[];
+      codexRuntimePolicyTargets?: Array<{ modelRef: string }>;
+    }> => ({ changes: ["cron-imported"], warnings: [] }),
+  ),
+);
+const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
+  vi.fn(async () => ({ targets: [] as Array<{ modelRef: string }>, warnings: [] as string[] })),
 );
 const needsStartupMigrationCheckpoint = vi.hoisted(() => vi.fn(() => false));
 const startupMigrationLeaseHeartbeat = vi.hoisted(() => vi.fn());
@@ -93,6 +102,12 @@ const runPostCorePluginConvergence = vi.hoisted(() =>
 );
 const planStartupPluginConvergence = vi.hoisted(() =>
   vi.fn(async () => ({ required: true, installRecords: {} })),
+);
+const planPristineStartupStateMigrations = vi.hoisted(() =>
+  vi.fn(() => ({
+    skipAllStateMigrations: false,
+    skipCoreStateMigrations: false,
+  })),
 );
 const makeStartupConvergenceResult = vi.hoisted(
   () =>
@@ -127,7 +142,8 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyTaskStateSidecars,
 }));
 
-vi.mock("./doctor/cron/index.js", () => ({
+vi.mock("./doctor/cron/legacy-repair.js", () => ({
+  collectCronCodexRuntimePolicyTargetsReadOnly,
   repairLegacyCronStoreWithoutPrompt,
 }));
 
@@ -143,6 +159,10 @@ vi.mock("../cli/update-cli/post-core-plugin-convergence.js", () => ({
 
 vi.mock("./doctor/shared/startup-plugin-convergence-plan.js", () => ({
   planStartupPluginConvergence,
+}));
+
+vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
+  planPristineStartupStateMigrations,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -161,6 +181,10 @@ describe("runDoctorConfigPreflight state migration", () => {
     needsStartupMigrationCheckpoint.mockReturnValue(false);
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
+    planPristineStartupStateMigrations.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
     autoMigrateLegacyStateDir.mockResolvedValue({
       migrated: false,
       skipped: false,
@@ -189,6 +213,8 @@ describe("runDoctorConfigPreflight state migration", () => {
       changes: ["cron-imported"],
       warnings: [],
     });
+    collectCronCodexRuntimePolicyTargetsReadOnly.mockReset();
+    collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValue({ targets: [], warnings: [] });
   });
 
   it("runs the startup guard immediately before the first state mutation", async () => {
@@ -342,6 +368,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
+      migrateCodexModelRefs: false,
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
@@ -350,6 +377,28 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
     expect(note).toHaveBeenCalledWith("- cron-imported", "Doctor changes");
     expect(note).toHaveBeenCalledWith("- imported", "Doctor changes");
+  });
+
+  it("carries cron Codex runtime policy targets only during repair", async () => {
+    collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValueOnce({
+      targets: [{ modelRef: "openai/gpt-5.6-sol" }],
+      warnings: [],
+    });
+
+    const result = await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      repairPrefixedConfig: true,
+    });
+
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+      migrateCodexModelRefs: false,
+    });
+    expect(collectCronCodexRuntimePolicyTargetsReadOnly).toHaveBeenCalledWith({
+      cfg: { gateway: { mode: "local", port: 19091 } },
+    });
+    expect(result.cronCodexRuntimePolicyTargets).toEqual([{ modelRef: "openai/gpt-5.6-sol" }]);
   });
 
   it("records the startup migration checkpoint after clean startup migrations", async () => {
@@ -460,6 +509,43 @@ describe("runDoctorConfigPreflight state migration", () => {
       expect.objectContaining({ valid: true }),
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+  });
+
+  it("runs only plugin-owned migrations for a pristine core state root", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    planPristineStartupStateMigrations.mockReturnValueOnce({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+
+    expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
+      config: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+    });
+  });
+
+  it("retains the prepared core-state fact after runtime files appear", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      skipPristineCoreStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledOnce();
   });
 
   it("blocks gateway readiness when startup migrations leave warnings", async () => {
@@ -630,6 +716,7 @@ describe("runDoctorConfigPreflight state migration", () => {
           list: [{ id: "main" }],
         }),
       }),
+      migrateCodexModelRefs: false,
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: expect.objectContaining({

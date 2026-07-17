@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
-import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
 export const AgentsSchema = z
   .object({
@@ -89,18 +88,11 @@ const AcpBindingSchema = z
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
 
-export const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
 
 export const BroadcastSchema = z
   .object({
     strategy: BroadcastStrategySchema.optional(),
   })
   .catchall(z.array(z.string()))
-  .optional();
-
-export const AudioSchema = z
-  .object({
-    transcription: TranscribeAudioSchema,
-  })
-  .strict()
   .optional();

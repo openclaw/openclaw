@@ -114,7 +114,9 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+function makeInboundRuntime(
+  onResolvedContext?: (ctx: Record<string, unknown>) => void,
+): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -132,7 +134,8 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown> };
+      )) as { ctxPayload: Record<string, unknown>; runDispatch: () => Promise<unknown> };
+      onResolvedContext?.(turn.ctxPayload);
       return { dispatchResult: await turn.runDispatch() };
     }),
   };
@@ -208,10 +211,7 @@ function makeRuntime(params: {
             await dispatcherOptions.onFreshSettledDelivery?.();
           }
         }),
-        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => {
-          params.onFinalize?.(rawCtx);
-          return rawCtx;
-        }),
+        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => rawCtx),
         formatInboundEnvelope: vi.fn(() => "voice"),
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
@@ -220,7 +220,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(),
+      inbound: makeInboundRuntime(params.onFinalize),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -575,9 +575,6 @@ describe("dispatchOutbound", () => {
         expect.anything(),
         "assistant",
       );
-      expect(runtime.channel.session.resolveStorePath).toHaveBeenCalledWith(undefined, {
-        agentId: "assistant",
-      });
       expect(finalized?.AgentId).toBe("assistant");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
@@ -861,7 +858,10 @@ describe("dispatchOutbound", () => {
         {
           runtime,
           cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
-          account: { ...account, config: { streaming: true } },
+          account: {
+            ...account,
+            config: { streaming: { mode: "partial", nativeTransport: true } },
+          },
         },
       );
 
@@ -997,7 +997,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1007,7 +1007,7 @@ describe("dispatchOutbound", () => {
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 
-  it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
+  it("delivers text-only tool progress when nativeTransport is on despite mode off", async () => {
     const runtime = makeRuntime({
       onDeliver: async (deliver) => {
         await deliver({ text: "Working: checking logs" }, { kind: "tool" });
@@ -1020,7 +1020,7 @@ describe("dispatchOutbound", () => {
       cfg: {},
       account: {
         ...account,
-        config: { streaming: { mode: "off", c2cStreamApi: true } },
+        config: { streaming: { mode: "off", nativeTransport: true } },
       },
     });
 
@@ -1062,7 +1062,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1096,7 +1096,7 @@ describe("dispatchOutbound", () => {
         agentBody: "do it",
         body: "[member-openid] do it (@you)",
       }),
-      { runtime, cfg: {}, account: { ...account, config: { streaming: false } } },
+      { runtime, cfg: {}, account: { ...account, config: { streaming: { mode: "off" } } } },
     );
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
@@ -1118,7 +1118,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
@@ -1138,7 +1138,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1159,7 +1159,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["visible tool message"]);
@@ -1179,7 +1179,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1202,7 +1202,7 @@ describe("dispatchOutbound", () => {
       await dispatchOutbound(makeInbound(), {
         runtime,
         cfg: {},
-        account: { ...account, config: { streaming: false } },
+        account: { ...account, config: { streaming: { mode: "off" } } },
       });
 
       expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1230,7 +1230,7 @@ describe("dispatchOutbound", () => {
     const dispatchPromise = dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     await vi.advanceTimersByTimeAsync(90_000);
@@ -1253,7 +1253,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendMediaMock).toHaveBeenCalledTimes(1);
@@ -1274,7 +1274,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: false } },
+      account: { ...account, config: { streaming: { mode: "off" } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1298,7 +1298,7 @@ describe("dispatchOutbound", () => {
     await dispatchOutbound(makeInbound(), {
       runtime,
       cfg: {},
-      account: { ...account, config: { streaming: true } },
+      account: { ...account, config: { streaming: { mode: "partial", nativeTransport: true } } },
     });
 
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -1475,3 +1475,4 @@ describe("dispatchOutbound", () => {
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -15,14 +15,12 @@ import {
   readSessionTranscriptSummary,
   readSkillStatus,
   seedQaSessionTranscript,
-  setSessionStoreLockRetryDelaysMsForTests,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
 afterEach(async () => {
-  setSessionStoreLockRetryDelaysMsForTests();
   vi.useRealTimers();
   await cleanup();
 });
@@ -37,7 +35,6 @@ describe("qa suite runtime agent session helpers", () => {
   } as never;
 
   beforeEach(() => {
-    setSessionStoreLockRetryDelaysMsForTests([1, 1, 1]);
     gatewayCall.mockReset();
   });
 
@@ -111,7 +108,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Session", "agent:qa:retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-2");
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -133,7 +130,7 @@ describe("qa suite runtime agent session helpers", () => {
     vi.useFakeTimers();
     const pending = createSession(env, "Retry Stale Session", "agent:qa:stale-retry");
 
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(pending).resolves.toBe("session-3");
     expect(gatewayCall).toHaveBeenCalledTimes(2);
@@ -184,6 +181,55 @@ describe("qa suite runtime agent session helpers", () => {
     ).resolves.toEqual({
       "session-1": { sessionId: "session-1", status: "running", updatedAt: 10 },
     });
+  });
+
+  it("retries transient FTS integrity mismatches while child transcripts settle", async () => {
+    const readEntries = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error(
+          'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
+        );
+      })
+      .mockReturnValueOnce([
+        {
+          sessionKey: "session-1",
+          entry: { sessionId: "session-1", updatedAt: 10 },
+        },
+      ]);
+    vi.useFakeTimers();
+
+    const pending = readRawQaSessionStore(
+      { gateway: { tempRoot: "/tmp/qa-fts-settle" } } as never,
+      { readEntries, retryDelaysMs: [1] },
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toEqual({
+      "session-1": { sessionId: "session-1", updatedAt: 10 },
+    });
+    expect(readEntries).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when an FTS integrity mismatch does not settle", async () => {
+    const mismatch = new Error(
+      'SQLite integrity_check failed for qa.sqlite: fts5: checksum mismatch for table "session_transcript_fts"',
+    );
+    const readEntries = vi.fn(() => {
+      throw mismatch;
+    });
+    vi.useFakeTimers();
+
+    const assertion = expect(
+      readRawQaSessionStore({ gateway: { tempRoot: "/tmp/qa-fts-persistent" } } as never, {
+        readEntries,
+        retryDelaysMs: [1],
+      }),
+    ).rejects.toThrow(mismatch.message);
+    await vi.runAllTimersAsync();
+
+    await assertion;
+    expect(readEntries).toHaveBeenCalledTimes(2);
   });
 
   it("seeds QA session metadata and transcript messages in SQLite", async () => {

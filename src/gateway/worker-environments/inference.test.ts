@@ -27,6 +27,7 @@ const IDENTITY: WorkerConnectionIdentity = {
   credentialHash: "d",
   bundleHash: "b",
   sessionId: REQUEST.sessionId,
+  runId: REQUEST.runId,
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -36,6 +37,26 @@ const ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
   message: "Provider request failed",
+};
+const DONE: WorkerInferenceTerminalOutcome = {
+  type: "done",
+  message: {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    api: "openai-responses",
+    provider: REQUEST.modelRef.provider,
+    model: REQUEST.modelRef.model,
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  },
 };
 const CANCEL = {
   runEpoch: REQUEST.runEpoch,
@@ -204,6 +225,63 @@ describe("worker inference manager", () => {
     accept(instance, { sink: sink.sink });
     await vi.waitFor(() => expect(store.complete).toHaveBeenCalledOnce());
     expect(terminalFrames(sink.frames)).toEqual([]);
+    await instance.stop();
+  });
+
+  it("rebinds an active stream on reconnect without a second provider call", async () => {
+    const release = createDeferred();
+    const execute = vi.fn<WorkerInferenceExecutor>(async ({ emit }) => {
+      emit({ type: "text_delta", contentIndex: 0, delta: "first" });
+      await release.promise;
+      emit({ type: "text_delta", contentIndex: 0, delta: "second" });
+      return ERROR;
+    });
+    const instance = makeManager(execute);
+    const first = createSink("first");
+    accept(instance, { sink: first.sink });
+    await vi.waitFor(() => expect(first.frames).toHaveLength(1));
+
+    const second = createSink("second");
+    expect(accept(instance, { sink: second.sink }).result.status).toBe("accepted");
+    release.resolve();
+
+    await vi.waitFor(() => expect(terminalFrames(second.frames)).toHaveLength(1));
+    expect(execute).toHaveBeenCalledOnce();
+    expect(terminalFrames(first.frames)).toEqual([]);
+    expect(second.frames[0]).toMatchObject({
+      event: "worker.inference.event",
+      payload: { seq: 2, event: { type: "text_delta", delta: "second" } },
+    });
+    await instance.stop();
+  });
+
+  it("fences an epoch flip between acceptance and the terminal outcome", async () => {
+    let current = true;
+    let signal: AbortSignal | undefined;
+    const pending = createDeferred<WorkerInferenceTerminalOutcome>();
+    const execute = vi.fn<WorkerInferenceExecutor>(({ signal: nextSignal }) => {
+      signal = nextSignal;
+      return pending.promise;
+    });
+    const instance = makeManager(execute);
+    const sink = createSink("epoch-flip");
+    const accepted = accept(
+      instance,
+      { sink: sink.sink, revalidate: () => (current ? null : "epoch-mismatch") },
+      false,
+    );
+    accepted.launch();
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+
+    current = false;
+    pending.resolve(DONE);
+
+    await vi.waitFor(() => expect(terminalFrames(sink.frames)).toHaveLength(1));
+    expect(terminalFrames(sink.frames)[0]?.payload.outcome).toMatchObject({
+      reason: "epoch-mismatch",
+    });
+    expect(signal?.aborted).toBe(true);
+    expect(execute).toHaveBeenCalledOnce();
     await instance.stop();
   });
 

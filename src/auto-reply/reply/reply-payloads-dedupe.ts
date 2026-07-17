@@ -6,7 +6,7 @@ import {
 import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -269,7 +269,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */
-export function getMatchingMessagingToolReplyTargets(params: {
+function getMatchingMessagingToolReplyTargets(params: {
   config?: OpenClawConfig;
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];

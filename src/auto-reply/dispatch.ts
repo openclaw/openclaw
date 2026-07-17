@@ -467,7 +467,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
   };
 }
 
-export type DispatchInboundResult = DispatchFromConfigResult;
+type DispatchInboundResult = DispatchFromConfigResult;
 export { settleReplyDispatcher, withReplyDispatcher } from "./dispatch-dispatcher.js";
 
 function finalizeDispatchResult(
@@ -519,6 +519,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
+  onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const replyPayloadRunState = params.replyPayloadRunState ?? {
@@ -546,6 +547,7 @@ export async function dispatchInboundMessage(params: {
   installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
+    onSettled: params.onSettled,
     run: () =>
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
@@ -660,9 +662,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
-        onFollowupAdmissionWaitChange: (waiting) => {
-          // An admission wait depends on the older owner finishing delivery.
-          // Suspending only that generation breaks the cycle without weakening newer-turn fencing.
+        onReplyAdmissionWaitChange: (waiting) => {
+          // A turn waiting to own the lane cannot make the current owner's reply stale.
+          // Suspend only that generation so independent newer turns still fence old replies.
           setForegroundReplyFenceAdmissionWaiting(foregroundReplyFence, waiting);
         },
       },

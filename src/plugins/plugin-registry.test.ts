@@ -20,13 +20,11 @@ import {
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
-  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
   createPluginRegistryIdNormalizer,
   getPluginRecord,
   inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
-  listPluginRecords,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
@@ -40,6 +38,11 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+
+function listPluginRecords(params: { index: InstalledPluginIndex }) {
+  return params.index.plugins;
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
