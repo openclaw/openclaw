@@ -1456,5 +1456,4 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
     (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }
-
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
