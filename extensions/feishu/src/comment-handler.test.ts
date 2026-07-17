@@ -89,7 +89,7 @@ function createTestRuntime(overrides?: {
   upsertPairingRequest?: () => Promise<{ code: string; created: boolean }>;
   resolveAgentRoute?: () => ReturnType<typeof buildResolvedRoute>;
 }) {
-  const recordInboundSession = vi.fn(async () => {});
+  const recordInboundSession = vi.fn(async (_params: unknown) => {});
   type PreparedCommentTurnPlan = {
     route: { agentId: string; sessionKey: string };
     ctxPayload: { SessionKey?: string };

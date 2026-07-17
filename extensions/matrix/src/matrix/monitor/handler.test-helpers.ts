@@ -281,7 +281,12 @@ export function createMatrixHandlerTestHarness(
           recordInboundSession,
         },
         reply: {
-          settleReplyDispatcher: async ({ dispatcher, onSettled }) => {
+          settleReplyDispatcher: async ({
+            dispatcher,
+            onSettled,
+          }: Parameters<
+            MatrixMonitorHandlerParams["core"]["channel"]["reply"]["settleReplyDispatcher"]
+          >[0]) => {
             dispatcher.markComplete?.();
             await dispatcher.waitForIdle?.();
             await onSettled?.();

@@ -219,7 +219,26 @@ function createRuntimeCore(
       options,
     }),
   );
-  const recordInboundSession = vi.fn(async (_params: unknown) => {});
+  type RecordInboundSessionInput = {
+    storePath: string;
+    sessionKey: string;
+    ctx: unknown;
+    createIfMissing?: boolean;
+    groupResolution?: unknown;
+    onRecordError?: (error: unknown) => void;
+    updateLastRoute?: {
+      accountId?: string;
+      channel?: string;
+      mainDmOwnerPin?: {
+        onSkip?: () => void;
+        ownerRecipient?: string;
+        senderRecipient?: string;
+      };
+      sessionKey?: string;
+      to?: string;
+    };
+  };
+  const recordInboundSession = vi.fn(async (_params: RecordInboundSessionInput) => {});
   const dispatchPreparedForTest = vi.fn(
     async (turn: {
       route: { agentId: string; sessionKey: string };
@@ -227,7 +246,7 @@ function createRuntimeCore(
       record?: {
         groupResolution?: unknown;
         createIfMissing?: boolean;
-        updateLastRoute?: unknown;
+        updateLastRoute?: RecordInboundSessionInput["updateLastRoute"];
         onRecordError?: (err: unknown) => void;
       };
       runDispatch: () => Promise<{

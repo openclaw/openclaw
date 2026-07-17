@@ -4,8 +4,8 @@
  * Routes legacy direct-message ingress through the standard channel reply pipeline.
  */
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "../plugin-sdk/inbound-envelope.js";
 import {
   normalizeOutboundReplyPayload,
   type OutboundReplyPayload,
@@ -162,15 +162,14 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
-    runtime: params.runtime.channel,
-    sessionStore: params.cfg.session?.store,
   });
-  const { storePath, body } = buildEnvelope({
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: route.agentId });
+  const body = buildEnvelope({
     channel: params.channelLabel,
     from: params.conversationLabel,
     body: params.rawBody,

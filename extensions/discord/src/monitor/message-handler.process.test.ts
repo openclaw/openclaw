@@ -403,7 +403,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             ) {
               throw error;
             }
-            await sessionInitRetry.sleep?.(delayMs, sessionInitRetry.signal);
+            await sessionInitRetry?.sleep?.(delayMs, sessionInitRetry.signal);
           }
         }
       };

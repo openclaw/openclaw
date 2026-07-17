@@ -11,7 +11,6 @@ import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
-import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixReactionEvent,

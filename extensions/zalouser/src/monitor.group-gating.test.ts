@@ -128,7 +128,7 @@ function installRuntime(params: {
   );
   const readAllowFromStore = vi.fn(async () => []);
   type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
-  const recordInboundSession = vi.fn(async () => {});
+  const recordInboundSession = vi.fn(async (_params: unknown) => {});
   const dispatch = vi.fn(async (plan: TurnPlan) => {
     const turn = {
       ...plan,
