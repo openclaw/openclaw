@@ -60,8 +60,11 @@ describe("listMemoryCorePublicArtifacts", () => {
     };
 
     const artifacts = await listMemoryCorePublicArtifacts({ cfg });
-    const eventExportPath = path.join(workspaceDir, "memory", "events", "memory-host-events.jsonl");
-    expect(artifacts).toEqual([
+    const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
+    if (!eventArtifact) {
+      throw new Error("expected memory event export");
+    }
+    expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
       {
         kind: "memory-root",
         workspaceDir,
@@ -86,16 +89,11 @@ describe("listMemoryCorePublicArtifacts", () => {
         agentIds: ["main"],
         contentType: "markdown",
       },
-      {
-        kind: "event-log",
-        workspaceDir,
-        relativePath: "memory/events/memory-host-events.jsonl",
-        absolutePath: eventExportPath,
-        agentIds: ["main"],
-        contentType: "json",
-      },
     ]);
-    await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe(
+    expect(eventArtifact.relativePath).toMatch(
+      /^memory\/events\/[a-f0-9]{32}\/memory-host-events\.jsonl$/u,
+    );
+    await expect(fs.readFile(eventArtifact.absolutePath, "utf8")).resolves.toBe(
       `${JSON.stringify({
         type: "memory.recall.recorded",
         timestamp: "2026-04-06T12:00:00.000Z",

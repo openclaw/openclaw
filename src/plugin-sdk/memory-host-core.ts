@@ -14,7 +14,7 @@ import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 
-const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.jsonl";
+const MEMORY_HOST_EVENTS_FILENAME = "memory-host-events.jsonl";
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS = 1_000;
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES = 1024 * 1024;
 const MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS = {
@@ -32,9 +32,26 @@ function isMissingPathError(error: unknown): boolean {
   );
 }
 
-function resolveMemoryHostEventExportLockTarget(workspaceDir: string): string {
+async function resolveMemoryHostEventExportOwner(workspaceDir: string): Promise<{
+  queueKey: string;
+  lockTarget: string;
+  relativePath: string;
+}> {
+  const requestedStateDir = path.resolve(resolveStateDir());
+  await fs.mkdir(requestedStateDir, { recursive: true, mode: 0o700 });
+  const stateDir = await fs.realpath(requestedStateDir);
+  const stateHash = sha256HexPrefix(stateDir, 32);
   const workspaceHash = sha256HexPrefix(path.resolve(workspaceDir), 32);
-  return path.join(resolveStateDir(), `.memory-host-events-export-${workspaceHash}`);
+  return {
+    queueKey: `${stateHash}\0${workspaceHash}`,
+    lockTarget: path.join(stateDir, `.memory-host-events-export-${workspaceHash}`),
+    relativePath: path.posix.join(
+      "memory",
+      "events",
+      stateHash,
+      MEMORY_HOST_EVENTS_FILENAME,
+    ),
+  };
 }
 
 export {
@@ -89,7 +106,7 @@ function serializeMemoryHostEventExport(
 
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
-}): Promise<string | undefined> {
+}): Promise<{ absolutePath: string; relativePath: string } | undefined> {
   const requestedWorkspace = path.resolve(params.workspaceDir);
   const workspace = await fs.stat(requestedWorkspace).catch((error: unknown) => {
     if (isMissingPathError(error)) {
@@ -107,12 +124,14 @@ async function materializeMemoryHostEventExport(params: {
     symlinks: "reject",
   });
   const workspaceKey = workspaceRoot.rootReal;
+  const owner = await resolveMemoryHostEventExportOwner(workspaceKey);
   // The queue handles re-entrant calls in this process; the sidecar lock makes
   // snapshot, cleanup, and replacement one ordered operation across processes.
-  return memoryHostEventExportQueue.enqueue(workspaceKey, async () => {
-    const absolutePath = path.join(workspaceKey, ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"));
+  // State-qualified paths keep different profiles from replacing each other's export.
+  return memoryHostEventExportQueue.enqueue(owner.queueKey, async () => {
+    const absolutePath = path.join(workspaceKey, ...owner.relativePath.split("/"));
     return await withFileLock(
-      resolveMemoryHostEventExportLockTarget(workspaceKey),
+      owner.lockTarget,
       MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS,
       async () => {
         const storedEvents = listStoredMemoryHostEvents({
@@ -121,7 +140,7 @@ async function materializeMemoryHostEventExport(params: {
         });
         if (storedEvents.length === 0) {
           try {
-            await workspaceRoot.remove(MEMORY_HOST_EVENTS_RELATIVE_PATH);
+            await workspaceRoot.remove(owner.relativePath);
           } catch (error) {
             if (isMissingPathError(error)) {
               return undefined;
@@ -137,7 +156,7 @@ async function materializeMemoryHostEventExport(params: {
         // SQLite is authoritative. Reading this bounded export only avoids replacing
         // an unchanged named artifact and preserves stable mtimes for bridge consumers.
         const existing = await workspaceRoot
-          .readText(MEMORY_HOST_EVENTS_RELATIVE_PATH)
+          .readText(owner.relativePath)
           .catch((error: unknown) => {
             if (isMissingPathError(error)) {
               return undefined;
@@ -145,12 +164,12 @@ async function materializeMemoryHostEventExport(params: {
             throw error;
           });
         if (existing !== content) {
-          await workspaceRoot.write(MEMORY_HOST_EVENTS_RELATIVE_PATH, content, {
+          await workspaceRoot.write(owner.relativePath, content, {
             mkdir: true,
             mode: 0o600,
           });
         }
-        return absolutePath;
+        return { absolutePath, relativePath: owner.relativePath };
       },
     );
   });
@@ -193,15 +212,15 @@ async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
-  const eventExportPath = await materializeMemoryHostEventExport({
+  const eventExport = await materializeMemoryHostEventExport({
     workspaceDir: params.workspaceDir,
   });
-  if (eventExportPath) {
+  if (eventExport) {
     artifacts.push({
       kind: "event-log",
       workspaceDir: params.workspaceDir,
-      relativePath: MEMORY_HOST_EVENTS_RELATIVE_PATH,
-      absolutePath: eventExportPath,
+      relativePath: eventExport.relativePath,
+      absolutePath: eventExport.absolutePath,
       agentIds: [...params.agentIds],
       contentType: "json",
     });

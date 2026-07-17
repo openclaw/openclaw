@@ -41,4 +41,22 @@ describe("SQLite audit record store", () => {
       expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
     });
   });
+
+  it("commits batch inserts with one retention pass", async () => {
+    await withTempDir({ prefix: "openclaw-audit-store-batch-" }, async (stateDir) => {
+      const store = createSqliteAuditRecordStore<{ value: number }>({
+        scope: "batch-test",
+        maxEntries: 2,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      store.registerMany([
+        { key: "one", value: { value: 1 }, createdAt: 1 },
+        { key: "two", value: { value: 2 }, createdAt: 2 },
+        { key: "three", value: { value: 3 }, createdAt: 3 },
+      ]);
+
+      expect(store.entries().map((entry) => entry.key)).toEqual(["two", "three"]);
+    });
+  });
 });

@@ -58,23 +58,24 @@ function pruneAuditRecords(params: {
   database: DatabaseSync;
   scope: string;
   maxEntries: number;
-  protectedKey: string;
+  protectedKey?: string;
 }): void {
   const overflow = countAuditRecords(params.database, params.scope) - params.maxEntries;
   if (overflow <= 0) {
     return;
   }
-  const rows = executeSqliteQuerySync(
-    params.database,
-    getAuditRecordKysely(params.database)
+  const protectedKey = params.protectedKey;
+  const candidates = getAuditRecordKysely(params.database)
       .selectFrom("diagnostic_events")
       .select("event_key")
       .where("scope", "=", params.scope)
-      .where("event_key", "!=", params.protectedKey)
+      .$if(protectedKey !== undefined, (query) =>
+        query.where("event_key", "!=", protectedKey),
+      )
       .orderBy("created_at", "asc")
       .orderBy(auditInsertionSequence, "asc")
-      .limit(overflow),
-  ).rows;
+      .limit(overflow);
+  const rows = executeSqliteQuerySync(params.database, candidates).rows;
   for (const row of rows) {
     executeSqliteQuerySync(
       params.database,
@@ -92,25 +93,38 @@ export function createSqliteAuditRecordStore<T>(
 ) {
   const scope = options.scope;
   const maxEntries = Math.max(1, Math.floor(options.maxEntries));
+  function prepareRecord(record: SqliteAuditRecordEntry<T>): DiagnosticEventRow {
+    const payloadJson = JSON.stringify(record.value);
+    if (payloadJson === undefined) {
+      throw new Error(`Audit record ${scope}/${record.key} is not JSON-serializable`);
+    }
+    return {
+      event_key: record.key,
+      payload_json: payloadJson,
+      created_at: record.createdAt,
+    };
+  }
+
+  function insertRecord(database: DatabaseSync, record: DiagnosticEventRow): void {
+    executeSqliteQuerySync(
+      database,
+      getAuditRecordKysely(database)
+        .insertInto("diagnostic_events")
+        .values({
+          scope,
+          event_key: record.event_key,
+          payload_json: record.payload_json,
+          created_at: record.created_at,
+        })
+        .onConflict((conflict) => conflict.columns(["scope", "event_key"]).doNothing()),
+    );
+  }
+
   return {
     register(key: string, value: T, createdAt = Date.now()): void {
-      const payloadJson = JSON.stringify(value);
-      if (payloadJson === undefined) {
-        throw new Error(`Audit record ${scope}/${key} is not JSON-serializable`);
-      }
+      const record = prepareRecord({ key, value, createdAt });
       runOpenClawStateWriteTransaction((database) => {
-        executeSqliteQuerySync(
-          database.db,
-          getAuditRecordKysely(database.db)
-            .insertInto("diagnostic_events")
-            .values({
-              scope,
-              event_key: key,
-              payload_json: payloadJson,
-              created_at: createdAt,
-            })
-            .onConflict((conflict) => conflict.columns(["scope", "event_key"]).doNothing()),
-        );
+        insertRecord(database.db, record);
         // Audit retention is scope-local. Keep the just-written row and evict the oldest
         // prior rows in the same synchronous commit section.
         pruneAuditRecords({
@@ -119,6 +133,20 @@ export function createSqliteAuditRecordStore<T>(
           maxEntries,
           protectedKey: key,
         });
+      }, options);
+    },
+    registerMany(records: readonly SqliteAuditRecordEntry<T>[]): void {
+      const prepared = records.map(prepareRecord);
+      if (prepared.length === 0) {
+        return;
+      }
+      // Legacy imports can contain tens of thousands of rows. Serialize first,
+      // then commit every insert and the single retention pass synchronously.
+      runOpenClawStateWriteTransaction((database) => {
+        for (const record of prepared) {
+          insertRecord(database.db, record);
+        }
+        pruneAuditRecords({ database: database.db, scope, maxEntries });
       }, options);
     },
     size(): number {

@@ -287,17 +287,17 @@ async function migrateLegacyAuditLogSource(params: {
     maxEntries,
     env,
   });
-  const existingKeys = new Set(store.entries().map((entry) => entry.key));
+  const existingEntries = store.entries();
+  const existingKeys = new Set(existingEntries.map((entry) => entry.key));
   const missing = prepared.records.filter((record) => !existingKeys.has(record.key));
-  if (missing.length > maxEntries - store.size()) {
+  const availableEntries = maxEntries - existingEntries.length;
+  if (missing.length > availableEntries) {
     warnings.push(
-      `Skipped ${params.source.label} migration because SQLite has room for ${maxEntries - store.size()} of ${missing.length} missing rows; left legacy source in place`,
+      `Skipped ${params.source.label} migration because SQLite has room for ${availableEntries} of ${missing.length} missing rows; left legacy source in place`,
     );
     return { changes, warnings };
   }
-  for (const record of missing) {
-    store.register(record.key, record.value, record.createdAt);
-  }
+  store.registerMany(missing);
   const importedKeys = new Set(store.entries().map((entry) => entry.key));
   const missingKey = prepared.records.find((record) => !importedKeys.has(record.key))?.key;
   if (missingKey) {

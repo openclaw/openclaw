@@ -185,13 +185,11 @@ describe("memory-host-core helpers", () => {
           },
         },
       });
-      const eventExportPath = path.join(
-        workspaceDir,
-        "memory",
-        "events",
-        "memory-host-events.jsonl",
-      );
-      expect(artifacts).toEqual([
+      const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
+      if (!eventArtifact) {
+        throw new Error("expected memory event export");
+      }
+      expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
         {
           kind: "memory-root",
           workspaceDir,
@@ -216,15 +214,20 @@ describe("memory-host-core helpers", () => {
           agentIds: ["main"],
           contentType: "markdown",
         },
-        {
-          kind: "event-log",
-          workspaceDir,
-          relativePath: "memory/events/memory-host-events.jsonl",
-          absolutePath: eventExportPath,
-          agentIds: ["main"],
-          contentType: "json",
-        },
       ]);
+      expect(eventArtifact).toMatchObject({
+        kind: "event-log",
+        workspaceDir,
+        agentIds: ["main"],
+        contentType: "json",
+      });
+      expect(eventArtifact.relativePath).toMatch(
+        /^memory\/events\/[a-f0-9]{32}\/memory-host-events\.jsonl$/u,
+      );
+      expect(eventArtifact.absolutePath).toBe(
+        path.join(workspaceDir, ...eventArtifact.relativePath.split("/")),
+      );
+      const eventExportPath = eventArtifact.absolutePath;
       await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe(
         `${JSON.stringify({
           type: "memory.recall.recorded",
@@ -267,12 +270,6 @@ describe("memory-host-core helpers", () => {
     async () => {
       const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-race-"));
       const workspaceDir = path.join(fixtureRoot, "workspace");
-      const eventExportPath = path.join(
-        workspaceDir,
-        "memory",
-        "events",
-        "memory-host-events.jsonl",
-      );
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
       const cfg = {
         agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -294,7 +291,8 @@ describe("memory-host-core helpers", () => {
           if (
             shouldBlockFirstRead &&
             typeof target === "string" &&
-            path.resolve(target) === eventExportPath
+            path.basename(target) === "memory-host-events.jsonl" &&
+            path.resolve(target).startsWith(`${path.resolve(workspaceDir)}${path.sep}`)
           ) {
             shouldBlockFirstRead = false;
             signalFirstRead?.();
@@ -334,7 +332,14 @@ describe("memory-host-core helpers", () => {
           }),
         ]);
         releaseFirstRead?.();
-        await Promise.all([olderListing, newerListing]);
+        const [olderArtifacts, newerArtifacts] = await Promise.all([olderListing, newerListing]);
+        const olderExport = olderArtifacts.find((artifact) => artifact.kind === "event-log");
+        const newerExport = newerArtifacts.find((artifact) => artifact.kind === "event-log");
+        expect(olderExport?.absolutePath).toBe(newerExport?.absolutePath);
+        const eventExportPath = newerExport?.absolutePath;
+        if (!eventExportPath) {
+          throw new Error("expected memory event export");
+        }
 
         const exported = (await fs.readFile(eventExportPath, "utf8"))
           .trim()
@@ -348,6 +353,47 @@ describe("memory-host-core helpers", () => {
       }
     },
   );
+
+  it("keeps public event exports isolated across state directories", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-export-owner-"));
+    const workspaceDir = path.join(fixtureRoot, "workspace");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+    try {
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      const exports: string[] = [];
+      for (const profile of ["profile-a", "profile-b"]) {
+        vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, profile));
+        await appendMemoryHostEvent(workspaceDir, {
+          type: "memory.recall.recorded",
+          timestamp: "2026-05-18T12:00:00.000Z",
+          query: profile,
+          resultCount: 0,
+          results: [],
+        });
+        const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
+          (candidate) => candidate.kind === "event-log",
+        );
+        if (!artifact) {
+          throw new Error("expected memory event export");
+        }
+        exports.push(artifact.absolutePath);
+        await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toContain(profile);
+      }
+
+      expect(new Set(exports).size).toBe(2);
+      const [profileAExport, profileBExport] = exports;
+      if (!profileAExport || !profileBExport) {
+        throw new Error("expected state-qualified memory event exports");
+      }
+      await expect(fs.readFile(profileAExport, "utf8")).resolves.toContain("profile-a");
+      await expect(fs.readFile(profileBExport, "utf8")).resolves.toContain("profile-b");
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
 
   it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
     expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
