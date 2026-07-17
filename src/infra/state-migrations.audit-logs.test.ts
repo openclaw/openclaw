@@ -10,6 +10,7 @@ import {
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
@@ -61,7 +62,7 @@ describe("legacy core audit log migration", () => {
       });
       expect(detected.sources).toHaveLength(3);
 
-      const result = migrateLegacyAuditLogs({ detected, stateDir });
+      const result = await migrateLegacyAuditLogs({ detected, stateDir });
       expect(result.warnings).toEqual([]);
       expect(result.changes).toHaveLength(6);
 
@@ -75,6 +76,11 @@ describe("legacy core audit log migration", () => {
         env,
       }).entries();
       expect(configEntries[0]?.key).not.toContain(unredactedDigest);
+      const archivedConfig = await fs.readFile(`${configPath}.migrated`, "utf8");
+      expect(archivedConfig).not.toContain("secret-value");
+      expect(JSON.parse(archivedConfig.trim())).toMatchObject({
+        argv: ["openclaw", "config", "set", "token", "***"],
+      });
       expect(
         listSystemAgentAuditEntriesForTests({ env })
           .map((entry) => entry.value.operation)
@@ -96,7 +102,7 @@ describe("legacy core audit log migration", () => {
         doctorOnlyStateMigrations: true,
       });
 
-      const result = migrateLegacyAuditLogs({ detected, stateDir });
+      const result = await migrateLegacyAuditLogs({ detected, stateDir });
       expect(result.warnings.join("\n")).toContain("Failed reading system-agent audit log");
       await expect(fs.access(sourcePath)).resolves.toBeUndefined();
       expect(
@@ -104,6 +110,46 @@ describe("legacy core audit log migration", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         }),
       ).toEqual([]);
+    });
+  });
+
+  it("requires exclusive state ownership before claiming legacy audit files", async () => {
+    await withTempDir({ prefix: "openclaw-audit-migration-lock-" }, async (stateDir) => {
+      const sourcePath = path.join(stateDir, "audit", "system-agent.jsonl");
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(
+        sourcePath,
+        `${JSON.stringify({
+          timestamp: "2026-07-03T00:00:00.000Z",
+          operation: "gateway.restart",
+          summary: "Restarted gateway",
+        })}\n`,
+      );
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const gatewayLock = await acquireGatewayLock({
+        allowInTests: true,
+        env,
+        pollIntervalMs: 10,
+        port: 18_791,
+        timeoutMs: 100,
+      });
+      if (!gatewayLock) {
+        throw new Error("expected test Gateway lock");
+      }
+
+      let result: Awaited<ReturnType<typeof migrateLegacyAuditLogs>>;
+      try {
+        result = await migrateLegacyAuditLogs({
+          detected: detectLegacyAuditLogs({ stateDir, doctorOnlyStateMigrations: true }),
+          stateDir,
+        });
+      } finally {
+        await gatewayLock.release();
+      }
+
+      expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");
+      await expect(fs.access(sourcePath)).resolves.toBeUndefined();
+      expect(listSystemAgentAuditEntriesForTests({ env })).toEqual([]);
     });
   });
 });

@@ -915,7 +915,7 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.acpReplayLedger,
     stateDir: detected.stateDir,
   });
-  const auditLogs = migrateLegacyAuditLogs({
+  const auditLogs = await migrateLegacyAuditLogs({
     detected: detected.auditLogs,
     stateDir: detected.stateDir,
   });
