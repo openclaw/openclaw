@@ -22,3 +22,8 @@ export function editorOpenUrl(editor: EditorId, absPath: string, line?: number |
     .join("/");
   return `${editor}://file${encodedPath}${line ? `:${line}` : ""}`;
 }
+
+export function openEditor(editor: EditorId, path: string, line?: number | null) {
+  // Typed editor IDs plus encoded paths make this custom-scheme handoff safe.
+  return window.open(editorOpenUrl(editor, path, line));
+}
