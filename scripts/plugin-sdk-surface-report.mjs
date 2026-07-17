@@ -301,7 +301,6 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +77: five zero-consumer subpaths enter their removal window.
       // +9: typed plan exports and formatter through deprecated channel barrels.
       // +6: plan-step ingress union and normalizer through deprecated channel barrels.
-      // Harvest: retired dual-field plan payload builder -1.
       // +8: channel-outbound plan pins mirrored through deprecated barrels.
       // Used-union narrowing drops inherited deprecated exports.
       // +1: Telegram runner alias retained for plugin SDK compatibility.
@@ -310,7 +309,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: unified implicit-mention config type through deprecated config-types.
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
-      3013,
+      // Harvest: retired dual-field plan payload builder -1; lower-only drift -8.
+      3005,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
