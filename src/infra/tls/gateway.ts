@@ -1,17 +1,56 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
+import { sameFileIdentity } from "../fs-safe-advanced.js";
 import { pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
 const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+
+type GeneratedTlsOutput = {
+  finalPath: string;
+  identity: Stats;
+  published: boolean;
+  stagedPath: string;
+};
+
+function removePublishedOutputIfOwned(output: GeneratedTlsOutput): void {
+  if (!output.published) {
+    return;
+  }
+  try {
+    const current = fsSync.lstatSync(output.finalPath);
+    if (sameFileIdentity(output.identity, current)) {
+      fsSync.unlinkSync(output.finalPath);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+async function publishGeneratedTlsOutputs(outputs: GeneratedTlsOutput[]): Promise<void> {
+  try {
+    for (const output of outputs) {
+      await fs.link(output.stagedPath, output.finalPath);
+      output.published = true;
+    }
+  } catch (error) {
+    for (const output of outputs.toReversed()) {
+      removePublishedOutputIfOwned(output);
+    }
+    throw error;
+  }
+}
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
@@ -43,36 +82,70 @@ async function generateSelfSignedCert(params: {
       "openssl not found in trusted system directories. Install it in an OS-managed location.",
     );
   }
-  // Use argv execution with a trusted system binary; certificate paths are arguments,
-  // not shell text.
-  await runExec(
-    opensslBin,
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-sha256",
-      "-days",
-      "3650",
-      "-nodes",
-      "-keyout",
-      params.keyPath,
-      "-out",
-      params.certPath,
-      "-subj",
-      "/CN=openclaw-gateway",
-    ],
-    {
-      logOutput: false,
-      timeoutMs: GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS,
-    },
-  );
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
-  params.log?.info?.(
-    `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
-  );
+  const certStageDir = await fs.mkdtemp(path.join(certDir, ".openclaw-gateway-tls-cert-"));
+  const stagedCertPath = path.join(certStageDir, "cert.pem");
+  let keyStageDir: string | undefined;
+  try {
+    keyStageDir = await fs.mkdtemp(path.join(keyDir, ".openclaw-gateway-tls-key-"));
+    const stagedKeyPath = path.join(keyStageDir, "key.pem");
+    await Promise.all([fs.chmod(certStageDir, 0o700), fs.chmod(keyStageDir, 0o700)]);
+    // OpenSSL never sees the configured final paths, so timeout and generation
+    // failures cannot strand a half-written certificate pair there.
+    await runExec(
+      opensslBin,
+      [
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "3650",
+        "-nodes",
+        "-keyout",
+        stagedKeyPath,
+        "-out",
+        stagedCertPath,
+        "-subj",
+        "/CN=openclaw-gateway",
+      ],
+      {
+        logOutput: false,
+        timeoutMs: GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS,
+      },
+    );
+    await Promise.all([fs.chmod(stagedKeyPath, 0o600), fs.chmod(stagedCertPath, 0o600)]);
+    const [cert, key, certIdentity, keyIdentity] = await Promise.all([
+      fs.readFile(stagedCertPath, "utf8"),
+      fs.readFile(stagedKeyPath, "utf8"),
+      fs.lstat(stagedCertPath),
+      fs.lstat(stagedKeyPath),
+    ]);
+    tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
+    await publishGeneratedTlsOutputs([
+      {
+        finalPath: params.certPath,
+        identity: certIdentity,
+        published: false,
+        stagedPath: stagedCertPath,
+      },
+      {
+        finalPath: params.keyPath,
+        identity: keyIdentity,
+        published: false,
+        stagedPath: stagedKeyPath,
+      },
+    ]);
+    params.log?.info?.(
+      `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
+    );
+  } finally {
+    await Promise.allSettled(
+      [certStageDir, keyStageDir]
+        .filter((dir): dir is string => Boolean(dir))
+        .map((dir) => fs.rm(dir, { force: true, recursive: true })),
+    );
+  }
 }
 
 /** Load or generate gateway TLS material and return server-ready TLS options. */
