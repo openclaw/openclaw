@@ -2,7 +2,7 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
@@ -29,6 +29,10 @@ const keys: ReefKeys = {
   replayKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
   keyEpoch: 1,
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function verifyRelaySignature(
   signature: string,
@@ -643,6 +647,48 @@ describe("ReefInboxConnection recovery", () => {
 
     expect(states).toEqual(["connected", "disconnected"]);
     expect(errors).toEqual(["reef inbox socket closed unexpectedly code=1008 reason=policy"]);
+  });
+
+  it("resets reconnect backoff after a socket completes catch-up", async () => {
+    vi.useFakeTimers();
+    const sockets: ControlledSocket[] = [];
+    const persisted: number[] = [];
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ entries: [], cursor: 1 }),
+      () => ts,
+    );
+    const abort = new AbortController();
+    const inbox = new ReefInboxConnection(
+      client,
+      async () => {},
+      () => {
+        const socket = new ControlledSocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocketLike;
+      },
+      { persistCursor: (cursor) => persisted.push(cursor) },
+    );
+
+    const running = inbox.start(abort.signal);
+    sockets[0]!.emit("close");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(sockets).toHaveLength(2);
+
+    sockets[1]!.emit("open");
+    await vi.waitFor(() => expect(persisted).toEqual([1]));
+    await Promise.resolve();
+    sockets[1]!.emit("close");
+
+    await vi.advanceTimersByTimeAsync(249);
+    expect(sockets).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sockets).toHaveLength(3);
+
+    abort.abort();
+    await running;
   });
 
   it("waits for an in-flight handler before completing channel abort", async () => {

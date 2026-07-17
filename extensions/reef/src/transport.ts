@@ -292,8 +292,11 @@ export class ReefInboxConnection {
       try {
         // Establish the live feed first. live() buffers frames behind the REST
         // catch-up, so a slow backlog cannot make a healthy socket look offline.
-        await this.live(signal);
-        delay = 250;
+        await this.live(signal, () => {
+          // A socket that completed catch-up is healthy. Future disconnects
+          // start from the short delay instead of inheriting old failures.
+          delay = 250;
+        });
       } catch (error) {
         this.options.onError?.(asError(error));
         await abortableSleep(delay, signal);
@@ -375,7 +378,7 @@ export class ReefInboxConnection {
     return scheduled;
   }
 
-  private live(signal?: AbortSignal): Promise<void> {
+  private live(signal?: AbortSignal, onReady?: () => void): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = this.webSocketFactory(this.client.websocketUrl());
       const workAbort = new AbortController();
@@ -456,6 +459,7 @@ export class ReefInboxConnection {
           if (catchUpPending) {
             catchUpPending = false;
             await this.drain(workAbort.signal);
+            onReady?.();
           }
           while (bufferedEntries.length > 0) {
             if (disconnected) {
