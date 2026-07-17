@@ -161,8 +161,23 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
+    expect(lastWizardOptions()?.gatewayPort).toBeUndefined();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
+
+  it.each(["", "nope", "1.5", "99999"])(
+    "rejects invalid gateway port %j before routing setup",
+    async (value) => {
+      await expect(runCli(["setup", "--gateway-port", value])).rejects.toThrow(
+        "--gateway-port must be an integer between 1 and 65535.",
+      );
+
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(setupCommandMock).not.toHaveBeenCalled();
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(runSystemAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("runs baseline setup command when --baseline is set", async () => {
     await runCli(["setup", "--baseline", "--workspace", "/tmp/ws"]);

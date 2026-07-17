@@ -96,19 +96,25 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions(2).installDaemon).toBe(false);
   });
 
-  it("parses numeric gateway port and drops invalid values", async () => {
+  it("parses an explicit gateway port and leaves an omitted port unset", async () => {
     await runCli(["onboard", "--gateway-port", "18789"]);
     expect(setupWizardOptions(0).gatewayPort).toBe(18789);
 
-    await runCli(["onboard", "--gateway-port", "nope"]);
+    await runCli(["onboard"]);
     expect(setupWizardOptions(1).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "18789x"]);
-    expect(setupWizardOptions(2).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "99999"]);
-    expect(setupWizardOptions(3).gatewayPort).toBeUndefined();
   });
+
+  it.each(["", "nope", "1.5", "99999"])(
+    "rejects invalid gateway port %j before running onboarding",
+    async (value) => {
+      await expect(runCli(["onboard", "--gateway-port", value])).rejects.toThrow(
+        "--gateway-port must be an integer between 1 and 65535.",
+      );
+
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(mocks.runSystemAgentWithInference).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards --reset-scope to setup wizard options", async () => {
     await runCli(["onboard", "--reset", "--reset-scope", "full"]);
