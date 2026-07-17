@@ -305,7 +305,9 @@ describe("checkQmdBinaryAvailability", () => {
 
     child.closeWith(0);
     taskkill.closeWith(1);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(child.kill).not.toHaveBeenCalled();
