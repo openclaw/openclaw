@@ -173,6 +173,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -267,7 +268,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
-            sandboxed: params.params.sandboxed,
+            sandboxed: params.sandboxed,
           })
         : undefined,
       heartbeatCollaborationInstructions:

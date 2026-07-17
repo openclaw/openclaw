@@ -168,7 +168,6 @@ describe("Codex app-server attempt context", () => {
         params: {
           sessionId: "session-1",
           sessionKey: "agent:marketing-agent:session-1",
-          sandboxed: true,
           config: {
             agents: {
               defaults: { workspace: workspaceDir },
@@ -181,6 +180,7 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        sandboxed: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
