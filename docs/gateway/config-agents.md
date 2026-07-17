@@ -615,7 +615,11 @@ Periodic heartbeat runs.
   agents: {
     defaults: {
       compaction: {
-        enabled: true, // set false to disable auto-compaction entirely (default: true)
+        // Set false to disable auto-compaction entirely (default: true). An explicit
+        // true does not override OpenClaw's auto-compaction safety guard, which can
+        // still disable embedded auto-compaction for overflow-prone providers or when
+        // a context engine owns compaction.
+        enabled: true,
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
         timeoutSeconds: 180,
