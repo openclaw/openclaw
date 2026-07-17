@@ -1769,10 +1769,6 @@ export const ko: TranslationMap = {
       testingButton: "테스트 중…",
       testing: "테스트 중 — {modelRef}에 빠른 응답을 요청하는 중…",
     },
-    empty: {
-      title: "권장 설치 항목",
-      intro: "기존 AI 액세스가 감지되지 않았습니다. 다음 도구 중 하나를 설치한 후 다시 확인하세요.",
-    },
     unavailable: {
       title: "감지되었지만 자동 테스트되지 않음",
     },

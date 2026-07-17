@@ -1793,11 +1793,6 @@ export const it: TranslationMap = {
       testingButton: "Test in corso…",
       testing: "Test in corso: richiesta di una risposta rapida a {modelRef}…",
     },
-    empty: {
-      title: "Installazioni consigliate",
-      intro:
-        "Non è stato rilevato alcun accesso all'IA. Installa uno di questi strumenti, quindi verifica di nuovo.",
-    },
     unavailable: {
       title: "Rilevato, ma non testato automaticamente",
     },

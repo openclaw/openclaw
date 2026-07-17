@@ -1778,11 +1778,6 @@ export const pt_BR: TranslationMap = {
       testingButton: "Testando…",
       testing: "Testando — solicitando uma resposta rápida de {modelRef}…",
     },
-    empty: {
-      title: "Instalações recomendadas",
-      intro:
-        "Nenhum acesso à IA existente foi detectado. Instale uma destas ferramentas e verifique novamente.",
-    },
     unavailable: {
       title: "Detectado, mas não testado automaticamente",
     },

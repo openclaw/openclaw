@@ -1783,11 +1783,6 @@ export const nl: TranslationMap = {
       testingButton: "Testen…",
       testing: "Testen — {modelRef} om een snel antwoord vragen…",
     },
-    empty: {
-      title: "Aanbevolen installaties",
-      intro:
-        "Er is geen bestaande AI-toegang gedetecteerd. Installeer een van deze tools en controleer het daarna opnieuw.",
-    },
     unavailable: {
       title: "Gedetecteerd, maar niet automatisch getest",
     },

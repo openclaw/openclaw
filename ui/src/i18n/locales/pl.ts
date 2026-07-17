@@ -1784,11 +1784,6 @@ export const pl: TranslationMap = {
       testingButton: "Testowanie…",
       testing: "Testowanie — prośba do {modelRef} o szybką odpowiedź…",
     },
-    empty: {
-      title: "Zalecane instalacje",
-      intro:
-        "Nie wykryto istniejącego dostępu do AI. Zainstaluj jedno z tych narzędzi, a następnie sprawdź ponownie.",
-    },
     unavailable: {
       title: "Wykryto, ale nie przetestowano automatycznie",
     },

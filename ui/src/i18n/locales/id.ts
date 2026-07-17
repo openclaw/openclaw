@@ -1776,11 +1776,6 @@ export const id: TranslationMap = {
       testingButton: "Menguji…",
       testing: "Menguji — meminta balasan singkat dari {modelRef}…",
     },
-    empty: {
-      title: "Instalasi yang direkomendasikan",
-      intro:
-        "Tidak ada akses AI yang terdeteksi. Instal salah satu alat berikut, lalu periksa kembali.",
-    },
     unavailable: {
       title: "Terdeteksi, tetapi tidak diuji secara otomatis",
     },

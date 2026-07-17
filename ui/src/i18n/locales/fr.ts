@@ -1797,11 +1797,6 @@ export const fr: TranslationMap = {
       testingButton: "Test en cours…",
       testing: "Test en cours — demande d’une réponse rapide à {modelRef}…",
     },
-    empty: {
-      title: "Installations recommandées",
-      intro:
-        "Aucun accès à l’IA existant n’a été détecté. Installez l’un de ces outils, puis vérifiez à nouveau.",
-    },
     unavailable: {
       title: "Détecté, mais non testé automatiquement",
     },
