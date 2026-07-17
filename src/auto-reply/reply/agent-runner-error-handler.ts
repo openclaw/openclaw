@@ -154,6 +154,7 @@ export async function handleAgentExecutionError(params: {
       }
       return abortAction;
     }
+    return undefined;
   };
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
