@@ -209,7 +209,7 @@ function resolveMattermostIngressNonRetryableFailure(error: unknown) {
     : null;
 }
 
-export type MattermostIngressMonitor = {
+type MattermostIngressMonitor = {
   receive: (rawEvent: string) => Promise<void>;
   stop: () => Promise<void>;
   waitForIdle: () => Promise<void>;
