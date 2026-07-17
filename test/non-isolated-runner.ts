@@ -243,7 +243,7 @@ const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 // already-evaluated manual mock modules mid-import-chain, so importers before
 // the wipe hold one factory instance and later importers get a fresh one
 // (vi.mocked(...) on the test's binding silently stops reaching prod). Coalesce
-// concurrent callers into one shared pass so registration happens exactly once
+// concurrent callers into one shared drain so registration happens exactly once
 // before any awaiting import proceeds.
 export function serializeMockerResolveMocks(
   mocker: SerializableMocker & { [SERIALIZED_RESOLVE_MOCKS]?: boolean },
@@ -253,9 +253,24 @@ export function serializeMockerResolveMocks(
   }
   mocker[SERIALIZED_RESOLVE_MOCKS] = true;
   const original = mocker.resolveMocks.bind(mocker);
+  const statics = mocker.constructor as { pendingIds?: unknown[] };
+  const drain = async (): Promise<void> => {
+    do {
+      const queue = statics.pendingIds;
+      const processedCount = queue?.length ?? 0;
+      await original();
+      // Upstream snapshots the queue contents at pass start and reassigns the
+      // pendingIds static to [] at the end, so ids queued during the pass's
+      // RPC window land in the abandoned array. Requeue them or a coalesced
+      // caller's vi.mock registration would be silently dropped.
+      if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+        statics.pendingIds?.push(...queue.slice(processedCount));
+      }
+    } while ((statics.pendingIds?.length ?? 0) > 0);
+  };
   let inflight: Promise<void> | null = null;
   mocker.resolveMocks = () => {
-    inflight ??= original().finally(() => {
+    inflight ??= drain().finally(() => {
       inflight = null;
     });
     return inflight;
