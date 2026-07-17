@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 
 describe("recommended tool installs", () => {
-  it("loads the complete bundled catalog with unique HTTPS metadata", () => {
+  it("loads only tools that guided setup can turn into an inference route", () => {
     const installs = listRecommendedToolInstalls();
 
     expect(installs.map((entry) => entry.id)).toEqual([
@@ -10,11 +10,6 @@ describe("recommended tool installs", () => {
       "lmstudio",
       "claude-code",
       "codex-cli",
-      "pi",
-      "opencode",
-      "gemini-cli",
-      "kimi-code",
-      "grok-build",
     ]);
     expect(new Set(installs.map((entry) => entry.id)).size).toBe(installs.length);
     for (const entry of installs) {
