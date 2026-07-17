@@ -249,6 +249,17 @@ describe("appendReceivedValueHint", () => {
     ).toBe('Invalid input (allowed: "minimal", "coding"), got: "none"');
   });
 
+  it("keeps truncated received values on a valid UTF-16 boundary", () => {
+    const message = appendReceivedValueHint(
+      "invalid input",
+      "gateway.bind",
+      `${"x".repeat(155)}🎉tail`,
+    );
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("skips when message already mentions received", () => {
     expect(appendReceivedValueHint("expected string, received number", "gateway.port", 18789)).toBe(
       "expected string, received number",
