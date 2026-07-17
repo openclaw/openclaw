@@ -138,9 +138,9 @@ describe("browser tab discovery poll abort", () => {
     const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(
-      setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS),
-    ).toBe(true);
+    expect(setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS)).toBe(
+      true,
+    );
     expect(vi.getTimerCount()).toBe(1);
     controller.abort();
 
