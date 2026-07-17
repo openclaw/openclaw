@@ -126,16 +126,6 @@ export async function runCliFallbackCandidate(params: {
   const cliBlockReplyHandler = turn.blockStreamingEnabled
     ? params.presentation.blockReplyHandler
     : undefined;
-  let cliBlockReplyDelivery: Promise<void> = Promise.resolve();
-  const queueCliBlockReply = (text: string): Promise<void> => {
-    if (!cliBlockReplyHandler) {
-      return Promise.resolve();
-    }
-    cliBlockReplyDelivery = cliBlockReplyDelivery
-      .catch(() => undefined)
-      .then(() => cliBlockReplyHandler({ text }));
-    return cliBlockReplyDelivery;
-  };
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -184,12 +174,6 @@ export async function runCliFallbackCandidate(params: {
             await turn.opts?.onReasoningProgress?.(payload);
           },
           onToolEvent: async (payload) => {
-            // Commentary and tool bridges drain independently. Flush the preceding
-            // assistant block first so tool progress cannot overtake it.
-            await cliBlockReplyDelivery.catch(() => undefined);
-            if (cliBlockReplyHandler && payload.phase !== "result") {
-              await turn.blockReplyPipeline?.flush({ force: true });
-            }
             if (!params.preserveProgressCallbackStartOrder) {
               await cliToolSummaryTracker.noteToolEvent(payload);
               if (payload.phase === "result") {
@@ -231,13 +215,30 @@ export async function runCliFallbackCandidate(params: {
           onCommentaryText:
             cliBlockReplyHandler || bridgeCliPreambleEvents
               ? async (payload) => {
-                  await queueCliBlockReply(payload.text);
-                  if (bridgeCliPreambleEvents) {
-                    await turn.opts?.onItemEvent?.({
-                      itemId: payload.itemId,
-                      kind: "preamble",
-                      progressText: payload.text,
-                    });
+                  const preambleProgressDelivery = bridgeCliPreambleEvents
+                    ? (async () => {
+                        await turn.opts?.onItemEvent?.({
+                          itemId: payload.itemId,
+                          kind: "preamble",
+                          progressText: payload.text,
+                        });
+                      })()
+                    : Promise.resolve();
+                  const durableBlockDelivery = cliBlockReplyHandler
+                    ? (async () => {
+                        await cliBlockReplyHandler({ text: payload.text });
+                        await turn.blockReplyPipeline?.flush({ force: true });
+                      })()
+                    : Promise.resolve();
+                  const [progressResult, blockResult] = await Promise.allSettled([
+                    preambleProgressDelivery,
+                    durableBlockDelivery,
+                  ]);
+                  if (progressResult.status === "rejected") {
+                    throw progressResult.reason;
+                  }
+                  if (blockResult.status === "rejected") {
+                    throw blockResult.reason;
                   }
                 }
               : undefined,
