@@ -2049,6 +2049,9 @@ describe("ci workflow guards", () => {
     const buildSetupNodeStep = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
+    const buildStepCache = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Restore build-all step cache",
+    );
 
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
@@ -2118,6 +2121,12 @@ describe("ci workflow guards", () => {
     expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
       setupNodeStep.with["node-compile-cache-scope"],
     );
+    expect(buildStepCache.with.key).toContain("build-all-v4-");
+    expect(buildStepCache.with.key).toContain("'src/**'");
+    expect(buildStepCache.with.key).toContain("'packages/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/dist/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/node_modules/**'");
+    expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
   });
 
   it("warms protected caches without main-run cancellation and cleans closed PR archives", () => {

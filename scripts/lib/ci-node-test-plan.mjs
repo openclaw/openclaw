@@ -205,6 +205,9 @@ const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
   ["auto-reply-reply-commands-1", 1],
   ["auto-reply-reply-commands-2", 1],
   ["auto-reply-reply-commands-3", 1],
+  // Start the broad cache writer in the first admission wave so later jobs
+  // can reuse its protected transform snapshot on the next run.
+  ["core-unit-fast", 1],
 ]);
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
