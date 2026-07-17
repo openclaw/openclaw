@@ -2025,7 +2025,7 @@
     "@anthropic-ai/sdk": "0.109.1",
     "@clack/core": "1.4.2",
     "@clack/prompts": "1.6.0",
-    "@earendil-works/pi-tui": "0.80.3",
+    "@earendil-works/pi-tui": "0.80.9",
     "@google/genai": "2.10.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",

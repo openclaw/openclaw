@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
+  noteWebFetchProxyDiagnostic: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   callGateway: vi.fn(),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
@@ -252,6 +253,10 @@ vi.mock("../commands/doctor-memory-search.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemorySearchHealth: mocks.noteMemorySearchHealth,
+}));
+
+vi.mock("../commands/doctor-web-fetch-proxy.js", () => ({
+  noteWebFetchProxyDiagnostic: mocks.noteWebFetchProxyDiagnostic,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -532,6 +537,8 @@ describe("doctor health contributions", () => {
     mocks.noteLegacyCodexProviderOverride.mockClear();
     mocks.noteMemorySearchHealth.mockClear();
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
+    mocks.noteWebFetchProxyDiagnostic.mockClear();
+    mocks.noteWebFetchProxyDiagnostic.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
     mocks.callGateway.mockReset();
@@ -966,6 +973,19 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:command-owner")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("runs the web fetch proxy diagnostic after security checks", async () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+    const contribution = requireDoctorContribution("doctor:web-fetch-proxy");
+    const cfg = { gateway: { mode: "local" as const } };
+    const env = { HTTPS_PROXY: "http://proxy.example:8080" };
+    const ctx = { cfg, env } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    expect(ids.indexOf("doctor:security")).toBeLessThan(ids.indexOf("doctor:web-fetch-proxy"));
+    await contribution.run(ctx);
+
+    expect(mocks.noteWebFetchProxyDiagnostic).toHaveBeenCalledWith({ cfg, env });
   });
 
   it("checks skill readiness before final config writes", () => {
