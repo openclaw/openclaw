@@ -506,7 +506,6 @@ describe("validateTalkClientCreateParams", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
-        language: "de",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
