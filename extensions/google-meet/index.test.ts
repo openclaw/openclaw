@@ -2604,6 +2604,47 @@ describe("google-meet plugin", () => {
     expect(requireSetupCheck(result.details.checks, "twilio-voice-call-webhook").ok).toBe(true);
   });
 
+  it("reports whitespace-only Twilio environment credentials as missing", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "   ");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "   ");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "   ");
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: {
+                  provider: "twilio",
+                  publicUrl: "https://voice.example.com/voice/webhook",
+                },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(false);
+    expect(requireSetupCheck(result.details.checks, "twilio-voice-call-credentials").ok).toBe(
+      false,
+    );
+  });
+
   it("reports missing voice-call wiring for explicit Twilio transport", async () => {
     vi.stubEnv("TWILIO_ACCOUNT_SID", "");
     vi.stubEnv("TWILIO_AUTH_TOKEN", "");
