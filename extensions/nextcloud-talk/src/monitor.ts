@@ -342,8 +342,20 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   });
 
   const start = (): Promise<void> => {
-    return new Promise((resolve) => {
-      server.listen(port, host, () => resolve());
+    return new Promise((resolve, reject) => {
+      // Startup has one terminal event; remove the other listener so stale startup
+      // state cannot consume a later runtime error or resolve after rejection.
+      const onListenError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onListenError);
+        resolve();
+      };
+      server.once("error", onListenError);
+      server.once("listening", onListening);
+      server.listen(port, host);
     });
   };
 
