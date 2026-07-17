@@ -727,7 +727,12 @@ export function resolveManagedBrowserHeadlessMode(
     return { headless: true, source: "linux-display-fallback" };
   }
 
-  return { headless: resolved.headless, source: "default" };
+  // Preserve the actual config source rather than hardcoding "default" so
+  // callers that reach this fallback (e.g. non-standard profile states) report
+  // the correct provenance. For normal profiles this branch is not reached
+  // because profile.headlessSource inherits from resolved.headlessSource and
+  // the earlier branch at line 722 returns first.
+  return { headless: resolved.headless, source: resolved.headlessSource ?? "default" };
 }
 
 /** Return a Linux display error for headed managed Chrome when no display exists. */

@@ -549,6 +549,61 @@ describe("browser config", () => {
         headlessSource: "request",
       });
     });
+
+    it("honors global browser.headless=true for the default openclaw profile on non-Linux", () => {
+      // Regression test for #109673: browser.headless: true in openclaw.json
+      // should produce headless: true with source: "config" for the default
+      // local managed profile on non-Linux platforms.
+      const resolved = resolveBrowserConfig({ headless: true });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      // Full chain verification: config → profile → resolver.
+      expect(resolved.headless).toBe(true);
+      expect(resolved.headlessSource).toBe("config");
+      expect(profile.headless).toBe(true);
+      expect(profile.headlessSource).toBe("config");
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "darwin",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: true, source: "config" });
+    });
+
+    it("defaults headless=false with source=default when browser.headless is unset on non-Linux", () => {
+      const resolved = resolveBrowserConfig({});
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(resolved.headless).toBe(false);
+      expect(resolved.headlessSource).toBe("default");
+      expect(profile.headless).toBe(false);
+      expect(profile.headlessSource).toBe("default");
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "darwin",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "default" });
+    });
+
+    it("lets global browser.headless=true coexist with per-profile headless=false", () => {
+      const resolved = resolveBrowserConfig({
+        headless: true,
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500", headless: false },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw")!;
+
+      expect(profile.headless).toBe(false);
+      expect(profile.headlessSource).toBe("profile");
+      expect(
+        resolveManagedBrowserHeadlessMode(resolved, profile, {
+          platform: "darwin",
+          env: noDisplayEnv,
+        }),
+      ).toEqual({ headless: false, source: "profile" });
+    });
   });
 
   describe("managed browser startup timeouts", () => {
