@@ -227,7 +227,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     }),
     listVoices: async () => XAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      Boolean(resolveXaiSpeechApiKey(readXaiProviderConfig(providerConfig).apiKey)) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
@@ -278,11 +278,16 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
 // 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
 // 2. `XAI_API_KEY` env var
 // 3. xAI OAuth auth profile (cfg-scoped)
+
+function resolveXaiSpeechApiKey(configApiKey?: string): string | undefined {
+  return configApiKey ?? trimToUndefined(process.env.XAI_API_KEY);
+}
+
 async function resolveXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg: OpenClawConfig,
 ): Promise<string> {
-  const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
+  const direct = resolveXaiSpeechApiKey(configApiKey);
   if (direct) {
     return direct;
   }
