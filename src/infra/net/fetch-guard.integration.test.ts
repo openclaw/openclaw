@@ -27,7 +27,9 @@ async function close(server: Server, sockets: Set<Socket>): Promise<void> {
   for (const socket of sockets) {
     socket.destroy();
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 async function expectRejectedRedirectToReleaseDispatcher(
