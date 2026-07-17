@@ -25,6 +25,26 @@ internal data class PendingChatComposerSend(
   val inputSnapshot: String?,
 )
 
+internal data class ChatComposerSendPayload(
+  val inputSnapshot: String,
+  val message: String,
+  val attachments: List<PendingAttachment>,
+)
+
+/** Captures the owner stores at admission time; Compose values may lag a synchronous edit. */
+internal fun captureChatComposerSendPayload(
+  owner: ChatComposerOwner,
+  textDrafts: ChatComposerTextDraftStore,
+  attachmentStore: ChatComposerAttachmentStore,
+): ChatComposerSendPayload {
+  val inputSnapshot = textDrafts[owner]
+  return ChatComposerSendPayload(
+    inputSnapshot = inputSnapshot,
+    message = inputSnapshot.trim(),
+    attachments = attachmentStore.get(owner),
+  )
+}
+
 internal data class ChatComposerDraftSnapshot(
   val drafts: Map<ChatComposerOwner, String> = emptyMap(),
   val pendingSends: List<PendingChatComposerSend> = emptyList(),

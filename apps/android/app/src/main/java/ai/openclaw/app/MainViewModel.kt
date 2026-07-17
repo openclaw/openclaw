@@ -29,6 +29,7 @@ import ai.openclaw.app.ui.chat.CHAT_COMPOSER_MAX_SEND_CHARS
 import ai.openclaw.app.ui.chat.ChatComposerAttachmentStore
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
 import ai.openclaw.app.ui.chat.PendingAttachment
+import ai.openclaw.app.ui.chat.captureChatComposerSendPayload
 import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
 import ai.openclaw.app.ui.chat.matchesSession
 import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
@@ -1856,41 +1857,51 @@ class MainViewModel private constructor(
   /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
   internal fun beginChatComposerSend(
     owner: ChatComposerOwner,
-    message: String,
-    inputSnapshot: String,
     thinking: String,
-    attachments: List<PendingAttachment>,
   ): ChatComposerSendStartResult {
     if (!isCurrentChatComposerOwner(owner)) return ChatComposerSendStartResult.Unavailable
-    if (inputSnapshot.length > CHAT_COMPOSER_MAX_SEND_CHARS) return ChatComposerSendStartResult.MessageTooLong
     val admissionId = chatComposerSendSeq.incrementAndGet()
     val commandId = UUID.randomUUID().toString()
-    synchronized(chatComposerSendLock) {
-      if (
-        chatComposerOwnerHasActiveSend(
-          owner = owner,
-          sendOwners = chatComposerSendOwnersState.value,
-          admissions = chatComposerSendAdmissionsState.value,
-        )
-      ) {
-        return ChatComposerSendStartResult.Unavailable
+    val payload =
+      synchronized(chatComposerSendLock) {
+        if (
+          chatComposerOwnerHasActiveSend(
+            owner = owner,
+            sendOwners = chatComposerSendOwnersState.value,
+            admissions = chatComposerSendAdmissionsState.value,
+          )
+        ) {
+          return ChatComposerSendStartResult.Unavailable
+        }
+        val current =
+          captureChatComposerSendPayload(
+            owner = owner,
+            textDrafts = chatComposerTextDrafts,
+            attachmentStore = chatComposerAttachmentStore,
+          )
+        if (current.message.isEmpty() && current.attachments.isEmpty()) {
+          return ChatComposerSendStartResult.Unavailable
+        }
+        if (current.inputSnapshot.length > CHAT_COMPOSER_MAX_SEND_CHARS) {
+          return ChatComposerSendStartResult.MessageTooLong
+        }
+        if (!chatComposerTextDrafts.beginAdmission(commandId, owner, current.inputSnapshot)) {
+          return ChatComposerSendStartResult.CheckpointFull
+        }
+        chatComposerSendOwnersState.value = chatComposerSendOwnersState.value + owner
+        // One SavedState checkpoint now binds this exact draft to the outbox id that will own it.
+        // Process recreation hides the draft until Room proves whether admission committed.
+        current
       }
-      if (!chatComposerTextDrafts.beginAdmission(commandId, owner, inputSnapshot)) {
-        return ChatComposerSendStartResult.CheckpointFull
-      }
-      chatComposerSendOwnersState.value = chatComposerSendOwnersState.value + owner
-      // One SavedState checkpoint now binds this exact draft to the outbox id that will own it.
-      // Process recreation hides the draft until Room proves whether admission committed.
-    }
-    val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
-    val attachmentIds = attachments.mapTo(linkedSetOf()) { it.id }
+    val outgoing = payload.attachments.map(PendingAttachment::toOutgoingAttachment)
+    val attachmentIds = payload.attachments.mapTo(linkedSetOf()) { it.id }
     viewModelScope.launch {
       var accepted: Boolean? = null
       try {
         accepted =
           sendChatForOwnerAwaitAcceptance(
             owner = owner,
-            message = message,
+            message = payload.message,
             thinking = thinking,
             attachments = outgoing,
             idempotencyKey = commandId,

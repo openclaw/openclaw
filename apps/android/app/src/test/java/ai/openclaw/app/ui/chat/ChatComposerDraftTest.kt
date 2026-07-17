@@ -39,6 +39,27 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun sendPayloadReadsCurrentOwnerStoresAfterEditsAndRemovals() {
+    val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")
+    val textDrafts = ChatComposerTextDraftStore()
+    val attachments = ChatComposerAttachmentStore()
+    val removed = PendingAttachment("removed", "removed.jpg", "image/jpeg", "YQ==")
+    val retained = PendingAttachment("retained", "retained.jpg", "image/jpeg", "Yg==")
+    textDrafts[owner] = "old text"
+    attachments.add(owner, listOf(removed))
+
+    textDrafts[owner] = "  edited text  "
+    attachments.remove(owner, setOf(removed.id))
+    attachments.add(owner, listOf(retained))
+
+    val payload = captureChatComposerSendPayload(owner, textDrafts, attachments)
+
+    assertEquals("  edited text  ", payload.inputSnapshot)
+    assertEquals("edited text", payload.message)
+    assertEquals(listOf(retained), payload.attachments)
+  }
+
+  @Test
   fun textDraftSnapshotRestoresEveryOwnerAfterProcessRecreation() {
     var saved = arrayListOf<String>()
     val first = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:first")

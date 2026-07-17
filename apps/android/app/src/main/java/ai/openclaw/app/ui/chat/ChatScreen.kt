@@ -640,18 +640,12 @@ fun ChatScreen(
         if (currentShare != null || composerOwner in sendOwnersInFlight) {
           return@ChatComposer
         }
-        val message = input.trim()
-        if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
-        val pendingAttachments = attachments.toList()
         val ownerSnapshot = composerOwner
         if (!viewModel.isCurrentChatComposerOwner(ownerSnapshot)) return@ChatComposer
         val result =
           viewModel.beginChatComposerSend(
             owner = ownerSnapshot,
-            message = message,
-            inputSnapshot = input,
             thinking = thinkingLevel,
-            attachments = pendingAttachments,
           )
         sendMessageTooLong = result == ChatComposerSendStartResult.MessageTooLong
         sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
