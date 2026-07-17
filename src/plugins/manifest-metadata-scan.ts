@@ -71,7 +71,7 @@ function readJsonObject(filePath: string): Record<string, unknown> | undefined {
     const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
     return isRecord(parsed) ? parsed : undefined;
   } catch (err) {
-    if (err instanceof RangeError) {
+    if (err instanceof Error && err.message.includes("exceeds")) {
       log.warn(
         `Ignoring oversized plugin manifest at ${filePath}: file exceeds the ${PLUGIN_MANIFEST_METADATA_MAX_BYTES}-byte limit`,
       );
