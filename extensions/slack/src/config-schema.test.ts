@@ -1,6 +1,8 @@
 // Slack tests cover config schema plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { SlackConfigSchema } from "../config-api.js";
+import { listSlackAccountIds, resolveSlackAccount } from "./accounts.js";
 
 function expectSlackConfigValid(config: unknown) {
   const res = SlackConfigSchema.safeParse(config);
@@ -35,6 +37,159 @@ describe("slack config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it('defaults identity to "bot"', () => {
+    const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.identity).toBe("bot");
+      expect(res.data.accounts?.work?.identity ?? res.data.identity).toBe("bot");
+    }
+  });
+
+  it('accepts identity="user" with both browser-session credentials', () => {
+    expectSlackConfigValid({
+      identity: "user",
+      sessionToken: "test-session-token",
+      sessionCookie: "test-session-cookie",
+    });
+    expectSlackConfigValid({
+      accounts: {
+        work: {
+          identity: "user",
+          sessionToken: "test-session-token",
+          sessionCookie: "test-session-cookie",
+        },
+      },
+    });
+  });
+
+  it("allows per-account credentials for an inherited user identity", () => {
+    expectSlackConfigValid({
+      identity: "user",
+      accounts: {
+        matty: {
+          sessionToken: "test-session-token-x",
+          sessionCookie: "test-session-cookie-y",
+        },
+      },
+    });
+  });
+
+  it("rejects an app token for an inherited user identity", () => {
+    expectSlackConfigIssue(
+      {
+        identity: "user",
+        accounts: {
+          matty: {
+            sessionToken: "test-session-token-x",
+            sessionCookie: "test-session-cookie-y",
+            appToken: "test-app-token",
+          },
+        },
+      },
+      "accounts.matty.appToken",
+    );
+  });
+
+  it("defers user-identity session credential presence to runtime", () => {
+    expectSlackConfigValid({ identity: "user" });
+    expectSlackConfigValid({ identity: "user", sessionToken: "test-session-token" });
+  });
+
+  it('rejects app transports and credentials for identity="user"', () => {
+    const credentials = {
+      identity: "user" as const,
+      sessionToken: "test-session-token",
+      sessionCookie: "test-session-cookie",
+    };
+
+    expectSlackConfigIssue({ ...credentials, appToken: "test-app-token" }, "appToken");
+    expectSlackConfigIssue(
+      { ...credentials, signingSecret: "test-signing-secret" },
+      "signingSecret",
+    );
+    expectSlackConfigIssue(
+      { ...credentials, relay: { url: "wss://router.example.com/gateway/ws" } },
+      "relay.url",
+    );
+    expectSlackConfigIssue({ ...credentials, mode: "http" }, "mode");
+    expectSlackConfigIssue({ ...credentials, mode: "relay" }, "mode");
+    expectSlackConfigIssue(
+      {
+        accounts: {
+          work: {
+            ...credentials,
+            appToken: "test-app-token",
+          },
+        },
+      },
+      "accounts.work.appToken",
+    );
+  });
+
+  it("validates user identity structure when accounts is empty", () => {
+    expectSlackConfigIssue(
+      { identity: "user", accounts: {}, appToken: "test-app-token" },
+      "appToken",
+    );
+  });
+
+  it("uses session env fallback for the default account only", () => {
+    const previousSessionToken = process.env.SLACK_SESSION_TOKEN;
+    const previousSessionCookie = process.env.SLACK_SESSION_COOKIE;
+    process.env.SLACK_SESSION_TOKEN = "test-session-token-env";
+    process.env.SLACK_SESSION_COOKIE = "test-session-cookie-env";
+    try {
+      const cfg = {
+        channels: {
+          slack: {
+            accounts: {
+              default: { identity: "user" },
+              work: { identity: "user" },
+              configured: {
+                identity: "user",
+                sessionToken: "test-session-token-config",
+                sessionCookie: "test-session-cookie-config",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      const defaultAccount = resolveSlackAccount({ cfg, accountId: "default" });
+      const workAccount = resolveSlackAccount({ cfg, accountId: "work" });
+      const configuredAccount = resolveSlackAccount({ cfg, accountId: "configured" });
+      const implicitCfg = {
+        channels: { slack: { identity: "user" as const } },
+      } satisfies OpenClawConfig;
+
+      expect(defaultAccount.sessionToken).toBe("test-session-token-env");
+      expect(defaultAccount.sessionCookie).toBe("test-session-cookie-env");
+      expect(defaultAccount.sessionTokenSource).toBe("env");
+      expect(defaultAccount.sessionCookieSource).toBe("env");
+      expect(workAccount.sessionToken).toBeUndefined();
+      expect(workAccount.sessionCookie).toBeUndefined();
+      expect(workAccount.sessionTokenSource).toBe("none");
+      expect(workAccount.sessionCookieSource).toBe("none");
+      expect(configuredAccount.sessionTokenSource).toBe("config");
+      expect(configuredAccount.sessionCookieSource).toBe("config");
+      expect(SlackConfigSchema.safeParse({ identity: "user" }).success).toBe(true);
+      expect(listSlackAccountIds(implicitCfg)).toEqual(["default"]);
+    } finally {
+      if (previousSessionToken === undefined) {
+        delete process.env.SLACK_SESSION_TOKEN;
+      } else {
+        process.env.SLACK_SESSION_TOKEN = previousSessionToken;
+      }
+      if (previousSessionCookie === undefined) {
+        delete process.env.SLACK_SESSION_COOKIE;
+      } else {
+        process.env.SLACK_SESSION_COOKIE = previousSessionCookie;
+      }
     }
   });
 
@@ -129,9 +284,9 @@ describe("slack config schema", () => {
 
   it("accepts user token config fields", () => {
     expectSlackConfigValid({
-      botToken: "xoxb-any",
-      appToken: "xapp-any",
-      userToken: "xoxp-any",
+      botToken: "test-bot-token",
+      appToken: "test-app-token",
+      userToken: "test-user-token",
       userTokenReadOnly: false,
     });
   });
@@ -157,7 +312,7 @@ describe("slack config schema", () => {
   it("accepts relay mode with a SecretInput auth token", () => {
     expectSlackConfigValid({
       mode: "relay",
-      botToken: "xoxb-any",
+      botToken: "test-bot-token",
       relay: {
         url: "wss://router.example.com/gateway/ws",
         authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
@@ -177,7 +332,7 @@ describe("slack config schema", () => {
         mode: "relay",
         relay: {
           url: "wss://router.example.com/gateway/ws",
-          authToken: "secret",
+          authToken: "test-relay-auth-token",
         },
       },
       "relay.gatewayId",
@@ -218,9 +373,9 @@ describe("slack config schema", () => {
     expectSlackConfigValid({
       accounts: {
         work: {
-          botToken: "xoxb-any",
-          appToken: "xapp-any",
-          userToken: "xoxp-any",
+          botToken: "test-bot-token",
+          appToken: "test-app-token",
+          userToken: "test-user-token",
           userTokenReadOnly: true,
         },
       },
@@ -230,9 +385,9 @@ describe("slack config schema", () => {
   it("rejects invalid userTokenReadOnly types", () => {
     expectSlackConfigIssue(
       {
-        botToken: "xoxb-any",
-        appToken: "xapp-any",
-        userToken: "xoxp-any",
+        botToken: "test-bot-token",
+        appToken: "test-app-token",
+        userToken: "test-user-token",
         userTokenReadOnly: "no",
       },
       "userTokenReadOnly",
@@ -242,8 +397,8 @@ describe("slack config schema", () => {
   it("rejects invalid userToken types", () => {
     expectSlackConfigIssue(
       {
-        botToken: "xoxb-any",
-        appToken: "xapp-any",
+        botToken: "test-bot-token",
+        appToken: "test-app-token",
         userToken: 123,
       },
       "userToken",
@@ -253,7 +408,7 @@ describe("slack config schema", () => {
   it("accepts HTTP mode when signing secret is configured", () => {
     expectSlackConfigValid({
       mode: "http",
-      signingSecret: "secret",
+      signingSecret: "test-signing-secret",
     });
   });
 
@@ -270,7 +425,7 @@ describe("slack config schema", () => {
 
   it("accepts account HTTP mode when base signing secret is set", () => {
     expectSlackConfigValid({
-      signingSecret: "secret",
+      signingSecret: "test-signing-secret",
       accounts: {
         ops: {
           mode: "http",

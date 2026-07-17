@@ -50,6 +50,8 @@ function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): Resolve
     enabled: true,
     botTokenSource: "config",
     appTokenSource: "config",
+    sessionTokenSource: "none",
+    sessionCookieSource: "none",
     userTokenSource: "none",
     config: { replyToMode },
     replyToMode,

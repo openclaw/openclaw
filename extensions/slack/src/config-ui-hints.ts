@@ -11,6 +11,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Enterprise Grid Org Install",
     help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
+  identity: {
+    label: "Slack Identity",
+    help: 'Select "bot" (default) for Slack app credentials or "user" for the unsupported, opt-in browser-session credential path.',
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
     dmPolicy: { channelKey: "slack", includeLegacyNestedPolicy: true },
@@ -86,6 +90,14 @@ export const slackChannelConfigUiHints = {
   appToken: {
     label: "Slack App Token",
     help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
+  },
+  sessionToken: {
+    label: "Slack Session Token",
+    help: "Slack browser-session bearer credential extracted from the web client (paired with the session cookie). Browser-session credentials rotate or expire; this is an unsupported, opt-in, ToS-gray path.",
+  },
+  sessionCookie: {
+    label: "Slack Session Cookie",
+    help: "Slack browser-session `d` cookie credential extracted from the web client (paired with the session token). Browser-session credentials rotate or expire; this is an unsupported, opt-in, ToS-gray path.",
   },
   userToken: {
     label: "Slack User Token",

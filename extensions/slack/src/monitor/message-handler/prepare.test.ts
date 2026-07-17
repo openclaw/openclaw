@@ -118,6 +118,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     enabled: true,
     botTokenSource: "config",
     appTokenSource: "config",
+    sessionTokenSource: "none",
+    sessionCookieSource: "none",
     userTokenSource: "none",
     config: {},
   };
@@ -658,6 +660,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
       enabled: true,
       botTokenSource: "config",
       appTokenSource: "config",
+      sessionTokenSource: "none",
+      sessionCookieSource: "none",
       userTokenSource: "none",
       config: {
         replyToMode: "all",

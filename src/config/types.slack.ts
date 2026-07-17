@@ -161,6 +161,8 @@ export type SlackRelayConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Slack author identity. Default: bot. */
+  identity?: "bot" | "user";
   /** Slack connection mode (socket|http|relay). Default: socket. */
   mode?: "socket" | "http" | "relay";
   /**
@@ -191,6 +193,8 @@ export type SlackAccountConfig = {
   enabled?: boolean;
   botToken?: SecretInput;
   appToken?: SecretInput;
+  sessionToken?: SecretInput;
+  sessionCookie?: SecretInput;
   userToken?: SecretInput;
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;

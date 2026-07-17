@@ -18,7 +18,13 @@
     }
   },
   "channelEnvVars": {
-    "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]
+    "slack": [
+      "SLACK_BOT_TOKEN",
+      "SLACK_APP_TOKEN",
+      "SLACK_USER_TOKEN",
+      "SLACK_SESSION_TOKEN",
+      "SLACK_SESSION_COOKIE"
+    ]
   },
   "configSchema": {
     "type": "object",

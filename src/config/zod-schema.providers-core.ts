@@ -955,9 +955,12 @@ const SlackRelaySchema = z
   })
   .strict();
 
+const SlackIdentitySchema = z.enum(["bot", "user"]);
+
 const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
+    identity: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     enterpriseOrgInstall: z.boolean().optional(),
     socketMode: SlackSocketModeSchema.optional(),
@@ -981,6 +984,8 @@ const SlackAccountSchema = z
     configWrites: z.boolean().optional(),
     botToken: SecretInputSchema.optional().register(sensitive),
     appToken: SecretInputSchema.optional().register(sensitive),
+    sessionToken: SecretInputSchema.optional().register(sensitive),
+    sessionCookie: SecretInputSchema.optional().register(sensitive),
     userToken: SecretInputSchema.optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
@@ -1040,11 +1045,13 @@ const SlackAccountSchema = z
     ackReaction: z.string().optional(),
     typingReaction: z.string().optional(),
   })
-  .strict()
-  .superRefine(() => {
-    // DM allowlist validation is enforced at SlackConfigSchema so account entries
-    // can inherit top-level allowFrom via runtime shallow merge.
-  });
+  .strict();
+
+// Account entries leave identity unset to inherit the top-level default. DM allowlist
+// validation stays at SlackConfigSchema so entries can also inherit top-level allowFrom.
+const SlackAccountEntrySchema = SlackAccountSchema.extend({
+  identity: SlackIdentitySchema.optional(),
+});
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
@@ -1053,7 +1060,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
-  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+  accounts: z.record(z.string(), SlackAccountEntrySchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
@@ -1104,7 +1111,58 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     }
   };
 
+  const validateUserIdentity = (
+    account: {
+      identity?: "bot" | "user";
+      mode?: "socket" | "http" | "relay";
+      appToken?: unknown;
+      signingSecret?: unknown;
+      relay?: { url?: unknown; authToken?: unknown; gatewayId?: unknown };
+    },
+    path: (string | number)[],
+  ) => {
+    if (account.identity !== "user") {
+      return;
+    }
+    // Session credential presence is enforced at runtime, like bot/app tokens, not in schema.
+    if (account.appToken !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.identity="user" does not support appToken',
+        path: [...path, "appToken"],
+      });
+    }
+    if (account.signingSecret !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.identity="user" does not support signingSecret',
+        path: [...path, "signingSecret"],
+      });
+    }
+    if (account.mode !== undefined && account.mode !== "socket") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.identity="user" does not support non-default mode',
+        path: [...path, "mode"],
+      });
+    }
+    for (const field of ["url", "authToken", "gatewayId"] as const) {
+      if (account.relay?.[field] === undefined) {
+        continue;
+      }
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `channels.slack.identity="user" does not support relay.${field}`,
+        path: [...path, "relay", field],
+      });
+    }
+  };
+
   const baseMode = value.mode ?? "socket";
+  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
+  if (accountIds.length === 0) {
+    validateUserIdentity(value, []);
+  }
   if (!value.accounts) {
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
@@ -1112,7 +1170,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
+  for (const accountId of accountIds) {
+    const account = value.accounts[accountId];
     if (!account) {
       continue;
     }
@@ -1124,6 +1183,17 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       ...value.relay,
       ...account.relay,
     };
+    validateUserIdentity(
+      {
+        ...account,
+        identity: account.identity ?? value.identity,
+        mode: account.mode ?? baseMode,
+        appToken: account.appToken ?? value.appToken,
+        signingSecret: account.signingSecret ?? value.signingSecret,
+        relay: effectiveRelay,
+      },
+      ["accounts", accountId],
+    );
     const effectivePolicy =
       account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
     const effectiveAllowFrom =
