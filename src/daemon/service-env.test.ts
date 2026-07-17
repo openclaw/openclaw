@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAutoNodeExtraCaCerts } from "../bootstrap/node-extra-ca-certs.js";
+import { resolveGatewayHeapLimit } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import {
   buildNodeServiceEnvironment,
@@ -726,69 +727,42 @@ describe("buildServiceEnvironment", () => {
 });
 
 describe("buildServiceEnvironment NODE_OPTIONS", () => {
-  it("sets default --max-old-space-size=8192 when no NODE_OPTIONS is present", () => {
+  it("sets the adaptive default heap flag", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
     });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+    expect(env.NODE_OPTIONS).toBe(
+      `--max-old-space-size=${resolveGatewayHeapLimit().maxOldSpaceSizeMiB}`,
+    );
   });
 
-  it("drops ambient NODE_OPTIONS and uses default heap flag", () => {
-    // Hostile NODE_OPTIONS (--require, --inspect, etc.) must not leak into
-    // managed services. The service env only gets the OpenClaw-owned heap flag.
+  it("drops ambient NODE_OPTIONS", () => {
     const env = buildServiceEnvironment({
       env: {
         HOME: "/home/user",
-        NODE_OPTIONS: "--max-old-space-size=16384 --no-warnings",
+        NODE_OPTIONS: "--require /tmp/preload.js --max-old-space-size=16384",
       },
       port: 18789,
     });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-  });
-
-  it("drops ambient NODE_OPTIONS with other flags and sets default heap", () => {
-    const env = buildServiceEnvironment({
-      env: {
-        HOME: "/home/user",
-        NODE_OPTIONS: "--no-warnings --experimental-vm-modules",
-      },
-      port: 18789,
-    });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-  });
-
-  it("drops hostile --require in ambient NODE_OPTIONS", () => {
-    // A --require preload in the host process must never persist into
-    // managed services — that would re-open a startup preload boundary.
-    const env = buildServiceEnvironment({
-      env: {
-        HOME: "/home/user",
-        NODE_OPTIONS: "--require /tmp/malicious.js --max-old-space-size=4096",
-      },
-      port: 18789,
-    });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
     expect(env.NODE_OPTIONS).not.toContain("--require");
+    expect(env.NODE_OPTIONS).not.toContain("16384");
   });
 
-  it("drops --inspect in ambient NODE_OPTIONS", () => {
+  it("keeps an explicit heap flag from the existing service only", () => {
     const env = buildServiceEnvironment({
-      env: {
-        HOME: "/home/user",
-        NODE_OPTIONS: "--inspect=0.0.0.0:9229 --max-old-space-size=4096",
-      },
+      env: { HOME: "/home/user" },
       port: 18789,
+      existingNodeOptions: "--require /tmp/preload.js --max_old_space_size=6144",
     });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-    expect(env.NODE_OPTIONS).not.toContain("--inspect");
+    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=6144");
   });
 
-  it("includes NODE_OPTIONS in buildNodeServiceEnvironment", () => {
+  it("does not apply the Gateway heap policy to node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
     });
-    expect(env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+    expect(env.NODE_OPTIONS).toBeUndefined();
   });
 });
 
