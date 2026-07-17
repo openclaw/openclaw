@@ -1,7 +1,7 @@
 // Daemon install tests cover service install command behavior and plan handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGatewayAuth } from "../../gateway/auth.js";
-import { captureFullEnv, withEnvAsync } from "../../test-utils/env.js";
+import { captureFullEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import type { DaemonActionResponse } from "./response.js";
 
@@ -921,27 +921,27 @@ describe("runDaemonInstall", () => {
       },
     } as never);
 
-    await withEnvAsync(
-      {
-        OPENAI_API_KEY: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-      },
-      async () => {
-        await runDaemonInstall({ json: true, force: true });
+    const previous = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await runDaemonInstall({ json: true, force: true });
 
-        expectFields(readFirstInstallPlanArg().env, {
-          OPENAI_API_KEY: "service-openai-key",
-        });
-        const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
-        expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-        expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-        expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-        expect(env.NODE_OPTIONS).toBeUndefined();
-        expect(env.PATH).not.toContain("/tmp/doctor-bin");
-        expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-      },
-    );
+      expectFields(readFirstInstallPlanArg().env, {
+        OPENAI_API_KEY: "service-openai-key",
+      });
+      const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
+      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.PATH).not.toContain("/tmp/doctor-bin");
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
   });
 });
