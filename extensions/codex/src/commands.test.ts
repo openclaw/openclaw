@@ -4170,6 +4170,23 @@ describe("codex command", () => {
     );
   });
 
+  it("rejects inherited object names as goal actions", async () => {
+    await writeTestBinding(
+      { kind: "session", agentId: "main", sessionId: "session-1" },
+      { threadId: "thread-goal", cwd: "/repo" },
+    );
+    const codexControlRequest = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("goal __proto__"), {
+        deps: createDeps({ codexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex goal [status|start <objective>|edit <objective>|pause|resume|block|complete|clear]",
+    });
+    expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
   it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {
     const malformedSkillEntries: JsonValue[] = [
       null,

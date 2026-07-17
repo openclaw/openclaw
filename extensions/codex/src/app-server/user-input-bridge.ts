@@ -310,9 +310,7 @@ function buildUserInputActionResponse(
     if (!rawAnswer) {
       return undefined;
     }
-    const exactOption = question.options?.find(
-      (option) => option.label.toLowerCase() === rawAnswer.toLowerCase(),
-    );
+    const exactOption = question.options?.find((option) => option.label === rawAnswer);
     if (!exactOption && question.options?.length && !question.isOther) {
       return undefined;
     }

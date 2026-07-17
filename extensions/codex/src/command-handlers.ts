@@ -949,13 +949,16 @@ async function handleNativeGoal(
       ? "Cleared the Codex goal."
       : "No Codex goal was active.";
   }
-  const statusByAction = {
-    pause: "paused",
-    resume: "active",
-    block: "blocked",
-    complete: "complete",
-  } as const;
-  const requestedStatus = statusByAction[action as keyof typeof statusByAction];
+  const requestedStatus =
+    action === "pause"
+      ? "paused"
+      : action === "resume"
+        ? "active"
+        : action === "block"
+          ? "blocked"
+          : action === "complete"
+            ? "complete"
+            : undefined;
   const isObjectiveUpdate = action === "start" || action === "set" || action === "edit";
   if ((!requestedStatus && !isObjectiveUpdate) || (isObjectiveUpdate && !objective)) {
     return "Usage: /codex goal [status|start <objective>|edit <objective>|pause|resume|block|complete|clear]";

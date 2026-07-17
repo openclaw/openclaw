@@ -163,6 +163,49 @@ describe("Codex app-server user input bridge", () => {
     await expect(response).resolves.toEqual({ answers: { mode: { answers: ["2"] } } });
   });
 
+  it("preserves case-distinct structured option labels", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const response = bridge.handleRequest({
+      id: "input-case-label",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-case-label",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [{ label: "FAST" }, { label: "fast" }],
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+    const event = vi
+      .mocked(params.onAgentEvent!)
+      .mock.calls.find(([payload]) => payload.stream === "question")?.[0];
+    const actionId =
+      event && typeof event.data === "object" && event.data && "actionToken" in event.data
+        ? event.data.actionToken
+        : undefined;
+    expect(
+      resolveCodexUserInputAction(String(actionId), {
+        type: "answers",
+        answers: { mode: "fast" },
+      }),
+    ).toBe(true);
+    await expect(response).resolves.toEqual({ answers: { mode: { answers: ["fast"] } } });
+  });
+
   it("preserves reserved question ids in structured answers", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({
