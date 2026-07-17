@@ -1327,6 +1327,11 @@ jobs:
             exit 1
           fi
 
+          fail_on_regression=true
+          if [[ "$RELEASE_PROFILE" == "beta" ]]; then
+            fail_on_regression=false
+          fi
+
           {
             echo "### Product performance"
             echo
@@ -1335,6 +1340,7 @@ jobs:
             echo "- Repeat: \`3\`"
             echo "- Deep profile: \`false\`"
             echo "- Live OpenAI candidate: \`false\`"
+            echo "- Regression gate: \`${fail_on_regression}\`"
             echo "- Report publication: disabled (artifacts only)"
             if [[ "$RELEASE_PROFILE" == "beta" ]]; then
               echo "- Release impact: advisory"
@@ -1355,7 +1361,7 @@ jobs:
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=true \
+            -f fail_on_regression="$fail_on_regression" \
             -f publish_reports=false \
             -f dispatch_id="$dispatch_id" 2>&1)"
           dispatch_status=$?
