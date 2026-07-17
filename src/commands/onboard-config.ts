@@ -7,6 +7,9 @@ import type { ToolProfileId } from "../config/types.tools.js";
 const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "coding";
 
 /** Applies local gateway/workspace defaults without overwriting explicit user defaults. */
+// Deliberately writes no session.dmScope: the schema default "main" (one rolling
+// personal-agent session across channels) is the product default. Multi-user DM
+// isolation is opt-in; `openclaw security audit` nudges it when traffic warrants.
 export function applyLocalSetupWorkspaceConfig(
   baseConfig: OpenClawConfig,
   workspaceDir: string,
