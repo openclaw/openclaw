@@ -846,6 +846,74 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("runs a subsequent recall normally after an aborted cleanup leaves the session entry", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    // Let the timeout path wait for the subagent so the cleanup retry schedule
+    // (or the aborted shortcut) fully settles before the assertions run.
+    testing.setTimeoutPartialDataGraceMsForTests(500);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 20,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    // Transient failure only for the aborted recall's first cleanup attempt;
+    // the subsequent recall's cleanup falls back to the default store behavior.
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValueOnce(
+      new Error("session store is busy"),
+    );
+
+    const startedAt = Date.now();
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order? abort then recall again", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    // The 20ms watchdog aborts the recall while cleanup waits out the first
+    // 50ms retry backoff, so the remaining retries never run and the aborted
+    // recall's session entry is left behind in the store.
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(1);
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    const abortedSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected aborted runtime session key",
+    );
+    expect(hoisted.sessionStore[abortedSessionKey]).toBeDefined();
+
+    // The next recall against the same store must proceed normally: no lock
+    // error from the leftover entry, no hang, and its own cleanup succeeds.
+    api.pluginConfig = {
+      agents: ["main"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const result = await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order? subsequent recall", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expectPrependContextContains(result, "lemon pepper wings");
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(2);
+    const subsequentSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected subsequent runtime session key",
+    );
+    expect(subsequentSessionKey).not.toBe(abortedSessionKey);
+    expect(hoisted.sessionStore[subsequentSessionKey]).toBeUndefined();
+    expect(api.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
