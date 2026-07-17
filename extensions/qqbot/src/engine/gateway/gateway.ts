@@ -12,11 +12,9 @@ import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
-  getAccessToken,
   initApiConfig,
   onMessageSent,
   sendInputNotify as senderSendInputNotify,
-  createRawInputNotifyFn,
   accountToCreds,
   buildDeliveryTarget,
   sendText as senderSendText,
@@ -36,7 +34,7 @@ import type {
   EngineLogger,
   RefAttachmentSummary,
 } from "./types.js";
-import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
+import { TYPING_INPUT_SECOND } from "./typing-callbacks.js";
 
 export type { CoreGatewayContext } from "./types.js";
 
@@ -141,7 +139,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
         messageId: event.messageId,
         blockReason: inbound.blockReason,
       });
-      inbound.typing.keepAlive?.stop();
       return;
     }
 
@@ -162,7 +159,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
             msgId: event.messageId,
           },
         );
-        inbound.typing.keepAlive?.stop();
         return;
       }
       log?.info(
@@ -174,7 +170,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           groupOpenid: event.groupOpenid,
         },
       );
-      inbound.typing.keepAlive?.stop();
       return;
     }
 
@@ -211,7 +206,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
           msgId: event.messageId,
         },
       );
-      inbound.typing.keepAlive?.stop();
       return;
     }
 
@@ -228,7 +222,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     } catch (err) {
       log?.error(`Message processing failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      inbound.typing.keepAlive?.stop();
       if (event.type === "group" && event.groupOpenid && inbound.group) {
         clearGroupPendingHistory({
           historyMap: groupHistories,
@@ -266,28 +259,33 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 // ============ Typing helper ============
 
 /**
- * Start typing indicator for a C2C event.
- * Returns the refIdx from InputNotify and a TypingKeepAlive handle.
+ * Send the early C2C typing cue and return its refIdx for quote resolution.
+ *
+ * This is a single input_notify fired right after intake accepts the message
+ * (mirroring Telegram's early typing cue). The recurring typing refresh is
+ * owned by the core TypingController wired in outbound-dispatch, so this helper
+ * starts no keepalive loop.
  */
 async function startTypingForEvent(
   event: QueuedMessage,
   account: GatewayAccount,
   log?: EngineLogger,
-): Promise<{ refIdx?: string; keepAlive: TypingKeepAlive | null }> {
+): Promise<{ refIdx?: string }> {
   const isC2C = event.type === "c2c" || event.type === "dm";
   if (!isC2C) {
-    return { keepAlive: null };
+    return {};
   }
   try {
     const creds = accountToCreds(account);
-    const rawNotifyFn = createRawInputNotifyFn(account.appId);
-    const sendNotifyAndStartKeepAlive = async () => {
+    const sendEarlyCue = async () => {
       // Typing and text share QQ's five passive calls. Keep one slot for the
       // final reply. The claim stays inside this retried closure so each wire
-      // attempt consumes its own slot.
+      // attempt consumes its own slot. When the reserved slot is all that
+      // remains, skip the cue; the core typing tick will send a proactive
+      // (no msg_id) input_notify instead.
       const passive = claimMessageReply(event.messageId, 1);
       if (!passive.allowed) {
-        return { keepAlive: null };
+        return {};
       }
       const resp = await senderSendInputNotify({
         openid: event.senderId,
@@ -295,29 +293,20 @@ async function startTypingForEvent(
         msgId: event.messageId,
         inputSecond: TYPING_INPUT_SECOND,
       });
-      const keepAlive = new TypingKeepAlive(
-        () => getAccessToken(account.appId, account.clientSecret),
-        () => clearTokenCache(account.appId),
-        rawNotifyFn,
-        event.senderId,
-        event.messageId,
-        log,
-      );
-      keepAlive.start();
-      return { refIdx: resp.refIdx, keepAlive };
+      return { refIdx: resp.refIdx };
     };
     try {
-      return await sendNotifyAndStartKeepAlive();
+      return await sendEarlyCue();
     } catch (notifyErr) {
       const errMsg = String(notifyErr);
       if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
         clearTokenCache(account.appId);
-        return await sendNotifyAndStartKeepAlive();
+        return await sendEarlyCue();
       }
       throw notifyErr;
     }
   } catch (err) {
     log?.error(`sendInputNotify error: ${err instanceof Error ? err.message : String(err)}`);
-    return { keepAlive: null };
+    return {};
   }
 }

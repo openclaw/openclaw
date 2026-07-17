@@ -2,9 +2,10 @@
 // the budget-constrained REPLACE-mode streaming channel.
 //
 // Wires the real engine paths the gateway uses — StreamingController
-// (engine/messaging/streaming-c2c.ts), the typing keepalive with QQ passive
-// reply budget accounting (engine/gateway/typing-keepalive.ts +
-// gateway.ts startTypingForEvent), the static block-deliver pipeline
+// (engine/messaging/streaming-c2c.ts), the OpenClaw core typing lifecycle with
+// QQ passive reply budget accounting (engine/gateway/typing-callbacks.ts +
+// outbound-dispatch.ts typing wiring + gateway.ts startTypingForEvent early
+// cue), the static block-deliver pipeline
 // (engine/gateway/outbound-dispatch.ts deliver wiring →
 // engine/messaging/outbound-deliver.ts), and the common budget-limited sender
 // path (engine/messaging/sender.ts text/media sends with ReplyLimiter proactive
@@ -31,9 +32,11 @@ import {
   type DeliveryTraceScenario,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { TYPING_INPUT_SECOND, TypingKeepAlive } from "./engine/gateway/typing-keepalive.js";
+import type { QueuedMessage } from "./engine/gateway/message-queue.js";
+import { TYPING_INPUT_SECOND, buildQqTypingOptions } from "./engine/gateway/typing-callbacks.js";
 import { createQQBotMarkdownChunker } from "./engine/messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
@@ -55,13 +58,7 @@ import {
   sendWithTokenRetry,
   type ReplyDispatcherDeps,
 } from "./engine/messaging/reply-dispatcher.js";
-import {
-  accountToCreds,
-  clearTokenCache,
-  createRawInputNotifyFn,
-  getAccessToken,
-  sendInputNotify,
-} from "./engine/messaging/sender.js";
+import { accountToCreds, sendInputNotify } from "./engine/messaging/sender.js";
 import {
   StreamingController,
   shouldUseOfficialC2cStream,
@@ -197,7 +194,10 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
 
   const account = ACCOUNT;
   const event = { type: "c2c" as const, senderId: OPENID, messageId: msgId };
-  let keepAlive: TypingKeepAlive | null = null;
+  // Core typing lifecycle (createTypingCallbacks) owns the keepalive loop;
+  // the trace drives it through reply-start -> onReplyStart, advance ticks,
+  // and idle -> onIdle, matching outbound-dispatch.ts.
+  let typingCallbacks: ReturnType<typeof createTypingCallbacks> | null = null;
 
   // outbound-dispatch.ts builds the controller only for official C2C stream
   // accounts; derive it through the real predicate.
@@ -244,9 +244,10 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
   const replyCtx = { target: deliverEvent, account, cfg: {}, log: silentLog };
 
   // Replica of outbound-dispatch.ts markBlockResponse: the first block deliver
-  // stops the typing keepalive so the reserved passive reply stays available.
+  // lets the core typing controller wind down so the reserved passive reply
+  // stays available. (Cleanup is finalized on idle.)
   const markBlockResponse = () => {
-    keepAlive?.stop();
+    typingCallbacks?.onIdle?.();
   };
 
   // Replica of the outbound-dispatch.ts block-deliver wiring for a visible
@@ -314,9 +315,11 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
       case "reply-start": {
-        // Replica of gateway.ts startTypingForEvent: initial input_notify
-        // (first budget spend), then the keepalive loop with
-        // TYPING_RENEWAL_LIMIT renewals reserving one reply for the final.
+        // Replica of gateway.ts startTypingForEvent (early cue) +
+        // outbound-dispatch.ts typing wiring: send the initial input_notify
+        // (first budget spend), then hand the recurring typing refresh to the
+        // core TypingController, whose keepalive ticks reserve one reply for
+        // the final just like the retired TypingKeepAlive.
         const passive = claimMessageReply(msgId, 1);
         if (!passive.allowed) {
           break;
@@ -327,15 +330,10 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
           msgId,
           inputSecond: TYPING_INPUT_SECOND,
         });
-        keepAlive = new TypingKeepAlive(
-          () => getAccessToken(account.appId, account.clientSecret),
-          () => clearTokenCache(account.appId),
-          createRawInputNotifyFn(account.appId),
-          OPENID,
-          msgId,
-          silentLog,
+        typingCallbacks = createTypingCallbacks(
+          buildQqTypingOptions({ event: event as QueuedMessage, account, log: silentLog }),
         );
-        keepAlive.start();
+        await typingCallbacks.onReplyStart();
         break;
       }
       case "partial":
@@ -374,7 +372,7 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
           streamingController.markFullyComplete();
           await streamingController.onIdle();
         }
-        keepAlive?.stop();
+        typingCallbacks?.onIdle?.();
         break;
       }
       case "wire-fault":
@@ -434,9 +432,12 @@ const QQBOT_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
 ];
 
 const EXPECTED_REPLY_BUDGET_REMAINING: Readonly<Record<string, number>> = {
-  "streaming-happy-c2c": 3,
+  // Core typing lifecycle fires input_notify on onReplyStart (one extra
+  // passive spend vs the retired TypingKeepAlive early-cue-only path), so
+  // each C2C scenario consumes one more shared passive slot.
+  "streaming-happy-c2c": 2,
   "budget-exhaustion": 0,
-  "media-interrupt": 1,
+  "media-interrupt": 0,
 };
 
 describe("qqbot delivery trace goldens", () => {

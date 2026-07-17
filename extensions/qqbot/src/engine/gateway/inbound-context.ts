@@ -8,7 +8,6 @@ import type { HistoryEntry } from "../group/history.js";
 import type { GroupMessageGateResult } from "../group/message-gating.js";
 import type { QueuedMessage } from "./message-queue.js";
 import type { GatewayAccount, EngineLogger, GatewayPluginRuntime } from "./types.js";
-import type { TypingKeepAlive } from "./typing-keepalive.js";
 
 export interface ReplyToInfo {
   id: string;
@@ -64,7 +63,6 @@ export interface InboundContext {
     | "block_unauthorized_command"
     | "skip_no_mention"
     | "private_command_only";
-  typing: { keepAlive: TypingKeepAlive | null };
   inputNotifyRefIdx?: string;
 }
 
@@ -73,10 +71,7 @@ export interface InboundPipelineDeps {
   cfg: OpenClawConfig;
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
-  startTyping: (event: QueuedMessage) => Promise<{
-    refIdx?: string;
-    keepAlive: TypingKeepAlive | null;
-  }>;
+  startTyping: (event: QueuedMessage) => Promise<{ refIdx?: string }>;
   groupHistories?: Map<string, HistoryEntry[]>;
   allowTextCommands?: boolean;
   isControlCommand?: (content: string) => boolean;

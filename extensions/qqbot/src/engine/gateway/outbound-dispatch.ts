@@ -12,6 +12,7 @@
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -48,6 +49,7 @@ import type {
   GatewayPluginRuntime,
   OutboundResult,
 } from "./types.js";
+import { buildQqTypingOptions } from "./typing-callbacks.js";
 
 // ============ Config ============
 
@@ -129,7 +131,6 @@ function isMediaOnlyBlockReply(payload: ReplyDeliverPayload): boolean {
  * Dispatch the AI reply for the given inbound context.
  *
  * Handles tool deliver collection, block deliver pipeline, and timeouts.
- * The caller is responsible for stopping typing.keepAlive in `finally`.
  */
 export async function dispatchOutbound(
   inbound: InboundContext,
@@ -177,7 +178,6 @@ export async function dispatchOutbound(
 
   const markBlockResponse = (): void => {
     hasBlockResponse = true;
-    inbound.typing.keepAlive?.stop();
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -421,6 +421,20 @@ export async function dispatchOutbound(
     });
   }
 
+  // Core typing lifecycle: the TypingController starts on onReplyStart and
+  // cleans up on markRunComplete + markDispatchIdle, so qqbot only supplies the
+  // per-tick send + budget claim. Group/guild turns get no typing (C2C only),
+  // matching the inbound early-cue gate.
+  const isC2cTurn = event.type === "c2c" || event.type === "dm";
+  const { onModelSelected: _onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline(
+    {
+      cfg: openClawCfg,
+      agentId: routeAgentId,
+      channel: "qqbot",
+      accountId: inbound.route.accountId,
+      ...(isC2cTurn ? { typing: buildQqTypingOptions({ event, account, log }) } : {}),
+    },
+  );
   const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
@@ -451,6 +465,7 @@ export async function dispatchOutbound(
             ctx: ctxPayload,
             cfg,
             dispatcherOptions: {
+              ...replyPipeline,
               responsePrefix: messagesConfig.responsePrefix,
               deliver: async (payload: ReplyDeliverPayload, info: { kind: string }) => {
                 hasResponse = true;

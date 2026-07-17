@@ -2,7 +2,6 @@
 import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { InboundContext, InboundGroupInfo } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
-import type { TypingKeepAlive } from "../typing-keepalive.js";
 
 interface BaseStubFields {
   event: QueuedMessage;
@@ -38,7 +37,6 @@ function emptyInboundContext(fields: BaseStubFields): InboundContext {
     group: undefined,
     blocked: false,
     skipped: false,
-    typing: { keepAlive: null },
     inputNotifyRefIdx: undefined,
   };
 }
@@ -62,7 +60,6 @@ export function buildSkippedInboundContext(
     group: InboundGroupInfo;
     skipReason: NonNullable<InboundContext["skipReason"]>;
     access: QQBotInboundAccess;
-    typing: { keepAlive: TypingKeepAlive | null };
     inputNotifyRefIdx?: string;
   },
 ): InboundContext {
@@ -72,7 +69,6 @@ export function buildSkippedInboundContext(
     skipped: true,
     skipReason: params.skipReason,
     accessDecision: params.access.senderAccess.decision,
-    typing: params.typing,
     inputNotifyRefIdx: params.inputNotifyRefIdx,
   };
 }

@@ -447,7 +447,7 @@ export async function sendInputNotify(opts: {
 }
 
 /**
- * Raw-token input notify — compatible with TypingKeepAlive's callback signature.
+ * Raw-token input notify used by the core typing-lifecycle tick callback.
  */
 export function createRawInputNotifyFn(
   appId: string,

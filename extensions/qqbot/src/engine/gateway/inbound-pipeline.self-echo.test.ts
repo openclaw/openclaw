@@ -141,7 +141,7 @@ function makeDeps(overrides: Partial<InboundPipelineDeps> = {}): InboundPipeline
     cfg: {},
     log: { info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     runtime: makeRuntime(),
-    startTyping: vi.fn(async () => ({ keepAlive: null })),
+    startTyping: vi.fn(async () => ({})),
     adapters: {
       history: {
         recordPendingHistoryEntry: vi.fn(() => []),

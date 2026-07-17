@@ -71,7 +71,6 @@ export async function buildInboundContext(
     });
 
     if (gateOutcome.kind === "skip") {
-      typingResult.keepAlive?.stop();
       return buildSkippedInboundContext({
         event,
         route,
@@ -82,7 +81,6 @@ export async function buildInboundContext(
         group: gateOutcome.groupInfo,
         skipReason: gateOutcome.skipReason,
         access,
-        typing: { keepAlive: typingResult.keepAlive },
         inputNotifyRefIdx: typingResult.refIdx,
       });
     }
@@ -150,7 +148,6 @@ export async function buildInboundContext(
     blocked: false,
     skipped: false,
     accessDecision: access.senderAccess.decision,
-    typing: { keepAlive: typingResult.keepAlive },
     inputNotifyRefIdx: typingResult.refIdx,
   };
 }

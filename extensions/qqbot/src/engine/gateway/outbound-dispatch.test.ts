@@ -57,6 +57,11 @@ vi.mock("../messaging/sender.js", async () => {
     sendMedia: sendMediaMock,
     UploadDailyLimitExceededError,
     withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
+    // Typing-lifecycle tick helpers used by buildQqTypingOptions during dispatch.
+    createRawInputNotifyFn: () => async () => undefined,
+    getAccessToken: vi.fn(async () => "token-test"),
+    clearTokenCache: vi.fn(),
+    sendInputNotify: vi.fn(async () => ({ refIdx: undefined })),
   };
 });
 
@@ -109,7 +114,6 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
     commandAuthorized: false,
     blocked: false,
     skipped: false,
-    typing: { keepAlive: null },
     ...overrides,
   };
 }
