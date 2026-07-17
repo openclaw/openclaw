@@ -431,25 +431,37 @@ describe("fetchDiscord", () => {
   });
 
   it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
-    const fetcher = vi.fn(async () =>
-      jsonResponse({ message: "rate limited", retry_after: 30, global: false }, 429),
-    );
-    const controller = new AbortController();
-    const started = Date.now();
-
-    const request = requestDiscord("/users/@me/guilds", "test-token", {
-      fetcher: withFetchPreconnect(fetcher),
-      retry: { attempts: 3 },
-      signal: controller.signal,
+    let requestCount = 0;
+    const server = createServer((_req, res) => {
+      requestCount += 1;
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ message: "rate limited", retry_after: 30, global: false }));
     });
-    // Let the first 429 land and the retry backoff sleep start.
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 200);
-    });
-    controller.abort();
+    const port = await listenLoopbackServer(server);
 
-    await expect(request).rejects.toThrow(/abort/i);
-    expect(Date.now() - started).toBeLessThan(10_000);
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    try {
+      stubDiscordFetchToLoopback(`http://127.0.0.1:${port}`);
+      const controller = new AbortController();
+      const started = Date.now();
+
+      const request = requestDiscord("/users/@me/guilds", "test-token", {
+        retry: { attempts: 3 },
+        signal: controller.signal,
+      });
+      // Let the first 429 land and the retry backoff sleep start.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
+      controller.abort();
+
+      await expect(request).rejects.toThrow(/abort/i);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(requestCount).toBe(1);
+      console.log(
+        `[discord 429 backoff abort proof] retry_after=30s aborted_after=200ms elapsed=${Date.now() - started}ms requests=${requestCount}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
   });
 });
