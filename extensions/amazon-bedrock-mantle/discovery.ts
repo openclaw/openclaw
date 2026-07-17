@@ -132,6 +132,36 @@ function getCachedIamTokenEntry(
 }
 
 /**
+ * Clear whitespace-only AWS credential environment variables so the AWS SDK
+ * default credential chain bypasses them. Its env credential providers accept
+ * whitespace static keys and any present Bedrock bearer-token value, preventing
+ * fallback to profile, SSO, ECS, or IMDS credentials.
+ */
+export function sanitizeBlankAwsCredentials(): void {
+  if (
+    process.env.AWS_BEARER_TOKEN_BEDROCK !== undefined &&
+    !process.env.AWS_BEARER_TOKEN_BEDROCK.trim()
+  ) {
+    delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+  }
+
+  const hasBlankAccessKey =
+    process.env.AWS_ACCESS_KEY_ID !== undefined && !process.env.AWS_ACCESS_KEY_ID.trim();
+  const hasBlankSecretKey =
+    process.env.AWS_SECRET_ACCESS_KEY !== undefined && !process.env.AWS_SECRET_ACCESS_KEY.trim();
+
+  if (hasBlankAccessKey || hasBlankSecretKey) {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+    delete process.env.AWS_SESSION_TOKEN;
+    return;
+  }
+  if (process.env.AWS_SESSION_TOKEN !== undefined && !process.env.AWS_SESSION_TOKEN.trim()) {
+    delete process.env.AWS_SESSION_TOKEN;
+  }
+}
+
+/**
  * Generate a bearer token from IAM credentials using `@aws/bedrock-token-generator`.
  *
  * Uses the AWS default credential chain (instance roles, SSO, access keys, EKS IRSA).
@@ -142,6 +172,10 @@ export async function generateBearerTokenFromIam(params: {
   now?: () => number;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<string | undefined> {
+  // Keep blank static credentials out of the AWS SDK default chain so it can
+  // fall through to profile, SSO, ECS, or IMDS credentials.
+  sanitizeBlankAwsCredentials();
+
   const now = params.now?.() ?? Date.now();
   const cached = getCachedIamTokenEntry(params.region, now);
 

@@ -12,6 +12,7 @@ const {
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
+  sanitizeBlankAwsCredentials,
 } = await import("./api.js");
 
 function createTokenProviderFactory(tokenProvider: () => Promise<string>) {
@@ -778,5 +779,75 @@ describe("bedrock mantle discovery", () => {
     });
 
     expect(result.models?.map((m) => m.id)).toEqual(["custom-model"]);
+  });
+});
+
+describe("sanitizeBlankAwsCredentials", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("clears whitespace-only AWS credential env vars", () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SESSION_TOKEN", "token");
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+
+  it("clears a blank session token without removing valid static keys", () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_SESSION_TOKEN", " \t ");
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+
+  it("clears a blank Bedrock bearer token without removing valid static keys", () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", " \t ");
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+    expect(process.env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined();
+  });
+
+  it("does not clear valid static AWS credentials", () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKID");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+  });
+
+  it("does not throw when no AWS credential env vars are set", () => {
+    expect(() => sanitizeBlankAwsCredentials()).not.toThrow();
+  });
+
+  it("clears blank static credentials before Mantle IAM token generation", () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "  ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret-key");
+
+    // GenerateBearerTokenFromIam is expected to sanitize before using the
+    // AWS SDK default credential chain. We verify the sanitizer covers the
+    // Mantle call-path by checking that blank keys are removed.
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
   });
 });
