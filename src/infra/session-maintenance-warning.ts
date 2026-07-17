@@ -19,6 +19,7 @@ type WarningParams = {
 };
 
 const warnedContexts = new Map<string, string>();
+const MAX_WARNED_CONTEXTS = 512;
 const log = createSubsystemLogger("session-maintenance-warning");
 const messageRuntimeLoader = createLazyPromiseLoader(
   () => import("../channels/message/runtime.js"),
@@ -113,6 +114,10 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   const contextKey = buildWarningContext(params);
   if (warnedContexts.get(params.sessionKey) === contextKey) {
     return;
+  }
+  if (warnedContexts.size >= MAX_WARNED_CONTEXTS) {
+    const oldest = warnedContexts.keys().next().value;
+    if (oldest !== undefined) warnedContexts.delete(oldest);
   }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
