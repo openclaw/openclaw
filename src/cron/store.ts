@@ -277,6 +277,33 @@ export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQua
   }
 }
 
+function buildQuarantineJobEntry(
+  entry: QuarantinedCronConfigJob,
+  nowMs: number,
+): CronQuarantineFile["jobs"][number] {
+  const result: CronQuarantineFile["jobs"][number] = {
+    quarantinedAtMs: nowMs,
+    sourceIndex: entry.sourceIndex,
+    reason: entry.reason,
+  };
+  if (entry.job) {
+    result.job = structuredClone(entry.job);
+  }
+  if ("raw" in entry) {
+    result.raw = structuredClone(entry.raw);
+  }
+  if (entry.state) {
+    result.state = structuredClone(entry.state);
+  }
+  if (entry.updatedAtMs !== undefined) {
+    result.updatedAtMs = entry.updatedAtMs;
+  }
+  if (entry.scheduleIdentity !== undefined) {
+    result.scheduleIdentity = entry.scheduleIdentity;
+  }
+  return result;
+}
+
 function quarantineEntryKey(entry: QuarantinedCronConfigJob): string {
   const rawId = entry.job
     ? (normalizeOptionalString(entry.job.id) ?? normalizeOptionalString(entry.job.jobId))
@@ -308,11 +335,11 @@ export async function saveCronQuarantineFile(params: {
   // load it for deduplication. Archive it and start fresh with the new entries.
   let existing: CronQuarantineFile = { version: 1, jobs: [] };
   let existingKeys = new Set<string>();
-  const existingStat = await fs.promises.stat(quarantinePath).catch((err) => {
+  const existingStat = await fs.promises.stat(quarantinePath).catch((err: unknown) => {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return null;
     }
-    return Promise.reject(err);
+    throw err;
   });
   if (existingStat && existingStat.size > CRON_QUARANTINE_MAX_BYTES) {
     await archiveQuarantineFile(quarantinePath);
@@ -335,16 +362,7 @@ export async function saveCronQuarantineFile(params: {
     seen.add(key);
     appended = true;
     appendedEntries.push(entry);
-    nextJobs.push({
-      quarantinedAtMs: params.nowMs,
-      sourceIndex: entry.sourceIndex,
-      reason: entry.reason,
-      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
-      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
-      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
-      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
-      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
-    });
+    nextJobs.push(buildQuarantineJobEntry(entry, params.nowMs));
   }
   if (!appended) {
     return quarantinePath;
@@ -356,16 +374,7 @@ export async function saveCronQuarantineFile(params: {
     // quarantine file containing only the new entries. This prevents a
     // cap-saturated sidecar from blocking every subsequent cron mutation.
     await archiveQuarantineFile(quarantinePath);
-    const freshJobs = appendedEntries.map((entry) => ({
-      quarantinedAtMs: params.nowMs,
-      sourceIndex: entry.sourceIndex,
-      reason: entry.reason,
-      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
-      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
-      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
-      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
-      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
-    }));
+    const freshJobs = appendedEntries.map((entry) => buildQuarantineJobEntry(entry, params.nowMs));
     const freshPayload = JSON.stringify({ version: 1, jobs: freshJobs }, null, 2);
     if (Buffer.byteLength(freshPayload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
       throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
