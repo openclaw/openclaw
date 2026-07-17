@@ -253,7 +253,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   }
 
   function createRuntimeLogger() {
-    return { log: vi.fn(), error: vi.fn() } as never;
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    return runtime as typeof runtime & ReplyDispatcherArgs["runtime"];
   }
 
   function createDispatcherHarness(overrides: Partial<ReplyDispatcherArgs> = {}) {
@@ -2061,6 +2062,123 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       visibleReplySent: true,
       skippedFinalReason: null,
     });
+  });
+
+  it("explains a Feishu content-policy rejection without changing the rejected reply", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+    const sdkError = Object.assign(new Error("Request failed with status code 400"), {
+      response: {
+        status: 400,
+        data: { code: 230028, msg: "The messages do NOT pass the audit" },
+      },
+    });
+    const wrappedError = new Error("Feishu send failed", { cause: sdkError });
+    sendMessageFeishuMock.mockRejectedValueOnce(wrappedError);
+
+    await expect(options.deliver({ text: "Original reply" }, { kind: "final" })).rejects.toBe(
+      wrappedError,
+    );
+    await options.onError?.(wrappedError, { kind: "final" });
+    await expect(result.ensureNoVisibleReplyFallback("failed-final")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toBe("Original reply");
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.text).toBe(
+      "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.",
+    );
+  });
+
+  it("keeps the original error path alive when the audit rejection notice also fails", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+    const sdkError = Object.assign(new Error("Request failed with status code 400"), {
+      response: { status: 400, data: { code: 230028 } },
+    });
+    const wrappedError = new Error("Feishu send failed", { cause: sdkError });
+    sendMessageFeishuMock
+      .mockRejectedValueOnce(wrappedError)
+      .mockRejectedValueOnce(new Error("notice send failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(options.deliver({ text: "Original reply" }, { kind: "final" })).rejects.toBe(
+      wrappedError,
+    );
+    await expect(options.onError?.(wrappedError, { kind: "final" })).resolves.toBeUndefined();
+    await expect(result.ensureNoVisibleReplyFallback("failed-final")).resolves.toBe(true);
+
+    expect(sendMessageFeishuMock.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "Original reply",
+      "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.",
+      expect.stringContaining("without visible content"),
+    ]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "feishu[main]: failed to send message audit rejection notice: Error: notice send failed",
+    );
+  });
+
+  it("sends the audit rejection notice before propagating streaming cleanup failures", async () => {
+    const originalPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+      const firstInstance = args[0];
+      if (firstInstance && streamingInstances.length === 0) {
+        firstInstance.close = vi.fn(async () => {
+          firstInstance.active = false;
+          throw new Error("close failed");
+        });
+      }
+      return originalPush(...args);
+    };
+
+    try {
+      const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
+      const sdkError = Object.assign(new Error("Request failed with status code 400"), {
+        response: { status: 400, data: { code: 230028 } },
+      });
+      const wrappedError = new Error("Feishu send failed", { cause: sdkError });
+
+      await options.deliver({ text: "```md\nfirst\n```" }, { kind: "final" });
+      await expect(options.onError?.(wrappedError, { kind: "final" })).rejects.toThrow(
+        "close failed",
+      );
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(firstMockArg(sendMessageFeishuMock, "send message params").text).toBe(
+        "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.",
+      );
+    } finally {
+      streamingInstances.push = originalPush;
+    }
+  });
+
+  it("explains an audit rejection after an earlier reply chunk was delivered", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = createRuntimeLogger();
+    const { result, options } = createDispatcherHarness({ runtime });
+    const core = getFeishuRuntimeMock();
+    core.channel.text.chunkTextWithMode.mockReturnValue(["First chunk", "Rejected chunk"]);
+    const sdkError = Object.assign(new Error("Request failed with status code 400"), {
+      response: { status: 400, data: { code: 230028 } },
+    });
+    const wrappedError = new Error("Feishu send failed", { cause: sdkError });
+    sendMessageFeishuMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(wrappedError)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(options.deliver({ text: "Original reply" }, { kind: "final" })).rejects.toBe(
+      wrappedError,
+    );
+    await options.onError?.(wrappedError, { kind: "final" });
+    await expect(result.ensureNoVisibleReplyFallback("failed-final")).resolves.toBe(false);
+
+    expect(sendMessageFeishuMock.mock.calls.map((call) => call[0]?.text)).toEqual([
+      "First chunk",
+      "Rejected chunk",
+      "⚠️ Feishu couldn't deliver this reply because it didn't pass a content policy check.",
+    ]);
   });
 
   it("does not send no-visible-reply fallback after an intentional silent final", async () => {

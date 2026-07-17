@@ -1,8 +1,8 @@
 // Feishu plugin module implements reply dispatcher behavior.
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  createChannelMessageReplyPipeline,
   formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
   resolveChannelPreviewStreamMode,
@@ -23,6 +23,7 @@ import { chunkFeishuPostMarkdown, materializeFeishuPostMarkdownSoftBreaks } from
 import { buildFeishuMediaFallbackText } from "./media-fallback.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { createFeishuReplyFallbackController } from "./reply-dispatcher-fallback.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -64,8 +65,6 @@ function mergeStreamingFinalText(
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
 const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
-const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
@@ -279,7 +278,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streamingCloseErroredForReply = false;
   let visibleReplySent = false;
   let skippedFinalReason: string | null = null;
-  let idleSideEffectsPromise: Promise<void> = Promise.resolve();
   let replyLifecycleStateInitialized = false;
   type StreamTextUpdateMode = "snapshot" | "delta";
 
@@ -601,41 +599,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const ensureNoVisibleReplyFallback = async (reason: string): Promise<boolean> => {
-    await idleSideEffectsPromise;
-    if (visibleReplySent) {
-      return false;
-    }
-    if (skippedFinalReason === "silent") {
-      params.runtime.log?.(
-        `feishu[${account.accountId}]: no-visible-reply fallback skipped for intentional silence (${reason})`,
-      );
-      return false;
-    }
-    await sendMessageFeishu({
-      cfg,
-      to: sendTarget,
-      text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
-      replyToMessageId: sendReplyToMessageId,
-      replyInThread: effectiveReplyInThread,
-      allowTopLevelReplyFallback,
-      accountId,
-    });
-    markVisibleReplySent();
-    params.runtime.error?.(
-      `feishu[${account.accountId}]: sent no-visible-reply fallback (${reason})`,
-    );
-    return true;
-  };
-
-  const queueIdleSideEffects = (options?: { markClosedForReply?: boolean }): Promise<void> => {
-    const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
-      await closeStreaming(options);
-      typingCallbacks?.onIdle?.();
-    });
-    idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
-    return nextIdleSideEffects;
-  };
+  const replyFallback = createFeishuReplyFallbackController({
+    accountId: account.accountId,
+    closeStreaming,
+    getVisibleReplyState: () => ({ visibleReplySent, skippedFinalReason }),
+    log: params.runtime.log,
+    error: params.runtime.error,
+    markVisibleReplySent,
+    onIdle: () => typingCallbacks?.onIdle?.(),
+    sendText: async (text) => {
+      await sendMessageFeishu({
+        cfg,
+        to: sendTarget,
+        text,
+        replyToMessageId: sendReplyToMessageId,
+        replyInThread: effectiveReplyInThread,
+        allowTopLevelReplyFallback,
+        accountId,
+      });
+    },
+  });
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
@@ -869,9 +852,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
-        await queueIdleSideEffects({ markClosedForReply: false });
+        await replyFallback.handleReplyError(error);
       },
-      onIdle: () => queueIdleSideEffects(),
+      onIdle: replyFallback.onIdle,
       onCleanup: () => {
         typingCallbacks?.onCleanup?.();
       },
@@ -957,7 +940,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
     },
     markDispatchIdle,
-    ensureNoVisibleReplyFallback,
+    ensureNoVisibleReplyFallback: replyFallback.ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({
       visibleReplySent,
       skippedFinalReason,
