@@ -12,6 +12,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { QuestionRequestQuestion } from "../../packages/gateway-protocol/src/schema/questions.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -37,7 +38,7 @@ import {
   parseInteractiveParam,
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
-import { hasReplyPayloadContent } from "../interactive/payload.js";
+import { hasReplyPayloadContent, type MessagePresentation } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
@@ -119,6 +120,45 @@ const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyMo
 const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
   () => import("../plugins/hook-runner-global.js"),
 );
+
+export function buildAskUserQuestionPresentation(params: {
+  questionId: string;
+  questions: QuestionRequestQuestion[];
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so v1 keeps multi-question records text-only.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  if (!question || question.multiSelect || question.isSecret || question.options.length === 0) {
+    return undefined;
+  }
+  const presentationText = [
+    question.question,
+    "",
+    ...question.options.map(
+      (option) => `- ${option.label}${option.description ? `: ${option.description}` : ""}`,
+    ),
+    "",
+    "Tap an option, or reply with the option text or your own answer.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: presentationText },
+      {
+        type: "buttons",
+        buttons: question.options.map((option) => ({
+          label: option.label,
+          action: {
+            type: "question",
+            questionId: params.questionId,
+            optionValue: option.label,
+          },
+        })),
+      },
+    ],
+  };
+}
 const fallbackToolTerminalObservers = new WeakMap<
   ToolHandlerContext["state"],
   ReturnType<typeof createToolTerminalObserver>
@@ -1223,8 +1263,10 @@ export function handleToolExecutionStart(
             const prompt = formatAgentHarnessUserInputPrompt(questions, {
               intro: "Question for you:",
             });
+            const presentation = buildAskUserQuestionPresentation({ questionId, questions });
             return ctx.params.onToolResult?.({
               text: `${prompt}\n\nReply with the number, the option text, or your own answer.`,
+              ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
               channelData: { askUser: { questionId } },
             });
           })

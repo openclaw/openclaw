@@ -21,6 +21,7 @@ import {
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
+  buildAskUserQuestionPresentation,
   handleToolExecutionEnd,
   handleToolExecutionStart,
   handleToolExecutionUpdate,
@@ -305,7 +306,115 @@ describe("handleToolExecutionStart read path checks", () => {
           questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
         },
       },
+      presentationTextMode: "fallback",
+      presentation: {
+        blocks: [
+          {
+            type: "text",
+            text: [
+              "Where should this deploy?",
+              "",
+              "- Staging (Recommended): Safer default",
+              "- Production",
+              "",
+              "Tap an option, or reply with the option text or your own answer.",
+            ].join("\n"),
+          },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging (Recommended)",
+                action: {
+                  type: "question",
+                  questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+                  optionValue: "Staging (Recommended)",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+                  optionValue: "Production",
+                },
+              },
+            ],
+          },
+        ],
+      },
     });
+  });
+
+  it.each([
+    {
+      name: "multi-question",
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+        {
+          id: "region",
+          header: "Region",
+          question: "Which region?",
+          options: [{ label: "EU" }, { label: "US" }],
+        },
+      ],
+    },
+    {
+      name: "multi-select",
+      questions: [
+        {
+          id: "targets",
+          header: "Targets",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+          multiSelect: true,
+        },
+      ],
+    },
+  ])("keeps $name ask_user prompts text-only", async ({ questions }) => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const toolCallId = `ask-${questions[0]?.id ?? "unknown"}`;
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId,
+      args: { questions },
+    });
+    markAskUserPromptReady(
+      buildAskUserQuestionId(toolCallId, "agent:unit-session"),
+      normalizeAskUserParams({ questions }).questions,
+    );
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    const payload = onToolResult.mock.calls[0]?.[0];
+    expect(payload?.text).toContain("Reply with the number, the option text, or your own answer.");
+    expect(payload).not.toHaveProperty("presentation");
+    expect(payload).not.toHaveProperty("presentationTextMode");
+  });
+
+  it("does not build buttons for secret runtime questions", () => {
+    expect(
+      buildAskUserQuestionPresentation({
+        questionId: buildAskUserQuestionId("ask-secret", "agent:unit-session"),
+        questions: [
+          {
+            id: "secret",
+            header: "Secret",
+            question: "Which secret?",
+            options: [{ label: "Alpha" }, { label: "Beta" }],
+            isSecret: true,
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("reserves ask_user before awaiting block-reply flush", async () => {

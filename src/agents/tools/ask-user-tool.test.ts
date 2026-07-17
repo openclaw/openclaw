@@ -58,6 +58,12 @@ describe("ask_user normalization", () => {
       3_600,
     );
     expect(Value.Check(createAskUserTool({}).parameters, validArgs)).toBe(true);
+    expect(
+      Value.Check(createAskUserTool({}).parameters, {
+        questions: [{ ...validArgs.questions[0], isSecret: true }],
+      }),
+    ).toBe(false);
+    expect(normalized.questions[0]).not.toHaveProperty("isSecret");
   });
 
   it("rejects question, option, id, and duplicate-id violations", () => {
