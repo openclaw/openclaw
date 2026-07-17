@@ -245,6 +245,7 @@ async function downloadGeneratedVideoFromUri(params: {
       });
       try {
         if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
           throw new Error(
             `Failed to download Google generated video: ${response.status} ${response.statusText}`,
           );
