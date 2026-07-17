@@ -174,9 +174,13 @@ export async function monitorLineProvider(
           channel: "line",
           accountId: route.accountId,
           raw: ctx,
-          onTurnAdopted: async () => {
-            await deliveryControl.onTurnAdopted?.();
-            turnAdopted = true;
+          turnAdoptionLifecycle: {
+            admission: "exclusive",
+            onAdopted: async () => {
+              await deliveryControl.onTurnAdopted?.();
+              turnAdopted = true;
+            },
+            ...(deliveryControl.abortSignal ? { abortSignal: deliveryControl.abortSignal } : {}),
           },
           adapter: {
             ingest: () => ({

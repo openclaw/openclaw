@@ -1,6 +1,9 @@
 // Line tests cover durable webhook admission, replay, and dead-lettering.
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import type { webhook } from "@line/bot-sdk";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -8,7 +11,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 import {
   createLineWebhookSpool,
@@ -23,7 +25,6 @@ type SpoolPayload = {
 };
 
 const runtime = (): RuntimeEnv => ({ error: vi.fn(), exit: vi.fn(), log: vi.fn() });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createEvent(eventId: string, userId = "user-1"): webhook.Event {
   return {
@@ -45,7 +46,8 @@ function callback(event: webhook.Event): webhook.CallbackRequest {
 async function withQueue<T>(
   fn: (queue: ReturnType<typeof createChannelIngressQueue<SpoolPayload>>) => Promise<T>,
 ): Promise<T> {
-  const stateDir = tempDirs.make("openclaw-line-spool-");
+  const stateDir = path.join(os.tmpdir(), `openclaw-line-spool-${crypto.randomUUID()}`);
+  await fs.mkdir(stateDir);
   const queue = createChannelIngressQueue<SpoolPayload>({
     channelId: "line",
     accountId: "default",
@@ -55,6 +57,7 @@ async function withQueue<T>(
     return await fn(queue);
   } finally {
     closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
