@@ -963,6 +963,82 @@ describe("memory index schema", () => {
     }
   });
 
+  it("imports legacy chunks for a canonical source that has no chunks yet", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`
+        -- doc.md is already chunk-owned: its stale legacy chunk must not ride along.
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('doc.md', 'memory', 'doc-hash', 200.0, 42);
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-doc-canonical', 'doc.md', 'memory', 1, 10, 'doc-chunk-hash', 'model',
+          'canonical body', '[]', 200
+        );
+        -- pending.md has a canonical source row but no chunks yet (indexing
+        -- interrupted before its chunks were written): its legacy chunk is the
+        -- only searchable content and must import instead of being stranded.
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('pending.md', 'memory', 'pending-hash', 150.0, 20);
+      `);
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO files VALUES ('doc.md', 'memory', 'doc-hash', 200, 42);
+        INSERT INTO files VALUES ('pending.md', 'memory', 'pending-hash', 150, 20);
+        INSERT INTO chunks VALUES (
+          'chunk-doc-legacy', 'doc.md', 'memory', 1, 8, 'stale-hash', 'model',
+          'stale legacy body', '[]', 100
+        );
+        INSERT INTO chunks VALUES (
+          'chunk-pending-legacy', 'pending.md', 'memory', 1, 6, 'pending-chunk-hash', 'model',
+          'only searchable content for pending', '[]', 150
+        );
+      `);
+
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: false,
+      });
+
+      // doc.md keeps only its canonical chunk (stale legacy chunk excluded);
+      // pending.md, whose canonical source had no chunks, imports its legacy
+      // chunk so the file is not left silently unsearchable.
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all()).toEqual([
+        { id: "chunk-doc-canonical", text: "canonical body" },
+        { id: "chunk-pending-legacy", text: "only searchable content for pending" },
+      ]);
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks')",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("keeps legacy tables when legacy rows cannot be copied", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -999,6 +1075,113 @@ describe("memory index schema", () => {
       ).toThrow("legacy memory files rows could not be copied");
       expect(db.prepare("SELECT path FROM files").get()).toEqual({ path: "doc.md" });
       expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps legacy tables when legacy meta rows cannot be copied", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO meta VALUES ('broken-key', NULL);
+      `);
+
+      expect(() =>
+        ensureMemoryIndexSchema({
+          db,
+          cacheEnabled: false,
+          ftsEnabled: false,
+        }),
+      ).toThrow("legacy memory meta rows could not be copied");
+      expect(
+        db
+          .prepare("SELECT COUNT(*) AS count FROM memory_index_meta WHERE key = 'broken-key'")
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps legacy tables when legacy chunk rows cannot be copied", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO files VALUES ('note.md', 'memory', 'note-hash', 90, 10);
+        -- Legacy-only source (canonical owns no chunks for it), so this chunk
+        -- must copy; a NULL embedding makes it uncopyable under STRICT and the
+        -- whole migration must abort with legacy tables retained.
+        INSERT INTO chunks VALUES (
+          'chunk-broken', 'note.md', 'memory', 1, 5, 'chunk-hash', 'model',
+          'body', NULL, 90
+        );
+      `);
+
+      expect(() =>
+        ensureMemoryIndexSchema({
+          db,
+          cacheEnabled: false,
+          ftsEnabled: false,
+        }),
+      ).toThrow("legacy memory chunks rows could not be copied");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
         count: 0,
       });
       expect(
