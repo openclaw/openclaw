@@ -29,10 +29,21 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import {
+  buildAskUserQuestionId,
+  markAskUserPromptReady,
+  normalizeAskUserParams,
+  reserveAskUserPromptDelivery,
+  resetPendingAskUserQuestionsForTest,
+} from "./tools/ask-user-tool.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
+
+afterEach(() => {
+  resetPendingAskUserQuestionsForTest();
+});
 
 const beforeToolCallTesting = { adjustedParamsByToolCallId, buildAdjustedParamsKey };
 
@@ -247,6 +258,229 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("delivers a numbered ask_user prompt with question id association", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [
+            { label: "Staging (Recommended)", description: "Safer default" },
+            { label: "Production" },
+          ],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-call-1",
+      args,
+    });
+    markAskUserPromptReady(
+      buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+      normalizeAskUserParams(args).questions,
+    );
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: [
+        "Question for you:",
+        "",
+        "Target",
+        "Where should this deploy?",
+        "1. Staging (Recommended) - Safer default",
+        "2. Production",
+        "Other: reply with your own answer.",
+        "",
+        "Reply with the number, the option text, or your own answer.",
+      ].join("\n"),
+      channelData: {
+        askUser: {
+          questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+        },
+      },
+    });
+  });
+
+  it("reserves ask_user before awaiting block-reply flush", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    const pending = handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-flush",
+      args,
+    });
+    markAskUserPromptReady(
+      buildAskUserQuestionId("ask-flush", "agent:unit-session"),
+      normalizeAskUserParams(args).questions,
+    );
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    releaseFlush?.();
+    await pending;
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+  });
+
+  it.each(["buffer", "callback"] as const)(
+    "releases ask_user reservation when the %s flush throws synchronously",
+    (flushKind) => {
+      const { ctx, onBlockReplyFlush } = createTestContext();
+      ctx.params.onToolResult = vi.fn();
+      const failure = new Error("flush failed");
+      if (flushKind === "buffer") {
+        vi.mocked(ctx.flushBlockReplyBuffer).mockImplementation(() => {
+          throw failure;
+        });
+      } else {
+        onBlockReplyFlush.mockImplementation(() => {
+          throw failure;
+        });
+      }
+      const args = {
+        questions: [
+          {
+            id: "target",
+            header: "Target",
+            question: "Where next?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+          },
+        ],
+      };
+
+      expect(() =>
+        handleToolExecutionStart(ctx, {
+          type: "tool_execution_start",
+          toolName: "ask_user",
+          toolCallId: `ask-${flushKind}-failure`,
+          args,
+        }),
+      ).toThrow(failure);
+      expect(
+        reserveAskUserPromptDelivery({
+          toolCallId: `ask-${flushKind}-retry`,
+          sessionKey: "agent:unit-session",
+          questions: normalizeAskUserParams(args).questions,
+        }),
+      ).toBeDefined();
+    },
+  );
+
+  it("delivers only the ask_user prompt that reserved the session slot", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-first",
+      args,
+    });
+    markAskUserPromptReady(
+      buildAskUserQuestionId("ask-first", "agent:unit-session"),
+      normalizeAskUserParams(args).questions,
+    );
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-second",
+      args,
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    expect(onToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelData: {
+          askUser: {
+            questionId: buildAskUserQuestionId("ask-first", "agent:unit-session"),
+          },
+        },
+      }),
+    );
+  });
+
+  it("releases an undelivered ask_user reservation when execution is rejected", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    const args = {
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Where next?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+        },
+      ],
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      args,
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "ask_user",
+      toolCallId: "ask-denied",
+      isError: true,
+      result: { content: [{ type: "text", text: "denied" }] },
+    });
+    await Promise.resolve();
+    expect(onToolResult).not.toHaveBeenCalled();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "ask_user",
+      toolCallId: "ask-after-denial",
+      args,
+    });
+    markAskUserPromptReady(
+      buildAskUserQuestionId("ask-after-denial", "agent:unit-session"),
+      normalizeAskUserParams(args).questions,
+    );
+    await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+  });
+
   it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {
     const { ctx, trace, isEnabled, warn } = createTestContext();
     isEnabled.mockImplementation((level: string) => level === "trace");
