@@ -144,6 +144,7 @@ describe("encodeWindowsLauncherScript", () => {
     resolveWindowsOemEncodingMock.mockReturnValue("windows-1258");
     const supported = '@echo off\r\ncd /d "C:\\Users\\Đăng"\r\n';
     const unsupported = '@echo off\r\ncd /d "C:\\Users\\Việt"\r\n';
+    const decomposed = '@echo off\r\ncd /d "C:\\Users\\e\u0323"\r\n';
 
     expect(
       decodeWindowsLauncherScript({
@@ -151,6 +152,9 @@ describe("encodeWindowsLauncherScript", () => {
       }),
     ).toBe(supported);
     expect(() => encodeWindowsLauncherScript({ format: "cmd", content: unsupported })).toThrow(
+      /cannot be represented/,
+    );
+    expect(() => encodeWindowsLauncherScript({ format: "cmd", content: decomposed })).toThrow(
       /cannot be represented/,
     );
   });

@@ -77,7 +77,11 @@ export function encodeWindowsLauncherScript(params: {
   const decoded = WHATWG_VERIFIABLE_ENCODINGS.has(encoding)
     ? new TextDecoder(encoding).decode(encoded)
     : iconv.decode(encoded, encoding);
-  if (decoded !== marked) {
+  // Windows decodes CP1258 with MB_PRECOMPOSED by default. Reject composite
+  // sequences that Windows would normalize into a different path or value.
+  const windowsWouldPrecompose =
+    encoding === "windows-1258" && decoded.normalize("NFC") !== decoded;
+  if (decoded !== marked || windowsWouldPrecompose) {
     throw new Error(
       `Windows ${params.format} launcher script contains characters that cannot be represented in the Windows console code page (${encoding}); cmd.exe would misread the script. Remove those characters or switch Windows to UTF-8 (code page 65001).`,
     );
