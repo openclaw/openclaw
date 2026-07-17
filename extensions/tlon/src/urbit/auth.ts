@@ -3,6 +3,8 @@ import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
+const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
+
 type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
   lookupFn?: LookupFn;
@@ -36,8 +38,27 @@ export async function authenticate(
       throw new UrbitAuthError("auth_failed", `Login failed with status ${response.status}`);
     }
 
-    // Some Urbit setups require the response body to be read before cookie headers finalize.
-    await response.text().catch(() => {});
+    // Drain the response body within a bounded buffer so cookie headers
+    // finalize. A streaming drain with a cap avoids buffering an arbitrarily
+    // large response into memory when only the set-cookie header is needed.
+    const body = response.body;
+    if (body && typeof body.getReader === "function") {
+      const reader = body.getReader();
+      try {
+        let drained = 0;
+        while (drained < MAX_AUTH_BODY_DRAIN_BYTES) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) drained += value.byteLength;
+        }
+        await reader.cancel().catch(() => {});
+      } catch {
+        // Drain failure is non-fatal — the cookie may still be available.
+      }
+    } else {
+      // Body stream unavailable; drain via text() with post-hoc cap.
+      await response.text().catch(() => {});
+    }
     const cookie = response.headers.get("set-cookie");
     if (!cookie) {
       throw new UrbitAuthError("missing_cookie", "No authentication cookie received");
