@@ -1,9 +1,10 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
-import fsSync, { type Stats } from "node:fs";
+import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import tls from "node:tls";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
@@ -14,41 +15,154 @@ import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 
 const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
+const GATEWAY_TLS_LINK_ATTEMPTS = 3;
+const GATEWAY_TLS_LINK_RETRY_DELAY_MS = 25;
+const TRANSIENT_LINK_ERROR_CODES = new Set(["EBUSY", "EINTR", "EIO"]);
 
 type GeneratedTlsOutput = {
   finalPath: string;
   identity: Stats;
   published: boolean;
+  stageDir: string;
   stagedPath: string;
 };
 
-function removePublishedOutputIfOwned(output: GeneratedTlsOutput): void {
-  if (!output.published) {
+type GeneratedTlsRecovery = {
+  error?: unknown;
+  preserveStageDir: boolean;
+};
+
+class TlsPublicationError extends Error {
+  readonly preserveStageDirs: ReadonlySet<string>;
+
+  constructor(
+    message: string,
+    options: { cause: unknown; preserveStageDirs: ReadonlySet<string> },
+  ) {
+    super(message, { cause: options.cause });
+    this.name = "TlsPublicationError";
+    this.preserveStageDirs = options.preserveStageDirs;
+  }
+}
+
+async function linkGeneratedTlsOutput(output: GeneratedTlsOutput): Promise<void> {
+  for (let attempt = 1; attempt <= GATEWAY_TLS_LINK_ATTEMPTS; attempt += 1) {
+    try {
+      await fs.link(output.stagedPath, output.finalPath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === GATEWAY_TLS_LINK_ATTEMPTS || !TRANSIENT_LINK_ERROR_CODES.has(code ?? "")) {
+        throw error;
+      }
+      await delay(GATEWAY_TLS_LINK_RETRY_DELAY_MS);
+    }
+  }
+}
+
+async function restoreRecoveredOutput(
+  recoveryPath: string,
+  finalPath: string,
+  identity: Stats,
+): Promise<void> {
+  if (identity.isDirectory()) {
+    await fs.cp(recoveryPath, finalPath, {
+      errorOnExist: true,
+      force: false,
+      preserveTimestamps: true,
+      recursive: true,
+      verbatimSymlinks: true,
+    });
+    return;
+  }
+  if (identity.isSymbolicLink()) {
+    await fs.symlink(await fs.readlink(recoveryPath), finalPath);
     return;
   }
   try {
-    const current = fsSync.lstatSync(output.finalPath);
-    if (sameFileIdentity(output.identity, current)) {
-      fsSync.unlinkSync(output.finalPath);
+    await fs.link(recoveryPath, finalPath);
+  } catch (linkError) {
+    try {
+      await fs.copyFile(recoveryPath, finalPath, fsConstants.COPYFILE_EXCL);
+    } catch (copyError) {
+      throw new AggregateError([linkError, copyError], "failed to restore recovered tls output");
     }
+  }
+}
+
+async function recoverPublishedTlsOutput(
+  output: GeneratedTlsOutput,
+): Promise<GeneratedTlsRecovery> {
+  if (!output.published) {
+    return { preserveStageDir: false };
+  }
+  const recoveryPath = path.join(output.stageDir, `published-${path.basename(output.finalPath)}`);
+  let currentIdentity: Stats;
+  try {
+    currentIdentity = await fs.lstat(output.finalPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { preserveStageDir: false };
     }
+    return { error, preserveStageDir: false };
+  }
+  if (!sameFileIdentity(output.identity, currentIdentity)) {
+    return { preserveStageDir: false };
+  }
+  try {
+    await fs.rename(output.finalPath, recoveryPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { preserveStageDir: false };
+    }
+    return { error, preserveStageDir: true };
+  }
+
+  let recoveredIdentity: Stats;
+  try {
+    recoveredIdentity = await fs.lstat(recoveryPath);
+  } catch (error) {
+    return { error, preserveStageDir: true };
+  }
+  if (sameFileIdentity(output.identity, recoveredIdentity)) {
+    return { preserveStageDir: false };
+  }
+  try {
+    await restoreRecoveredOutput(recoveryPath, output.finalPath, recoveredIdentity);
+    return { preserveStageDir: true };
+  } catch (error) {
+    return { error, preserveStageDir: true };
   }
 }
 
 async function publishGeneratedTlsOutputs(outputs: GeneratedTlsOutput[]): Promise<void> {
   try {
     for (const output of outputs) {
-      await fs.link(output.stagedPath, output.finalPath);
+      await linkGeneratedTlsOutput(output);
       output.published = true;
     }
   } catch (error) {
+    const preserveStageDirs = new Set<string>();
+    const recoveryErrors: unknown[] = [];
     for (const output of outputs.toReversed()) {
-      removePublishedOutputIfOwned(output);
+      const recovery = await recoverPublishedTlsOutput(output);
+      if (recovery.preserveStageDir) {
+        preserveStageDirs.add(output.stageDir);
+      }
+      if (recovery.error) {
+        recoveryErrors.push(recovery.error);
+      }
     }
-    throw error;
+    const recoveryNotice = preserveStageDirs.size
+      ? `; concurrent output backup preserved under ${[...preserveStageDirs].join(", ")}`
+      : "";
+    throw new TlsPublicationError(
+      `gateway tls: generated pair publication failed${recoveryNotice}`,
+      {
+        cause: new AggregateError([error, ...recoveryErrors]),
+        preserveStageDirs,
+      },
+    );
   }
 }
 
@@ -85,6 +199,7 @@ async function generateSelfSignedCert(params: {
   const certStageDir = await fs.mkdtemp(path.join(certDir, ".openclaw-gateway-tls-cert-"));
   const stagedCertPath = path.join(certStageDir, "cert.pem");
   let keyStageDir: string | undefined;
+  let preserveStageDirs: ReadonlySet<string> = new Set();
   try {
     keyStageDir = await fs.mkdtemp(path.join(keyDir, ".openclaw-gateway-tls-key-"));
     const stagedKeyPath = path.join(keyStageDir, "key.pem");
@@ -127,22 +242,30 @@ async function generateSelfSignedCert(params: {
         finalPath: params.certPath,
         identity: certIdentity,
         published: false,
+        stageDir: certStageDir,
         stagedPath: stagedCertPath,
       },
       {
         finalPath: params.keyPath,
         identity: keyIdentity,
         published: false,
+        stageDir: keyStageDir,
         stagedPath: stagedKeyPath,
       },
     ]);
     params.log?.info?.(
       `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
     );
+  } catch (error) {
+    if (error instanceof TlsPublicationError) {
+      preserveStageDirs = error.preserveStageDirs;
+    }
+    throw error;
   } finally {
     await Promise.allSettled(
       [certStageDir, keyStageDir]
         .filter((dir): dir is string => Boolean(dir))
+        .filter((dir) => !preserveStageDirs.has(dir))
         .map((dir) => fs.rm(dir, { force: true, recursive: true })),
     );
   }
