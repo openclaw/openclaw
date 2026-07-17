@@ -698,17 +698,15 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    // Estimate the UTF-8 byte size before allocating a Buffer so oversized
-    // content is rejected without first materialising the full encoded payload.
-    const estimatedBytes = Buffer.byteLength(params.content, "utf8");
-    if (estimatedBytes > MAX_PREVIEW_BYTES) {
+    const contentSize = Buffer.byteLength(params.content, "utf8");
+    if (contentSize > MAX_PREVIEW_BYTES) {
       respond(
         false,
         undefined,
         sessionFilesError("session_file_too_large", "session file content is too large", {
           maxPreviewBytes: MAX_PREVIEW_BYTES,
           path: params.path,
-          size: estimatedBytes,
+          size: contentSize,
         }),
       );
       return;
