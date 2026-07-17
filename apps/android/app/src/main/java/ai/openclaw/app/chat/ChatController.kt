@@ -856,7 +856,7 @@ class ChatController internal constructor(
     return members.values.toList()
   }
 
-  suspend fun deleteSession(
+  internal suspend fun deleteSession(
     key: String,
     ownerAgentId: String? = null,
   ): ChatSessionDeletion? {

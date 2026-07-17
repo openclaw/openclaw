@@ -346,7 +346,9 @@ class MainViewModel private constructor(
   private val chatComposerSendSeq = AtomicLong()
   private val recoveredChatComposerSends = chatComposerTextDrafts.pendingAdmissions()
   private val chatComposerSendOwnersState =
-    MutableStateFlow(recoveredChatComposerSends.mapTo(linkedSetOf()) { pending -> pending.owner })
+    MutableStateFlow<Set<ChatComposerOwner>>(
+      recoveredChatComposerSends.mapTo(linkedSetOf()) { pending -> pending.owner },
+    )
   internal val chatComposerSendOwners: StateFlow<Set<ChatComposerOwner>> = chatComposerSendOwnersState.asStateFlow()
   private val chatComposerSendAdmissionsState =
     MutableStateFlow<Map<ChatComposerOwner, ChatComposerSendAdmission>>(emptyMap())
@@ -1021,7 +1023,7 @@ class MainViewModel private constructor(
     owner: ChatComposerOwner,
   ): Boolean = chatShareDraftQueue.acknowledgeHead(id, owner)
 
-  suspend fun withChatShareDraftLease(
+  internal suspend fun withChatShareDraftLease(
     id: Long,
     owner: ChatComposerOwner,
     block: suspend () -> Unit,

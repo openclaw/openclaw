@@ -4253,7 +4253,7 @@ class NodeRuntime private constructor(
     chat.dissolveSessionGroup(group)
   }
 
-  suspend fun deleteChatSession(
+  internal suspend fun deleteChatSession(
     key: String,
     ownerAgentId: String?,
   ): ChatSessionDeletion? = chat.deleteSession(key, ownerAgentId)
