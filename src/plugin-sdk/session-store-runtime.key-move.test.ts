@@ -66,7 +66,14 @@ describe("session-store-runtime whole-store key moves", () => {
         cycleId: "ambiguous-key-move-cycle",
         revision: 4,
       },
+      restartRecoveryRuns: [
+        {
+          lifecycleGeneration: "ambiguous-key-move-generation",
+          runId: "ambiguous-key-move-run",
+        },
+      ],
       sessionId: "ambiguous-key-move-session",
+      status: "running",
       updatedAt: 10,
     } as InternalSessionEntry);
 
@@ -81,9 +88,14 @@ describe("session-store-runtime whole-store key moves", () => {
     );
 
     for (const sessionKey of [firstNewKey, secondNewKey]) {
-      expect(
-        loadInternalSessionEntry({ agentId: "main", sessionKey, storePath }),
-      ).not.toHaveProperty("mainRestartRecovery");
+      const entry = loadInternalSessionEntry({ agentId: "main", sessionKey, storePath });
+      expect(entry).toMatchObject({
+        abortedLastRun: false,
+        sessionId: "ambiguous-key-move-session",
+        status: "running",
+      });
+      expect(entry).not.toHaveProperty("mainRestartRecovery");
+      expect(entry).not.toHaveProperty("restartRecoveryRuns");
     }
   });
 });

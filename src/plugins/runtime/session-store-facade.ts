@@ -164,28 +164,30 @@ export function reconcilePluginSessionStore(params: {
   for (const [sessionKey, publicEntry] of Object.entries(params.publicStore)) {
     const projectedEntry = projectPluginSessionEntry(publicEntry as InternalSessionEntry);
     const originalEntry = originalStore[sessionKey];
+    let hasSameSessionSource = originalEntry?.sessionId === projectedEntry.sessionId;
     let existingRecovery = activeRecoveryFieldsForSameSession(
       originalEntry,
       projectedEntry.sessionId,
     );
-    if (!existingRecovery && projectedEntry.sessionId) {
+    if (!hasSameSessionSource && projectedEntry.sessionId) {
       const originalKeys = originalKeysBySessionId.get(projectedEntry.sessionId);
       const publicKeys = publicKeysBySessionId.get(projectedEntry.sessionId);
       if (originalKeys?.length === 1 && publicKeys?.length === 1) {
+        hasSameSessionSource = true;
         existingRecovery = activeRecoveryFieldsForSameSession(
           originalStore[originalKeys[0]!],
           projectedEntry.sessionId,
         );
       }
     }
-    params.internalStore[sessionKey] =
-      originalEntry && originalEntry.sessionId !== projectedEntry.sessionId
-        ? existingRecovery
-          ? { ...projectedEntry, ...existingRecovery }
-          : { ...projectedEntry, ...MAIN_SESSION_RECOVERY_CLEAR_PATCH }
-        : existingRecovery
-          ? { ...projectedEntry, ...existingRecovery }
-          : projectedEntry;
+    const mustClearRecovery = originalEntry
+      ? originalEntry.sessionId !== projectedEntry.sessionId
+      : !hasSameSessionSource;
+    params.internalStore[sessionKey] = existingRecovery
+      ? { ...projectedEntry, ...existingRecovery }
+      : mustClearRecovery
+        ? { ...projectedEntry, ...MAIN_SESSION_RECOVERY_CLEAR_PATCH }
+        : projectedEntry;
   }
 }
 
