@@ -19,10 +19,15 @@ function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void
 
 function parseContentLengthHeader(headers: Headers): number | undefined {
   const raw = headers.get("content-length");
-  if (!raw || !/^\d+$/u.test(raw)) {
+  if (!raw) {
     return undefined;
   }
-  const parsed = Number(raw);
+  const values = raw.includes(",") ? raw.split(",").map((value) => value.trim()) : [raw];
+  const declared = values[0];
+  if (!declared || !/^\d+$/u.test(declared) || values.some((value) => value !== declared)) {
+    return undefined;
+  }
+  const parsed = Number(declared);
   return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
