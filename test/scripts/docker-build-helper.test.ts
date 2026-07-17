@@ -1336,9 +1336,12 @@ docker() {
   return 125
 }
 
-mkfifo() {
-  umask >"$TMPDIR/mkfifo-umask"
-  /usr/bin/mkfifo "$@"
+mktemp() {
+  local dir=""
+  dir="$(/usr/bin/mktemp "$@")" || return
+  printf "%s\\n" "$*" >"$TMPDIR/mktemp-seen"
+  printf "%s\\n" "$dir" >"$TMPDIR/diagnostic-dir"
+  printf "%s\\n" "$dir"
 }
 
 tail() {
@@ -1366,7 +1369,8 @@ stderr="$(<"$TMPDIR/stderr")"
 [[ "$stderr" = *"OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1"* ]]
 [[ "$(grep -c '^run ' "$TMPDIR/docker-seen")" = "1" ]]
 [[ "$(<"$TMPDIR/tail-seen")" = "-c 65536" ]]
-[[ "$(<"$TMPDIR/mkfifo-umask")" = "0077" ]]
+[[ "$(<"$TMPDIR/mktemp-seen")" = -d* ]]
+[[ ! -e "$(<"$TMPDIR/diagnostic-dir")" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
