@@ -78,6 +78,7 @@ describe("createQQWSClient", () => {
       {
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: 1024 * 1024,
       },
     ]);
   });
@@ -98,6 +99,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: 1024 * 1024,
       },
     ]);
   });
@@ -118,6 +120,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: 1024 * 1024,
       },
     ]);
   });
@@ -138,6 +141,7 @@ describe("createQQWSClient", () => {
         agent: { proxied: true },
         headers: { "User-Agent": "openclaw-qqbot-test" },
         handshakeTimeout: 30_000,
+        maxPayload: 1024 * 1024,
       },
     ]);
   });
