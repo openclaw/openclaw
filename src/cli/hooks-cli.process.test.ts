@@ -209,7 +209,6 @@ async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; 
       LINGER_MARKER: fixture.markerPath,
       NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NO_RESPAWN: "1",
       OPENCLAW_STATE_DIR: fixture.stateDir,
     },
     stdin: params.stdin,
@@ -254,7 +253,6 @@ describe("hooks CLI process lifecycle", () => {
       label: "hooks relay explicit state database",
       env: {
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: childStateDir,
       },
       stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
