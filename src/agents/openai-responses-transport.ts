@@ -1236,6 +1236,7 @@ async function processResponsesStream(
   let lastTextBlock: {
     block: Record<string, unknown>;
     index: number;
+    itemId: string | undefined;
     phase: "commentary" | "final_answer" | undefined;
   } | null = null;
   // While a message item may still be a cumulative snapshot of lastTextBlock,
@@ -1301,14 +1302,17 @@ async function processResponsesStream(
     if (!text) {
       return;
     }
+    const itemId = readIdentityValue(item.id);
     const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
     const collapse = resolveResponsesMessageSnapshotCollapse({
       prior: lastTextBlock && {
         text: stringifyUnknown(lastTextBlock.block.text),
         phase: lastTextBlock.phase,
+        itemId: lastTextBlock.itemId,
       },
       nextText: text,
       nextPhase: phase,
+      nextItemId: itemId,
     });
     if (collapse.kind === "extend" && lastTextBlock) {
       // Cumulative snapshot of the prior message item: replace, don't append;
@@ -1329,7 +1333,7 @@ async function processResponsesStream(
       textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase),
     };
     output.content.push(block);
-    lastTextBlock = { block, index: blockIndex(), phase };
+    lastTextBlock = { block, index: blockIndex(), itemId, phase };
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1430,11 +1434,16 @@ async function processResponsesStream(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        if (lastTextBlock) {
+        const itemId = readIdentityValue(item.id);
+        const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+        if (
+          lastTextBlock?.itemId &&
+          lastTextBlock.itemId === itemId &&
+          lastTextBlock.phase === phase
+        ) {
           currentBlock = null;
           pendingMessageText = "";
         } else {
-          const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
           currentBlock = {
             type: "text",
             text: "",
@@ -1583,9 +1592,11 @@ async function processResponsesStream(
                 prior: lastTextBlock && {
                   text: stringifyUnknown(lastTextBlock.block.text),
                   phase: lastTextBlock.phase,
+                  itemId: lastTextBlock.itemId,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: readIdentityValue(item.id),
               })
             : ({ kind: "keep" } as const);
         pendingMessageText = null;
@@ -1621,7 +1632,12 @@ async function processResponsesStream(
           }
           currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
-          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          lastTextBlock = {
+            block: currentBlock,
+            index: blockIndex(),
+            itemId: readIdentityValue(item.id),
+            phase,
+          };
           stream.push({
             type: "text_end",
             contentIndex: blockIndex(),

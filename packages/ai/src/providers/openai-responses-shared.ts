@@ -702,6 +702,7 @@ export async function processResponsesStream<TApi extends Api>(
   type TextBlockReference = {
     block: TextContent;
     index: number;
+    itemId: string | undefined;
     phase: TextSignatureV1["phase"] | undefined;
   };
   type ResponsesOutputSlot =
@@ -831,15 +832,18 @@ export async function processResponsesStream<TApi extends Api>(
     }
     if (item.type === "message") {
       const messageItem = item as ResponsesStreamOutputMessage;
-      const collapseCandidate = lastTextBlock;
+      const itemId = readIdentityValue(messageItem.id);
+      const phase = messageItem.phase ?? undefined;
+      const collapseCandidate =
+        lastTextBlock?.itemId && lastTextBlock.itemId === itemId && lastTextBlock.phase === phase
+          ? lastTextBlock
+          : null;
       const block: TextContent | null = collapseCandidate
         ? null
         : {
             type: "text",
             text: "",
-            ...(messageItem.phase
-              ? { textSignature: encodeTextSignatureV1(messageItem.id, messageItem.phase) }
-              : {}),
+            ...(phase ? { textSignature: encodeTextSignatureV1(messageItem.id, phase) } : {}),
           };
       const slot = {
         type: "text",
@@ -886,12 +890,11 @@ export async function processResponsesStream<TApi extends Api>(
       return;
     }
     const text = slot.pendingText;
+    const phase = slot.item.phase ?? undefined;
     slot.block = {
       type: "text",
       text,
-      ...(slot.item.phase
-        ? { textSignature: encodeTextSignatureV1(slot.item.id, slot.item.phase) }
-        : {}),
+      ...(phase ? { textSignature: encodeTextSignatureV1(slot.item.id, phase) } : {}),
     };
     blocks.push(slot.block);
     slot.contentIndex = blockIndex();
@@ -1267,9 +1270,11 @@ export async function processResponsesStream<TApi extends Api>(
                 prior: outputSlot.collapseCandidate && {
                   text: outputSlot.collapseCandidate.block.text,
                   phase: outputSlot.collapseCandidate.phase,
+                  itemId: outputSlot.collapseCandidate.itemId,
                 },
                 nextText: finalText,
                 nextPhase: phase,
+                nextItemId: readIdentityValue(item.id),
               })
             : ({ kind: "keep" } as const);
         outputSlot.pendingText = null;
@@ -1310,7 +1315,12 @@ export async function processResponsesStream<TApi extends Api>(
           if (contentIndex === undefined) {
             throw new Error("Responses stream finalized text without a content index");
           }
-          lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+          lastTextBlock = {
+            block: outputSlot.block,
+            index: contentIndex,
+            itemId: readIdentityValue(item.id),
+            phase,
+          };
           stream.push({
             type: "text_end",
             contentIndex,
