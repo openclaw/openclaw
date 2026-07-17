@@ -899,18 +899,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       knownIds.add(accountId);
     }
 
-    await Promise.all(
-      Array.from(knownIds.values()).map(async (id) => {
-        const abort = store.aborts.get(id);
-        const task = store.tasks.get(id);
-        if (!abort && !task && !plugin?.gateway?.stopAccount) {
-          return;
-        }
-        const rKey = restartKey(channelId, id);
-        if (manual) {
-          manuallyStopped.add(rKey);
-        }
-        abort?.abort();
+    const stopTasks: Array<() => Promise<void>> = [];
+    // Abort every account before provider hooks run so one slow stop hook cannot
+    // delay cancellation of the remaining channel runtimes.
+    for (const id of knownIds) {
+      const abort = store.aborts.get(id);
+      const task = store.tasks.get(id);
+      if (!abort && !task && !plugin?.gateway?.stopAccount) {
+        continue;
+      }
+      const rKey = restartKey(channelId, id);
+      if (manual) {
+        manuallyStopped.add(rKey);
+      }
+      abort?.abort();
+      stopTasks.push(async () => {
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
         if (plugin?.gateway?.stopAccount) {
@@ -960,8 +963,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           restartPending: false,
           lastStopAt: Date.now(),
         });
-      }),
-    );
+      });
+    }
+
+    const shutdown = await runTasksWithConcurrency({
+      limit: CHANNEL_STARTUP_CONCURRENCY,
+      tasks: stopTasks,
+    });
+    if (shutdown.hasError) {
+      throw shutdown.firstError;
+    }
   };
 
   const startChannels = async () => {

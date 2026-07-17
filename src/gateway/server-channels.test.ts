@@ -1435,6 +1435,82 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("limits whole-channel account shutdown fanout to four after aborting every account", async () => {
+    const accountIds = ["one", "two", "three", "four", "five", "six"];
+    const releases = new Map(accountIds.map((id) => [id, createDeferred()]));
+    const aborted = new Set<string>();
+    const abortCountsAtStop: number[] = [];
+    let active = 0;
+    let maxActive = 0;
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener(
+            "abort",
+            () => {
+              aborted.add(accountId);
+              resolve();
+            },
+            { once: true },
+          );
+        }),
+    );
+    const stopAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      abortCountsAtStop.push(aborted.size);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await releases.get(accountId)?.promise;
+      active -= 1;
+    });
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        startAccount,
+        stopAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === accountIds.length,
+      "expected every account runtime to start",
+    );
+
+    const stop = manager.stopChannel("discord");
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length >= 4,
+      "expected first account shutdown wave",
+    );
+    const firstWaveCallCount = stopAccount.mock.calls.length;
+    const firstWaveActive = active;
+    const abortedBeforeFirstWave = new Set(aborted);
+
+    accountIds.slice(0, 4).forEach((id) => releases.get(id)?.resolve());
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === accountIds.length,
+      "expected second account shutdown wave",
+    );
+    const secondWaveActive = active;
+
+    accountIds.slice(4).forEach((id) => releases.get(id)?.resolve());
+    await stop;
+
+    expect(firstWaveCallCount).toBe(4);
+    expect(firstWaveActive).toBe(4);
+    expect(maxActive).toBe(4);
+    expect(abortedBeforeFirstWave).toEqual(new Set(accountIds));
+    expect(abortCountsAtStop).toEqual(Array.from({ length: accountIds.length }, () => 6));
+    expect(secondWaveActive).toBe(2);
+    expect(stopAccount).toHaveBeenCalledTimes(6);
+    expect(active).toBe(0);
+    for (const account of Object.values(
+      manager.getRuntimeSnapshot().channelAccounts.discord ?? {},
+    )) {
+      expect(account.running).toBe(false);
+    }
+  });
+
   it("limits channel plugin startup fanout to four", async () => {
     const channelIds = Array.from({ length: 6 }, (_, index) => `test-${index}` as ChannelId);
     const releases: Array<() => void> = [];
