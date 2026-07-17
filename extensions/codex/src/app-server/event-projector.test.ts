@@ -6322,6 +6322,8 @@ describe("CodexAppServerEventProjector", () => {
     const params = await createParams();
     const onPartialReply = vi.fn();
     const projector = await createProjector({ ...params, onPartialReply });
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+    expect(warn).not.toHaveBeenCalled();
     const rawEventKind = "item/futureStatus/updated\nforged";
     const collidingSanitizedEventKind = "item/futureStatus/updated\\nforged";
     const notification = forCurrentTurn(rawEventKind, {
