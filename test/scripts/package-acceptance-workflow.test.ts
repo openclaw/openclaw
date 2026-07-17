@@ -651,6 +651,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
+      "refs/heads/extended-stable/[0-9]{4}\\.([1-9]|1[0-2])\\.33",
+    );
+    expect(releaseChecksWorkflow).toContain(
       "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
