@@ -5,7 +5,7 @@
  */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { readRegularFileSync } from "../infra/regular-file.js";
+import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
 import { DEFAULT_IDENTITY_FILENAME, MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace.js";
 
 /** Parsed rich identity values from a workspace `IDENTITY.md` file. */
@@ -212,6 +212,25 @@ export function mergeIdentityMarkdownContent(
 function loadIdentityFromFile(identityPath: string): AgentIdentityFile | null {
   try {
     const { buffer } = readRegularFileSync({
+      filePath: identityPath,
+      maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+    });
+    const parsed = parseIdentityMarkdown(buffer.toString("utf-8"));
+    if (!identityHasValues(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/** Load a specific identity file when it exists and contains real values. */
+export async function loadAgentIdentityFromFile(
+  identityPath: string,
+): Promise<AgentIdentityFile | null> {
+  try {
+    const { buffer } = await readRegularFile({
       filePath: identityPath,
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
     });

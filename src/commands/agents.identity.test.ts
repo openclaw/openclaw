@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -231,6 +232,25 @@ describe("agents set-identity command", () => {
     expect(getWrittenMainIdentity()).toEqual({
       avatar: "https://example.com/avatar.png",
     });
+  });
+
+  it("errors when an explicit identity file exceeds the size cap", async () => {
+    const { workspace } = await createIdentityWorkspace();
+    const identityPath = await writeIdentityFile(workspace, [
+      "- Name: Oversized",
+      "x".repeat(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1),
+    ]);
+
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { list: [{ id: "main" }] } },
+    });
+
+    await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(`No identity data found in ${identityPath}.`);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("errors when identity data is missing", async () => {
