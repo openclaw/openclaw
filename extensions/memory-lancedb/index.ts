@@ -383,11 +383,7 @@ function stringifyEmbeddingApiError(error: unknown): string {
   return parts.join("\n");
 }
 
-function truncateEmbeddingVector(
-  embedding: number[],
-  dimensions: number,
-  model: string,
-): number[] {
+function truncateEmbeddingVector(embedding: number[], dimensions: number, model: string): number[] {
   if (embedding.length < dimensions) {
     throw new Error(
       `Embedding model ${model} returned ${embedding.length} dimensions, need at least ${dimensions} for local truncation`,
