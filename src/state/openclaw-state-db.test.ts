@@ -1921,7 +1921,6 @@ describe("openclaw state database", () => {
     expect(columns.map((column) => column.name)).toContain("startup_reason");
   });
 
-
   it("adds and backfills Claw package update timestamps in existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
@@ -1932,8 +1931,8 @@ describe("openclaw state database", () => {
       .prepare(
         "INSERT INTO claw_package_refs (" +
           "agent_id, package_kind, package_source, package_ref, package_version, " +
-          "schema_version, claw_name, package_status, ownership, installed_at_ms, updated_at_ms" +
-          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "package_integrity, schema_version, claw_name, package_status, ownership, installed_at_ms, updated_at_ms" +
+          ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         "incident",
@@ -1941,6 +1940,7 @@ describe("openclaw state database", () => {
         "clawhub",
         "@owner/audit",
         "2.0.1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "openclaw.clawPackageRef.v1",
         "incident-claw",
         "complete",

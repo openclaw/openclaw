@@ -248,7 +248,13 @@ describe("plugins cli uninstall", () => {
           agent: { finalId: "audit-agent" },
           claw: { name: "@owner/audit-claw" },
         } as ClawAddPlan,
-        { kind: "plugin", source: "clawhub", ref: "@owner/audit", version: "2.0.1" },
+        {
+          kind: "plugin",
+          source: "clawhub",
+          ref: "@owner/audit",
+          version: "2.0.1",
+          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
         { status: "failed" },
       );
 

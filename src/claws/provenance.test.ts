@@ -246,20 +246,23 @@ describe("applyClawAddPlan", () => {
     let config: OpenClawConfig = {};
     let attempts = 0;
 
-    await expect(
-      applyClawAddPlan(plan, {
-        consentPlanIntegrity: plan.planIntegrity,
-        env: stateEnv(root),
-        commitConfig: async (transform) => {
-          attempts += 1;
-          if (attempts === 1) {
-            await writeFile(join(plan.agent.workspace, "leftover.txt"), "keep", "utf8");
-            throw new Error("config unavailable");
-          }
-          config = transform(config);
-        },
-      }),
-    ).rejects.toThrow("config unavailable");
+    const first = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        attempts += 1;
+        if (attempts === 1) {
+          await writeFile(join(plan.agent.workspace, "leftover.txt"), "keep", "utf8");
+          throw new Error("config unavailable");
+        }
+        config = transform(config);
+      },
+    });
+
+    expect(first).toMatchObject({
+      status: "partial",
+      error: { code: "config_commit_failed", message: "config unavailable" },
+    });
     expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
 
     const retry = await applyClawAddPlan(plan, {
@@ -283,7 +286,15 @@ describe("applyClawAddPlan", () => {
     const { plan } = await makePlan({
       schemaVersion: 1,
       agent: { id: "worker" },
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "1.0.0" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "demo",
+          version: "1.0.0",
+          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      ],
     });
 
     await expect(

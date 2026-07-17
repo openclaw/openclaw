@@ -81,6 +81,7 @@ export type ClawPackage = {
   source: "clawhub";
   ref: string;
   version: string;
+  integrity: string;
 };
 
 type ClawMcpServerCommon = {

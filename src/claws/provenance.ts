@@ -239,6 +239,7 @@ export type PersistedClawPackageRef = {
   source: ClawPackage["source"];
   ref: string;
   version: string;
+  integrity: string;
   status: ClawPackageRefStatus;
   ownership: ClawPackageOwnership;
   installedAtMs: number;
@@ -253,6 +254,7 @@ type PackageRefRow = {
   package_source: ClawPackage["source"];
   package_ref: string;
   package_version: string;
+  package_integrity: string;
   package_status: ClawPackageRefStatus;
   ownership: ClawPackageOwnership;
   installed_at_ms: number | bigint;
@@ -268,6 +270,7 @@ function rowToPackageRef(row: PackageRefRow): PersistedClawPackageRef {
     source: row.package_source,
     ref: row.package_ref,
     version: row.package_version,
+    integrity: row.package_integrity,
     status: row.package_status,
     ownership: row.ownership,
     installedAtMs: Number(row.installed_at_ms),
@@ -293,6 +296,7 @@ export function persistClawPackageRef(
     source: pkg.source,
     ref: pkg.ref,
     version: pkg.version,
+    integrity: pkg.integrity,
     status: options.status ?? "complete",
     ownership: options.ownership ?? "claw-installed",
     installedAtMs: nowMs,
@@ -303,11 +307,11 @@ export function persistClawPackageRef(
     db.prepare(
       `INSERT INTO claw_package_refs (
          agent_id, package_kind, package_source, package_ref, package_version,
-         schema_version, claw_name, package_status, ownership, installed_at_ms,
+         package_integrity, schema_version, claw_name, package_status, ownership, installed_at_ms,
          updated_at_ms
        ) VALUES (
          @agent_id, @package_kind, @package_source, @package_ref, @package_version,
-         @schema_version, @claw_name, @package_status, @ownership, @installed_at_ms,
+         @package_integrity, @schema_version, @claw_name, @package_status, @ownership, @installed_at_ms,
          @updated_at_ms
        )`,
     ).run({
@@ -316,6 +320,7 @@ export function persistClawPackageRef(
       package_source: record.source,
       package_ref: record.ref,
       package_version: record.version,
+      package_integrity: record.integrity,
       schema_version: record.schemaVersion,
       claw_name: record.clawName,
       package_status: record.status,
@@ -342,13 +347,15 @@ export function updateClawPackageRefStatus(
           AND package_kind = @package_kind
           AND package_source = @package_source
           AND package_ref = @package_ref
-          AND package_version = @package_version`,
+          AND package_version = @package_version
+          AND package_integrity = @package_integrity`,
     ).run({
       agent_id: ref.agentId,
       package_kind: ref.kind,
       package_source: ref.source,
       package_ref: ref.ref,
       package_version: ref.version,
+      package_integrity: ref.integrity,
       package_status: status,
       updated_at_ms: nowMs,
     });
@@ -362,6 +369,7 @@ export function readClawPackageRefs(
     source?: ClawPackage["source"];
     ref?: string;
     version?: string;
+    integrity?: string;
     status?: ClawPackageRefStatus;
   } = {},
 ): PersistedClawPackageRef[] {
@@ -373,6 +381,7 @@ export function readClawPackageRefs(
     ["package_source", options.source],
     ["package_ref", options.ref],
     ["package_version", options.version],
+    ["package_integrity", options.integrity],
     ["package_status", options.status],
   ] as const) {
     if (value !== undefined) {
@@ -381,15 +390,15 @@ export function readClawPackageRefs(
     }
   }
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
-  const rows = database.db
-    .prepare(
-      /* sqlite-allow-raw: read-only Claw package reference lookup with closed column filters. */
-      `SELECT schema_version, agent_id, claw_name, package_kind, package_source,
-              package_ref, package_version, package_status, ownership, installed_at_ms,
+  const rows =
+    database.db /* sqlite-allow-raw: read-only Claw package reference lookup with closed column filters. */
+      .prepare(
+        `SELECT schema_version, agent_id, claw_name, package_kind, package_source,
+              package_ref, package_version, package_integrity, package_status, ownership, installed_at_ms,
               updated_at_ms
          FROM claw_package_refs${where}
         ORDER BY agent_id, package_kind, package_ref`,
-    )
-    .all(params) as PackageRefRow[];
+      )
+      .all(params) as PackageRefRow[];
   return rows.map(rowToPackageRef);
 }

@@ -260,6 +260,7 @@ export interface ClawPackageRefs {
   claw_name: string;
   installed_at_ms: number;
   ownership: string;
+  package_integrity: string;
   package_kind: string;
   package_ref: string;
   package_source: string;

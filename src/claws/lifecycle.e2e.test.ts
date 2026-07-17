@@ -102,7 +102,7 @@ describe("claws lifecycle cli e2e", () => {
       },
       blockers: expect.arrayContaining([
         expect.objectContaining({ code: "skill_package_preflight_unavailable" }),
-      ])
+      ]),
     });
     expect(result.code).toBe(1);
   });

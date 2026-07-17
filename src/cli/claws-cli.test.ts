@@ -80,7 +80,15 @@ async function writePackage(): Promise<{ root: string; workspace: string }> {
       workspace: {
         bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
       },
-      packages: [{ kind: "skill", source: "clawhub", ref: "@acme/demo-skill", version: "1.0.0" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "@acme/demo-skill",
+          version: "1.0.0",
+          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      ],
     }),
     "utf8",
   );
@@ -272,7 +280,7 @@ describe("claws cli", () => {
 
     expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
-      { consentPlanIntegrity: plan.planIntegrity },
+      expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
     );
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });

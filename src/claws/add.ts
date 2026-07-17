@@ -220,7 +220,11 @@ export async function applyClawAddPlan(
         packages,
         error: {
           code: "workspace_collision",
-          message: "Could not create new workspace " + JSON.stringify(workspace) + ": " + (error as Error).message,
+          message:
+            "Could not create new workspace " +
+            JSON.stringify(workspace) +
+            ": " +
+            (error as Error).message,
         },
         nowMs: options.nowMs,
       });
@@ -272,9 +276,13 @@ export async function applyClawAddPlan(
     markInstallStatus(plan.agent.finalId, "config_committed", options);
   } catch (error) {
     if (!configCommitted) {
-      await rmdir(workspace).catch(() => undefined);
+      const removedWorkspace = await rmdir(workspace)
+        .then(() => true)
+        .catch(() => false);
+      if (removedWorkspace) {
+        updateRecord(plan.agent.finalId, "partial", options);
+      }
     }
-    updateRecord(plan.agent.finalId, "partial", options);
     return partialResult({
       plan,
       installRecord,

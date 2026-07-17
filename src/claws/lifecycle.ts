@@ -370,6 +370,7 @@ export async function buildClawAddPlan(params: {
       id: `${pkg.kind}:${pkg.ref}`,
       action: "install",
       target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
+      digest: pkg.integrity,
       details: {
         ...pkg,
         expectedState: !preflight.ok

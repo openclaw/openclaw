@@ -28,8 +28,20 @@ const baseManifest = {
     files: [{ source: "workspace/reference/policy.md", path: "reference/policy.md" }],
   },
   packages: [
-    { kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.2.0" },
-    { kind: "plugin", source: "clawhub", ref: "@acme/github", version: "2.0.1" },
+    {
+      kind: "skill",
+      source: "clawhub",
+      ref: "@acme/triage",
+      version: "1.2.0",
+      integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+    {
+      kind: "plugin",
+      source: "clawhub",
+      ref: "@acme/github",
+      version: "2.0.1",
+      integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
   ],
   mcpServers: {
     github: {
@@ -148,7 +160,15 @@ describe("parseClawManifest", () => {
   it("requires exact package versions", () => {
     const result = parseClawManifest({
       ...baseManifest,
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "latest" }],
+      packages: [
+        {
+          kind: "skill",
+          source: "clawhub",
+          ref: "demo",
+          version: "latest",
+          integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      ],
     });
 
     expect(result.ok).toBe(false);

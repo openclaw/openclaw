@@ -1920,6 +1920,7 @@ CREATE TABLE IF NOT EXISTS claw_package_refs (
   package_source TEXT NOT NULL,
   package_ref TEXT NOT NULL,
   package_version TEXT NOT NULL,
+  package_integrity TEXT NOT NULL,
   schema_version TEXT NOT NULL,
   claw_name TEXT NOT NULL,
   package_status TEXT NOT NULL,

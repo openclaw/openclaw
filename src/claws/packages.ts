@@ -1,7 +1,6 @@
 import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   persistClawPackageRef,
@@ -22,7 +21,6 @@ export class ClawPackageInstallError extends Error {
 }
 
 type PackageInstallerDeps = {
-  installSkill?: typeof installSkillFromClawHub;
   installPlugin?: typeof runPluginInstallCommand;
   preflightPlugin?: typeof preflightPluginInstall;
   persistPackageRef?: typeof persistClawPackageRef;
@@ -38,8 +36,10 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
   if (details?.kind !== "skill" && details?.kind !== "plugin") {
     throw new Error(`Package action ${JSON.stringify(action.id)} has no valid package kind.`);
   }
-  if (details.source !== "clawhub" || !details.ref || !details.version) {
-    throw new Error(`Package action ${JSON.stringify(action.id)} is not a pinned ClawHub package.`);
+  if (details.source !== "clawhub" || !details.ref || !details.version || !details.integrity) {
+    throw new Error(
+      `Package action ${JSON.stringify(action.id)} is not a pinned ClawHub package with integrity.`,
+    );
   }
   if (details.ownerAction !== "install" && details.ownerAction !== "reuse") {
     throw new Error(`Package action ${JSON.stringify(action.id)} has no planned owner state.`);
@@ -49,6 +49,7 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
     source: details.source,
     ref: details.ref,
     version: details.version,
+    integrity: details.integrity,
     ownerAction: details.ownerAction,
   };
 }
@@ -102,7 +103,6 @@ export async function installClawPackages(
   } = {},
 ): Promise<PersistedClawPackageRef[]> {
   const deps = options.deps ?? {};
-  const installSkill = deps.installSkill ?? installSkillFromClawHub;
   const installPlugin = deps.installPlugin ?? runPluginInstallCommand;
   const preflightPlugin = deps.preflightPlugin ?? preflightPluginInstall;
   const persistPackageRef = deps.persistPackageRef ?? persistClawPackageRef;
@@ -113,41 +113,44 @@ export async function installClawPackages(
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
     try {
       const pkg = packageFromAction(action);
-      if (pkg.kind === "plugin") {
-        const preflight = await preflightPlugin({
-          clawhubPackage: pkg.ref,
-          rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
-          expectedVersion: pkg.version,
-        });
-        if (!preflight.ok) {
-          throw new Error(
-            preflight.code === "plugin_version_conflict"
-              ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
-              : preflight.error,
-          );
-        }
-        if (preflight.action !== pkg.ownerAction) {
-          throw new ClawPackageInstallError(
-            "package_owner_state_changed",
-            `Plugin ${pkg.ref}@${pkg.version} owner state changed from ${pkg.ownerAction} to ${preflight.action}; run add --dry-run again.`,
-            installedPackages,
-          );
-        }
-        if (preflight.action === "reuse") {
-          // The operator installed this package first. Retain only a dependency ref.
-          installedPackages.push(
-            persistPackageRef(plan, pkg, {
-              ...options,
-              status: "complete",
-              ownership: "independently-owned",
-            }),
-          );
-          continue;
-        }
+      if (pkg.kind === "skill") {
+        throw new ClawPackageInstallError(
+          "skill_package_install_unavailable",
+          `Skill ${pkg.ref}@${pkg.version} requires the later skill package lifecycle slice.`,
+          installedPackages,
+        );
       }
 
-      // Persist pending ownership before the external installer. A later failure stays
-      // inspectable and is never mistaken for an operator-owned installation.
+      const preflight = await preflightPlugin({
+        clawhubPackage: pkg.ref,
+        rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
+        expectedVersion: pkg.version,
+      });
+      if (!preflight.ok) {
+        throw new Error(
+          preflight.code === "plugin_version_conflict"
+            ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
+            : preflight.error,
+        );
+      }
+      if (preflight.action !== pkg.ownerAction) {
+        throw new ClawPackageInstallError(
+          "package_owner_state_changed",
+          `Plugin ${pkg.ref}@${pkg.version} owner state changed from ${pkg.ownerAction} to ${preflight.action}; run add --dry-run again.`,
+          installedPackages,
+        );
+      }
+      if (preflight.action === "reuse") {
+        installedPackages.push(
+          persistPackageRef(plan, pkg, {
+            ...options,
+            status: "complete",
+            ownership: "independently-owned",
+          }),
+        );
+        continue;
+      }
+
       let packageRef = persistPackageRef(plan, pkg, {
         ...options,
         status: "pending",
@@ -155,27 +158,12 @@ export async function installClawPackages(
       });
       installedPackages.push(packageRef);
 
-      if (pkg.kind === "skill") {
-        const result = await installSkill({
-          workspaceDir: plan.agent.workspace,
-          slug: pkg.ref,
-          version: pkg.version,
-          logger: {
-            info: (message) => runtime.log(message),
-            warn: (message) => runtime.log(message),
-          },
-        });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-      } else {
-        await installPlugin({
-          raw: `clawhub:${pkg.ref}@${pkg.version}`,
-          opts: {},
-          invalidateRuntimeCache: false,
-          runtime: installerRuntime(runtime),
-        });
-      }
+      await installPlugin({
+        raw: `clawhub:${pkg.ref}@${pkg.version}`,
+        opts: {},
+        invalidateRuntimeCache: false,
+        runtime: installerRuntime(runtime),
+      });
       packageRef = completePackageRef(packageRef, "complete", options);
       installedPackages[installedPackages.length - 1] = packageRef;
     } catch (error) {
