@@ -57,6 +57,10 @@ function collectApiKeyProfileAssignment(params: {
     ref: resolvedKeyRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
     expected: "string",
+    ownerKind: "unknown",
+    ownerId: `${params.agentDir}.auth-profiles.${params.profileId}`,
+    requiredForGateway: false,
+    disposition: "isolate",
     apply: (value) => {
       params.profile.key = String(value);
     },
@@ -98,6 +102,10 @@ function collectTokenProfileAssignment(params: {
     ref: resolvedTokenRef,
     path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
     expected: "string",
+    ownerKind: "unknown",
+    ownerId: `${params.agentDir}.auth-profiles.${params.profileId}`,
+    requiredForGateway: false,
+    disposition: "isolate",
     apply: (value) => {
       params.profile.token = String(value);
     },

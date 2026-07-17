@@ -212,6 +212,11 @@
       - any-glob-to-any-file:
           - "apps/android/**"
           - "docs/platforms/android.md"
+"app: wearos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/wear/**"
+          - "apps/android/wear-shared/**"
 "app: ios":
   - changed-files:
       - any-glob-to-any-file:

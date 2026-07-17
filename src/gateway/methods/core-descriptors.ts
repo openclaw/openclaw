@@ -308,6 +308,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.refresh", scope: "operator.admin", controlPlaneWrite: true },
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "controlUi.sessionPullRequests", scope: "operator.read" },

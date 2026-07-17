@@ -321,7 +321,6 @@ extensions/telegram/src/send.test.ts
 extensions/telegram/src/send.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
-extensions/telegram/src/webhook.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
 extensions/voice-call/index.ts

@@ -14,16 +14,24 @@ export function resolveLlamaCppSyntheticApiKey(): string {
   return LLAMA_CPP_LOCAL_AUTH_MARKER;
 }
 
-export const DEFAULT_LLAMA_CPP_MODEL_ID = "qwen3-4b-instruct-2507-q4_k_m";
+export const DEFAULT_LLAMA_CPP_MODEL_ID = "gemma-4-e4b-it-q4_k_m";
 export const DEFAULT_LLAMA_CPP_MODEL_REF = `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`;
-// Verified 2026-07-16: 2,497,280,736 bytes (about 2.5 GB) from the public
-// bartowski mirror. Qwen does not publish an official Instruct-2507 GGUF repo.
+// Verified 2026-07-16: 4,977,169,568 bytes (about 5.0 GB) from the public
+// Unsloth Hugging Face repository metadata and response headers.
 export const DEFAULT_LLAMA_CPP_MODEL_URI =
-  "hf:bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
+  "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf";
 export const DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE =
-  "hf_bartowski_Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf";
-export const DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES = 2_497_280_736;
+  "hf_unsloth_gemma-4-E4B-it-GGUF_gemma-4-E4B-it-Q4_K_M.gguf";
+export const DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES = 4_977_169_568;
 export const DEFAULT_LLAMA_CPP_CONTEXT_SIZE = 8192;
+
+// 5 GB weights + KV cache + OS headroom. Below 16 GiB the bundled default
+// thrashes, so the owner decision for 2026-07 is to omit that offer entirely.
+const LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES = 16 * 1024 ** 3;
+
+export function meetsLlamaCppDefaultModelRamFloor(totalmemBytes = os.totalmem()): boolean {
+  return totalmemBytes >= LLAMA_CPP_DEFAULT_MODEL_RAM_FLOOR_BYTES;
+}
 
 export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): string {
   const configured = provider?.params?.modelCacheDir;
@@ -77,7 +85,7 @@ export function resolveCachedLlamaCppModelPath(params: {
 function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
   return {
     id: DEFAULT_LLAMA_CPP_MODEL_ID,
-    name: "Qwen3 4B Instruct 2507 (Q4_K_M)",
+    name: "Gemma 4 E4B (Q4_K_M)",
     api: "openai-completions",
     reasoning: false,
     input: ["text"],

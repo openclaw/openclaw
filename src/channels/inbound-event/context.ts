@@ -214,6 +214,19 @@ export function filterChannelInboundSupplementalContext(params: {
   };
 }
 
+/** Resolves whether a supplemental-context sender passes the active group policy. */
+export function resolveInboundSupplementalSenderAllowed<TAllowFrom>(params: {
+  isGroup: boolean;
+  groupPolicy: string;
+  allowFrom: readonly TAllowFrom[];
+  isSenderAllowed: (allowFrom: readonly TAllowFrom[]) => boolean;
+}): boolean {
+  if (!params.isGroup || params.groupPolicy !== "allowlist") {
+    return true;
+  }
+  return params.isSenderAllowed(params.allowFrom);
+}
+
 export function filterChannelInboundQuoteContext(
   contextVisibility: ContextVisibilityMode | undefined,
   quote: SupplementalContextFacts["quote"] | undefined,

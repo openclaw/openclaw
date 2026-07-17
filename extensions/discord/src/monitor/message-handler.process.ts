@@ -1188,7 +1188,7 @@ async function processDiscordMessageInner(
           if (payload.phase !== "update") {
             return;
           }
-          await draftPreview.pushPlanProgress(payload.planSteps, {
+          await draftPreview.pushPlanProgress(payload.steps, {
             explanation: payload.explanation,
           });
         },

@@ -40,6 +40,10 @@ import {
 } from "../../components/command-palette-contract.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { clampText } from "../../lib/format.ts";
@@ -75,7 +79,11 @@ import {
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -284,6 +292,7 @@ class ChatPane extends OpenClawLightDomElement {
   ) => void;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
@@ -1706,8 +1715,7 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
-    if (selectedSession) {
-      state.selectedChatSessionArchived = selectedSession.archived === true;
+    if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
     if (selectedSessionDeleted) {
@@ -1831,6 +1839,7 @@ class ChatPane extends OpenClawLightDomElement {
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
       state.realtimeTalkActive = false;
+      state.realtimeTalkVideoStream = null;
       state.realtimeTalkStatus = "idle";
       state.realtimeTalkInputLevel.set(0);
       state.resetToolStream();
@@ -2136,6 +2145,7 @@ class ChatPane extends OpenClawLightDomElement {
       paneId: this.paneId,
       active: this.active,
       narrow: this.narrow,
+      mergedChrome: this.mergedChrome,
       title: this.paneTitle,
       session: row,
       catalog,
@@ -2182,6 +2192,22 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    const selectedSession = state.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, state.sessionKey),
+    );
+    const runtimeConfigState = this.context.runtimeConfig.state;
+    const configSnapshot = runtimeConfigState.configSnapshot;
+    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfigState.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded:
+        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    });
+    state.chatFollowUpMode = resolveControlUiFollowUpMode(
+      state.settings.chatFollowUpMode,
+      serverQueueMode,
+    );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     // Tool rows consult the global title store while rendering; point its
@@ -2197,9 +2223,6 @@ class ChatPane extends OpenClawLightDomElement {
       (agent) => agent.id === currentAgentId,
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
-    const selectedSession = state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
     const selectedSessionArchived =
       state.selectedChatSessionArchived ||
       state.sessionsResult?.sessions.some(
@@ -2272,7 +2295,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
-      followUpMode: state.settings.chatFollowUpMode,
+      followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,
@@ -2280,6 +2303,7 @@ class ChatPane extends OpenClawLightDomElement {
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
       realtimeTalkConversation: state.realtimeTalkConversation,
+      realtimeTalkVideoStream: state.realtimeTalkVideoStream,
       connected: state.connected,
       canSend: catalogKey ? this.catalogSession?.canContinue === true : !selectedSessionArchived,
       disabledReason: catalogDisabledReason ?? disabledReason,
@@ -2397,6 +2421,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
+      onToggleRealtimeVideo: () => void state.toggleRealtimeTalk({ video: true }),
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenClaw</string>
+    <string name="notification_channel_name">OpenClaw replies</string>
+    <string name="notification_reply">Reply</string>
+    <string name="notification_title">OpenClaw reply</string>
+    <string name="notification_reply_failed_title">Reply not sent</string>
+    <string name="notification_reply_failed_text">Phone unavailable. Tap Reply to try again.</string>
+    <string name="notification_phone_changed_title">Open OpenClaw to reply</string>
+    <string name="notification_phone_changed_text">Your preferred phone changed. Open the app to reload the session before replying.</string>
+    <string name="tile_label">OpenClaw</string>
+    <string name="tile_description">Open sessions and reply through your paired phone</string>
+    <string name="tile_open">OPEN</string>
+    <string name="tile_phone_proxy">PHONE PROXY</string>
+</resources>

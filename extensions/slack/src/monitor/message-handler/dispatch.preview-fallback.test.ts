@@ -105,8 +105,7 @@ let capturedReplyOptions:
       onPlanUpdate?: (payload: {
         phase?: string;
         explanation?: string;
-        steps?: string[];
-        planSteps?: Array<{
+        steps?: Array<{
           step: string;
           status: "pending" | "in_progress" | "completed";
         }>;
@@ -1106,8 +1105,7 @@ vi.mock("../reply.runtime.js", () => ({
       onPlanUpdate?: (payload: {
         phase?: string;
         explanation?: string;
-        steps?: string[];
-        planSteps?: Array<{
+        steps?: Array<{
           step: string;
           status: "pending" | "in_progress" | "completed";
         }>;
@@ -1173,8 +1171,7 @@ vi.mock("../reply.runtime.js", () => ({
           await params.replyOptions?.onPlanUpdate?.({
             phase: entry.phase,
             explanation: entry.explanation,
-            steps: entry.steps.map((step) => step.step),
-            planSteps: entry.steps,
+            steps: entry.steps,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(
@@ -1281,8 +1278,7 @@ vi.mock("../reply.runtime.js", () => ({
       onPlanUpdate?: (payload: {
         phase?: string;
         explanation?: string;
-        steps?: string[];
-        planSteps?: Array<{
+        steps?: Array<{
           step: string;
           status: "pending" | "in_progress" | "completed";
         }>;
@@ -1334,8 +1330,7 @@ vi.mock("../reply.runtime.js", () => ({
           await params.replyOptions?.onPlanUpdate?.({
             phase: entry.phase,
             explanation: entry.explanation,
-            steps: entry.steps.map((step) => step.step),
-            planSteps: entry.steps,
+            steps: entry.steps,
           });
         } else if (entry.kind === "concurrent_items") {
           await Promise.all(

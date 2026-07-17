@@ -5,8 +5,10 @@
 // names (extensions/workspaces/src/schema.ts).
 
 import { renderActivity } from "./activity.ts";
+import { renderAgentStatus } from "./agent-status.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
+import { renderCustomWidgetApprovals } from "./custom-widget-approvals.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -29,6 +31,8 @@ const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   instances: (widget, value) => renderInstances(widget, value),
   activity: (widget, value) => renderActivity(widget, value),
   chart: (widget, value) => renderChart(widget, value),
+  "agent-status": (widget, value) => renderAgentStatus(widget, value),
+  "custom-widget-approvals": renderCustomWidgetApprovals,
 };
 
 export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefined {

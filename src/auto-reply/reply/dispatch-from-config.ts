@@ -2314,16 +2314,13 @@ async function dispatchReplyFromConfigInner(
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    // External resolvers call this SDK callback directly and may
-                    // send only the shipped string form; normalize once so
-                    // channel forwards and fallback notices see both fields.
-                    const planSteps =
-                      normalizeAgentPlanSteps(payload.planSteps) ??
-                      normalizeAgentPlanSteps(payload.steps);
+                    const steps = normalizeAgentPlanSteps(payload.steps);
                     const normalized = {
-                      ...payload,
-                      steps: planSteps?.map((entry) => entry.step) ?? payload.steps,
-                      planSteps,
+                      phase: payload.phase,
+                      title: payload.title,
+                      explanation: payload.explanation,
+                      steps,
+                      source: payload.source,
                     };
                     markProgress();
                     await waitForPendingDirectBlockReplyDelivery(
@@ -2349,7 +2346,7 @@ async function dispatchReplyFromConfigInner(
                     }
                     await sendPlanUpdate({
                       explanation: normalized.explanation,
-                      steps: planSteps,
+                      steps,
                     });
                   },
                   onApprovalEvent: async (payload) => {

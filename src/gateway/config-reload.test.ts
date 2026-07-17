@@ -3431,6 +3431,46 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("reloads explicitly signaled plugin metadata when config bytes stay identical", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+    };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "unchanged-config",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn(async () => ({
+      brave: {
+        source: "npm" as const,
+        spec: "@openclaw/brave",
+        installPath: "/tmp/openclaw/plugins/brave",
+      },
+    }));
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: activeConfig,
+      initialCompareConfig: activeConfig,
+      initialInternalWriteHash: "unchanged-config",
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords,
+    });
+
+    harness.reloader.notifyPluginMetadataChanged();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledOnce();
+    expect(readPluginInstallRecords).toHaveBeenCalledOnce();
+    const [plan, nextConfig] = getOnlyRestartCall(harness);
+    expect(plan.changedPaths).toEqual(["plugins.installs.brave"]);
+    expect(plan.restartReasons).toEqual(["plugins.installs.brave"]);
+    expect(nextConfig).toBe(activeConfig);
+
+    await harness.reloader.stop();
+  });
+
   it("keeps external plugin policy-only writes on the hot reload path", async () => {
     const previousConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },

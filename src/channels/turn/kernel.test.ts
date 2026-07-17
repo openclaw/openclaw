@@ -1083,9 +1083,9 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "afterRecord", "dispatch"]);
   });
 
-  it("threads onTurnAdopted into assembled reply options and fires after recovery persist attempt", async () => {
+  it("threads turnAdoptionLifecycle into assembled reply options and fires after recovery persist attempt", async () => {
     const events: string[] = [];
-    const onTurnAdopted = vi.fn(async () => {
+    const onAdopted = vi.fn(async () => {
       events.push("adopted");
     });
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -1093,7 +1093,7 @@ describe("channel turn kernel", () => {
         events.push("dispatch-start");
         // Persist attempt completes before adoption (agent-runner contract).
         events.push("recovery-persist");
-        await params.replyOptions?.onTurnAdopted?.();
+        await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
         events.push("settle");
         return {
           queuedFinal: true,
@@ -1114,14 +1114,16 @@ describe("channel turn kernel", () => {
       delivery: {
         deliver: vi.fn(async () => undefined),
       },
-      onTurnAdopted,
+      turnAdoptionLifecycle: { onAdopted },
     });
 
-    expect(onTurnAdopted).toHaveBeenCalledOnce();
+    expect(onAdopted).toHaveBeenCalledOnce();
     expect(events).toEqual(["record", "dispatch-start", "recovery-persist", "adopted", "settle"]);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
-        replyOptions: expect.objectContaining({ onTurnAdopted }),
+        replyOptions: expect.objectContaining({
+          turnAdoptionLifecycle: expect.objectContaining({ onAdopted }),
+        }),
       }),
     );
   });

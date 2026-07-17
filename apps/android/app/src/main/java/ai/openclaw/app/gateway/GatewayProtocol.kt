@@ -356,6 +356,7 @@ enum class GatewayMethod(
   PluginsInstall("plugins.install"),
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
+  PluginsRefresh("plugins.refresh"),
   ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),

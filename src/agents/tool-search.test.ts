@@ -212,6 +212,98 @@ describe("Tool Search", () => {
     }
   });
 
+  it("guides structured control tools toward compact catalog calls", () => {
+    const tools = createToolSearchTools({ config: {} as never });
+    const byName = new Map(tools.map((tool) => [tool.name, tool]));
+    expect(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME)?.description).toContain(
+      "search(query: string, options?)",
+    );
+    expect(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME)?.description).toContain(
+      "JSON values normally live in `result.details`",
+    );
+    expect(byName.get(TOOL_SEARCH_RAW_TOOL_NAME)?.description).toContain(
+      "use tool_describe only when you need its input schema",
+    );
+    expect(byName.get(TOOL_DESCRIBE_RAW_TOOL_NAME)?.description).toContain(
+      "when its input is not already clear",
+    );
+  });
+
+  it("includes bounded input signatures in compact search hits", async () => {
+    const target = pluginTool("fake_update", "Update a fake record");
+    const openTarget = pluginTool("fake_open", "Accept constrained open input");
+    const mcpTarget = mcpPluginTool("remote_echo", "Echo through remote MCP");
+    target.parameters = {
+      type: "object",
+      required: ["id"],
+      properties: {
+        id: { type: "string" },
+        mode: { type: "string", enum: ["drip", "flood"] },
+        policy: { enum: ["auto", { mode: "custom" }] },
+        nested: {
+          type: "array",
+          items: {
+            type: "array",
+            items: {
+              type: "array",
+              items: {
+                type: "array",
+                items: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        },
+        zones: { type: "array", items: { type: "string", enum: ["north", "south"] } },
+      },
+    };
+    openTarget.parameters = {
+      type: "object",
+      required: ["token"],
+      additionalProperties: true,
+    };
+    const config = { tools: { toolSearch: { mode: "tools" } } } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        target,
+        openTarget,
+        mcpTarget,
+      ],
+      config,
+      sessionId: "session-input-hint",
+    });
+    const runtimeTools = createToolSearchTools({ config, sessionId: "session-input-hint" });
+    const search = expectDefined(
+      runtimeTools.find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
+      "search tool",
+    );
+    const result = resultDetails(await search.execute("call-search", { query: "update record" }));
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        name: "fake_update",
+        input:
+          '{ id: string; mode?: "drip" | "flood"; nested?: Array<Array<Array<Array<unknown>>>>; policy?: unknown; zones?: Array<"north" | "south"> }',
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("parameters");
+
+    const openResult = resultDetails(
+      await search.execute("call-search-open", { query: "constrained open input" }),
+    );
+    expect(openResult).toContainEqual(
+      expect.objectContaining({ name: "fake_open", input: "{ ... }" }),
+    );
+
+    const mcpResult = resultDetails(
+      await search.execute("call-search-mcp", { query: "remote echo" }),
+    );
+    expect(mcpResult).toContainEqual(expect.objectContaining({ name: "remote_echo" }));
+    expect(mcpResult).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
+  });
+
   it("compacts plugin tools behind the code surface and can search, describe, and call them", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const alpha = pluginTool("fake_create_ticket", "Create a ticket in the fake tracker");

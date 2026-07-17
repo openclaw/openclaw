@@ -406,7 +406,10 @@ describe("detectSetupInference", () => {
           credentials: false,
         },
       ],
-      probeLocalCommand: vi.fn(async (command) => ({ command, found: command === "agy" })),
+      probeLocalCommand: vi.fn(async (command) => ({
+        command,
+        found: command === "agy" || command === "pi" || command === "opencode",
+      })),
       resolveManifestProviderAuthChoices: () => [
         {
           pluginId: "local-plugin",
@@ -435,6 +438,8 @@ describe("detectSetupInference", () => {
     expect(detection.unavailableCandidates).toEqual([
       expect.objectContaining({ id: "gemini-cli" }),
       expect.objectContaining({ id: "antigravity-cli" }),
+      expect.objectContaining({ id: "pi-cli" }),
+      expect.objectContaining({ id: "opencode-cli" }),
     ]);
     expect(detect).toHaveBeenCalledOnce();
     expect(prepare).not.toHaveBeenCalled();
@@ -676,6 +681,39 @@ describe("detectSetupInference", () => {
     expect(detection.unavailableCandidates).toEqual([
       expect.objectContaining({ id: "gemini-cli" }),
     ]);
+  });
+
+  it("reports installed Pi and OpenCode without offering them as setup inference routes", async () => {
+    vi.mocked(detectInferenceBackends).mockResolvedValueOnce([]);
+    const probeLocalCommand = vi.fn(async (command: string) => ({
+      command,
+      found: command === "pi" || command === "opencode",
+    }));
+
+    const detection = await detectSetupInference({
+      resolveManifestProviderAuthChoices: () => [],
+      probeLocalCommand,
+    });
+
+    expect(detection.candidates).toEqual([]);
+    expect(detection.unavailableCandidates).toEqual([
+      {
+        id: "pi-cli",
+        label: "Pi CLI",
+        detail: "installed",
+        reason:
+          "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
+      },
+      {
+        id: "opencode-cli",
+        label: "OpenCode CLI",
+        detail: "installed",
+        reason:
+          "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
+      },
+    ]);
+    expect(probeLocalCommand).toHaveBeenCalledWith("pi");
+    expect(probeLocalCommand).toHaveBeenCalledWith("opencode");
   });
 });
 

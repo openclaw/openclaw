@@ -51,6 +51,11 @@ const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
 };
 
+const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
+  "features.multi_agent": false,
+  "features.multi_agent_v2": false,
+};
+
 const CODEX_RING_ZERO_THREAD_CONFIG: JsonObject = {
   "features.apps": false,
   "features.current_time_reminder": false,
@@ -361,6 +366,9 @@ export function buildCodexRuntimeThreadConfigForRun(
       options.appServer?.networkProxy?.configPatch,
       shouldDisableCodexToolSearchForModel(params.modelId)
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        : undefined,
+      params.delegationCapability === "report_only"
+        ? CODEX_DELEGATION_DISABLED_THREAD_CONFIG
         : undefined,
       buildCodexRingZeroThreadConfigPatch(
         params,

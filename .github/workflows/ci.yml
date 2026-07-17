@@ -180,7 +180,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -190,6 +190,25 @@ jobs:
                 return "$fetch_status"
               fi
               echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+
+          # Diff-base resolution needs the head's parent commits and trees
+          # (merge-head-diff-base.mjs and the name-only diffs), but not the
+          # parents' blobs. Fetching them blob-less keeps preflight several
+          # times faster than a full --depth=2 snapshot fetch.
+          fetch_parent_metadata() {
+            local sha="$1"
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 \
+                --filter=blob:none origin "$sha" && return 0
+              if [ "$attempt" = "3" ]; then
+                return 1
+              fi
+              echo "::warning::parent metadata fetch for '$sha' failed on attempt $attempt; retrying"
               sleep 5
             done
           }
@@ -239,6 +258,7 @@ jobs:
               exit 1
             fi
           fi
+          fetch_parent_metadata "$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Resolve checkout SHA
@@ -701,18 +721,24 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
-                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
+                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
                     },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
+                      : []),
                     {
                       check_name: "android-build-play",
                       task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
                     },
                     ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      ? [
+                          { check_name: "android-build-wear", task: "build-wear" },
+                          { check_name: "android-ktlint", task: "ktlint" },
+                        ]
                       : []),
                   ]
                 : [],
@@ -994,9 +1020,9 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .artifacts/build-all-cache
-          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
+          key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
           restore-keys: |
-            ${{ runner.os }}-build-all-v3-
+            ${{ runner.os }}-build-all-v4-
 
       - name: Restore dist build cache
         id: dist_build_cache
@@ -2999,6 +3025,40 @@ jobs:
         # workflow-owned as before. Load them from the workflow revision so old targets work.
         uses: ./.ci-workflow/.github/actions/setup-android-toolchain
 
+      # Same-repo runs carry the Gradle user home (dependency, wrapper, and
+      # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
+      # above is evicted so quickly under the repo quota that it rarely
+      # restores, leaving every run to re-resolve the full dependency graph.
+      # Fork PRs and manual dispatches must never produce writable
+      # repository-global snapshots, so they keep the GitHub cache path (their
+      # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
+      - name: Mount Gradle sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
+        with:
+          # Task-scoped keys keep one semantic writer per snapshot: each matrix
+          # task resolves a different dependency set, and a shared if-missing
+          # key would let a light task (ktlint) win the cold-key race and pin a
+          # thin snapshot the heavy build lanes can never repair. Gradle's own
+          # caches are content-addressed, so stale restored entries are ignored
+          # and dependency-file changes mint a fresh key/snapshot.
+          key: ${{ github.repository }}-gradle-v1-${{ matrix.task }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties', 'apps/android/gradle/libs.versions.toml') }}
+          path: /var/tmp/openclaw-gradle
+          # on-change keeps the snapshot learning: Gradle's build cache
+          # accumulates across runs (if-missing would freeze the first
+          # hydration forever). Entries are content-addressed, task-scoped
+          # keys give one semantic writer, and v1.4.0 still skips commit
+          # after failed/cancelled steps.
+          commit: on-change
+
+      - name: Point Gradle at the sticky disk
+        if: github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /var/tmp/openclaw-gradle/gradle-user-home
+          echo "GRADLE_USER_HOME=/var/tmp/openclaw-gradle/gradle-user-home" >> "$GITHUB_ENV"
+
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
@@ -3020,6 +3080,9 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
                 :app:assemblePlayDebug \
@@ -3029,6 +3092,11 @@ jobs:
                 :benchmark:assembleDebug \
                 :wear-shared:assembleDebug \
                 :wear-shared:lintDebug
+              ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache \
+                :wear:assembleDebug \
+                :wear:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -3040,6 +3108,7 @@ jobs:
               ./gradlew --no-daemon --build-cache \
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
+                :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
               ;;
             *)
