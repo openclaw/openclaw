@@ -259,6 +259,7 @@ const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+const MANAGED_IMAGE_BLOB_URL_FETCH_TIMEOUT_MS = 30_000;
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -1549,11 +1550,19 @@ async function resolveManagedOutgoingImageBlobUrl(
       if (requesterSessionKey) {
         headers.set("x-openclaw-requester-session-key", requesterSessionKey);
       }
-      const res = await fetch(fetchUrl, {
-        method: "GET",
-        headers,
-        credentials: "same-origin",
-      });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), MANAGED_IMAGE_BLOB_URL_FETCH_TIMEOUT_MS);
+      let res: Response;
+      try {
+        res = await fetch(fetchUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       if (!res.ok) {
         managedImageBlobUrlMissCache.set(cacheKey, Date.now());
         return null;
