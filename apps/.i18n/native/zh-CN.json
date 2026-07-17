@@ -18759,6 +18759,16 @@
       "translated": "启用状态图标的空闲眨眼和摆动效果。"
     },
     {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "快速聊天快捷键"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "用于为主会话打开浮动聊天栏的全局快捷键。"
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "功能"
@@ -19442,6 +19452,11 @@
       "id": "native.apple.723e0d2283af1458",
       "source": "Open Chat",
       "translated": "打开聊天"
+    },
+    {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "快速聊天"
     },
     {
       "id": "native.apple.5e3cd7734f27f447",
@@ -20539,9 +20554,9 @@
       "translated": "打开菜单栏面板"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "点击 OpenClaw 菜单栏图标，快速聊天并查看状态。"
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "点按 OpenClaw 菜单栏图标，打开紧凑型聊天面板并查看状态。"
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20574,9 +20589,9 @@
       "translated": "使用面板 + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "打开紧凑型聊天面板；智能体可在 Canvas 中显示预览和更丰富的视觉内容。"
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20729,6 +20744,11 @@
       "translated": "系统访问"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "位置"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "设置"
@@ -20842,46 +20862,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "请求访问权限"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "自动化 (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "通知"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "辅助功能"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "屏幕录制"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "麦克风"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "语音识别"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "摄像头"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "位置"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -21097,6 +21077,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "继续"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "给 \\(self.model.agentDisplay.name) 发消息"
+    },
+    {
+      "id": "native.apple.c1fec5e4735d8995",
+      "source": "main session",
+      "translated": "主会话"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "发送消息"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "需要其他权限"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "授予权限"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "暂不"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",

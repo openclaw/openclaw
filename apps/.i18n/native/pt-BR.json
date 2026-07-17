@@ -18759,6 +18759,16 @@
       "translated": "Ativar piscadas e movimentos quando o ícone de status estiver ocioso."
     },
     {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "Atalho do Chat Rápido"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "Atalho global que abre uma barra de chat flutuante para a sessão principal."
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "Recursos"
@@ -19442,6 +19452,11 @@
       "id": "native.apple.723e0d2283af1458",
       "source": "Open Chat",
       "translated": "Abrir chat"
+    },
+    {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "Chat Rápido"
     },
     {
       "id": "native.apple.5e3cd7734f27f447",
@@ -20539,9 +20554,9 @@
       "translated": "Abrir o painel da barra de menus"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "Clique no ícone do OpenClaw na barra de menus para chat rápido e status."
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "Clique no ícone do OpenClaw na barra de menus para acessar o painel de chat compacto e o status."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20574,9 +20589,9 @@
       "translated": "Usar o painel + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "Abra o painel de chat compacto; o agente pode mostrar prévias e elementos visuais mais elaborados no Canvas."
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20729,6 +20744,11 @@
       "translated": "Acesso ao sistema"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "Localização"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Configuração"
@@ -20842,46 +20862,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "Solicitar acesso"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "Automação (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "Notificações"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "Acessibilidade"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "Gravação de Tela"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "Microfone"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "Reconhecimento de Fala"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "Câmera"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "Localização"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -21097,6 +21077,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "Continuar"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "Enviar mensagem para \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.c1fec5e4735d8995",
+      "source": "main session",
+      "translated": "sessão principal"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "Enviar mensagem"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "Requer permissões adicionais"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "Conceder"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "Agora não"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
