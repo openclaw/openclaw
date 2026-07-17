@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -252,5 +253,25 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     expect(fixture.report.currentTurn?.kind).toBe("room_event");
     expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
+  });
+
+  it("uses heartbeat task text at the model and hook boundary", () => {
+    const heartbeatTask = "Read HEARTBEAT.md and handle any due tasks.";
+    const fixture = createInput({
+      prompt: createPrompt({
+        effectivePrompt: heartbeatTask,
+        promptBeforePromptBuildHooks: heartbeatTask,
+        effectiveTranscriptPrompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+        transcriptPromptForRuntimeSplit: HEARTBEAT_TRANSCRIPT_PROMPT,
+        promptForRuntimeContextSplit: heartbeatTask,
+        promptForModelBeforeRuntimeContextSplit: heartbeatTask,
+        promptForRuntimeContextBeforeAnnotation: heartbeatTask,
+      }),
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.promptForSession).toBe(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(result.promptForModel).toBe(heartbeatTask);
   });
 });

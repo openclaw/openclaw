@@ -1,6 +1,7 @@
 // Runtime-context prompt tests keep hidden OpenClaw context separate from the
 // user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -33,6 +34,53 @@ describe("runtime context prompt submission", () => {
         transcriptPrompt: "visible ask",
       }),
     ).toEqual({ prompt: "visible ask" });
+  });
+
+  it("keeps heartbeat task text model-visible while persisting the transcript marker", () => {
+    const heartbeatTask = "Read HEARTBEAT.md and handle any due tasks.";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: heartbeatTask,
+        transcriptPrompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+      }),
+    ).toEqual({
+      prompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+      modelPrompt: heartbeatTask,
+    });
+  });
+
+  it("preserves heartbeat task text when prompt-build hooks add model context", () => {
+    const heartbeatTask = "Read HEARTBEAT.md and handle any due tasks.";
+    const prependContext = "Hook-provided policy context";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: heartbeatTask,
+        transcriptPrompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+        modelPrompt: `${prependContext}\n\n${heartbeatTask}`,
+        ...withModelPromptBuildContext({
+          promptBeforeHooks: heartbeatTask,
+          transcriptPrompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+          prependContext,
+        }),
+      }),
+    ).toEqual({
+      prompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+      modelPrompt: `${prependContext}\n\n${heartbeatTask}`,
+    });
+  });
+
+  it("keeps source context separate when the transcript prompt is embedded", () => {
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "System event\n\nvisible ask",
+        transcriptPrompt: "visible ask",
+      }),
+    ).toEqual({
+      prompt: "visible ask",
+      runtimeContext: "System event",
+    });
   });
 
   it("moves hidden runtime context out of the visible prompt", () => {

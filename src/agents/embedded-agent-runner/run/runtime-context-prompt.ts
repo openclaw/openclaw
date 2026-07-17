@@ -151,7 +151,16 @@ export function resolveRuntimeContextPromptParts(params: {
           .text,
       }
     : undefined;
-  const modelPromptText = modelPrompt?.text ?? transcriptPrompt ?? extracted.text;
+  const transcriptPromptParts = transcriptPrompt?.trim()
+    ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
+    : undefined;
+  // Non-empty transcript substitutions are persistence-only; the effective
+  // prompt must still reach the model when no hook supplied an explicit copy.
+  const modelPromptText =
+    modelPrompt?.text ??
+    (transcriptPrompt?.trim() && !transcriptPromptParts
+      ? extracted.text
+      : (transcriptPrompt ?? extracted.text));
   const prompt = transcriptPrompt ?? extracted.text;
   if (!prompt.trim() && params.emptyTranscriptMode === "model-prompt") {
     return {
@@ -173,13 +182,8 @@ export function resolveRuntimeContextPromptParts(params: {
     : undefined;
   const fallbackPromptParts = !modelPromptBuildContext
     ? modelPrompt
-      ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ??
-        (transcriptPrompt
-          ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
-          : undefined))
-      : transcriptPrompt
-        ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
-        : undefined
+      ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ?? transcriptPromptParts)
+      : transcriptPromptParts
     : undefined;
   // Source context sits inside the active prompt; provenance sits outside all
   // prompt transforms. Preserve that nesting order when hiding both.
