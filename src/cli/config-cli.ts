@@ -24,7 +24,7 @@ import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -2577,8 +2577,7 @@ export async function runConfigUnset(opts: {
 async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const snapshot = await readConfigFileSnapshot();
-    runtime.log(snapshot.path);
+    runtime.log(resolveConfigPath());
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
