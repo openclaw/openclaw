@@ -1655,20 +1655,20 @@ export function resolveSkillsPromptForRun(params: {
     if (
       catalogStart < 0 ||
       catalogEnd < 0 ||
-      snapshotPrompt.indexOf(catalogOpen, catalogStart + catalogOpen.length) >= 0 ||
-      snapshotPrompt.indexOf(catalogClose, catalogEnd + catalogClose.length) >= 0
+      snapshotPrompt.includes(catalogOpen, catalogStart + catalogOpen.length) ||
+      snapshotPrompt.includes(catalogClose, catalogEnd + catalogClose.length)
     ) {
       return "";
     }
     const bodyStart = catalogStart + catalogOpen.length;
     const catalogBody = snapshotPrompt.slice(bodyStart, catalogEnd);
-    const blockPattern = /\n  <skill>\n[\s\S]*?\n  <\/skill>/g;
+    const blockPattern = /\n[ ]{2}<skill>\n[\s\S]*?\n[ ]{2}<\/skill>/g;
     let cursor = 0;
     let filteredBody = "";
     for (const match of catalogBody.matchAll(blockPattern)) {
       const gap = catalogBody.slice(cursor, match.index);
       const block = match[0];
-      const name = /^    <name>(.*)<\/name>$/m.exec(block)?.[1];
+      const name = /^[ ]{4}<name>(.*)<\/name>$/m.exec(block)?.[1];
       if (gap.trim() || !name) {
         return "";
       }
