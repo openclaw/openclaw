@@ -102,7 +102,7 @@ describe("package Telegram live Docker E2E", () => {
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
     expect(runtimeRun).toContain(
-      'OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard',
+      'OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command openclaw onboard',
     );
     expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
     expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
