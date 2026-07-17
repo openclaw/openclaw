@@ -309,7 +309,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
       return preserveUserFacingRunState
         ? metadataPatch
-        : projectSessionSnapshotChanges({ initial: entry, next, current: currentEntry });
+        : projectSessionSnapshotChanges({
+            initial: entry,
+            next,
+            current: currentEntry,
+            reassertAbortedLastRun: result.meta.aborted === true,
+          });
     },
     {
       ...(preserveUserFacingRunState ? {} : { fallbackEntry: entry }),

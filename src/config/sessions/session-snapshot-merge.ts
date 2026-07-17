@@ -92,6 +92,7 @@ export function projectSessionSnapshotChanges(params: {
   initial: SessionEntry;
   next: SessionEntry;
   current: SessionEntry;
+  reassertAbortedLastRun?: boolean;
   reassertLiveModelSwitchPending?: boolean;
 }): Partial<SessionEntry> {
   if (params.current.sessionId !== params.initial.sessionId) {
@@ -177,6 +178,20 @@ export function projectSessionSnapshotChanges(params: {
     params.initial,
     params.current,
   );
+  const initialForegroundClaims = params.initial.mainRestartRecovery?.foregroundClaims;
+  const currentForegroundClaims = params.current.mainRestartRecovery?.foregroundClaims;
+  if (
+    params.reassertAbortedLastRun &&
+    params.next.abortedLastRun === true &&
+    initialForegroundClaims &&
+    currentForegroundClaims &&
+    params.initial.mainRestartRecovery?.cycleId === params.current.mainRestartRecovery?.cycleId &&
+    initialForegroundClaims.lifecycleGeneration === currentForegroundClaims.lifecycleGeneration
+  ) {
+    // A terminal abort is authoritative even when true matches this owner's
+    // initial snapshot. Preserve the concurrently narrowed owner aggregate.
+    patch.abortedLastRun = true;
+  }
   if (mainRecoveryChanged && !mainRecoveryChangedConcurrently) {
     // Apply all three fields together: a stale healthy flag can otherwise hide a newer marker.
     // A healthy run first marks its claim non-interrupted; token-scoped release
@@ -339,6 +354,7 @@ export function mergeSessionSnapshotChanges(params: {
   initial: SessionEntry;
   next: SessionEntry;
   current: SessionEntry;
+  reassertAbortedLastRun?: boolean;
   reassertLiveModelSwitchPending?: boolean;
 }): SessionEntry {
   const merged = { ...params.current };

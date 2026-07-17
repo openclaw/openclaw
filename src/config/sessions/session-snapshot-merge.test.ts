@@ -450,6 +450,89 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 
+  it("reasserts a terminal abort after another owner marks the session healthy", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-1", "owner-2"],
+        },
+      },
+    };
+    const next: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 2,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 4,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-1",
+          tokens: ["owner-2"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next,
+      current,
+      reassertAbortedLastRun: true,
+    });
+
+    expect(merged.abortedLastRun).toBe(true);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("does not attach a stale terminal abort to a replacement recovery cycle", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      mainRestartRecovery: {
+        cycleId: "cycle-old",
+        revision: 2,
+        chargedAttempts: 1,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-old",
+          tokens: ["old-owner"],
+        },
+      },
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        cycleId: "cycle-new",
+        revision: 1,
+        chargedAttempts: 0,
+        foregroundClaims: {
+          lifecycleGeneration: "generation-new",
+          tokens: ["new-owner"],
+        },
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next: { ...structuredClone(initialRecovery), updatedAt: 2 },
+      current,
+      reassertAbortedLastRun: true,
+    });
+
+    expect(merged.abortedLastRun).toBe(false);
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
   it("preserves a concurrent foreground claim over a partial recovery update", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
