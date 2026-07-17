@@ -1,10 +1,50 @@
+import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
-import {
-  appendReceivedValueHint,
-  attachConfigIssueDiagnostics,
-  formatConfigIssuePath,
-  resolveConfigIssueLineInRaw,
-} from "./issue-location.js";
+import { attachConfigIssueDiagnostics } from "./issue-location.js";
+
+type PathSegment = string | number;
+
+function formatConfigIssuePath(pathSegments: PathSegment[]): string {
+  return (
+    attachConfigIssueDiagnostics(
+      [{ path: pathSegments.join("."), pathSegments, message: "Invalid input" }],
+      { raw: null, parsed: {}, effective: {}, formatPathForDisplay: true },
+    )[0]?.path ?? ""
+  );
+}
+
+function resolveConfigIssueLineInRaw(raw: string, pathSegments: PathSegment[]): number | undefined {
+  let parsed: unknown = {};
+  try {
+    parsed = JSON5.parse(raw);
+  } catch {
+    // Malformed or empty text cannot own a source location.
+  }
+  return attachConfigIssueDiagnostics(
+    [{ path: pathSegments.join("."), pathSegments, message: "Invalid input" }],
+    { raw, parsed, effective: parsed },
+  )[0]?.line;
+}
+
+function appendReceivedValueHint(message: string, pathValue: string, value: unknown): string {
+  const pathSegments = pathValue.split(".");
+  const root: Record<string, unknown> = {};
+  let current = root;
+  for (const segment of pathSegments.slice(0, -1)) {
+    const child: Record<string, unknown> = {};
+    current[segment] = child;
+    current = child;
+  }
+  current[pathSegments.at(-1) ?? ""] = value;
+  return (
+    attachConfigIssueDiagnostics([{ path: pathValue, pathSegments, message }], {
+      raw: JSON5.stringify(root),
+      parsed: root,
+      effective: root,
+      includeReceivedValueHint: true,
+    })[0]?.message ?? message
+  );
+}
 
 describe("formatConfigIssuePath", () => {
   it("formats numeric segments with bracket notation", () => {

@@ -4,7 +4,7 @@ import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigValidationIssue } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
 
-export type ConfigIssuePathSegment = string | number;
+type ConfigIssuePathSegment = string | number;
 
 type Cursor = { pos: number };
 
@@ -210,7 +210,7 @@ function lineAtOffset(raw: string, offset: number): number {
   return line;
 }
 
-export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
+function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
   return segments.reduce<string>(
     (result, segment) =>
       typeof segment === "number"
@@ -222,7 +222,7 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   );
 }
 
-export function resolveConfigValueAtPath(
+function resolveConfigValueAtPath(
   root: unknown,
   segments: readonly ConfigIssuePathSegment[],
 ): unknown {
@@ -293,7 +293,7 @@ function shouldOmitReceivedValue(
   );
 }
 
-export function appendReceivedValueHint(
+function appendReceivedValueHint(
   message: string,
   pathValue: string,
   value: unknown,
@@ -310,7 +310,7 @@ export function appendReceivedValueHint(
   return label ? `${message}, got: ${label}` : message;
 }
 
-export function resolveConfigIssueLineInRaw(
+function resolveConfigIssueLineInRaw(
   raw: string,
   segments: readonly ConfigIssuePathSegment[],
 ): number | undefined {
@@ -321,7 +321,7 @@ export function resolveConfigIssueLineInRaw(
   return offset === undefined ? undefined : lineAtOffset(raw, offset);
 }
 
-export type AttachConfigIssueDiagnosticsParams = {
+type AttachConfigIssueDiagnosticsParams = {
   raw: string | null | undefined;
   parsed: unknown;
   effective: unknown;
@@ -330,7 +330,7 @@ export type AttachConfigIssueDiagnosticsParams = {
   includeReceivedValueHint?: boolean;
 };
 
-export type ConfigIssueDiagnostics = ConfigValidationIssue & {
+type ConfigIssueDiagnostics = ConfigValidationIssue & {
   line?: number;
   sourceFile?: string;
 };
