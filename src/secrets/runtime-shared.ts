@@ -122,6 +122,7 @@ export function collectSecretInputAssignment(params: {
   context: ResolverContext;
   active?: boolean;
   inactiveReason?: string;
+  owner?: SecretAssignmentOwner;
   apply: (value: unknown) => void;
 }): void {
   collectRuntimeSecretInputAssignment(params);

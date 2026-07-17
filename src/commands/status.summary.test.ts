@@ -279,10 +279,10 @@ describe("getStatusSummary", () => {
   it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
     setActiveDegradedSecretOwners([
       {
-        ownerKind: "provider",
-        ownerId: "openai",
+        ownerKind: "account",
+        ownerId: "discord:ops",
         state: "unavailable",
-        paths: ["models.providers.openai.apiKey"],
+        paths: ["channels.discord.accounts.ops.token"],
         refKeys: ["env:default:PRIVATE_REF_ID"],
         reason: "secret reference was not found",
       },
@@ -292,10 +292,10 @@ describe("getStatusSummary", () => {
 
     expect(summary.degradedSecretOwners).toEqual([
       {
-        ownerKind: "provider",
-        ownerId: "openai",
+        ownerKind: "account",
+        ownerId: "discord:ops",
         state: "unavailable",
-        paths: ["models.providers.openai.apiKey"],
+        paths: ["channels.discord.accounts.ops.token"],
         reason: "secret reference was not found",
       },
     ]);

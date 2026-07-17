@@ -28,6 +28,10 @@ import {
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import {
+  detectLegacyAcpReplayLedger,
+  migrateLegacyAcpReplayLedger,
+} from "./state-migrations.acp-replay.js";
+import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
 } from "./state-migrations.apns.js";
@@ -396,6 +400,10 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const acpReplayLedger = detectLegacyAcpReplayLedger({
+    stateDir,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const managedOutgoingImages = detectLegacyManagedOutgoingImages({
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -578,6 +586,9 @@ export async function detectLegacyStateMigrations(params: {
   if (commitments.hasLegacy) {
     preview.push("- Commitments: legacy JSON file → shared SQLite state");
   }
+  if (acpReplayLedger.hasLegacy) {
+    preview.push("- ACP replay ledger: legacy JSON file → shared SQLite state");
+  }
   if (managedOutgoingImages.hasLegacy) {
     preview.push("- Managed outgoing images: legacy record JSON → shared SQLite state");
   }
@@ -686,6 +697,7 @@ export async function detectLegacyStateMigrations(params: {
     },
     tuiLastSessions,
     commitments,
+    acpReplayLedger,
     managedOutgoingImages,
     apns,
     mcpOauth,
@@ -879,6 +891,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.commitments,
     stateDir: detected.stateDir,
   });
+  const acpReplayLedger = await migrateLegacyAcpReplayLedger({
+    detected: detected.acpReplayLedger,
+    stateDir: detected.stateDir,
+  });
   const managedOutgoingImages = migrateLegacyManagedOutgoingImages({
     detected: detected.managedOutgoingImages,
     stateDir: detected.stateDir,
@@ -948,6 +964,7 @@ export async function runLegacyStateMigrations(params: {
     updateCheck,
     tuiLastSessions,
     commitments,
+    acpReplayLedger,
     managedOutgoingImages,
     apns,
     mcpOauth,
@@ -972,6 +989,7 @@ export async function runLegacyStateMigrations(params: {
       ...currentConversationBindings.changes,
       ...tuiLastSessions.changes,
       ...commitments.changes,
+      ...acpReplayLedger.changes,
       ...managedOutgoingImages.changes,
       ...apns.changes,
       ...mcpOauth.changes,
@@ -1003,6 +1021,7 @@ export async function runLegacyStateMigrations(params: {
       ...currentConversationBindings.warnings,
       ...tuiLastSessions.warnings,
       ...commitments.warnings,
+      ...acpReplayLedger.warnings,
       ...managedOutgoingImages.warnings,
       ...apns.warnings,
       ...mcpOauth.warnings,

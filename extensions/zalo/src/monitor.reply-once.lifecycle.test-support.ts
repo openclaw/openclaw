@@ -21,14 +21,6 @@ describe("Zalo reply-once lifecycle", () => {
   const recordInboundSessionMock = vi.fn(
     async (_input: { sessionKey?: string; ctx?: Record<string, unknown> }) => undefined,
   );
-  const resolveAgentRouteMock = vi.fn(() => ({
-    agentId: "main",
-    channel: "zalo",
-    accountId: "acct-zalo-lifecycle",
-    sessionKey: "agent:main:zalo:direct:dm-chat-1",
-    mainSessionKey: "agent:main:main",
-    matchedBy: "default",
-  }));
   const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn();
 
   beforeAll(async () => {
@@ -38,10 +30,6 @@ describe("Zalo reply-once lifecycle", () => {
   beforeEach(async () => {
     await resetLifecycleTestState();
     setLifecycleRuntimeCore({
-      routing: {
-        resolveAgentRoute:
-          resolveAgentRouteMock as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-      },
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
@@ -60,10 +48,17 @@ describe("Zalo reply-once lifecycle", () => {
   });
 
   function createReplyOnceMonitorSetup() {
-    return createLifecycleMonitorSetup({
+    const setup = createLifecycleMonitorSetup({
       accountId: "acct-zalo-lifecycle",
       dmPolicy: "open",
     });
+    return {
+      ...setup,
+      config: {
+        ...setup.config,
+        session: { dmScope: "per-channel-peer" as const },
+      },
+    };
   }
 
   function requireRecordInboundSessionArgs() {

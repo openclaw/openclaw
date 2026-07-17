@@ -95,12 +95,14 @@ export async function runTelegramDispatchTurn(params: {
           raw: context,
         }),
         resolveTurn: () => ({
+          cfg: params.cfg,
           channel: "telegram",
           accountId: context.route.accountId,
-          routeSessionKey: context.route.sessionKey,
-          storePath: context.turn.storePath,
+          route: {
+            agentId: context.route.agentId,
+            sessionKey: context.route.sessionKey,
+          },
           ctxPayload: context.ctxPayload,
-          recordInboundSession: context.turn.recordInboundSession,
           record: context.turn.record,
           runDispatch: () =>
             params.telegramDeps.dispatchReplyWithBufferedBlockDispatcher({

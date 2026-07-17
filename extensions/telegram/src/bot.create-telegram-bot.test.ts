@@ -1496,6 +1496,113 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("preserves structured origin for a single forwarded debounce entry", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      await messageHandler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "single forwarded note",
+          date: 1736380921,
+          message_id: 121,
+          from: { id: 42, first_name: "Ada" },
+          forward_origin: {
+            type: "hidden_user",
+            date: 621,
+            sender_user_name: "Original A",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 80);
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      const payload = requireValue(replySpy.mock.calls[0]?.[0], "single forwarded payload");
+      expect(payload.Body).toContain("[Forwarded from Original A");
+      expect(payload.ForwardedFrom).toBe("Original A");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves distinct origins for forwarded messages in one debounce batch", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+
+      for (const [messageId, text, origin] of [
+        [121, "first forwarded note", "Original A"],
+        [122, "second forwarded note", "Original B"],
+      ] as const) {
+        await messageHandler({
+          message: {
+            chat: { id: 7, type: "private" },
+            text,
+            date: 1736380800 + messageId,
+            message_id: messageId,
+            from: { id: 42, first_name: "Ada" },
+            forward_origin: {
+              type: "hidden_user",
+              date: 500 + messageId,
+              sender_user_name: origin,
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+      }
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 80);
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      const payload = requireValue(replySpy.mock.calls[0]?.[0], "forwarded batch payload");
+      expect(payload.Body).toContain("[Forwarded from Original A");
+      expect(payload.Body).toContain("[Forwarded from Original B");
+      expect(payload.Body).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
+      );
+      expect(payload.BodyForAgent).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
+      );
+      expect(payload.BodyForAgent).not.toContain("Conversation info (untrusted metadata)");
+      expect(payload.CommandBody).toBe("first forwarded note\nsecond forwarded note");
+      expect(payload.ForwardedFrom).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("lets stop cancel pending same-chat forwarded debounce", async () => {
     const DEBOUNCE_MS = 4321;
     loadConfig.mockReturnValue({

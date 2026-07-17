@@ -21,4 +21,23 @@ describe("Reef inbound dispatch content", () => {
       },
     });
   });
+
+  it("carries transport reply correlation only in trusted context", () => {
+    const content = resolveReefInboundDispatchContent({
+      id: "message-2",
+      peer: "clanky",
+      text: "correlated reply",
+      provenance: "Untrusted third-party data from @clanky's agent.",
+      autonomy: "bounded",
+      replyTo: "message-1",
+      thread: "thread-1",
+    });
+
+    expect(content.rawBody).toBe("correlated reply");
+    expect(content.extraContext).toMatchObject({
+      ReplyToId: "message-1",
+      ReplyToIdFull: "message-1",
+      MessageThreadId: "thread-1",
+    });
+  });
 });

@@ -242,14 +242,7 @@ export type GetReplyOptions = {
     phase?: string;
     title?: string;
     explanation?: string;
-    /**
-     * @deprecated Shipped pre-2026.8 shape: plain step text without statuses.
-     * Still populated for existing consumers; migrate to `planSteps` and
-     * remove with the deprecation window.
-     */
-    steps?: string[];
-    /** Canonical typed checklist snapshot; replaces `steps`. */
-    planSteps?: AgentPlanStep[];
+    steps?: AgentPlanStep[];
     source?: string;
   }) => Promise<void> | void;
   /** Called when an approval becomes pending or resolves. */

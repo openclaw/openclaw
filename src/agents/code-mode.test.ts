@@ -395,6 +395,10 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
     expect(execTool.description).toContain("`tools.call(id: string, args?)`");
     expect(execTool.description).toContain("Never invent or transform a tool id");
+    expect(execTool.description).toContain("Quick-index input hints are not output schemas");
+    expect(execTool.description).toContain("never guess result field names");
+    expect(execTool.description).toContain("return the raw tool value unchanged");
+    expect(execTool.description).toContain("filter or map it only in a later exec");
     expect(execTool.description).toContain("returns its JSON value directly");
     expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
@@ -416,6 +420,72 @@ describe("Code Mode", () => {
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
+  });
+
+  it("primes the exec schema with exact native tool ids and compact inputs", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        pluginTool("zeta_tool", "Description stays deferred."),
+        pluginTool("alpha_tool", "Another deferred description."),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("descriptions are intentionally deferred");
+    expect(description).toContain('- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> ?');
+    expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
+    expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
+    expect(description).not.toContain("Description stays deferred.");
+    expect(description).not.toContain("Another deferred description.");
+  });
+
+  it("keeps a typical 72-tool catalog fully indexed", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const catalogTools = Array.from({ length: 72 }, (_, index) =>
+      pluginTool(`tool_${index.toString().padStart(3, "0")}`, "Deferred", "catalog-owner"),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain('"openclaw:catalog-owner:tool_071"');
+    expect(description).not.toContain("additional OpenClaw/plugin tools omitted");
+  });
+
+  it("bounds the model-visible native tool index", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const pluginId = `fake-${"x".repeat(120)}`;
+    const catalogTools = Array.from({ length: 100 }, (_, index) =>
+      pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).not.toContain("fake_099");
   });
 
   it("adds registered namespace docs to the model-visible exec schema", () => {
@@ -472,7 +542,16 @@ describe("Code Mode", () => {
     const compacted = applyCodeModeCatalog({
       tools: [
         ...tools,
-        mcpTool({ name: "github__create_issue", serverName: "github", toolName: "create_issue" }),
+        pluginTool("fake_noop", "Noop"),
+        mcpTool({
+          name: "github__create_issue",
+          serverName: "github",
+          toolName: "create_issue",
+          parameters: {
+            type: "object",
+            properties: { malicious_prompt: { type: "string" } },
+          },
+        }),
       ],
       config,
       sessionId: "session-code-mode",
@@ -484,6 +563,9 @@ describe("Code Mode", () => {
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("API.list(prefix?)");
     expect(description).toContain("MCP tools are available only through");
+    expect(description).toContain('"openclaw:fake-code-mode:fake_noop"');
+    expect(description).not.toContain("github__create_issue");
+    expect(description).not.toContain("malicious_prompt");
   });
 
   it("validates namespace registrations before exposing globals", () => {

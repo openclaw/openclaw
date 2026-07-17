@@ -169,7 +169,7 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
 let currentRuntimeConfig = {} as ClawdbotConfig;
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
-  return {
+  const runtime = {
     config: {
       current: vi.fn(() => currentRuntimeConfig),
     },
@@ -209,9 +209,14 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             kind: "message",
             canStartAgentTurn: true,
           });
-          await turn.recordInboundSession({
-            storePath: turn.storePath,
-            sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+          if (!("route" in turn) || !("runDispatch" in turn)) {
+            throw new Error("expected a prepared channel turn plan");
+          }
+          await runtime.channel.session.recordInboundSession({
+            storePath: runtime.channel.session.resolveStorePath(turn.cfg.session?.store, {
+              agentId: turn.route.agentId,
+            }),
+            sessionKey: turn.ctxPayload.SessionKey ?? turn.route.sessionKey,
             ctx: turn.ctxPayload,
             groupResolution: turn.record?.groupResolution,
             createIfMissing: turn.record?.createIfMissing,
@@ -229,6 +234,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
     ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
     ...(overrides.media ? { media: overrides.media as PluginRuntime["media"] } : {}),
   } as unknown as PluginRuntime;
+  return runtime;
 }
 
 const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
@@ -239,7 +245,6 @@ const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSession
 const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
   mockResolveStorePath(params);
 const resolveEnvelopeFormatOptionsMock = () => ({});
-const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
 const withReplyDispatcherMock = async ({
   run,
 }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
@@ -299,6 +304,8 @@ const {
   mockResolveFeishuReasoningPreviewEnabled,
   mockTranscribeFirstAudio,
   mockMaybeCreateDynamicAgent,
+  mockBuildChannelInboundEventContext,
+  mockDispatchInboundMessage,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -336,7 +343,48 @@ const {
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
   mockTranscribeFirstAudio: vi.fn(),
   mockMaybeCreateDynamicAgent: vi.fn(),
+  mockBuildChannelInboundEventContext: vi.fn(),
+  mockDispatchInboundMessage: vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } }),
 }));
+
+const finalizeInboundContextMock = mockBuildChannelInboundEventContext;
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    formatAgentEnvelope: ({ body }: { body: string }) => body,
+    resolveEnvelopeFormatOptions: () => ({}),
+    buildChannelInboundEventContext: (
+      params: Parameters<typeof actual.buildChannelInboundEventContext>[0],
+    ) =>
+      actual.buildChannelInboundEventContext({
+        ...params,
+        finalize: (ctx) => {
+          mockBuildChannelInboundEventContext(ctx);
+          return ctx as never;
+        },
+      }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
+  return { ...actual, dispatchInboundMessage: mockDispatchInboundMessage };
+});
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return { ...actual, resolveStorePath: mockResolveStorePath };
+});
 
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,
@@ -966,42 +1014,11 @@ describe("handleFeishuMessage ACP routing", () => {
     );
     expect(dispatcherOptions.allowReasoningPreview).toBe(true);
   });
-
-  it("falls back to full runtime channel when partial channelRuntime lacks inbound", async () => {
-    const partialChannelRuntime = {
-      runtimeContexts: {} as PluginRuntime["channel"]["runtimeContexts"],
-    } as PluginRuntime["channel"];
-
-    await dispatchMessage({
-      cfg: {
-        session: { mainKey: "main", scope: "per-sender" },
-        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
-      },
-      event: {
-        sender: { sender_id: { open_id: "ou_sender_1" } },
-        message: {
-          message_id: "msg-partial-runtime",
-          chat_id: "oc_dm",
-          chat_type: "p2p",
-          message_type: "text",
-          content: JSON.stringify({ text: "hello" }),
-        },
-      },
-      channelRuntime: partialChannelRuntime,
-    });
-
-    expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("handleFeishuMessage command authorization", () => {
-  const mockFinalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ({
-    ...ctx,
-    CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
-  }));
-  const mockDispatchReplyFromConfig = vi
-    .fn()
-    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockFinalizeInboundContext = mockBuildChannelInboundEventContext;
+  const mockDispatchReplyFromConfig = mockDispatchInboundMessage;
   const mockWithReplyDispatcher = vi.fn(
     async ({
       dispatcher,
@@ -1037,6 +1054,10 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatchReplyFromConfig.mockReset().mockResolvedValue({
+      queuedFinal: false,
+      counts: { final: 1 },
+    });
     mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(true);
     mockGetMessageFeishu.mockReset().mockResolvedValue(null);
     mockListFeishuThreadMessages.mockReset().mockResolvedValue([]);

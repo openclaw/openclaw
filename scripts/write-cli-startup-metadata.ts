@@ -75,6 +75,20 @@ type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
 type Awaitable<T> = T | Promise<T>;
 type SourceCommandHelpCommand = "browser" | "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
 type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
+type ExistingCliStartupMetadata = {
+  rootHelpBundleSignature?: unknown;
+  generatorSignature?: unknown;
+  browserHelpSourceSignature?: unknown;
+  secretsHelpSourceSignature?: unknown;
+  nodesHelpSourceSignature?: unknown;
+  subcommandHelpSourceSignature?: unknown;
+  channelCatalogSignature?: unknown;
+  browserHelpText?: unknown;
+  secretsHelpText?: unknown;
+  nodesHelpText?: unknown;
+  subcommandHelpText?: unknown;
+  rootHelpText?: unknown;
+};
 type SpawnTextParentSignalState = {
   done: boolean;
   signal: NodeJS.Signals | null;
@@ -626,6 +640,7 @@ function renderSourceRootHelpText(
       cwd: rootDir,
       encoding: "utf8",
       env: renderContext.env,
+      killSignal: "SIGKILL",
       timeout: ROOT_HELP_RENDER_TIMEOUT_MS,
     },
   );
@@ -741,97 +756,138 @@ export async function writeCliStartupMetadata(options?: {
   );
   const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...channelCatalog.ids]);
 
+  let existing: ExistingCliStartupMetadata | undefined;
   try {
-    const existing = JSON.parse(readFileSync(resolvedOutputPath, "utf8")) as {
-      rootHelpBundleSignature?: unknown;
-      generatorSignature?: unknown;
-      browserHelpSourceSignature?: unknown;
-      secretsHelpSourceSignature?: unknown;
-      nodesHelpSourceSignature?: unknown;
-      subcommandHelpSourceSignature?: unknown;
-      channelCatalogSignature?: unknown;
-      browserHelpText?: unknown;
-      secretsHelpText?: unknown;
-      nodesHelpText?: unknown;
-      subcommandHelpText?: unknown;
-    };
-    if (
-      bundleIdentity &&
-      existing.rootHelpBundleSignature === bundleIdentity.signature &&
-      existing.generatorSignature === generatorSignature &&
-      existing.browserHelpSourceSignature === browserHelpSourceSignature &&
-      existing.secretsHelpSourceSignature === secretsHelpSourceSignature &&
-      existing.nodesHelpSourceSignature === nodesHelpSourceSignature &&
-      existing.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
-      existing.channelCatalogSignature === channelCatalog.signature &&
-      typeof existing.browserHelpText === "string" &&
-      existing.browserHelpText.length > 0 &&
-      typeof existing.secretsHelpText === "string" &&
-      existing.secretsHelpText.length > 0 &&
-      typeof existing.nodesHelpText === "string" &&
-      existing.nodesHelpText.length > 0 &&
-      hasAllPrecomputedSubcommandHelpText(existing.subcommandHelpText)
-    ) {
-      return;
-    }
+    existing = JSON.parse(readFileSync(resolvedOutputPath, "utf8")) as ExistingCliStartupMetadata;
   } catch {
     // Missing or malformed existing metadata means we should regenerate it.
   }
 
-  const rootHelpTextPromise = (async () => {
-    try {
-      return await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
-        resolvedDistDir,
-        renderContext,
-      );
-    } catch {
-      // The spawnSync source fallback blocks the event loop; that is fine for
-      // this rare recovery path (missing/broken bundle) and only delays
-      // draining sibling render output, not its correctness.
-      return (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
-    }
-  })();
+  const reusableExisting =
+    existing?.generatorSignature === generatorSignature &&
+    existing.channelCatalogSignature === channelCatalog.signature
+      ? existing
+      : undefined;
+  const reusableRootHelpText =
+    reusableExisting &&
+    bundleIdentity &&
+    reusableExisting.rootHelpBundleSignature === bundleIdentity.signature &&
+    typeof reusableExisting.rootHelpText === "string" &&
+    reusableExisting.rootHelpText.length > 0
+      ? reusableExisting.rootHelpText
+      : undefined;
+  const reusableBrowserHelpText =
+    reusableExisting &&
+    reusableExisting.browserHelpSourceSignature === browserHelpSourceSignature &&
+    typeof reusableExisting.browserHelpText === "string" &&
+    reusableExisting.browserHelpText.length > 0
+      ? reusableExisting.browserHelpText
+      : undefined;
+  const reusableSecretsHelpText =
+    reusableExisting &&
+    reusableExisting.secretsHelpSourceSignature === secretsHelpSourceSignature &&
+    typeof reusableExisting.secretsHelpText === "string" &&
+    reusableExisting.secretsHelpText.length > 0
+      ? reusableExisting.secretsHelpText
+      : undefined;
+  const reusableNodesHelpText =
+    reusableExisting &&
+    reusableExisting.nodesHelpSourceSignature === nodesHelpSourceSignature &&
+    typeof reusableExisting.nodesHelpText === "string" &&
+    reusableExisting.nodesHelpText.length > 0
+      ? reusableExisting.nodesHelpText
+      : undefined;
+  const reusableSubcommandHelpText =
+    reusableExisting &&
+    reusableExisting.subcommandHelpSourceSignature === subcommandHelpSourceSignature &&
+    hasAllPrecomputedSubcommandHelpText(reusableExisting.subcommandHelpText)
+      ? (reusableExisting.subcommandHelpText as PrecomputedSubcommandHelpText)
+      : undefined;
+  if (
+    reusableRootHelpText &&
+    reusableBrowserHelpText &&
+    reusableSecretsHelpText &&
+    reusableNodesHelpText &&
+    reusableSubcommandHelpText
+  ) {
+    return;
+  }
+
+  const rootHelpTextPromise = reusableRootHelpText
+    ? Promise.resolve(reusableRootHelpText)
+    : (async () => {
+        try {
+          return await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
+            resolvedDistDir,
+            renderContext,
+          );
+        } catch {
+          // The spawnSync source fallback blocks the event loop; that is fine for
+          // this rare recovery path (missing/broken bundle) and only delays
+          // draining sibling render output, not its correctness.
+          return (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
+        }
+      })();
   const hasCustomCommandRenderer =
     options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
     options?.renderSourceNodesHelpText ||
     options?.renderSourceSubcommandHelpTextRecord;
-  const commandHelpTextPromise = hasCustomCommandRenderer
-    ? null
-    : renderSourceCommandHelpTextRecord(
-        ["browser", "secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
-        renderContext,
-      );
-  const browserHelpTextPromise = commandHelpTextPromise
-    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-    : Promise.resolve(
-        (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
-      );
-  const secretsHelpTextPromise = commandHelpTextPromise
-    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-    : Promise.resolve(
-        (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext),
-      );
-  const nodesHelpTextPromise = commandHelpTextPromise
-    ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-    : Promise.resolve(
-        (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext),
-      );
-  const subcommandHelpTextPromise = commandHelpTextPromise
-    ? commandHelpTextPromise.then(
-        (commandHelpText) =>
-          Object.fromEntries(
-            PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
-              commandName,
-              commandHelpText[commandName],
-            ]),
-          ) as PrecomputedSubcommandHelpText,
-      )
-    : Promise.resolve(
-        (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
-          renderContext,
-        ),
-      );
+  const sourceCommandsToRender: SourceCommandHelpCommand[] = [];
+  if (!reusableBrowserHelpText) {
+    sourceCommandsToRender.push("browser");
+  }
+  if (!reusableSecretsHelpText) {
+    sourceCommandsToRender.push("secrets");
+  }
+  if (!reusableNodesHelpText) {
+    sourceCommandsToRender.push("nodes");
+  }
+  if (!reusableSubcommandHelpText) {
+    sourceCommandsToRender.push(...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS);
+  }
+  const commandHelpTextPromise =
+    hasCustomCommandRenderer || sourceCommandsToRender.length === 0
+      ? null
+      : renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext);
+  const browserHelpTextPromise = reusableBrowserHelpText
+    ? Promise.resolve(reusableBrowserHelpText)
+    : commandHelpTextPromise
+      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
+      : Promise.resolve(
+          (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(renderContext),
+        );
+  const secretsHelpTextPromise = reusableSecretsHelpText
+    ? Promise.resolve(reusableSecretsHelpText)
+    : commandHelpTextPromise
+      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
+      : Promise.resolve(
+          (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext),
+        );
+  const nodesHelpTextPromise = reusableNodesHelpText
+    ? Promise.resolve(reusableNodesHelpText)
+    : commandHelpTextPromise
+      ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
+      : Promise.resolve(
+          (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext),
+        );
+  const subcommandHelpTextPromise = reusableSubcommandHelpText
+    ? Promise.resolve(reusableSubcommandHelpText)
+    : commandHelpTextPromise
+      ? commandHelpTextPromise.then(
+          (commandHelpText) =>
+            Object.fromEntries(
+              PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+                commandName,
+                commandHelpText[commandName],
+              ]),
+            ) as PrecomputedSubcommandHelpText,
+        )
+      : Promise.resolve(
+          (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+            renderContext,
+          ),
+        );
   const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
     await Promise.all([
       rootHelpTextPromise,
@@ -879,6 +935,7 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 }
 
 export const testing = {
+  renderSourceRootHelpText,
   signalCliStartupMetadataProcessTree,
   spawnText,
 };

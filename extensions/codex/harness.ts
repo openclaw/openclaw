@@ -66,7 +66,7 @@ export function createCodexAppServerAgentHarness(options: {
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
-      sourceVisibleReplies: "message_tool",
+      visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
     authBinding: {

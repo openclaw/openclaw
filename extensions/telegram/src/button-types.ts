@@ -1,12 +1,12 @@
 // Telegram plugin module implements button types behavior.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import { reduceLegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
-  normalizeInteractiveReply,
+  normalizeLegacyInteractiveReply,
   resolveMessagePresentationButtonAction,
-  type InteractiveReply,
+  type LegacyInteractiveReply,
   type MessagePresentation,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -100,9 +100,9 @@ function chunkInteractiveButtons(
  * @deprecated Use buildTelegramPresentationButtons with MessagePresentation.
  */
 function buildTelegramInteractiveButtons(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): TelegramInlineButtons | undefined {
-  const rows = reduceInteractiveReply(
+  const rows = reduceLegacyInteractiveReply(
     interactive,
     [] as TelegramInlineButton[][],
     (state, block) => {
@@ -159,7 +159,7 @@ export function resolveTelegramInlineButtons(params: {
 }): TelegramInlineButtons | undefined {
   return (
     params.buttons ??
-    buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive)) ??
+    buildTelegramInteractiveButtons(normalizeLegacyInteractiveReply(params.interactive)) ??
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation))
   );
 }

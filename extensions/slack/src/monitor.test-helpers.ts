@@ -295,23 +295,16 @@ vi.mock("./monitor/config.runtime.js", async () => {
   };
 });
 
-vi.mock("./monitor/reply.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
-    "./monitor/reply.runtime.js",
-  );
-  type BufferedDispatchParams = Parameters<
-    typeof actual.dispatchReplyWithBufferedBlockDispatcher
-  >[0];
-  type ReplyResolver = NonNullable<BufferedDispatchParams["replyResolver"]>;
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
+  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
-      actual.dispatchReplyWithBufferedBlockDispatcher({
-        ...params,
-        replyResolver,
-      }),
+    dispatchChannelInboundTurn: (params: DispatchParams) =>
+      actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
   };
 });
 
@@ -349,7 +342,6 @@ vi.mock("./monitor/conversation.runtime.js", async () => {
     ...actual,
     readChannelAllowFromStore: (...args: unknown[]) =>
       slackTestState.readAllowFromStoreMock(...args),
-    recordInboundSession: vi.fn().mockResolvedValue(undefined),
     upsertChannelPairingRequest: (...args: unknown[]) =>
       slackTestState.upsertPairingRequestMock(...args),
   };
