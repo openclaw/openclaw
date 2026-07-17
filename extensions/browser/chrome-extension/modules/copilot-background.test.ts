@@ -13,9 +13,7 @@ function eventHook() {
 function storageArea(initial: Record<string, unknown> = {}) {
   const values = { ...initial };
   return {
-    get: vi.fn(async (keys: string[]) =>
-      Object.fromEntries(keys.map((key) => [key, values[key]])),
-    ),
+    get: vi.fn(async (keys: string[]) => Object.fromEntries(keys.map((key) => [key, values[key]]))),
     set: vi.fn(async (update: Record<string, unknown>) => {
       Object.assign(values, update);
     }),

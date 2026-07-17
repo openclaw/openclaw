@@ -221,10 +221,12 @@ async function revokeCopilotDebugger(tabId) {
   copilotAccessRevisions.set(tabId, (copilotAccessRevisions.get(tabId) ?? 0) + 1);
   copilotDeniedTabs.add(tabId);
   const previous = copilotRevocations.get(tabId) ?? Promise.resolve();
-  const revocation = previous.catch(() => undefined).then(async () => {
-    await Promise.allSettled([attachingTabs.get(tabId)]);
-    await detachDebugger(tabId);
-  });
+  const revocation = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await Promise.allSettled([attachingTabs.get(tabId)]);
+      await detachDebugger(tabId);
+    });
   copilotRevocations.set(tabId, revocation);
   try {
     await revocation;
