@@ -19,9 +19,11 @@ export function resolveAmbientTranscriptWatermarkKey(
   ]);
 }
 
-function numericMessageId(value: string): number | undefined {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+function numericMessageId(value: string): bigint | undefined {
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+    return undefined;
+  }
+  return BigInt(value);
 }
 
 function isAmbientTranscriptWatermarkAfter(
@@ -37,11 +39,10 @@ function isAmbientTranscriptWatermarkAfter(
     }
     const nextMessageId = numericMessageId(next.messageId);
     const currentMessageId = numericMessageId(current.messageId);
-    return (
-      nextMessageId !== undefined &&
-      currentMessageId !== undefined &&
-      nextMessageId > currentMessageId
-    );
+    if (nextMessageId !== undefined && currentMessageId !== undefined) {
+      return nextMessageId > currentMessageId;
+    }
+    return next.messageId !== current.messageId;
   }
   const nextMessageId = numericMessageId(next.messageId);
   const currentMessageId = numericMessageId(current.messageId);
