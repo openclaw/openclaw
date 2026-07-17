@@ -245,7 +245,7 @@ function describeToolFailureInputs(params: {
   return parts.join(" ");
 }
 
-export function normalizeToolExecutionResult(params: {
+function normalizeToolExecutionResult(params: {
   toolName: string;
   result: unknown;
 }): AgentToolResult<unknown> {

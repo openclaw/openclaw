@@ -751,6 +751,12 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
     return false;
   }
+  // Hidden catalog bridges execute through an outer control tool. Keeping
+  // sequential tools direct preserves their pre-execution scheduling contract
+  // and lets finalized result controls be handled by the actual target tool.
+  if (tool.executionMode === "sequential") {
+    return false;
+  }
   return tool.catalogMode !== "direct-only";
 }
 
