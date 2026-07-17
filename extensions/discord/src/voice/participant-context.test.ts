@@ -58,7 +58,7 @@ describe("normalizeLabel UTF-16 safety", () => {
     } as never;
     const line = formatDiscordVoiceParticipantStateLine(state);
     // format: `- user_id="user1" display_name="<truncated label>"`
-    expect(line).toMatch(/^\- user_id="user1" display_name="/);
+    expect(line).toMatch(/^- user_id="user1" display_name="/);
     // No replacement character (U+FFFD) in output
     expect(line).not.toContain("�");
     // Display name part is at most 100 chars inside the quotes
