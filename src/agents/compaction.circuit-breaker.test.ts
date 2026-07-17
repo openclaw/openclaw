@@ -85,14 +85,19 @@ describe("compaction staged fallback circuit breaker", () => {
       .mockResolvedValueOnce("oldest summary")
       .mockRejectedValueOnce(new Error("fetch failed"))
       .mockResolvedValueOnce("newest summary")
-      .mockResolvedValueOnce("merged summary");
+      .mockResolvedValueOnce("merged: oldest summary + newest summary");
 
     // The oldest split carries whatever context the caller needs redistilled, and it
     // made it into the merge. Reporting a fallback here makes callers re-add it.
     await expect(summarize()).resolves.toEqual({
       kind: "summary",
-      text: "merged summary",
+      text: "merged: oldest summary + newest summary",
     });
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(4);
+    expect(agentSessionMocks.generateSummary.mock.calls[3]?.[0]).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining("oldest summary") }),
+      ]),
+    );
   });
 });
