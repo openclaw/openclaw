@@ -5,7 +5,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -143,8 +143,10 @@ describe("stripSessionsYieldArtifacts — trailing assistant stripping (#109638)
       { role: "user", content: "do something" },
       { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "fn", input: {} }] },
       { role: "tool_result", tool_use_id: "t1", content: "ok" },
-      { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "fn2", input: {} }] },
-      { role: "tool_result", tool_use_id: "t2", content: "done" },
+      // Regular assistant messages that the second while loop should strip
+      { role: "assistant", content: [{ type: "text", text: "Let me wait for results" }] },
+      { role: "assistant", content: [{ type: "text", text: "Still processing" }] },
+      // Aborted + yield interrupt that the first while loop strips
       { role: "assistant", stopReason: "aborted", content: [] },
       { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
     ];
@@ -156,8 +158,49 @@ describe("stripSessionsYieldArtifacts — trailing assistant stripping (#109638)
 
     stripSessionsYieldArtifacts(activeSession);
 
+    // First loop removes yield interrupt + aborted assistant
+    // Second loop removes the two trailing regular assistants
+    expect(activeSession.agent.state.messages).toHaveLength(3);
     const last = activeSession.agent.state.messages.at(-1) as any;
     expect(last.role).toBe("tool_result");
-    expect(last.tool_use_id).toBe("t2");
+    expect(last.tool_use_id).toBe("t1");
+  });
+
+  it("calls sessionManager.removeTrailingEntries with the correct predicate", () => {
+    const messages: any[] = [
+      { role: "user", content: "do something" },
+      { role: "assistant", content: [{ type: "text", text: "thinking" }] },
+      { role: "assistant", stopReason: "aborted", content: [] },
+      { role: "custom", customType: "openclaw.sessions_yield_interrupt" },
+    ];
+
+    const removeTrailingEntries = vi.fn().mockReturnValue(3);
+    const activeSession = {
+      messages: messages.slice(),
+      agent: { state: { messages: messages.slice() } },
+      sessionManager: { removeTrailingEntries },
+    };
+
+    stripSessionsYieldArtifacts(activeSession);
+
+    expect(removeTrailingEntries).toHaveBeenCalledOnce();
+    const [predicate, options] = removeTrailingEntries.mock.calls[0];
+
+    expect(
+      predicate({ type: "message", message: { role: "assistant", stopReason: "aborted" } }),
+    ).toBe(true);
+    expect(
+      predicate({ type: "custom_message", customType: "openclaw.sessions_yield_interrupt" }),
+    ).toBe(true);
+    expect(predicate({ type: "message", message: { role: "assistant" } })).toBe(true);
+    expect(predicate({ type: "message", message: { role: "user" } })).toBe(false);
+    expect(predicate({ type: "tool_result" })).toBe(false);
+
+    expect(options.preserveTrailing({ type: "custom" })).toBe(true);
+    expect(options.preserveTrailing({ type: "label" })).toBe(true);
+    expect(options.preserveTrailing({ type: "session_info" })).toBe(true);
+    expect(options.preserveTrailing({ type: "message", message: { role: "assistant" } })).toBe(
+      false,
+    );
   });
 });
