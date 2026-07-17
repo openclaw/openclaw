@@ -11,8 +11,21 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
 
+const recoveryOwnerMocks = vi.hoisted(() => ({
+  scheduleMainSessionRecoveryPendingTarget: vi.fn(),
+}));
+
+vi.mock("./main-session-recovery-owner-release.js", () => ({
+  scheduleMainSessionRecoveryPendingTarget:
+    recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:main";
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("agent command restart recovery ownership", () => {
   function createTarget() {
@@ -198,11 +211,16 @@ describe("agent command restart recovery ownership", () => {
         chargedAttempts: 1,
       },
     });
+    const restoredTarget = {
+      sessionId: target.sessionId,
+      sessionKey,
+      storePath: target.storePath,
+    };
     const restoreAdmittedRecovery = vi.fn(async () => {
       const entry = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
       entry.abortedLastRun = true;
       await write(target, entry);
-      return { sessionId: target.sessionId, sessionKey, storePath: target.storePath };
+      return restoredTarget;
     });
     const run = vi.fn();
 
@@ -220,6 +238,9 @@ describe("agent command restart recovery ownership", () => {
     ).rejects.toThrow("model preparation failed");
 
     expect(restoreAdmittedRecovery).toHaveBeenCalledOnce();
+    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenCalledWith(
+      restoredTarget,
+    );
     expect(run).not.toHaveBeenCalled();
     expect(loadSessionEntry({ sessionKey, storePath: target.storePath })).toMatchObject({
       abortedLastRun: true,

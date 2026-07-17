@@ -122,7 +122,8 @@ export async function runWithAgentCommandRecoveryOwner<
     return await params.run(prepared);
   } finally {
     try {
-      pendingRecovery = await releaseMainSessionRecoveryOwner(lease);
+      const releasedRecovery = await releaseMainSessionRecoveryOwner(lease);
+      pendingRecovery ??= releasedRecovery;
     } catch (error) {
       log.warn(`failed to release main-session recovery owner: ${formatErrorMessage(error)}`);
     }
