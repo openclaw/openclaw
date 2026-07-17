@@ -30,7 +30,7 @@ describe("QA Lab dashboard HTTP", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await getJson("/api/bootstrap");
-    await getJsonNoStore("/api/snapshot");
+    await getJsonNoStore("/api/ui-version");
     await postJson("/api/runner/start", { scenario: "baseline" });
 
     expect(timeout).toHaveBeenCalledTimes(3);
@@ -41,7 +41,7 @@ describe("QA Lab dashboard HTTP", () => {
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      "/api/snapshot",
+      "/api/ui-version",
       expect.objectContaining({ cache: "no-store", signal: expect.any(AbortSignal) }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -108,8 +108,8 @@ describe("QA Lab dashboard HTTP", () => {
       ),
     );
 
-    await expect(getJsonNoStore("/api/snapshot")).rejects.toThrow(
-      /\/api\/snapshot: empty JSON response/,
+    await expect(getJsonNoStore("/api/ui-version")).rejects.toThrow(
+      /\/api\/ui-version: empty JSON response/,
     );
   });
 
@@ -140,6 +140,6 @@ describe("QA Lab dashboard HTTP", () => {
       ),
     );
 
-    await expect(getJson("/api/snapshot")).resolves.toEqual({ data: "x".repeat(128 * 1024) });
+    await expect(getJson("/api/state")).resolves.toEqual({ data: "x".repeat(128 * 1024) });
   });
 });
