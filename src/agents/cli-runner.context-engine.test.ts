@@ -9,12 +9,29 @@ const {
   executePreparedCliRunMock,
   loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessagesMock,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock,
   resolveCliSessionSqliteTranscriptScopeMock,
   getGlobalHookRunnerMock,
 } = vi.hoisted(() => ({
   executePreparedCliRunMock: vi.fn(),
   loadCliSessionContextEngineMessagesMock: vi.fn(),
   loadCliSessionHistoryMessagesMock: vi.fn(),
+  resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock: vi.fn(
+    (params: {
+      suppressNextUserMessagePersistence?: boolean;
+      userTurnTranscriptRecorder?: {
+        hasPersisted: () => boolean;
+        getPersistedMessage?: () => { idempotencyKey?: string } | undefined;
+        message?: { idempotencyKey?: string };
+      };
+    }) => {
+      const recorder = params.userTurnTranscriptRecorder;
+      if (params.suppressNextUserMessagePersistence !== true || !recorder?.hasPersisted()) {
+        return undefined;
+      }
+      return (recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey;
+    },
+  ),
   resolveCliSessionSqliteTranscriptScopeMock: vi.fn(),
   getGlobalHookRunnerMock: vi.fn(() => null),
 }));
@@ -30,6 +47,8 @@ vi.mock("./cli-runner/execute.runtime.js", () => ({
 vi.mock("./cli-runner/session-history.js", () => ({
   loadCliSessionContextEngineMessages: loadCliSessionContextEngineMessagesMock,
   loadCliSessionHistoryMessages: loadCliSessionHistoryMessagesMock,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey:
+    resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock,
   resolveCliSessionSqliteTranscriptScope: resolveCliSessionSqliteTranscriptScopeMock,
 }));
 
@@ -157,6 +176,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     ]);
     loadCliSessionHistoryMessagesMock.mockReset();
     loadCliSessionHistoryMessagesMock.mockResolvedValue([]);
+    resolveCliSessionHistoryExcludedMessageIdempotencyKeyMock.mockClear();
     resolveCliSessionSqliteTranscriptScopeMock.mockReset();
     resolveCliSessionSqliteTranscriptScopeMock.mockReturnValue(undefined);
     getGlobalHookRunnerMock.mockReset();
@@ -347,6 +367,44 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
     expect(afterTurnParams?.prePromptMessageCount).toBe(101);
     expect(afterTurnParams?.messages.slice(0, 101)).toEqual(fullHistory);
+  });
+
+  it("excludes an already-persisted retry turn from hook and context-engine history", async () => {
+    const contextEngine = createContextEngine();
+    const context = buildPreparedContext(contextEngine);
+    const persistedMessage = {
+      role: "user" as const,
+      content: "visible ask",
+      timestamp: 3,
+      idempotencyKey: "cli-user:current-turn",
+    };
+    context.params.suppressNextUserMessagePersistence = true;
+    context.params.userTurnTranscriptRecorder = {
+      message: persistedMessage,
+      getPersistedMessage: () => persistedMessage,
+      hasPersisted: () => true,
+      isBlocked: () => false,
+      persistApproved: vi.fn(async () => undefined),
+    } as PreparedCliRunContext["params"]["userTurnTranscriptRecorder"];
+    const runLlmInput = vi.fn(async () => undefined);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "llm_input"),
+      runLlmInput,
+    });
+
+    await runPreparedCliAgent(context);
+
+    const expectedTranscriptParams = {
+      sessionId: "openclaw-session-1",
+      sessionFile: "session.jsonl",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      config: undefined,
+      excludeMessageIdempotencyKey: "cli-user:current-turn",
+    };
+    expect(loadCliSessionHistoryMessagesMock).toHaveBeenCalledWith(expectedTranscriptParams);
+    expect(loadCliSessionContextEngineMessagesMock).toHaveBeenCalledWith(expectedTranscriptParams);
+    expect(runLlmInput).toHaveBeenCalledTimes(1);
   });
 
   it("loads context-engine history after bootstrap lifecycle runs", async () => {

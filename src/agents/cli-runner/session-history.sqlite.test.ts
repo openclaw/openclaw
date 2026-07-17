@@ -7,7 +7,12 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cliBackendLog } from "./log.js";
-import { hasCliSessionTranscript, loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  hasCliSessionTranscript,
+  loadCliSessionContextEngineMessages,
+  loadCliSessionHistoryMessages,
+  loadCliSessionReseedMessages,
+} from "./session-history.js";
 
 const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -103,6 +108,108 @@ describe("SQLite CLI session history", () => {
           content: [{ type: "text", text: "active history" }],
         });
       }
+    });
+  });
+
+  it("excludes an already-persisted current turn from history consumers", async () => {
+    const stateDir = tempDirs.make("openclaw-cli-state-");
+    const sessionId = "session-sqlite-current-turn";
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const excludeMessageIdempotencyKey = "cli-user:current-turn";
+
+    await withCliSessionState(stateDir, async () => {
+      await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: stateDir,
+        },
+        {
+          type: "message",
+          id: "msg-prior",
+          parentId: null,
+          message: { role: "user", content: "prior ask", idempotencyKey: "cli-user:prior" },
+        },
+        {
+          type: "compaction",
+          id: "compaction-1",
+          parentId: "msg-prior",
+          timestamp: new Date(2).toISOString(),
+          summary: "prior compacted context",
+          firstKeptEntryId: "msg-prior",
+          tokensBefore: 100,
+        },
+        {
+          type: "message",
+          id: "msg-answer",
+          parentId: "compaction-1",
+          message: {
+            role: "assistant",
+            content: "prior answer",
+            idempotencyKey: "cli-assistant:prior",
+          },
+        },
+        {
+          type: "message",
+          id: "msg-current",
+          parentId: "msg-answer",
+          message: {
+            role: "user",
+            content: "current ask",
+            idempotencyKey: excludeMessageIdempotencyKey,
+          },
+        },
+      ]);
+
+      const controlHistory = await loadCliSessionHistoryMessages({
+        sessionId,
+        sessionFile,
+        sessionKey,
+        agentId: "main",
+      });
+      expect(controlHistory).toHaveLength(3);
+      expectMessageFields(controlHistory.at(-1), { role: "user", content: "current ask" });
+
+      const transcriptParams = {
+        sessionId,
+        sessionFile,
+        sessionKey,
+        agentId: "main",
+        excludeMessageIdempotencyKey,
+      };
+      const history = await loadCliSessionHistoryMessages(transcriptParams);
+      expect(history).toHaveLength(2);
+      expectMessageFields(history[0], { role: "user", content: "prior ask" });
+      expectMessageFields(history[1], {
+        role: "assistant",
+        content: [{ type: "text", text: "prior answer" }],
+      });
+
+      const contextEngineHistory = await loadCliSessionContextEngineMessages(transcriptParams);
+      expect(contextEngineHistory).toHaveLength(2);
+      expect(contextEngineHistory[0]).toMatchObject({
+        role: "compactionSummary",
+        summary: "prior compacted context",
+      });
+      expectMessageFields(contextEngineHistory[1], {
+        role: "assistant",
+        content: [{ type: "text", text: "prior answer" }],
+      });
+
+      const reseedHistory = await loadCliSessionReseedMessages(transcriptParams);
+      expect(reseedHistory).toHaveLength(2);
+      expect(reseedHistory[0]).toMatchObject({
+        role: "compactionSummary",
+        summary: "prior compacted context",
+      });
+      expectMessageFields(reseedHistory[1], {
+        role: "assistant",
+        content: [{ type: "text", text: "prior answer" }],
+      });
     });
   });
 
