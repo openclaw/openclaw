@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Gateway agent cancellation attribution:** report operator-cancelled CLI agent tasks as cancelled without attaching the gateway-draining timeout phase, while preserving restart and maintenance-timeout ownership. Fixes #110209.
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
