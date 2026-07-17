@@ -27,7 +27,6 @@ import {
 } from "./attempt.async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
-  findCurrentAttemptAssistantMessage,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -173,10 +172,7 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     if (input.onBlockReplyFlush) {
-      const currentAssistant = findCurrentAttemptAssistantMessage({
-        messagesSnapshot: snapshot,
-        prePromptMessageCount: input.prePromptMessageCount,
-      });
+      const currentAssistant = subscription.getCurrentAttemptAssistant();
       const attemptAccepted =
         !promptError &&
         !input.readLifecycleState().aborted &&
@@ -281,10 +277,7 @@ export async function settleEmbeddedAttemptStream(input: {
       .slice()
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
-    currentAttemptAssistant = findCurrentAttemptAssistantMessage({
-      messagesSnapshot,
-      prePromptMessageCount: input.prePromptMessageCount,
-    });
+    currentAttemptAssistant = subscription.getCurrentAttemptAssistant();
     attemptUsage = subscription.getUsageTotals();
     cacheBreak = input.cache.observabilityEnabled
       ? completePromptCacheObservation({

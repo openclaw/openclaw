@@ -789,6 +789,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
   });
 
+  it("does not resolve a successful run from a stale transcript assistant", async () => {
+    const staleAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Prior transcript reply." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Current run reply." }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Current run reply."],
+        lastAssistant: staleAssistant,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-success-stale-transcript-assistant",
+    });
+
+    expect(result.payloads).toEqual([{ text: "Current run reply." }]);
+    expect(result.meta.finalAssistantVisibleText).toBe("Current run reply.");
+    expect(result.meta.finalAssistantRawText).toBe("Current run reply.");
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ currentAssistant: null, lastAssistant: undefined }),
+    );
+  });
+
   it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText = "Completed answer after the timeout race.";
