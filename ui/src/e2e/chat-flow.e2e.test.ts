@@ -2021,7 +2021,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("steers ordinary follow-ups into the active run by default", async () => {
+  it("steers ordinary follow-ups when the server default is steer", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2032,7 +2032,21 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         : {}),
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "followup" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-steer-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
@@ -2066,7 +2080,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps a steerable queued message above the composer in queue mode", async () => {
+  it("preserves a non-steer server default for active-run follow-ups", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2074,15 +2088,44 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "followup" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-followup-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}settings/appearance`);
       const followUpSelect = page.locator("[data-settings-follow-up-mode]");
       await followUpSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await followUpSelect.inputValue()).toBe("steer");
-      await followUpSelect.selectOption("queue");
-      expect(await followUpSelect.inputValue()).toBe("queue");
+      expect(await followUpSelect.inputValue()).toBe("server");
+      await page.getByText("Using server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-setting.png`,
+          fullPage: true,
+        });
+      }
+      await followUpSelect.selectOption("steer");
+      await page.getByText("Overriding server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-override.png`,
+          fullPage: true,
+        });
+      }
+      await page.getByRole("button", { name: "Reset to server default" }).click();
+      expect(await followUpSelect.inputValue()).toBe("server");
 
       await page.goto(`${server.baseUrl}chat`);
 
@@ -2093,21 +2136,73 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const queuedPrompt = "show this only above the composer";
+      const queuedPrompt = "queue this on the server";
       await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
       await page.getByRole("button", { name: "Queue message" }).click();
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
-      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/queue-mode.png`,
-          fullPage: true,
-        });
-      }
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: queuedPrompt,
+        queueMode: "followup",
+        sessionKey: "main",
+      });
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("honors a session interrupt override ahead of the webchat config default", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-session-override-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+        "sessions.list": chatSessionListResponse([
+          {
+            effectiveQueueMode: "interrupt",
+            key: "main",
+            kind: "direct",
+            label: "Main",
+            queueMode: "interrupt",
+            updatedAt: Date.now(),
+          },
+        ]),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const followUp = "interrupt for this session override";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: followUp,
+        queueMode: "interrupt",
+        sessionKey: "main",
+      });
     } finally {
       await closeBrowserContext(context);
     }

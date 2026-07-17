@@ -701,18 +701,24 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
-                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
+                    // android-ci-contract-v3: phone variants, Wear modules, Android lint, benchmark, and ktlint.
                     {
                       check_name: "android-test-play",
                       task: useCompatibleAndroidCi ? "test-play-compat" : "test-play",
                     },
                     { check_name: "android-test-third-party", task: "test-third-party" },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-test-wear", task: "test-wear" }]
+                      : []),
                     {
                       check_name: "android-build-play",
                       task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
                     },
                     ...(!useCompatibleAndroidCi
-                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      ? [
+                          { check_name: "android-build-wear", task: "build-wear" },
+                          { check_name: "android-ktlint", task: "ktlint" },
+                        ]
                       : []),
                   ]
                 : [],
@@ -3054,6 +3060,9 @@ jobs:
             test-third-party)
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
+            test-wear)
+              ./gradlew --no-daemon --build-cache :wear:testDebugUnitTest
+              ;;
             build-play)
               ./gradlew --no-daemon --build-cache \
                 :app:assemblePlayDebug \
@@ -3063,6 +3072,11 @@ jobs:
                 :benchmark:assembleDebug \
                 :wear-shared:assembleDebug \
                 :wear-shared:lintDebug
+              ;;
+            build-wear)
+              ./gradlew --no-daemon --build-cache \
+                :wear:assembleDebug \
+                :wear:lintDebug
               ;;
             build-play-compat)
               # Frozen targets keep their target-owned Android build contract. New lint rules
@@ -3074,6 +3088,7 @@ jobs:
               ./gradlew --no-daemon --build-cache \
                 :app:ktlintCheck \
                 :benchmark:ktlintCheck \
+                :wear:ktlintCheck \
                 :wear-shared:ktlintCheck
               ;;
             *)

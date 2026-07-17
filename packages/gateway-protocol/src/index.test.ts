@@ -509,6 +509,7 @@ describe("validateTalkClientCreateParams", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        capabilities: ["camera-frame"],
       }),
     ).toBe(true);
   });
@@ -523,6 +524,15 @@ describe("validateTalkClientCreateParams", () => {
     expect(formatValidationErrors(validateTalkClientCreateParams.errors)).toContain(
       "unexpected property 'instructions'",
     );
+  });
+
+  it("rejects unknown browser capabilities", () => {
+    expect(
+      validateTalkClientCreateParams({
+        sessionKey: "agent:main:main",
+        capabilities: ["screen-frame"],
+      }),
+    ).toBe(false);
   });
 });
 

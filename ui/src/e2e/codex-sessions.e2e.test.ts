@@ -18,6 +18,7 @@ const suite = available || !allowMissing ? describe : describe.skip;
 let browser: Browser;
 let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -90,6 +91,7 @@ suite("Codex native session catalog", () => {
 
   it("groups sessions by host and hides empty offline nodes", async () => {
     const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
+    await page.addInitScript((key) => localStorage.removeItem(key), catalogGroupingStorageKey);
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -109,6 +111,25 @@ suite("Codex native session catalog", () => {
                     {
                       threadId: "thread-local",
                       name: "Local planning session",
+                      cwd: "/Users/dev/openclaw",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                    {
+                      threadId: "thread-worktree",
+                      name: "Worktree fix session",
+                      cwd: "/Users/dev/openclaw/.claude/worktrees/fix-1",
+                      status: "idle",
+                      archived: false,
+                      canContinue: true,
+                      canArchive: true,
+                    },
+                    {
+                      threadId: "thread-other",
+                      name: "Other project session",
+                      cwd: "/Users/dev/other",
                       status: "idle",
                       archived: false,
                       canContinue: true,
@@ -164,11 +185,50 @@ suite("Codex native session catalog", () => {
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
       expect(await section.getByText("Offline Workstation", { exact: true }).count()).toBe(0);
       expect(await section.getByText("Offline Laptop", { exact: true }).count()).toBe(0);
+      const projectHeads = section.locator("[data-session-catalog-project]");
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      const openclawProject = section.locator(
+        '[data-session-catalog-project="/Users/dev/openclaw"]',
+      );
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__label").textContent(),
+      ).toBe("openclaw");
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+      ).toBe("2");
+      expect(
+        await section
+          .locator('[data-session-catalog-project="/Users/dev/other"]')
+          .locator(".sidebar-session-catalog-project__label")
+          .textContent(),
+      ).toBe("other");
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
       expect(await toggle.getAttribute("title")).toBeNull();
       await expect
         .poll(() => section.locator(".sidebar-session-group-count").textContent())
-        .toBe("2");
+        .toBe("4");
+
+      const groupingToggle = section.locator('[data-session-catalog-grouping-toggle="codex"]');
+      await groupingToggle.click();
+      await expect.poll(() => projectHeads.count()).toBe(0);
+      expect(await section.locator("[data-session-key]").count()).toBe(4);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("none");
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await section.screenshot({
+          animations: "disabled",
+          path: path.join(uiProofArtifactDir, "04-flat-session-hosts.png"),
+        });
+      }
+
+      await groupingToggle.click();
+      await expect.poll(() => projectHeads.count()).toBe(2);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
+      ).toBe("project");
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });

@@ -649,6 +649,7 @@ function createChatProps(
     onSend: () => undefined,
     onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
+    onToggleRealtimeVideo: () => undefined,
     onDismissError: () => undefined,
     onAbort: () => undefined,
     onQueueRemove: () => undefined,
@@ -2164,7 +2165,31 @@ describe("chat voice controls", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start voice input"]', "voice input button");
+    requireElement(container, '[aria-label="Start video talk"]', "video talk button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("starts Video Talk separately and renders the live camera preview", () => {
+    const onToggleRealtimeVideo = vi.fn();
+    const stream = {} as MediaStream;
+    const container = renderChatView({
+      onToggleRealtimeVideo,
+      realtimeTalkVideoStream: stream,
+    });
+
+    requireElement(container, '[aria-label="Start video talk"]', "video talk button").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    const preview = requireElement(
+      container,
+      'video[aria-label="Camera preview"]',
+      "camera preview",
+    ) as HTMLVideoElement;
+
+    expect(onToggleRealtimeVideo).toHaveBeenCalledOnce();
+    expect(preview.srcObject).toBe(stream);
+    expect(preview.autoplay).toBe(true);
+    expect(preview.muted).toBe(true);
   });
 
   it("stops active voice input without sending a composed draft", () => {

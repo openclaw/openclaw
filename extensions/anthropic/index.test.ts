@@ -25,7 +25,9 @@ vi.mock("./cli-auth-seam.js", () => {
 });
 
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
+import { CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER } from "./cli-constants.js";
 import anthropicPlugin from "./index.js";
+import anthropicProviderDiscovery from "./provider-discovery.js";
 
 beforeEach(() => {
   readClaudeCliCredentialsForSetupMock.mockReset();
@@ -1329,6 +1331,29 @@ describe("anthropic provider replay hooks", () => {
       mode: "token",
       expiresAt: 123,
     });
+  });
+
+  it("resolves claude-cli apiKeyHelper synthetic auth without exposing helper output", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReset();
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: "helper-hash",
+    });
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const runtimeAuth = provider.resolveSyntheticAuth?.({
+      provider: "claude-cli",
+    } as never);
+    const discoveryAuth = anthropicProviderDiscovery.resolveSyntheticAuth?.({
+      provider: "claude-cli",
+    } as never);
+    for (const auth of [runtimeAuth, discoveryAuth]) {
+      expect(auth?.apiKey).toBe(CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER);
+      expect(auth?.source).toBe("Claude CLI apiKeyHelper");
+      expect(auth?.mode).toBe("api-key");
+    }
   });
 
   it("stores a claude-cli auth profile during anthropic cli migration", async () => {

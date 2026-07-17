@@ -49,6 +49,7 @@ import {
   type VoiceModelProvider,
   type VoiceProviderCandidate,
 } from "../voice-models.js";
+import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
@@ -1027,6 +1028,7 @@ export async function synthesizeSpeech(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<TtsSynthesisResult> {
+  assertSpeechRuntimeAvailable();
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
@@ -1177,6 +1179,7 @@ export async function streamSpeech(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<TtsSynthesisStreamResult> {
+  assertSpeechRuntimeAvailable();
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
@@ -1361,6 +1364,7 @@ export async function textToSpeechTelephony(params: {
   overrides?: TtsDirectiveOverrides;
   timeoutMs?: number;
 }): Promise<TtsTelephonyResult> {
+  assertSpeechRuntimeAvailable();
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
@@ -1503,6 +1507,7 @@ export async function listSpeechVoices(params: {
   apiKey?: string;
   baseUrl?: string;
 }): Promise<SpeechVoiceOption[]> {
+  assertSpeechRuntimeAvailable();
   const cfg = params.cfg ? resolveTtsRuntimeConfig(params.cfg) : undefined;
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
   if (!provider) {
@@ -1546,6 +1551,9 @@ export async function maybeApplyTtsToPayload(params: {
   agentId?: string;
   accountId?: string;
 }): Promise<ReplyPayload> {
+  if (!isSpeechRuntimeAvailable()) {
+    return params.payload;
+  }
   if (params.payload.isCompactionNotice) {
     return params.payload;
   }

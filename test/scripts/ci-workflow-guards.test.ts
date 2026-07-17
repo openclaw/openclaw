@@ -2943,7 +2943,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
@@ -2965,7 +2967,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
     expect(
