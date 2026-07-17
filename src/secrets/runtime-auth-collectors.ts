@@ -56,6 +56,8 @@ function collectApiKeyProfileAssignment(params: {
       message: `auth-profiles ${params.profileId}: keyRef is set; runtime will ignore plaintext key.`,
     });
   }
+  // Only successful runtime materialization may populate the authoritative secret slot.
+  params.profile.key = undefined;
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.context.sourceConfig,
     store: params.store,
@@ -114,6 +116,8 @@ function collectTokenProfileAssignment(params: {
       message: `auth-profiles ${params.profileId}: tokenRef is set; runtime will ignore plaintext token.`,
     });
   }
+  // Only successful runtime materialization may populate the authoritative secret slot.
+  params.profile.token = undefined;
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.context.sourceConfig,
     store: params.store,

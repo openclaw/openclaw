@@ -93,11 +93,13 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
 
   it("skips refs on auth profiles that are not eligible for their configured provider", async () => {
     const profileId = "openai:mismatched";
+    const tokenProfileId = "github-copilot:mismatched";
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         auth: {
           profiles: {
             [profileId]: { provider: "anthropic", mode: "api_key" },
+            [tokenProfileId]: { provider: "anthropic", mode: "token" },
           },
         },
       }),
@@ -110,7 +112,14 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
           [profileId]: {
             type: "api_key",
             provider: "openai",
+            key: "unused",
             keyRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_KEY" },
+          },
+          [tokenProfileId]: {
+            type: "token",
+            provider: "github-copilot",
+            token: "unused",
+            tokenRef: { source: "env", provider: "default", id: "MISSING_MISMATCHED_TOKEN" },
           },
         }),
     });
@@ -122,7 +131,16 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
           code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
           path: `/tmp/openclaw-agent-main.auth-profiles.${profileId}.key`,
         }),
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: `/tmp/openclaw-agent-main.auth-profiles.${tokenProfileId}.token`,
+        }),
       ]),
+    );
+    expect(snapshot.authStores[0]?.store.profiles[profileId]).toHaveProperty("key", undefined);
+    expect(snapshot.authStores[0]?.store.profiles[tokenProfileId]).toHaveProperty(
+      "token",
+      undefined,
     );
   });
 
