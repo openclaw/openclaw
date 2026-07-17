@@ -18,7 +18,7 @@ type HeartbeatOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "heartbeat_out
 type HeartbeatOutcomeRow = Selectable<HeartbeatOutcomeTable>;
 type HeartbeatOutcomeInsert = Insertable<HeartbeatOutcomeTable>;
 
-export type PersistedHeartbeatOutcome = {
+type PersistedHeartbeatOutcome = {
   sessionKey: string;
   runSessionKey: string;
   outcome: Exclude<HeartbeatToolResponse["outcome"], "no_change">;
