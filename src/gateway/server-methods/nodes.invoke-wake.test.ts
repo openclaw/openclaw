@@ -6,7 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
-import { nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
+import { invalidateNodeWakeState, nodeWakeById, nodeWakeNudgeById } from "./nodes-wake-state.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -929,6 +929,32 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
+  it("releases idle wake state when an unregistered node reconnects during invoke", async () => {
+    const nodeId = "ios-node-reconnect-without-registration";
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const session: TestNodeSession = { nodeId, commands: ["camera.capture"] };
+    let lookupCount = 0;
+    const nodeRegistry = {
+      get: vi.fn(() => {
+        lookupCount += 1;
+        return lookupCount === 1 ? undefined : session;
+      }),
+      invoke: vi.fn().mockResolvedValue({
+        ok: true,
+        payload: { ok: true },
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId, idempotencyKey: "idem-reconnect-without-registration" },
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+    expect(nodeWakeById.has(nodeId)).toBe(false);
+  });
+
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
     mocks.loadApnsRegistration.mockResolvedValue(relayRegistration("ios-node-relay-no-auth"));
     mocks.resolveApnsRelayConfigFromEnv.mockReturnValue({
@@ -1323,7 +1349,7 @@ describe("node.invoke APNs wake path", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
 
-    clearNodeWakeState(nodeId);
+    invalidateNodeWakeState(nodeId);
     await vi.advanceTimersByTimeAsync(20_000);
     const respond = await invokePromise;
 
@@ -1335,6 +1361,62 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toBe("node not connected");
+  });
+
+  it("keeps a foreground-recovery wake alive across an ordinary disconnect cleanup", async () => {
+    const nodeId = "ios-node-disconnect-during-foreground-wake";
+    const registration = directRegistration(nodeId);
+    let resolveRegistration!: (value: typeof registration) => void;
+    mocks.loadApnsRegistration.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRegistration = resolve;
+      }),
+    );
+    mocks.resolveApnsAuthConfigFromEnv.mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+    mocks.sendApnsBackgroundWake.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+    const nodeRegistry = createForegroundUnavailableNodeRegistry({
+      nodeId,
+      commands: ["canvas.navigate"],
+      platform: "iOS 26.4.0",
+    });
+
+    const invokePromise = invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        params: { url: "http://example.com/" },
+        idempotencyKey: "idem-disconnect-during-foreground-wake",
+      },
+    });
+    await vi.waitFor(() => expect(mocks.loadApnsRegistration).toHaveBeenCalledTimes(1));
+
+    clearNodeWakeState(nodeId);
+    resolveRegistration(registration);
+    const respond = await invokePromise;
+
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
+    const call = firstRespondCall(respond);
+    const details = requireRecord(call[2]?.details, "queued foreground details");
+    expectRecordFields(details.wake, "queued foreground wake", {
+      path: "sent",
+      available: true,
+      throttled: false,
+    });
   });
 
   it("queues iOS foreground-only command failures and keeps them until acked", async () => {

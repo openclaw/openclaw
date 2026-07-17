@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   enqueueNodePendingWork: vi.fn(),
   maybeWakeNodeWithApns: vi.fn(),
   maybeSendNodeWakeNudge: vi.fn(),
+  releaseNodeWakeLifecycle: vi.fn(),
   waitForNodeReconnect: vi.fn(),
 }));
 
@@ -26,6 +27,7 @@ vi.mock("./nodes.js", () => ({
   captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
   maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
   maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
+  releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
   waitForNodeReconnect: mocks.waitForNodeReconnect,
 }));
 
@@ -64,6 +66,7 @@ describe("node.pending handlers", () => {
     mocks.enqueueNodePendingWork.mockReset();
     mocks.maybeWakeNodeWithApns.mockReset();
     mocks.maybeSendNodeWakeNudge.mockReset();
+    mocks.releaseNodeWakeLifecycle.mockReset();
     mocks.waitForNodeReconnect.mockReset();
   });
 
@@ -191,6 +194,7 @@ describe("node.pending handlers", () => {
       lifecycle: wakeLifecycle,
     });
     expect(mocks.maybeSendNodeWakeNudge).not.toHaveBeenCalled();
+    expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith("ios-node-2", wakeLifecycle);
     const call = respondCall(respond) as
       | [boolean, { nodeId?: string; revision?: number; wakeTriggered?: boolean }, unknown?]
       | undefined;
@@ -271,6 +275,10 @@ describe("node.pending handlers", () => {
       cfg: {},
       lifecycle: wakeLifecycle,
     });
+    expect(mocks.releaseNodeWakeLifecycle).toHaveBeenCalledWith(
+      "ios-node-invalidated",
+      wakeLifecycle,
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ nodeId: "ios-node-invalidated", wakeTriggered: true }),

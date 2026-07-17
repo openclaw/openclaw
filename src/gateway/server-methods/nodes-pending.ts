@@ -19,6 +19,7 @@ import {
   maybeWakeNodeWithApns,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
+  releaseNodeWakeLifecycle,
   waitForNodeReconnect,
 } from "./nodes.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -87,82 +88,86 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       let wakeTriggered = false;
       if (p.wake !== false && !queued.deduped && !context.nodeRegistry.get(p.nodeId)) {
         const wakeLifecycle = captureNodeWakeLifecycle(p.nodeId);
-        const wakeReqId = queued.item.id;
-        context.logGateway.info(
-          `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
-        );
-        const cfg = context.getRuntimeConfig();
-        const wake = await maybeWakeNodeWithApns(p.nodeId, {
-          wakeReason: "node.pending",
-          cfg,
-          lifecycle: wakeLifecycle,
-        });
-        context.logGateway.info(
-          `node pending wake stage=wake1 node=${p.nodeId} req=${wakeReqId} ` +
-            `available=${wake.available} throttled=${wake.throttled} ` +
-            `path=${wake.path} durationMs=${wake.durationMs} ` +
-            `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
-        );
-        wakeTriggered = wake.available;
-        if (wake.available) {
-          // Give the first wake a short reconnect window before forcing a
-          // second wake; this keeps normal APNs delivery cheap and quiet.
-          const reconnected = await waitForNodeReconnect({
-            nodeId: p.nodeId,
-            context,
-            timeoutMs: NODE_WAKE_RECONNECT_WAIT_MS,
-            lifecycle: wakeLifecycle,
-          });
+        try {
+          const wakeReqId = queued.item.id;
           context.logGateway.info(
-            `node pending wake stage=wait1 node=${p.nodeId} req=${wakeReqId} ` +
-              `reconnected=${reconnected} timeoutMs=${NODE_WAKE_RECONNECT_WAIT_MS}`,
+            `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,
           );
-        }
-        if (!context.nodeRegistry.get(p.nodeId) && wake.available) {
-          // A forced retry is only useful after the first wake was deliverable
-          // but the node still has not reattached to the Gateway.
-          const retryWake = await maybeWakeNodeWithApns(p.nodeId, {
-            force: true,
+          const cfg = context.getRuntimeConfig();
+          const wake = await maybeWakeNodeWithApns(p.nodeId, {
             wakeReason: "node.pending",
             cfg,
             lifecycle: wakeLifecycle,
           });
           context.logGateway.info(
-            `node pending wake stage=wake2 node=${p.nodeId} req=${wakeReqId} force=true ` +
-              `available=${retryWake.available} throttled=${retryWake.throttled} ` +
-              `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
-              `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
+            `node pending wake stage=wake1 node=${p.nodeId} req=${wakeReqId} ` +
+              `available=${wake.available} throttled=${wake.throttled} ` +
+              `path=${wake.path} durationMs=${wake.durationMs} ` +
+              `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
           );
-          if (retryWake.available) {
+          wakeTriggered = wake.available;
+          if (wake.available) {
+            // Give the first wake a short reconnect window before forcing a
+            // second wake; this keeps normal APNs delivery cheap and quiet.
             const reconnected = await waitForNodeReconnect({
               nodeId: p.nodeId,
               context,
-              timeoutMs: NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
+              timeoutMs: NODE_WAKE_RECONNECT_WAIT_MS,
               lifecycle: wakeLifecycle,
             });
             context.logGateway.info(
-              `node pending wake stage=wait2 node=${p.nodeId} req=${wakeReqId} ` +
-                `reconnected=${reconnected} timeoutMs=${NODE_WAKE_RECONNECT_RETRY_WAIT_MS}`,
+              `node pending wake stage=wait1 node=${p.nodeId} req=${wakeReqId} ` +
+                `reconnected=${reconnected} timeoutMs=${NODE_WAKE_RECONNECT_WAIT_MS}`,
             );
           }
-        }
-        if (!context.nodeRegistry.get(p.nodeId)) {
-          const nudge = await maybeSendNodeWakeNudge(p.nodeId, {
-            cfg,
-            lifecycle: wakeLifecycle,
-          });
-          context.logGateway.info(
-            `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
-              `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
-              `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
-          );
-          context.logGateway.warn(
-            `node pending wake done node=${p.nodeId} req=${wakeReqId} connected=false reason=not_connected`,
-          );
-        } else {
-          context.logGateway.info(
-            `node pending wake done node=${p.nodeId} req=${wakeReqId} connected=true`,
-          );
+          if (!context.nodeRegistry.get(p.nodeId) && wake.available) {
+            // A forced retry is only useful after the first wake was deliverable
+            // but the node still has not reattached to the Gateway.
+            const retryWake = await maybeWakeNodeWithApns(p.nodeId, {
+              force: true,
+              wakeReason: "node.pending",
+              cfg,
+              lifecycle: wakeLifecycle,
+            });
+            context.logGateway.info(
+              `node pending wake stage=wake2 node=${p.nodeId} req=${wakeReqId} force=true ` +
+                `available=${retryWake.available} throttled=${retryWake.throttled} ` +
+                `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
+                `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
+            );
+            if (retryWake.available) {
+              const reconnected = await waitForNodeReconnect({
+                nodeId: p.nodeId,
+                context,
+                timeoutMs: NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
+                lifecycle: wakeLifecycle,
+              });
+              context.logGateway.info(
+                `node pending wake stage=wait2 node=${p.nodeId} req=${wakeReqId} ` +
+                  `reconnected=${reconnected} timeoutMs=${NODE_WAKE_RECONNECT_RETRY_WAIT_MS}`,
+              );
+            }
+          }
+          if (!context.nodeRegistry.get(p.nodeId)) {
+            const nudge = await maybeSendNodeWakeNudge(p.nodeId, {
+              cfg,
+              lifecycle: wakeLifecycle,
+            });
+            context.logGateway.info(
+              `node pending wake nudge node=${p.nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
+                `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
+                `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+            );
+            context.logGateway.warn(
+              `node pending wake done node=${p.nodeId} req=${wakeReqId} connected=false reason=not_connected`,
+            );
+          } else {
+            context.logGateway.info(
+              `node pending wake done node=${p.nodeId} req=${wakeReqId} connected=true`,
+            );
+          }
+        } finally {
+          releaseNodeWakeLifecycle(p.nodeId, wakeLifecycle);
         }
       }
       respond(

@@ -18,40 +18,66 @@ export type NodeWakeLifecycle = AbortSignal;
 type NodeWakeState = {
   lastWakeAtMs: number;
   inFlight?: Promise<NodeWakeAttempt>;
-  lifecycleController?: AbortController;
+};
+
+type NodeWakeLifecycleState = {
+  controller: AbortController;
+  users: number;
 };
 
 export const nodeWakeById = new Map<string, NodeWakeState>();
 export const nodeWakeNudgeById = new Map<string, number>();
+const nodeWakeLifecycleById = new Map<string, NodeWakeLifecycleState>();
 
 export function captureNodeWakeLifecycle(nodeId: string): NodeWakeLifecycle {
-  const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
-  if (!state.lifecycleController || state.lifecycleController.signal.aborted) {
-    state.lifecycleController = new AbortController();
+  let lifecycleState = nodeWakeLifecycleById.get(nodeId);
+  if (!lifecycleState || lifecycleState.controller.signal.aborted) {
+    lifecycleState = { controller: new AbortController(), users: 0 };
+    nodeWakeLifecycleById.set(nodeId, lifecycleState);
   }
-  nodeWakeById.set(nodeId, state);
-  return state.lifecycleController.signal;
+  lifecycleState.users += 1;
+  nodeWakeById.set(nodeId, nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 });
+  return lifecycleState.controller.signal;
 }
 
 export function isNodeWakeLifecycleCurrent(nodeId: string, lifecycle: NodeWakeLifecycle): boolean {
-  return !lifecycle.aborted && nodeWakeById.get(nodeId)?.lifecycleController?.signal === lifecycle;
+  return !lifecycle.aborted && nodeWakeLifecycleById.get(nodeId)?.controller.signal === lifecycle;
 }
 
-export function releaseNodeWakeLifecycleIfIdle(nodeId: string, lifecycle: NodeWakeLifecycle): void {
-  const state = nodeWakeById.get(nodeId);
-  if (
-    state?.lifecycleController?.signal !== lifecycle ||
-    state.inFlight ||
-    state.lastWakeAtMs !== 0
-  ) {
+export function releaseNodeWakeLifecycle(nodeId: string, lifecycle: NodeWakeLifecycle): void {
+  const lifecycleState = nodeWakeLifecycleById.get(nodeId);
+  if (lifecycleState?.controller.signal !== lifecycle) {
     return;
   }
-  state.lifecycleController.abort();
-  nodeWakeById.delete(nodeId);
+  lifecycleState.users = Math.max(0, lifecycleState.users - 1);
+  if (lifecycleState.users > 0) {
+    return;
+  }
+
+  const wakeState = nodeWakeById.get(nodeId);
+  if (wakeState && !wakeState.inFlight && wakeState.lastWakeAtMs === 0) {
+    nodeWakeById.delete(nodeId);
+  }
+  if (nodeWakeById.has(nodeId) || nodeWakeNudgeById.has(nodeId)) {
+    return;
+  }
+  lifecycleState.controller.abort();
+  nodeWakeLifecycleById.delete(nodeId);
 }
 
 export function clearNodeWakeState(nodeId: string): void {
-  nodeWakeById.get(nodeId)?.lifecycleController?.abort();
+  nodeWakeById.delete(nodeId);
+  nodeWakeNudgeById.delete(nodeId);
+  const lifecycleState = nodeWakeLifecycleById.get(nodeId);
+  if (lifecycleState && lifecycleState.users === 0) {
+    lifecycleState.controller.abort();
+    nodeWakeLifecycleById.delete(nodeId);
+  }
+}
+
+export function invalidateNodeWakeState(nodeId: string): void {
+  nodeWakeLifecycleById.get(nodeId)?.controller.abort();
+  nodeWakeLifecycleById.delete(nodeId);
   nodeWakeById.delete(nodeId);
   nodeWakeNudgeById.delete(nodeId);
 }
