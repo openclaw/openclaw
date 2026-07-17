@@ -43,7 +43,7 @@ type DiscordIngressDispatch = (
   lifecycle: DiscordIngressLifecycle,
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
-export type DiscordIngressMonitor = {
+type DiscordIngressMonitor = {
   accept: (rawMessage: APIMessage) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;

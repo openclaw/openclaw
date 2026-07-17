@@ -38,7 +38,7 @@ import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
-export type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 export type DiscordMessageEvent = DiscordMessageDispatchData;
 type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 

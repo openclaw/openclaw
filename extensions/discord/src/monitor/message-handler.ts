@@ -138,7 +138,7 @@ function buildFlushIngressLifecycle(
   };
 }
 
-export function createDiscordMessageDispatcher(
+function createDiscordMessageDispatcher(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageDispatcherWithLifecycle {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
