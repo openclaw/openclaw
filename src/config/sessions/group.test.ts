@@ -1,7 +1,7 @@
 // Session group tests cover grouping and lookup of related sessions.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { buildGroupDisplayTitle, resolveGroupSessionKey } from "./group.js";
+import { buildGroupDisplayTitle, resolveGroupSessionKey, shortenGroupId } from "./group.js";
 
 describe("resolveGroupSessionKey", () => {
   it("preserves Signal group ids from the originating target", () => {
@@ -77,5 +77,17 @@ describe("buildGroupDisplayTitle", () => {
     expect(buildGroupDisplayTitle({ space: "Acme" })).toBe("Acme");
     expect(buildGroupDisplayTitle({})).toBeUndefined();
     expect(buildGroupDisplayTitle({ subject: "  " })).toBeUndefined();
+  });
+});
+
+describe("shortenGroupId", () => {
+  it("does not split UTF-16 surrogate pairs at truncation boundary", () => {
+    expect(shortenGroupId("abcde🔥fghijklmno")).toBe("abcde...lmno");
+  });
+
+  it("preserves short group ids as-is", () => {
+    expect(shortenGroupId("abc")).toBe("abc");
+    expect(shortenGroupId("")).toBe("");
+    expect(shortenGroupId(undefined)).toBe("");
   });
 });
