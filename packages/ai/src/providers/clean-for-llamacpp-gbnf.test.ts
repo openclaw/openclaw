@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD,
-  cleanSchemaForLlamacppGbnf,
-  isLlamacppGbnfToolSchemaProvider,
-} from "./clean-for-llamacpp-gbnf.js";
+import { cleanSchemaForLlamacppGbnf, isLlamacppGbnfToolSchemaProvider } from "./clean-for-llamacpp-gbnf.js";
 
 describe("cleanSchemaForLlamacppGbnf", () => {
   it("removes pattern and oversized maxLength while preserving other bounds", () => {
@@ -96,11 +92,5 @@ describe("isLlamacppGbnfToolSchemaProvider", () => {
   it("does not match unrelated providers", () => {
     expect(isLlamacppGbnfToolSchemaProvider({ modelProvider: "openai" })).toBe(false);
     expect(isLlamacppGbnfToolSchemaProvider({ modelProvider: "anthropic" })).toBe(false);
-  });
-});
-
-describe("LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD", () => {
-  it("tracks the llama.cpp repetition ceiling used by the cleaner", () => {
-    expect(LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD).toBe(2000);
   });
 });

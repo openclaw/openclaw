@@ -7,11 +7,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { TSchema } from "typebox";
 
 /** Model compat profile id for llama.cpp GBNF tool-schema cleaning. */
-export const LLAMACPP_TOOL_SCHEMA_PROFILE = "llamacpp";
+const LLAMACPP_TOOL_SCHEMA_PROFILE = "llamacpp";
 
 // llama.cpp compiles bounded maxLength into repeated grammar rules and caps the
 // repetition count near 2000; larger values fail GBNF compilation (#108580).
-export const LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD = 2000;
+const LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD = 2000;
 
 const SCHEMA_MAP_KEYS = new Set([
   "properties",

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
-import { LLAMACPP_TOOL_SCHEMA_PROFILE } from "./clean-for-llamacpp-gbnf.js";
 
 describe("normalizeToolParameterSchema llama.cpp GBNF projection", () => {
   const canonicalCronTriggerScript = {
@@ -35,7 +34,7 @@ describe("normalizeToolParameterSchema llama.cpp GBNF projection", () => {
   it("strips grammar-hostile constraints for llamacpp profile projection", () => {
     expect(
       normalizeToolParameterSchema(canonicalCronTriggerScript, {
-        modelCompat: { toolSchemaProfile: LLAMACPP_TOOL_SCHEMA_PROFILE },
+        modelCompat: { toolSchemaProfile: "llamacpp" },
       }),
     ).toEqual({
       type: "object",
