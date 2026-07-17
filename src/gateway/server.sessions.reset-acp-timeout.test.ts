@@ -101,8 +101,9 @@ async function resetMainSession() {
   );
 }
 
-async function resetAfterCleanupTimeout() {
+async function resetAfterCleanupTimeout(operationStarted: Promise<void>) {
   const resetPromise = resetMainSession();
+  await operationStarted;
   await vi.advanceTimersByTimeAsync(15_000);
   return await resetPromise;
 }
@@ -126,11 +127,18 @@ test("sessions.reset force-discards ACP runtime when cancel times out", async ()
   vi.useFakeTimers();
   try {
     const prepareFreshSession = await setupAcpSession("backend-session-timeout");
+    let markCancelStarted: (() => void) | undefined;
+    const cancelStarted = new Promise<void>((resolve) => {
+      markCancelStarted = resolve;
+    });
     // Hang cancel so the cleanup race times out; close must be skipped and the
     // manager force-discard path must run so the handle is not left reusable.
-    acpManagerMocks.cancelSession.mockImplementation(() => new Promise(() => {}));
+    acpManagerMocks.cancelSession.mockImplementation(() => {
+      markCancelStarted?.();
+      return new Promise(() => {});
+    });
 
-    expect((await resetAfterCleanupTimeout()).ok).toBe(true);
+    expect((await resetAfterCleanupTimeout(cancelStarted)).ok).toBe(true);
     expect(acpManagerMocks.closeSession).not.toHaveBeenCalled();
     expectForceDiscarded(prepareFreshSession);
   } finally {
@@ -142,12 +150,19 @@ test("sessions.reset force-discards ACP runtime when close times out", async () 
   vi.useFakeTimers();
   try {
     const prepareFreshSession = await setupAcpSession("backend-session-close-timeout");
+    let markCloseStarted: (() => void) | undefined;
+    const closeStarted = new Promise<void>((resolve) => {
+      markCloseStarted = resolve;
+    });
     // Cancel succeeds; hang close so cleanup times out and force-discard still
     // runs without waiting indefinitely on the stuck close.
     acpManagerMocks.cancelSession.mockImplementation(async () => {});
-    acpManagerMocks.closeSession.mockImplementation(() => new Promise(() => {}));
+    acpManagerMocks.closeSession.mockImplementation(() => {
+      markCloseStarted?.();
+      return new Promise(() => {});
+    });
 
-    expect((await resetAfterCleanupTimeout()).ok).toBe(true);
+    expect((await resetAfterCleanupTimeout(closeStarted)).ok).toBe(true);
     expect(acpManagerMocks.cancelSession).toHaveBeenCalled();
     expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
     expectForceDiscarded(prepareFreshSession);
