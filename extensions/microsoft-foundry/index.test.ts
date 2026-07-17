@@ -2076,7 +2076,7 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
 
     child.emit("close", 1);
 
-    const err = await loginPromise.catch((e) => e);
+    const err = await loginPromise.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     // The error message contains the cleanly reassembled smiley, not U+FFFD
     expect((err as Error).message).toBe("az login exited with code 1: 😊");
