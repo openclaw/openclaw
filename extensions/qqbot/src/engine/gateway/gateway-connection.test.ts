@@ -262,4 +262,51 @@ describe("GatewayConnection disconnect status", () => {
     expect(onDisconnected).not.toHaveBeenCalled();
     await started;
   });
+
+  it("resolves start() immediately when the abort signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    createQQWSClientMock.mockResolvedValue(new FakeWebSocket());
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+    });
+
+    await expect(connection.start()).resolves.toBeUndefined();
+    expect(createQQWSClientMock).not.toHaveBeenCalled();
+  });
+
+  it("closes a socket created after aborting during startup", async () => {
+    let resolveSocket: ((ws: FakeWebSocket) => void) | undefined;
+    createQQWSClientMock.mockImplementation(
+      () =>
+        new Promise<FakeWebSocket>((resolve) => {
+          resolveSocket = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const connection = new GatewayConnection({
+      account: makeAccount(),
+      abortSignal: controller.signal,
+      cfg: {},
+      runtime: {} as GatewayPluginRuntime,
+      adapters: {} as EngineAdapters,
+      handleMessage: async () => {},
+    });
+
+    const started = connection.start();
+    await vi.waitFor(() => {
+      expect(resolveSocket).toBeDefined();
+    });
+    controller.abort();
+    const ws = new FakeWebSocket();
+    resolveSocket?.(ws);
+
+    await expect(started).resolves.toBeUndefined();
+    expect(ws.close).toHaveBeenCalledOnce();
+  });
 });

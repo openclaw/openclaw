@@ -67,9 +67,15 @@ export class GatewayConnection {
   async start(): Promise<void> {
     this.restoreSession();
     this.registerAbortHandler();
+    if (this.isAborted) {
+      return;
+    }
     await this.connect();
+    if (this.isAborted) {
+      return;
+    }
     return new Promise<void>((resolve) => {
-      this.ctx.abortSignal.addEventListener("abort", () => resolve());
+      this.ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
     });
   }
 
@@ -101,7 +107,7 @@ export class GatewayConnection {
 
   private registerAbortHandler(): void {
     const { account, abortSignal, log: _log } = this.ctx;
-    abortSignal.addEventListener("abort", () => {
+    const handleAbort = () => {
       this.isAborted = true;
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
@@ -111,7 +117,11 @@ export class GatewayConnection {
       stopBackgroundTokenRefresh(account.appId);
       flushKnownUsers();
       flushRefIndex();
-    });
+    };
+    abortSignal.addEventListener("abort", handleAbort, { once: true });
+    if (abortSignal.aborted) {
+      handleAbort();
+    }
   }
 
   private cleanup(): void {
@@ -171,13 +181,28 @@ export class GatewayConnection {
       }
 
       const accessToken = await getAccessToken(account.appId, account.clientSecret);
+      if (this.isAborted) {
+        this.isConnecting = false;
+        return;
+      }
       log?.info(`✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
+      if (this.isAborted) {
+        this.isConnecting = false;
+        return;
+      }
       log?.info(`Connecting to ${gatewayUrl}`);
       const ws = await createQQWSClient({
         gatewayUrl,
         userAgent: getPluginUserAgent(),
       });
+      // Abort can land while socket creation is in flight. Never adopt a
+      // connection created after this lifecycle owner has already stopped.
+      if (this.isAborted) {
+        ws.close();
+        this.isConnecting = false;
+        return;
+      }
       this.currentWs = ws;
 
       const slashCtx: SlashCommandHandlerContext = {
@@ -304,6 +329,9 @@ export class GatewayConnection {
       });
     } catch (err) {
       this.isConnecting = false;
+      if (this.isAborted) {
+        return;
+      }
       const errMsg = err instanceof Error ? err.message : String(err);
       log?.error(`Connection failed: ${errMsg}`);
       if (errMsg.includes("Too many requests") || errMsg.includes("100001")) {
