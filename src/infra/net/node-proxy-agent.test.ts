@@ -1,7 +1,7 @@
 // Node proxy agent tests cover shared Node HTTP(S) proxy agent construction.
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import { createNodeProxyAgent } from "./node-proxy-agent.js";
+import { createFixedNodeProxyAgentPair, createNodeProxyAgent } from "./node-proxy-agent.js";
 
 const PROXY_ENV_KEYS = [
   "http_proxy",
@@ -58,5 +58,66 @@ describe("createNodeProxyAgent", () => {
       });
       expect(agentState?.keepAlive).toBe(true);
     });
+  });
+
+  it("sets default maxSockets and maxTotalSockets when no explicit limit is provided", () => {
+    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
+      const agent = createNodeProxyAgent({
+        mode: "env",
+        targetUrl: "https://api.example.test/v1/chat",
+      });
+
+      const agentState = agent as {
+        maxSockets?: number;
+        maxTotalSockets?: number;
+      };
+      expect(agentState?.maxSockets).toBe(256);
+      expect(agentState?.maxTotalSockets).toBe(1024);
+    });
+  });
+
+  it("allows explicit agentOptions.maxSockets to override the default", () => {
+    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
+      const agent = createNodeProxyAgent({
+        mode: "env",
+        targetUrl: "https://api.example.test/v1/chat",
+        agentOptions: {
+          maxSockets: 128,
+        },
+      });
+
+      const agentState = agent as {
+        maxSockets?: number;
+        maxTotalSockets?: number;
+      };
+      expect(agentState?.maxSockets).toBe(128);
+      // maxTotalSockets still gets the default since only maxSockets was overridden
+      expect(agentState?.maxTotalSockets).toBe(1024);
+    });
+  });
+
+  it("applies default maxSockets and maxTotalSockets to an explicit proxy agent", () => {
+    const agent = createNodeProxyAgent({
+      mode: "explicit",
+      proxyUrl: "http://proxy.example:8080",
+    });
+
+    const agentState = agent as {
+      maxSockets?: number;
+      maxTotalSockets?: number;
+    };
+    expect(agentState?.maxSockets).toBe(256);
+    expect(agentState?.maxTotalSockets).toBe(1024);
+  });
+
+  it("applies defaults to both HTTP and HTTPS agents in a proxy pair", () => {
+    const { httpAgent, httpsAgent } = createFixedNodeProxyAgentPair("http://proxy.example:8080");
+
+    const httpState = httpAgent as { maxSockets?: number; maxTotalSockets?: number };
+    const httpsState = httpsAgent as { maxSockets?: number; maxTotalSockets?: number };
+    expect(httpState?.maxSockets).toBe(256);
+    expect(httpState?.maxTotalSockets).toBe(1024);
+    expect(httpsState?.maxSockets).toBe(256);
+    expect(httpsState?.maxTotalSockets).toBe(1024);
   });
 });

@@ -27,6 +27,13 @@ type NodeProxyAgentWithOptions = HttpAgent & {
   timeout?: number;
 };
 
+// Node.js http.Agent defaults maxSockets to Infinity. A proxy agent without
+// an explicit limit can open unlimited connections to the upstream, risking
+// socket exhaustion under high concurrency. Cap per-origin and total sockets
+// unless the caller sets an explicit value through agentOptions.
+const DEFAULT_NODE_PROXY_MAX_SOCKETS = 256;
+const DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS = 1024;
+
 const require = createRequire(import.meta.url);
 
 /** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
@@ -189,11 +196,21 @@ function createFixedNodeProxyAgent(
     proxyUrl instanceof URL
       ? proxyUrl
       : proxyUrlWithDefaultScheme(proxyUrl, options.protocol ?? "https");
+  // Pass bounded connection defaults to proxyline at construction time so its
+  // private agents (#httpAgent, #httpsAgent, per-proxy agents created in
+  // addRequest) all inherit the limits. Mutating the returned wrapper's fields
+  // after construction does not propagate to proxyline's internal agents.
+  // Callers may override through agentOptions — applyNodeAgentOptions sets
+  // maxSockets / maxTotalScores from explicit callers values after this.
   const agent = loadCreateAmbientNodeProxyAgent()({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
+    agentOptions: {
+      maxSockets: DEFAULT_NODE_PROXY_MAX_SOCKETS,
+      maxTotalSockets: DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS,
+    },
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),
-  });
+  } as Parameters<ProxylineCreateAmbientNodeProxyAgent>[0]);
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
   }

@@ -40,6 +40,11 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
 
+// Default per-origin connection cap for proxy client pools created without an
+// explicit limit. Undici leaves this unbounded by default; a cap prevents a
+// misbehaving proxy upstream from opening unlimited TCP connections.
+const DEFAULT_POOL_CONNECTIONS = 256;
+
 function applyMissingConnectOptions(
   connect: Record<string, unknown>,
   defaults: Record<string, unknown>,
@@ -95,10 +100,19 @@ function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
     const clientOptions = isObjectRecord(options)
       ? { ...options, connect: stripIpServernameFromConnect(options.connect) }
       : options;
-    return new Pool(
-      origin,
-      clientOptions as ConstructorParameters<typeof import("undici").Pool>[1],
-    );
+    // Apply a default per-origin connection cap when none is configured.
+    // Undici leaves Pool connections unbounded by default; a cap prevents a
+    // misbehaving proxy upstream from opening unlimited TCP connections.
+    // Undici supports explicit `connections: null` for unlimited — preserve
+    // that sentinel. Only default when the property is absent or undefined.
+    let poolOptions = clientOptions;
+    if (isObjectRecord(clientOptions)) {
+      const opts = clientOptions as Record<string, unknown>;
+      if (!("connections" in opts && opts.connections !== undefined)) {
+        poolOptions = { ...clientOptions, connections: DEFAULT_POOL_CONNECTIONS };
+      }
+    }
+    return new Pool(origin, poolOptions as ConstructorParameters<typeof import("undici").Pool>[1]);
   };
 }
 
