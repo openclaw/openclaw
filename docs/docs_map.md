@@ -3877,6 +3877,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /gateway/secrets-plan-contract
 - Headings:
+  - H2: Plan file requirements
   - H2: Plan file shape
   - H2: Provider upserts and deletes
   - H2: Supported target scope
