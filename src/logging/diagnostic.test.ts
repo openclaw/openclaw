@@ -724,7 +724,6 @@ describe("stuck session diagnostics threshold", () => {
 
   it("defers subsequent heartbeat recovery after noop/no_active_work outcome", () => {
     const recoverStuckSession = vi.fn();
-    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 
     vi.setSystemTime(0);
     startDiagnosticHeartbeat(
