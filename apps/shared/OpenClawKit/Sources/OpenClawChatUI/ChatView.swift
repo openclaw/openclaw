@@ -77,7 +77,6 @@ public struct OpenClawChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
-    @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
     @State private var lastUserMessageID: UUID?
     @State private var hasNewerContentBelow = false
@@ -190,11 +189,6 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
-        .sheet(isPresented: self.$showSessions) {
-            if self.showsSessionSwitcher {
-                ChatSessionsSheet(viewModel: self.viewModel)
-            }
-        }
     }
 
     @ViewBuilder
@@ -454,6 +448,7 @@ public struct OpenClawChatView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
                 self.copyMessageButton(for: msg)
+                self.replyMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -493,6 +488,7 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contextMenu {
+                self.replyMessageButton(for: msg)
                 Button {
                     if speech.isActive(msg.id) {
                         speech.stop()
@@ -516,14 +512,11 @@ public struct OpenClawChatView: View {
                 }
             }
         } else {
-            #if os(macOS)
             bubble
                 .contextMenu {
                     self.copyMessageButton(for: msg)
+                    self.replyMessageButton(for: msg)
                 }
-            #else
-            bubble
-            #endif
         }
     }
 
@@ -561,6 +554,33 @@ public struct OpenClawChatView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func replyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let text = ChatReplyQuote.targetText(ChatMessageVisibleText.visibleText(in: message))
+        if role == "user" || role == "assistant", !text.isEmpty {
+            Button {
+                self.viewModel.setReplyTarget(
+                    messageID: message.id,
+                    text: text,
+                    senderLabel: self.replySenderLabel(forRole: role))
+            } label: {
+                Label {
+                    Text(String(localized: "Reply"))
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "arrowshape.turn.up.left")
+                }
+            }
+        }
+    }
+
+    private func replySenderLabel(forRole role: String) -> String {
+        guard role == "assistant" else { return String(localized: "You") }
+        let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? String(localized: "Assistant") : name
     }
 
     private static func copyToClipboard(_ text: String) {

@@ -9,6 +9,15 @@ import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
+export type SubagentProgressOrigin = {
+  channel?: string;
+  accountId?: string;
+  to?: string;
+  threadId?: string | number;
+  channelId?: string | number;
+  messageId?: string | number;
+};
+
 export type PendingFinalDeliveryPayload = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -118,6 +127,8 @@ export type SubagentRunRecord = {
   controllerSessionKey?: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  /** Durable source locator for transport-neutral progress presentation. */
+  progressOrigin?: SubagentProgressOrigin;
   requesterDisplayKey: string;
   task: string;
   taskName?: string;

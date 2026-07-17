@@ -56,10 +56,12 @@ describe("agents_list tool", () => {
       },
     } as unknown as OpenClawConfig);
 
-    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
-      "call",
-      {},
-    );
+    const tool = createAgentsListTool({ agentSessionKey: "agent:main:main" });
+    expect(tool.outputSchema).toMatchObject({
+      type: "object",
+      required: ["requester", "allowAny", "agents"],
+    });
+    const result = await tool.execute("call", {});
     const details = result.details as AgentListDetails;
 
     expect(details).toStrictEqual({

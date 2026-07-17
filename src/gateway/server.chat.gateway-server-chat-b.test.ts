@@ -206,6 +206,10 @@ async function removeTempDir(dir: string): Promise<void> {
 function createDirectChatContext(): GatewayRequestContext {
   return {
     loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
+    loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    }),
     logGateway: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -216,6 +220,7 @@ function createDirectChatContext(): GatewayRequestContext {
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
+    chatRunPlanSnapshots: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatDeltaLastBroadcastText: new Map(),
@@ -424,6 +429,63 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s replays the active plan snapshot in inFlightRun",
+    async (method) => {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      try {
+        testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+        await writeMainSessionStore(sessionDir);
+        const context = createDirectChatContext();
+        const controller = new AbortController();
+        context.chatAbortControllers.set("run-active", {
+          controller,
+          sessionId: "sess-main",
+          sessionKey: "main",
+          startedAtMs: 1_000,
+          expiresAtMs: 10_000,
+          projectSessionActive: true,
+        });
+        context.chatRunBuffers.set("run-active", "partial reply");
+        context.chatRunPlanSnapshots?.set("run-active", {
+          explanation: "Replay on reconnect",
+          steps: [{ step: "Reconnect clients", status: "in_progress" }],
+        });
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        const { chatHandlers } = await import("./server-methods/chat.js");
+
+        await expectDefined(
+          chatHandlers[method],
+          `${method} test invariant`,
+        )({
+          req: { type: "req", id: method, method, params: { sessionKey: "main" } },
+          params: { sessionKey: "main" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toEqual({
+          runId: "run-active",
+          text: "partial reply",
+          plan: {
+            explanation: "Replay on reconnect",
+            steps: [{ step: "Reconnect clients", status: "in_progress" }],
+          },
+        });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+        await removeTempDir(sessionDir);
+      }
+    },
+  );
+
   test("chat.history returns catalog-backed session metadata with history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {

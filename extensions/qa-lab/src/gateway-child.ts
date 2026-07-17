@@ -14,6 +14,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
+  normalizeOptionalString,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -757,15 +758,14 @@ function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
 }
 
 function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | null {
-  if (isQaModelProviderConfig(value)) {
-    return value;
-  }
-  if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+  if (!isQaModelProviderConfig(value) && (!isRecord(value) || !Object.hasOwn(value, "apiKey"))) {
     return null;
   }
+  const { baseUrl: rawBaseUrl, ...providerConfig } = value;
+  const baseUrl = normalizeOptionalString(rawBaseUrl);
   return {
-    ...value,
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    ...providerConfig,
+    ...(baseUrl ? { baseUrl } : {}),
     models: Array.isArray(value.models) ? value.models : [],
   } as ModelProviderConfig;
 }

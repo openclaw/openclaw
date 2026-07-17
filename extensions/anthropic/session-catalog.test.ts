@@ -1407,6 +1407,82 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("bounds how long a hung paired-node catalog can delay the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(
+        async () => await new Promise<never>(() => {}),
+      );
+      const provider = captureCatalogProvider({
+        nodes: {
+          list: vi.fn().mockResolvedValue({
+            nodes: [
+              {
+                nodeId: "slow-node",
+                displayName: "Slow node",
+                connected: true,
+                commands: [CLAUDE_SESSIONS_LIST_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as unknown as PluginRuntime);
+      const pending = provider.list({ hostIds: ["node:slow-node"] });
+
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({
+          hostId: "node:slow-node",
+          connected: true,
+          sessions: [],
+          error: expect.objectContaining({ code: "NODE_INVOKE_FAILED" }),
+        }),
+      ]);
+      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts paired-node discovery while the local catalog is still reading", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "concurrent-local-session";
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Local")] },
+    });
+    let releaseOpen = () => {};
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let reportOpen = () => {};
+    const opened = new Promise<void>((resolve) => {
+      reportOpen = resolve;
+    });
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      reportOpen();
+      await openGate;
+      return await originalOpen(...args);
+    });
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    const listing = provider.list({});
+    await opened;
+    expect(listNodes).toHaveBeenCalledOnce();
+    releaseOpen();
+    await expect(listing).resolves.toMatchObject([
+      { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
+    ]);
+  });
+
   it("keeps the underlying paired-node list failure", async () => {
     const runtime = {
       nodes: {

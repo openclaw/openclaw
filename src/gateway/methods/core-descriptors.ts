@@ -374,6 +374,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "ui.command", scope: "operator.write" },
   { name: "approval.history", scope: "operator.approvals" },
   { name: "plugin.surface.refresh", scope: "operator.read" },
+  { name: "conversations.list", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

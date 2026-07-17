@@ -193,6 +193,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--non-interactive", "Run without prompts", false)
     .option("--modern", "Open inference-gated OpenClaw (kept for compatibility)", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
@@ -288,6 +289,7 @@ export function registerOnboardCommand(program: Command): void {
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
           classic: Boolean(opts.classic),
+          tui: Boolean(opts.tui),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),

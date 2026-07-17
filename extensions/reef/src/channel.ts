@@ -9,7 +9,7 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
-import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import {
   ReefChannelConfigSchema,
   autonomyBudget,
@@ -62,6 +62,24 @@ function listTrustedPeers(config: ReefAccount["config"]): string[] {
         .list()
         .map((entry) => entry.peer)
     : [];
+}
+
+function listTrustedPeerDirectoryEntries(params: {
+  config: ReefAccount["config"];
+  query: string | null | undefined;
+  limit: number | null | undefined;
+}) {
+  const query = normalizeReefTarget(params.query ?? "") ?? params.query?.trim().toLowerCase();
+  const peers = listTrustedPeers(params.config).filter(
+    (peer) => !query || peer === query || peer.includes(query),
+  );
+  const limit = params.limit == null ? peers.length : Math.max(0, params.limit);
+  return peers.slice(0, limit).map((peer) => ({
+    kind: "user" as const,
+    id: peer,
+    name: `@${peer}'s agent`,
+    handle: `@${peer}`,
+  }));
 }
 
 function replyText(payload: unknown): string {
@@ -147,7 +165,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         : null;
     },
   },
-  directory: createEmptyChannelDirectoryAdapter(),
+  directory: createChannelDirectoryAdapter({
+    listPeers: async ({ cfg, query, limit }) =>
+      listTrustedPeerDirectoryEntries({
+        config: resolveReefConfig(cfg as ReefCoreConfig),
+        query,
+        limit,
+      }),
+    listGroups: async () => [],
+  }),
   message: reefMessageAdapter,
   outbound: reefOutboundAdapter,
   pairing: {

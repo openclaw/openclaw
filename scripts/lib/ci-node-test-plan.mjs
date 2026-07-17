@@ -125,14 +125,18 @@ const COMPACT_GROUP_SECONDS_HINTS = new Map([
   // PTY timing suites still need a lightly packed lane; the exclusive-bin cap
   // leaves only trivial co-groups next to this measured runtime.
   ["core-runtime-tui-pty", 103],
-  ["core-tooling-1", 85],
-  ["core-tooling-2", 112],
-  ["core-tooling-3", 106],
-  ["core-tooling-4", 105],
-  ["core-tooling-isolated", 58],
-  ["core-unit-fast-1", 60],
-  ["core-unit-fast-2", 60],
-  ["core-unit-fast-isolated", 25],
+  // Stripe walls measured from compact run 29564411446 group timestamps.
+  ["core-tooling-1", 87],
+  ["core-tooling-2", 80],
+  ["core-tooling-3", 82],
+  ["core-tooling-4", 71],
+  ["core-tooling-isolated", 45],
+  ["core-unit-fast-1", 40],
+  ["core-unit-fast-2", 40],
+  // Fork-per-file isolation parallelizes poorly on 4 vCPU (78.6s measured in
+  // compact run 29564411446); keep it on the 8 vCPU class where the same
+  // segment runs ~50s.
+  ["core-unit-fast-isolated", 50],
   ["core-unit-src-security", 108],
   ["core-unit-support", 15],
 ]);
@@ -256,6 +260,7 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "core-runtime-media-ui",
   "core-unit-fast-1",
   "core-unit-fast-2",
+  "core-unit-fast-isolated",
   "core-unit-src-security",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);

@@ -386,6 +386,7 @@ enum class GatewayMethod(
   UiCommand("ui.command"),
   ApprovalHistory("approval.history"),
   PluginSurfaceRefresh("plugin.surface.refresh"),
+  ConversationsList("conversations.list"),
 }
 
 enum class GatewayEvent(

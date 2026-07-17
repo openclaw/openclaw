@@ -147,6 +147,8 @@ type CreateFeishuReplyDispatcherParams = {
   accountId?: string;
   identity?: OutboundIdentity;
   mentionTargets?: MentionTarget[];
+  /** Mentions required on every mention-capable text/card reply, used for bot-authored ingress. */
+  requiredMentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -169,6 +171,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     identity,
     mentionTargets,
+    requiredMentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
@@ -255,10 +258,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  // Streaming cards default to enabled: only streaming.mode "off" (or raw
-  // render mode) disables them, matching the legacy `streaming: false` boolean.
+  // Streaming cards cannot attach native mention recipients. Bot-authored ingress
+  // therefore uses normal cards/posts so every emitted unit reaches the peer bot.
   const streamingEnabled =
-    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" && renderMode !== "raw";
+    !requiredMentionTargets?.length &&
+    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" &&
+    renderMode !== "raw";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const coreBlockStreamingEnabled = blockStreamingEnabled === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
@@ -500,7 +505,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     useCard: boolean;
     infoKind?: string;
     firstChunkMentions?: MentionTarget[];
-    sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
+    chunkMentions?: MentionTarget[];
+    sendChunk: (params: {
+      chunk: string;
+      isFirst: boolean;
+      mentions?: MentionTarget[];
+    }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
@@ -521,13 +531,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             limit: textChunkLimit,
             mode: chunkMode,
             firstChunkMentions: paramsLocal.firstChunkMentions,
+            chunkMentions: paramsLocal.chunkMentions,
             initialChunks,
           }),
     );
     for (const [index, chunk] of chunks.entries()) {
+      const mentions = [
+        ...(paramsLocal.chunkMentions ?? []),
+        ...(index === 0 ? (paramsLocal.firstChunkMentions ?? []) : []),
+      ];
       await paramsLocal.sendChunk({
         chunk,
         isFirst: index === 0,
+        mentions: mentions.length > 0 ? mentions : undefined,
       });
       markVisibleReplySent();
     }
@@ -559,7 +575,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendMessageFeishu({
                 cfg,
                 to: sendTarget,
@@ -568,6 +585,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
+                ...(mentions ? { mentions } : {}),
               });
             },
           });
@@ -586,7 +604,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: fallbackText,
                 useCard: false,
                 infoKind: "final",
-                sendChunk: async ({ chunk }) => {
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: sendTarget,
@@ -595,6 +614,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
+                    ...(mentions ? { mentions } : {}),
                   });
                 },
               });
@@ -621,6 +641,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       replyInThread: effectiveReplyInThread,
       allowTopLevelReplyFallback,
       accountId,
+      ...(requiredMentionTargets?.length ? { mentions: requiredMentionTargets } : {}),
     });
     markVisibleReplySent();
     params.runtime.error?.(
@@ -751,7 +772,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 useCard: false,
                 infoKind: "block",
                 firstChunkMentions,
-                sendChunk: async ({ chunk, isFirst }) => {
+                chunkMentions: requiredMentionTargets,
+                sendChunk: async ({ chunk, mentions }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: sendTarget,
@@ -760,7 +782,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     replyInThread: effectiveReplyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
-                    ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                    ...(mentions ? { mentions } : {}),
                   });
                 },
               });
@@ -814,7 +836,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text,
             useCard: true,
             infoKind: info?.kind,
-            sendChunk: async ({ chunk }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendStructuredCardFeishu({
                 cfg,
                 to: sendTarget,
@@ -825,6 +848,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 accountId,
                 header: cardHeader,
                 note: cardNote,
+                ...(mentions ? { mentions } : {}),
               });
             },
           });
@@ -836,7 +860,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             useCard: false,
             infoKind: info?.kind,
             firstChunkMentions,
-            sendChunk: async ({ chunk, isFirst }) => {
+            chunkMentions: requiredMentionTargets,
+            sendChunk: async ({ chunk, mentions }) => {
               await sendMessageFeishu({
                 cfg,
                 to: sendTarget,
@@ -845,7 +870,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread: effectiveReplyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
-                ...(isFirst && firstChunkMentions ? { mentions: firstChunkMentions } : {}),
+                ...(mentions ? { mentions } : {}),
               });
             },
           });

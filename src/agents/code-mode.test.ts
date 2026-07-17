@@ -1,9 +1,11 @@
 /** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import {
   clearCodeModeNamespacesForPlugin,
   createCodeModeNamespaceTool,
@@ -387,7 +389,10 @@ describe("Code Mode", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("one exec invocation");
+    expect(execTool.description).toContain("process them in the first exec");
+    expect(execTool.description).toContain("do not spend another exec inspecting");
+    expect(execTool.description).toContain("dependent reads, checks, and follow-up calls in order");
+    expect(execTool.description).toContain("normal tool policy and approvals");
     expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
     expect(execTool.description).toContain("`tools.search(query: string, options?)`");
     expect(execTool.description).toContain("enabled catalog tools allowed by policy");
@@ -395,7 +400,8 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
     expect(execTool.description).toContain("`tools.call(id: string, args?)`");
     expect(execTool.description).toContain("Never invent or transform a tool id");
-    expect(execTool.description).toContain("Quick-index input hints are not output schemas");
+    expect(execTool.description).toContain("Quick-index arrows show trusted declared output hints");
+    expect(execTool.description).toContain("`-> ?` means never guess result field names");
     expect(execTool.description).toContain("never guess result field names");
     expect(execTool.description).toContain("return the raw tool value unchanged");
     expect(execTool.description).toContain("filter or map it only in a later exec");
@@ -422,14 +428,14 @@ describe("Code Mode", () => {
     );
   });
 
-  it("primes the exec schema with exact native tool ids and compact inputs", () => {
+  it("primes the exec schema with exact native tool ids and compact contracts", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
+    const alpha = pluginTool("alpha_tool", "Another deferred description.");
+    alpha.outputSchema = Type.Array(
+      Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
+    );
     const compacted = applyCodeModeCatalog({
-      tools: [
-        ...tools,
-        pluginTool("zeta_tool", "Description stays deferred."),
-        pluginTool("alpha_tool", "Another deferred description."),
-      ],
+      tools: [...tools, pluginTool("zeta_tool", "Description stays deferred."), alpha],
       config,
       sessionId: "session-code-mode",
       sessionKey: "agent:main:main",
@@ -439,7 +445,10 @@ describe("Code Mode", () => {
 
     const description = compacted.tools[0]?.description ?? "";
     expect(description).toContain("descriptions are intentionally deferred");
-    expect(description).toContain('- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> ?');
+    expect(description).toContain("OUTPUT DECLARED RULE");
+    expect(description).toContain(
+      '- "openclaw:fake-code-mode:alpha_tool" { value?: string } -> Array<{ id: string; score: number }>',
+    );
     expect(description).toContain('- "openclaw:fake-code-mode:zeta_tool" { value?: string } -> ?');
     expect(description.indexOf("alpha_tool")).toBeLessThan(description.indexOf("zeta_tool"));
     expect(description).not.toContain("Description stays deferred.");
@@ -1173,6 +1182,41 @@ describe("Code Mode", () => {
     expect(details.value).toBe(
       "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
     );
+  });
+
+  it("surfaces policy blocks as guest call errors for declared outputs", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginTool("fake_policy_block", "Return policy-controlled rows");
+    target.outputSchema = Type.Array(
+      Type.Object({ id: Type.String() }, { additionalProperties: false }),
+    );
+    target.execute = vi.fn(async () =>
+      buildBlockedToolResult({ reason: "blocked by orchard policy" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        try {
+          const rows = await tools.callValue("fake_policy_block", {});
+          return rows.map((row) => row.id);
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toContain("was blocked before execution: blocked by orchard policy");
   });
 
   it("exposes MCP tools only through the MCP namespace", async () => {

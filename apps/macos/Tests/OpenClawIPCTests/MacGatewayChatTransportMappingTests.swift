@@ -37,6 +37,23 @@ struct MacGatewayChatTransportMappingTests {
             agentID: nil))
     }
 
+    @Test func `session settings request preserves verbosity patch`() {
+        let request = MacGatewayChatTransport.sessionSettingsRequest(
+            sessionKey: "global",
+            agentID: "reviewer",
+            patch: OpenClawChatSessionSettingsPatch(
+                model: .some("openai/gpt-5.6-sol"),
+                thinkingLevel: .some("high"),
+                verboseLevel: .some("full")))
+
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["model"]?.value as? String == "openai/gpt-5.6-sol")
+        #expect(request.params["thinkingLevel"]?.value as? String == "high")
+        #expect(request.params["verboseLevel"]?.value as? String == "full")
+    }
+
     @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],

@@ -105,6 +105,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Validate Tideclaw alpha preflight target
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -586,6 +587,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Validate npm release request

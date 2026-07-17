@@ -1278,8 +1278,9 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
       ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
       : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact catalog ids and compact input hints; descriptions are intentionally deferred):",
-    "Each line contains an exact catalog id and compact input hint; `-> ?` means its output schema is unknown.",
+    "OpenClaw/plugin tool quick index (exact ids plus compact input and declared output hints; descriptions are intentionally deferred):",
+    "Each line is `id input -> output`; `-> ?` means the output shape is unknown.",
+    "OUTPUT DECLARED RULE: use the named fields in the first exec; keep dependent reads, checks, and follow-up calls in that exec instead of returning a raw value only to inspect an already-declared shape.",
     "OUTPUT UNKNOWN RULE: the first exec must return that tool's raw value unchanged; filter or map it only in a later exec after observing its shape.",
     ...lines,
     "",
@@ -1292,7 +1293,10 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
     .filter((entry) => entry.source === "openclaw")
     .map((entry) => compactToolSearchCatalogEntry(entry))
     .toSorted((a, b) => a.id.localeCompare(b.id))
-    .map((entry) => `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ?`);
+    .map(
+      (entry) =>
+        `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+    );
   if (lines.length === 0) {
     return "";
   }
@@ -1340,7 +1344,7 @@ function createCodeModeExecDescription(
       : "";
   const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index input hints are not output schemas: `output unknown` means never guess result field names. For an unknown output, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; filter or map it only in a later exec after observing its shape. Prefer one exec invocation only when required result fields are documented: select tools, call them, and process their results in the same program. Await prerequisites before later calls; parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids and input hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index arrows show trusted declared output hints; `-> ?` means never guess result field names. For an unknown output, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; filter or map it only in a later exec after observing its shape. When the arrow declares the fields you need, select, call, and process them in the first exec; do not spend another exec inspecting that declared shape. Within that exec, perform dependent reads, checks, and follow-up calls in order; nested calls still enforce normal tool policy and approvals. Parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids, input hints, and declared output hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
     mcpGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +

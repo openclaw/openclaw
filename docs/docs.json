@@ -165,6 +165,10 @@
       "destination": "/plugins/adding-capabilities"
     },
     {
+      "source": "/reference/code-mode",
+      "destination": "/tools/code-mode"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
@@ -1300,6 +1304,7 @@
                   "plugins/codex-computer-use",
                   "plugins/logbook",
                   "plugins/google-meet",
+                  "plugins/teams-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
@@ -1355,6 +1360,7 @@
                   "tools/apply-patch",
                   "tools/btw",
                   "tools/code-execution",
+                  "tools/code-mode",
                   "tools/diffs",
                   "tools/show-widget",
                   "tools/elevated",
@@ -1869,7 +1875,6 @@
                 "pages": [
                   "reference/rpc",
                   "gateway/external-apps",
-                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },

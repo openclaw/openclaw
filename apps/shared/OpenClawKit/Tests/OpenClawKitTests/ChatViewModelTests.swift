@@ -70,6 +70,7 @@ private func historyPayload(
     messages: [AnyCodable] = [],
     supportsActiveRunState: Bool = true,
     hasActiveRun: Bool? = nil,
+    activeRunIds: [String]? = nil,
     inFlightRun: OpenClawChatInFlightRun? = nil) -> OpenClawChatHistoryPayload
 {
     OpenClawChatHistoryPayload(
@@ -78,7 +79,9 @@ private func historyPayload(
         messages: messages,
         thinkingLevel: "off",
         sessionInfo: supportsActiveRunState
-            ? OpenClawChatSessionInfo(hasActiveRun: hasActiveRun ?? (inFlightRun != nil))
+            ? OpenClawChatSessionInfo(
+                hasActiveRun: hasActiveRun ?? (inFlightRun != nil),
+                activeRunIds: activeRunIds ?? inFlightRun.map { [$0.runId] })
             : nil,
         inFlightRun: inFlightRun)
 }
@@ -1206,13 +1209,17 @@ struct ChatViewModelTests {
     }
 
     @Test func `decodes in-flight run from chat history`() throws {
-        let data = #"{"sessionKey":"main","messages":[],"inFlightRun":{"runId":"run-active","text":"partial"}}"#
+        let data = #"{"sessionKey":"main","messages":[],"inFlightRun":{"runId":"run-active","text":"partial","plan":{"steps":[{"step":"Reconnect","status":"in_progress"}],"explanation":"Current work"}}}"#
             .data(using: .utf8)!
 
         let payload = try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
 
         #expect(payload.inFlightRun?.runId == "run-active")
         #expect(payload.inFlightRun?.text == "partial")
+        #expect(payload.inFlightRun?.plan?.steps == [
+            OpenClawChatPlanStep(step: "Reconnect", status: .inProgress),
+        ])
+        #expect(payload.inFlightRun?.plan?.explanation == "Current work")
     }
 
     @Test func `decodes agent scope from chat event`() throws {
@@ -1265,6 +1272,128 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
         #expect(await MainActor.run { !vm.canSend })
+    }
+
+    @Test func `bootstrap adopts in-flight plan snapshot`() async throws {
+        let history = historyPayload(
+            inFlightRun: OpenClawChatInFlightRun(
+                runId: "run-plan",
+                text: "working",
+                plan: OpenClawChatPlanSnapshot(
+                    steps: [
+                        OpenClawChatPlanStep(step: "Inspect", status: .completed),
+                        OpenClawChatPlanStep(step: "Reconnect", status: .inProgress),
+                    ],
+                    explanation: "Restore checklist")))
+        let (_, vm) = await makeViewModel(historyResponses: [history])
+
+        try await loadAndWaitBootstrap(vm: vm)
+
+        #expect(await MainActor.run { vm.planRunId } == "run-plan")
+        #expect(await MainActor.run { vm.planSteps } == [
+            OpenClawChatPlanStep(step: "Inspect", status: .completed),
+            OpenClawChatPlanStep(step: "Reconnect", status: .inProgress),
+        ])
+        #expect(await MainActor.run { vm.planExplanation } == "Restore checklist")
+    }
+
+    @Test func `history plan reconciliation contract`() async {
+        let retainedSteps = [OpenClawChatPlanStep(step: "Retained", status: .inProgress)]
+        let liveSteps = [OpenClawChatPlanStep(step: "New live plan", status: .inProgress)]
+        let cases: [(
+            name: String,
+            payload: OpenClawChatHistoryPayload,
+            expectedRunId: String?,
+            expectedSteps: [OpenClawChatPlanStep],
+            staleAfterLivePlan: Bool)] = [
+            (
+                "replace",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-retained",
+                        text: "working",
+                        plan: OpenClawChatPlanSnapshot(
+                            steps: [OpenClawChatPlanStep(step: "Replacement", status: .completed)]))),
+                "run-retained",
+                [OpenClawChatPlanStep(step: "Replacement", status: .completed)],
+                false),
+            (
+                "legacy-preserve",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(runId: "run-retained", text: "working")),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "superseded",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-next",
+                        text: "next",
+                        plan: OpenClawChatPlanSnapshot(
+                            steps: [OpenClawChatPlanStep(step: "Next run", status: .inProgress)]))),
+                "run-next",
+                [OpenClawChatPlanStep(step: "Next run", status: .inProgress)],
+                false),
+            (
+                "active-preserve",
+                historyPayload(hasActiveRun: true, activeRunIds: ["run-retained"]),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "terminal-clear",
+                historyPayload(hasActiveRun: false, activeRunIds: []),
+                nil,
+                [],
+                false),
+            (
+                "no-evidence-preserve",
+                historyPayload(supportsActiveRunState: false),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "stale-response-does-not-clobber-newer-live-plan",
+                historyPayload(hasActiveRun: false, activeRunIds: []),
+                "run-live",
+                liveSteps,
+                true),
+            (
+                "explicit-empty-clears",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-retained",
+                        text: "working",
+                        plan: OpenClawChatPlanSnapshot(steps: []))),
+                nil,
+                [],
+                false),
+        ]
+
+        for testCase in cases {
+            let (_, vm) = await makeViewModel(historyResponses: [])
+            await MainActor.run {
+                vm.applyPlanSnapshot(
+                    runId: "run-retained",
+                    steps: retainedSteps,
+                    explanation: nil)
+                let request = vm.beginHistoryRequest()
+                if testCase.staleAfterLivePlan {
+                    vm.invalidateRunSnapshots()
+                    vm.adoptRun(runId: "run-live", bufferedText: "live")
+                    vm.applyPlanSnapshot(runId: "run-live", steps: liveSteps, explanation: nil)
+                }
+                #expect(
+                    vm.applyHistoryPayload(
+                        testCase.payload,
+                        for: request,
+                        preservingOptimisticLocalMessages: true),
+                    "\(testCase.name): history applies")
+                #expect(vm.planRunId == testCase.expectedRunId, "\(testCase.name): run owner")
+                #expect(vm.planSteps == testCase.expectedSteps, "\(testCase.name): steps")
+            }
+        }
     }
 
     @Test func `foreground history refreshes adopted run snapshot`() async throws {
@@ -1475,7 +1604,11 @@ struct ChatViewModelTests {
     @Test func `foreground clears completed run without assistant output`() async throws {
         let activeHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
-            inFlightRun: OpenClawChatInFlightRun(runId: "run-quiet", text: ""))
+            inFlightRun: OpenClawChatInFlightRun(
+                runId: "run-quiet",
+                text: "",
+                plan: OpenClawChatPlanSnapshot(
+                    steps: [OpenClawChatPlanStep(step: "Finish", status: .inProgress)])))
         let completedHistory = historyPayload(
             messages: [chatTextMessage(role: "user", text: "quiet task", timestamp: 1)],
             hasActiveRun: false)
@@ -1483,11 +1616,13 @@ struct ChatViewModelTests {
 
         try await loadAndWaitBootstrap(vm: vm)
         #expect(await MainActor.run { vm.pendingRunCount == 1 })
+        #expect(await MainActor.run { vm.planRunId == "run-quiet" })
         await MainActor.run { vm.resumeFromForeground() }
         try await waitUntil("silent completed run clears") {
             await MainActor.run { vm.pendingRunCount == 0 }
         }
         #expect(await MainActor.run { !vm.hasActiveSessionRunWithoutChatSnapshot })
+        #expect(await MainActor.run { vm.planSteps.isEmpty && vm.planRunId == nil })
     }
 
     @Test func `foreground active session with answered chat does not show activity indicator`() async throws {
@@ -1556,6 +1691,39 @@ struct ChatViewModelTests {
                 vm.pendingRunCount == 1 && vm.streamingAssistantText == "working"
             }
         }
+    }
+
+    @Test func `post-send stale inactive history preserves newer live plan`() async throws {
+        let historyGate = AsyncGate()
+        let historyCalls = AsyncCounter()
+        let inactiveHistory = historyPayload(hasActiveRun: false)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), inactiveHistory],
+            requestHistoryHook: { _ in
+                if await historyCalls.increment() == 2 {
+                    await historyGate.wait()
+                }
+            },
+            sendMessageStatus: "pending")
+
+        try await loadAndWaitBootstrap(vm: vm)
+        await sendUserMessage(vm, text: "finish while disconnected")
+        let runId = try await waitForLastSentRunId(transport)
+        try await waitUntil("post-send history starts") { await historyCalls.current() == 2 }
+        emitPlan(
+            transport: transport,
+            runId: runId,
+            steps: [planStep("Finish", status: "in_progress")])
+        try await waitUntil("plan applies before inactive history") {
+            await MainActor.run { vm.planRunId == runId }
+        }
+
+        await historyGate.open()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await MainActor.run { vm.planRunId == runId })
+        #expect(await MainActor.run { vm.planSteps == [
+            OpenClawChatPlanStep(step: "Finish", status: .inProgress),
+        ] })
     }
 
     @Test func `legacy history omission does not clear pending run`() async throws {
@@ -3059,7 +3227,11 @@ struct ChatViewModelTests {
         let activeRunId = "active-run"
         let initialHistory = historyPayload()
         let activeHistory = historyPayload(
-            inFlightRun: OpenClawChatInFlightRun(runId: activeRunId, text: ""))
+            inFlightRun: OpenClawChatInFlightRun(
+                runId: activeRunId,
+                text: "",
+                plan: OpenClawChatPlanSnapshot(
+                    steps: [OpenClawChatPlanStep(step: "Keep working", status: .inProgress)])))
         let (transport, vm) = await makeViewModel(
             historyResponses: [initialHistory, activeHistory, activeHistory],
             sendMessageHook: { _ in
