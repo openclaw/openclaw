@@ -101,8 +101,10 @@ describeLive("OpenAI Responses live", () => {
       expect(result.stopReason).toBe("toolUse");
       const toolCalls = result.content.filter((block) => block.type === "toolCall");
       expect(toolCalls).toHaveLength(1);
-      expect(toolCalls[0]?.name).toBe("live_probe");
-      expect((toolCalls[0]?.arguments as { value?: string }).value).toBe("LIVE_OK");
+      const probeCall = toolCalls[0];
+      expect(probeCall?.name).toBe("live_probe");
+      const probeArguments = (probeCall?.arguments ?? {}) as { value?: string };
+      expect(probeArguments.value).toBe("LIVE_OK");
       for (const block of result.content) {
         if (block.type === "thinking") {
           expect(block.thinkingSignature).toBeTruthy();
