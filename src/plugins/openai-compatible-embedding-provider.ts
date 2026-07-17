@@ -1,3 +1,4 @@
+// Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { applyQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/host/query-instruction-templates.js";
@@ -19,11 +20,13 @@ import type {
   EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
+/** Provider id for OpenAI-compatible remote embedding servers. */
 const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const EMBEDDING_ERROR_BODY_MAX_CHARS = 1_000;
 const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
+/** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
   providerId: string;
   baseUrl: string;
