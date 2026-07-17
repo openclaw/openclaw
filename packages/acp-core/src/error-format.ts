@@ -1,5 +1,11 @@
 // ACP Core helper module supports error format behavior.
 import {
+  CREDENTIAL_STYLE_HEADER_REDACT_PATTERN,
+  HTTP_AUTH_HEADER_BOUNDARY_PATTERN,
+  HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN,
+  HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN,
+  HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN,
+  HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN,
   HTTP_AUTH_SCHEME_PATTERN,
   HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
   redactStructuredAuthHeaders,
@@ -14,30 +20,30 @@ const SECRET_PATTERNS: RegExp[] = [
   /(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
   /--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token)\s+(["']?)([^\s"']+)\1/gi,
   new RegExp(
-    String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer\s+([-A-Za-z0-9._~+/=]+)`,
+    String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
     "gi",
   ),
   new RegExp(
-    String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic\s+([A-Za-z0-9+/=]+)`,
+    String.raw`Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
     "gi",
   ),
   new RegExp(
-    String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+    String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
     "gi",
   ),
   new RegExp(
-    String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
+    String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
     "gi",
   ),
   new RegExp(
-    String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=\s))${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+    String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))${HTTP_AUTH_SCHEME_PATTERN}${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})`,
     "gi",
   ),
   new RegExp(
-    String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=\s))([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
+    String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}))(${HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN})(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[,;)}\]]|\r?\n(?![ \t])))`,
     "gi",
   ),
-  /(^|[\s,{])(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)\s*[:=]\s*([^\s"',;]+)/gi,
+  new RegExp(CREDENTIAL_STYLE_HEADER_REDACT_PATTERN, "gi"),
   /(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
   /\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])/g,
   /(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token)=([^\s&#]+)/gi,
@@ -64,12 +70,40 @@ const SECRET_PATTERNS: RegExp[] = [
 
 let configuredRedactor: ((value: string) => string) | undefined;
 
+const STRUCTURED_AUTH_MARKER_PREFIX = ";__openclaw_structured_auth_redacted_";
+
 function createStructuredAuthMarker(value: string): string {
-  let marker = ";__openclaw_structured_auth_redacted__;";
-  while (value.includes(marker)) {
-    marker = `;${marker}`;
+  const usedIds = new Set<number>();
+  const maxIdDigits = String(value.length).length;
+  let cursor = 0;
+  for (;;) {
+    const markerStart = value.indexOf(STRUCTURED_AUTH_MARKER_PREFIX, cursor);
+    if (markerStart < 0) {
+      break;
+    }
+    const idStart = markerStart + STRUCTURED_AUTH_MARKER_PREFIX.length;
+    let idEnd = idStart;
+    while (idEnd - idStart <= maxIdDigits) {
+      const char = value[idEnd];
+      if (char === undefined || char < "0" || char > "9") {
+        break;
+      }
+      idEnd += 1;
+    }
+    if (idEnd > idStart && value[idEnd] === ";" && idEnd - idStart <= maxIdDigits) {
+      const id = Number(value.slice(idStart, idEnd));
+      if (id <= value.length) {
+        usedIds.add(id);
+      }
+    }
+    cursor = idStart;
   }
-  return marker;
+
+  let id = 0;
+  while (usedIds.has(id)) {
+    id += 1;
+  }
+  return `${STRUCTURED_AUTH_MARKER_PREFIX}${id};`;
 }
 
 /** Installs a host-provided redactor used before ACP fallback secret-pattern redaction. */

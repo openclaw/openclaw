@@ -82,6 +82,89 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(input)).toBe("Authorization: Digest [REDACTED]; status=401");
   });
 
+  it("redacts consecutive, prefixed, and serialized auth headers", () => {
+    const proxyValue = ["cHJveH", "k6cGFz", "cw=="].join("");
+    const customValue = ["Y3VzdG", "9tOnBh", "c3M="].join("");
+    const accessValue = ["sample", "access", "value", "1234567890"].join("-");
+    const googleValue = ["sample", "google", "value", "1234567890"].join("-");
+    const input = [
+      "Proxy-Authorization: Foo",
+      `Proxy-Authorization: Basic ${proxyValue}`,
+      `X-Authorization: Basic ${customValue}`,
+      JSON.stringify({
+        "x-access-token": accessValue,
+        "x-goog-api-key": googleValue,
+      }),
+    ].join("\n");
+
+    expect(redactSensitiveText(input)).toBe(
+      [
+        "Proxy-Authorization: [REDACTED]",
+        "Proxy-Authorization: Basic [REDACTED]",
+        "X-Authorization: Basic [REDACTED]",
+        JSON.stringify({
+          "x-access-token": "[REDACTED]",
+          "x-goog-api-key": "[REDACTED]",
+        }),
+      ].join("\n"),
+    );
+  });
+
+  it("redacts later auth params and token credentials after punctuation", () => {
+    const responseValue = ["later", "response", "value", "1234567890"].join("-");
+    const negotiateValue = ["cHJvb2", "YxMjM0", "NTY3ODkw"].join("");
+    const foldedValue = ["Zm9sZG", "VkOnNl", "Y3JldA=="].join("");
+    const input = [
+      `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
+      `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
+      `Authorization: Digest username="sample", uri=/bad, response="${responseValue}"; status=407`,
+      `Authorization: Digest username="sample",\r\n response="${responseValue}"; status=408`,
+      `Authorization: Digest uri=http://service, response="${responseValue}"; status=409`,
+      `Authorization: Digest response='${responseValue}'; status=410`,
+      `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
+      `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
+      `(Authorization: Negotiate ${negotiateValue})`,
+      `Authorization:\r\n Basic ${foldedValue}`,
+      `Authorization:\nBasic ${foldedValue}`,
+      `Authorization:\\nBasic ${foldedValue}`,
+    ].join("\n");
+
+    expect(redactSensitiveText(input)).toBe(
+      [
+        "Authorization: Digest [REDACTED]; status=401",
+        "Authorization: Digest [REDACTED]; status=403",
+        "Authorization: Digest [REDACTED]; status=407",
+        "Authorization: Digest [REDACTED]; status=408",
+        "Authorization: Digest [REDACTED]; status=409",
+        "Authorization: Digest [REDACTED]; status=410",
+        "Authorization: Digest [REDACTED]; status=412",
+        "Authorization: Digest [REDACTED]; status=413",
+        "(Authorization: Negotiate [REDACTED])",
+        "Authorization:\r\n Basic [REDACTED]",
+        "Authorization:\nBasic [REDACTED]",
+        "Authorization:\\nBasic [REDACTED]",
+      ].join("\n"),
+    );
+
+    const serializedLine = JSON.stringify(
+      `prefix\nAuthorization: Digest response="${responseValue}"`,
+    );
+    expect(redactSensitiveText(serializedLine)).toBe(
+      JSON.stringify("prefix\nAuthorization: Digest [REDACTED]"),
+    );
+  });
+
+  it("bounds recovery between repeated malformed auth headers", () => {
+    const response = ["final", "response", "1234567890abcdef"].join("-");
+    const malformed = Array.from({ length: 128 }, () => "Authorization: Digest damaged").join(" ");
+    const output = redactSensitiveText(
+      `${malformed} Authorization: Digest response="${response}"; status=411`,
+    );
+
+    expect(output).not.toContain(response);
+    expect(output).toContain("Authorization: Digest [REDACTED]; status=411");
+  });
+
   it("redacts parameterized schemes and encoded quoted-pairs", () => {
     const proof = ["hawk", "credential", "proof", "1234567890abcdef"].join("-");
     const response = ["escaped", "quoted", "response", "1234567890abcdef"].join("-");
@@ -178,6 +261,21 @@ describe("redactSensitiveText", () => {
 
     expect(redactSensitiveText(input)).toBe(
       [`${envKey}=[REDACTED]`, "Authorization: Digest [REDACTED]; status=401"].join("\n"),
+    );
+  });
+
+  it("preserves marker-shaped input while redacting structured auth", () => {
+    const markerZero = ";__openclaw_structured_auth_redacted_0;";
+    const markerOne = ";__openclaw_structured_auth_redacted_1;";
+    const response = ["collision", "response", "1234567890abcdef"].join("-");
+    const input = [
+      markerZero,
+      markerOne,
+      `Authorization: Digest response="${response}"; status=401`,
+    ].join("\n");
+
+    expect(redactSensitiveText(input)).toBe(
+      [markerZero, markerOne, "Authorization: Digest [REDACTED]; status=401"].join("\n"),
     );
   });
 

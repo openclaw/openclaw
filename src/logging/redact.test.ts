@@ -408,6 +408,77 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("; request_id=proxy-example");
   });
 
+  it("masks consecutive, prefixed, and serialized auth headers", () => {
+    const proxyValue = ["cHJveH", "k6cGFz", "cw=="].join("");
+    const customValue = ["Y3VzdG", "9tOnBh", "c3M="].join("");
+    const accessValue = ["sample", "access", "value", "1234567890"].join("-");
+    const googleValue = ["sample", "google", "value", "1234567890"].join("-");
+    const input = [
+      "Proxy-Authorization: Foo",
+      `Proxy-Authorization: Basic ${proxyValue}`,
+      `X-Authorization: Basic ${customValue}`,
+      JSON.stringify({
+        "x-access-token": accessValue,
+        "x-goog-api-key": googleValue,
+      }),
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain("Proxy-Authorization: Basic ***");
+    expect(output).toContain("X-Authorization: Basic ***");
+    for (const credential of [proxyValue, customValue, accessValue, googleValue]) {
+      expect(output).not.toContain(credential);
+    }
+  });
+
+  it("masks later auth params and token credentials after punctuation", () => {
+    const responseValue = ["later", "response", "value", "1234567890"].join("-");
+    const negotiateValue = ["cHJvb2", "YxMjM0", "NTY3ODkw"].join("");
+    const foldedValue = ["Zm9sZG", "VkOnNl", "Y3JldA=="].join("");
+    const input = [
+      `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
+      `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
+      `Authorization: Digest username="sample", uri=/bad, response="${responseValue}"; status=407`,
+      `Authorization: Digest username="sample",\r\n response="${responseValue}"; status=408`,
+      `Authorization: Digest uri=http://service, response="${responseValue}"; status=409`,
+      `Authorization: Digest response='${responseValue}'; status=410`,
+      `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
+      `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
+      `(Authorization: Negotiate ${negotiateValue})`,
+      `Authorization:\r\n Basic ${foldedValue}`,
+      `Authorization:\nBasic ${foldedValue}`,
+      `Authorization:\\nBasic ${foldedValue}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toBe(
+      [
+        "Authorization: Digest ***; status=401",
+        "Authorization: Digest ***; status=403",
+        "Authorization: Digest ***; status=407",
+        "Authorization: Digest ***; status=408",
+        "Authorization: Digest ***; status=409",
+        "Authorization: Digest ***; status=410",
+        "Authorization: Digest ***; status=412",
+        "Authorization: Digest ***; status=413",
+        "(Authorization: Negotiate cHJvb2…ODkw)",
+        "Authorization:\r\n Basic Zm9sZG…dA==",
+        "Authorization:\nBasic Zm9sZG…dA==",
+        "Authorization:\\nBasic Zm9sZG…dA==",
+      ].join("\n"),
+    );
+    expect(output).not.toContain(responseValue);
+    expect(output).not.toContain(negotiateValue);
+    expect(output).not.toContain(foldedValue);
+
+    const serializedLine = JSON.stringify(
+      `prefix\nAuthorization: Digest response="${responseValue}"`,
+    );
+    expect(redactSensitiveText(serializedLine, { mode: "tools" })).toBe(
+      JSON.stringify("prefix\nAuthorization: Digest ***"),
+    );
+  });
+
   it("masks escaped structured authorization fields", () => {
     const response = ["escaped", "digest", "response", "1234567890abcdef"].join("-");
     const input = `Authorization: Digest realm=\\"Example Realm\\", response=\\"${response}\\"; status=401`;
@@ -554,6 +625,18 @@ describe("redactSensitiveText", () => {
 
     expect(output).not.toContain(response);
     expect(output).not.toContain("response=");
+  });
+
+  it("masks opaque authorization across bounded-replacement chunks", () => {
+    const headerValue = `${"A".repeat(96)}==`;
+    const standaloneValue = `${"B".repeat(96)}==`;
+    const input = `${"x".repeat(32_760)} Authorization: Bearer ${headerValue}\nrequest failed: Bearer ${standaloneValue}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(headerValue);
+    expect(output).not.toContain(standaloneValue);
+    expect(output).toContain("Authorization: Bearer AAAAAA…AA==");
+    expect(output).toContain("request failed: Bearer BBBBBB…BB==");
   });
 
   it("masks token authorization fields without consuming adjacent diagnostics", () => {
@@ -1637,6 +1720,18 @@ describe("redactSensitiveLines", () => {
         resolved,
       ),
     ).toEqual(["Authorization: Digest ***; status=401"]);
+  });
+
+  it("redacts folded structured auth across line batches", () => {
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    const response = ["folded", "line", "response", "1234567890abcdef"].join("-");
+
+    expect(
+      redactSensitiveLines(
+        ["Authorization: Digest", ` response="${response}"; status=401`],
+        resolved,
+      ),
+    ).toEqual(["Authorization: Digest", " ***; status=401"]);
   });
 
   it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {
