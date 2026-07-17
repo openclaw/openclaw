@@ -305,6 +305,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+
+  /** Apply a finalized host-runtime control request after `afterToolCall` has completed. */
+  onToolResultControl?: (control: AgentToolControl) => Promise<void> | void;
 }
 
 /**

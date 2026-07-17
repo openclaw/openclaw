@@ -182,6 +182,9 @@ export async function runEmbeddedAttempt(
       effectiveWorkspace,
       markCoreToolStage: (name) => corePluginToolStages.mark(name),
       onYield: (message) => {
+        if (yieldDetected) {
+          return;
+        }
         yieldDetected = true;
         yieldMessage = message;
         queueYieldInterruptForSession?.();
@@ -358,6 +361,7 @@ export async function runEmbeddedAttempt(
           },
           getCurrentAttemptPluginMetadataSnapshot,
           markStage: (stage) => prepStages.mark(stage),
+          onYield: preparedToolBase.onYield,
           runAbortSignal: runAbortController.signal,
         },
         contextGuards: { computerContextEpoch },

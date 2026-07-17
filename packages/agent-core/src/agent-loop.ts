@@ -1077,6 +1077,22 @@ async function finalizeExecutedToolCall(
     }
   }
 
+  if (result.control) {
+    if (!config.onToolResultControl) {
+      result = createErrorToolResult(
+        `Tool requested ${result.control.type}, but ${result.control.type} is not supported in this runtime`,
+      );
+      isError = true;
+    } else {
+      try {
+        await config.onToolResultControl(result.control);
+      } catch (error) {
+        result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+        isError = true;
+      }
+    }
+  }
+
   return {
     toolCall: prepared.toolCall,
     result,
