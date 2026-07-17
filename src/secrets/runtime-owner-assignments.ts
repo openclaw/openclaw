@@ -68,7 +68,11 @@ function createDegradedOwner(assignments: SecretAssignment[], reason: string): D
   };
 }
 
-function warnDegradedOwner(context: ResolverContext, owner: DegradedSecretOwner): void {
+/** Emits the canonical warning for one isolated runtime secret owner. */
+export function warnDegradedSecretOwner(
+  context: ResolverContext,
+  owner: DegradedSecretOwner,
+): void {
   pushWarning(context, {
     code: "SECRETS_OWNER_UNAVAILABLE",
     path: owner.paths[0]!,
@@ -159,7 +163,7 @@ export async function resolveAndApplySecretAssignments(params: {
         // would silently route this owner through env/profile fallback after its declared ref failed.
         const degradedOwner = createDegradedOwner(assignments, failureReason);
         degradedOwners.push(degradedOwner);
-        warnDegradedOwner(params.context, degradedOwner);
+        warnDegradedSecretOwner(params.context, degradedOwner);
         continue;
       }
       if (

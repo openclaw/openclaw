@@ -58,9 +58,12 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
     }
   },
   resolveRuntimeWebTools: async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
   }),
 }));
 
