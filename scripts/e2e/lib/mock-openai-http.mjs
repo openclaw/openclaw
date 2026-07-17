@@ -1,11 +1,25 @@
 // Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REQUEST_LOG_BODY_MAX_BYTES = 256 * 1024;
 const REQUEST_LOG_PREVIEW_CHARS = 4096;
+
+// Mock servers run under plain Node before workspace packages are built or linked.
+function requestLogPreview(bodyText) {
+  const end = Math.min(bodyText.length, REQUEST_LOG_PREVIEW_CHARS);
+  const previousCodeUnit = bodyText.charCodeAt(end - 1);
+  const nextCodeUnit = bodyText.charCodeAt(end);
+  const cutsSurrogatePair =
+    end > 0 &&
+    end < bodyText.length &&
+    previousCodeUnit >= 0xd800 &&
+    previousCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff;
+  return bodyText.slice(0, cutsSurrogatePair ? end - 1 : end);
+}
 
 export function readMockOpenAiHttpLimits(env = process.env) {
   return {
@@ -77,7 +91,7 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
   return {
     truncated: true,
     byteLength,
-    preview: truncateUtf16Safe(bodyText, REQUEST_LOG_PREVIEW_CHARS),
+    preview: requestLogPreview(bodyText),
   };
 }
 
