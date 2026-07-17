@@ -699,4 +699,109 @@ describe("provider-catalog-live-runtime", () => {
     expect(recovered.models.map((model) => model.id)).toEqual(["model-b"]);
     expect(fetchGuardMock).toHaveBeenCalledTimes(2);
   });
+
+  it("gracefully ignores a malformed absolute next URL instead of crashing", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+          // Space in hostname makes this a genuinely invalid absolute URL that
+          // throws TypeError from `new URL()`. Relative URLs like "?page=2" never
+          // throw and are handled by the existing pagination path.
+          next: "http://exa mple.com/models?page=2",
+          has_more: false,
+        }),
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a"]);
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gracefully ignores a malformed nested links.next URL", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+          links: { next: "http://exa mple.com/models?page=2" },
+          has_more: false,
+        }),
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a"]);
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sets safe replay headers when final URL is unparseable", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+        }),
+      ),
+      // An unparseable finalUrl should trigger safe replay headers (conservative
+      // cross-origin assumption), not crash.
+      finalUrl: "http://exa mple.com/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a"]);
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports incomplete pagination instead of crashing on malformed next URL with has_more", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "model-a", object: "model" }],
+          next: "http://exa mple.com/models?page=2",
+          has_more: true,
+        }),
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).rejects.toThrow(
+      "provider model discovery did not include a supported next page before the catalog completed",
+    );
+
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
 });

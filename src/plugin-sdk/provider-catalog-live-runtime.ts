@@ -212,22 +212,33 @@ function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
   );
 }
 
+function tryParseUrl(url: string, base?: string): URL | undefined {
+  try {
+    return new URL(url, base);
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveLiveModelCatalogNextPage(
   currentUrl: string,
   body: unknown,
 ): LiveModelCatalogNextPageResolution {
   const rawNextUrl = readLiveModelCatalogNextUrl(body);
   if (rawNextUrl) {
-    const nextUrl = new URL(rawNextUrl, currentUrl);
-    if (nextUrl.origin === new URL(currentUrl).origin) {
+    const currentParsed = tryParseUrl(currentUrl);
+    const nextUrl = tryParseUrl(rawNextUrl, currentUrl);
+    if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
   }
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
-    const nextUrl = new URL(currentUrl);
-    nextUrl.searchParams.set(cursor.name, cursor.value);
-    return { status: "next", url: nextUrl.toString() };
+    const nextUrl = tryParseUrl(currentUrl);
+    if (nextUrl) {
+      nextUrl.searchParams.set(cursor.name, cursor.value);
+      return { status: "next", url: nextUrl.toString() };
+    }
   }
   return bodyAdvertisesMoreLiveModelCatalogPages(body)
     ? { status: "incomplete" }
@@ -302,7 +313,14 @@ export async function fetchLiveProviderModelRows(
       safeReplayHeaders,
     });
     rows.push(...result.rows);
-    if (safeReplayHeaders || new URL(result.finalUrl).origin !== new URL(requestedPageUrl).origin) {
+    const finalParsed = tryParseUrl(result.finalUrl);
+    const requestedParsed = tryParseUrl(requestedPageUrl);
+    if (
+      safeReplayHeaders ||
+      !finalParsed ||
+      !requestedParsed ||
+      finalParsed.origin !== requestedParsed.origin
+    ) {
       safeReplayHeaders = new Headers(
         retainSafeHeadersForCrossOriginRedirect(result.requestHeaders),
       );
