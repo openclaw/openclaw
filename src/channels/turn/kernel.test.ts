@@ -326,33 +326,6 @@ describe("channel turn kernel", () => {
     expect(delivered.visibleReplySent).toBe(true);
   });
 
-  it("forwards resolver-only config overrides without replacing the base config", async () => {
-    const configOverride = {
-      agents: { defaults: { userTimezone: "America/New_York" } },
-    } as OpenClawConfig;
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }));
-
-    await dispatchAssembledChannelTurn({
-      cfg,
-      configOverride,
-      channel: "msteams",
-      agentId: "main",
-      routeSessionKey: "agent:main:msteams:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: createCtx({ Provider: "msteams", Surface: "msteams" }),
-      recordInboundSession: createRecordInboundSession(),
-      dispatchReplyWithBufferedBlockDispatcher,
-      delivery: { deliver: vi.fn() },
-    });
-
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg, configOverride }),
-    );
-  });
-
   it("prepares payloads before durable enqueue and observes handled delivery", async () => {
     sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["tlon-1"]));
     const onDelivered = vi.fn();

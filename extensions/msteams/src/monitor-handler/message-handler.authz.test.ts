@@ -826,9 +826,9 @@ describe("msteams monitor handler authz", () => {
     const dispatchParams = recordFromMockCall(
       mockCallArg(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher, 0, 0),
     );
-    expect(dispatchParams.cfg).toBe(deps.cfg);
-    expect(dispatchParams.configOverride).toEqual({
-      agents: { defaults: { userTimezone: "America/New_York" } },
+    expect(dispatchParams.cfg).not.toBe(deps.cfg);
+    expect(recordFromMockCall(dispatchParams.cfg).agents).toEqual({
+      defaults: { userTimezone: "America/New_York" },
     });
   });
 

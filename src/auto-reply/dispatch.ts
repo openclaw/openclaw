@@ -513,7 +513,6 @@ function finalizeDispatchResult(
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
-  configOverride?: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
@@ -556,7 +555,6 @@ export async function dispatchInboundMessage(params: {
           dispatchReplyFromConfig({
             ctx: finalized,
             cfg: params.cfg,
-            configOverride: params.configOverride,
             dispatcher: params.dispatcher,
             replyOptions: replyOptionsWithRunState,
             replyResolver: params.replyResolver,
@@ -576,7 +574,6 @@ export async function dispatchInboundMessage(params: {
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
-  configOverride?: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
@@ -665,7 +662,6 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     return await dispatchInboundMessage({
       ctx: finalized,
       cfg: params.cfg,
-      configOverride: params.configOverride,
       dispatcher,
       toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
@@ -706,7 +702,6 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
 export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
-  configOverride?: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
@@ -742,7 +737,6 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   return await dispatchInboundMessage({
     ctx: params.ctx,
     cfg: params.cfg,
-    configOverride: params.configOverride,
     dispatcher,
     toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,

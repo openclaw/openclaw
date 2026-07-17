@@ -942,14 +942,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       | { timezone?: string }
       | undefined;
     const senderTimezone = activityClientInfo?.timezone || conversationRef.timezone;
-    const configOverride =
+    const turnConfig =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {
+            ...cfg,
             agents: {
+              ...cfg.agents,
               defaults: { ...cfg.agents?.defaults, userTimezone: senderTimezone },
             },
           }
-        : undefined;
+        : cfg;
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
       const turnResult = await core.channel.inbound.run({
@@ -966,8 +968,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
-            cfg,
-            configOverride,
+            cfg: turnConfig,
             channel: "msteams",
             accountId: route.accountId,
             route: { agentId: route.agentId, sessionKey: route.sessionKey },

@@ -36,18 +36,14 @@ describe("provider dispatcher wrappers", () => {
     hoisted.plainDispatchMock.mockResolvedValue(dispatchResult);
   });
 
-  it("forwards runtime controls through the buffered wrapper", async () => {
+  it("forwards runtime toolsAllow through the buffered wrapper", async () => {
     const dispatcherOptions = {
       deliver: async () => ({ visibleReplySent: false }),
     } satisfies ReplyDispatcherWithTypingOptions;
-    const configOverride = {
-      agents: { defaults: { userTimezone: "America/New_York" } },
-    } as OpenClawConfig;
 
     await dispatchReplyWithBufferedBlockDispatcher({
       ctx: { Body: "hello" },
       cfg: {} as OpenClawConfig,
-      configOverride,
       dispatcherOptions,
       toolsAllow: ["message"],
     });
@@ -55,25 +51,20 @@ describe("provider dispatcher wrappers", () => {
     expect(hoisted.bufferedDispatchMock).toHaveBeenCalledTimes(1);
     expect(hoisted.bufferedDispatchMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        configOverride,
         dispatcherOptions,
         toolsAllow: ["message"],
       }),
     );
   });
 
-  it("forwards runtime controls through the plain wrapper", async () => {
+  it("forwards runtime toolsAllow through the plain wrapper", async () => {
     const dispatcherOptions = {
       deliver: async () => ({ visibleReplySent: false }),
     } satisfies ReplyDispatcherOptions;
-    const configOverride = {
-      agents: { defaults: { userTimezone: "America/New_York" } },
-    } as OpenClawConfig;
 
     await dispatchReplyWithDispatcher({
       ctx: { Body: "hello" },
       cfg: {} as OpenClawConfig,
-      configOverride,
       dispatcherOptions,
       toolsAllow: ["message"],
     });
@@ -81,7 +72,6 @@ describe("provider dispatcher wrappers", () => {
     expect(hoisted.plainDispatchMock).toHaveBeenCalledTimes(1);
     expect(hoisted.plainDispatchMock.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
-        configOverride,
         dispatcherOptions,
         toolsAllow: ["message"],
       }),

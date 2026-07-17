@@ -16,8 +16,6 @@ type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply">;
 export type DispatchReplyWithBufferedBlockDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;
-  /** Optional patch applied only at reply resolution. */
-  configOverride?: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
   toolsAllow?: string[];
   replyOptions?: DispatchReplyOptions;
@@ -28,8 +26,6 @@ export type DispatchReplyWithBufferedBlockDispatcher = (params: {
 export type DispatchReplyWithDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;
-  /** Optional patch applied only at reply resolution. */
-  configOverride?: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
   toolsAllow?: string[];
   replyOptions?: DispatchReplyOptions;
