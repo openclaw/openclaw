@@ -2627,7 +2627,6 @@ describe("processResponsesStream", () => {
     const snapshot1 = "Self-attention computes";
     const snapshot2 = "Self-attention computes Q/K/V projections";
     const snapshot3 = "Self-attention computes Q/K/V projections for each token.";
-    const snapshotItemId = "msg_snapshot";
     const messageItem = (id: string, text: string) => ({
       type: "message",
       id,
@@ -2639,21 +2638,40 @@ describe("processResponsesStream", () => {
       responseEvents([
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
-        { type: "response.content_part.added", part: { type: "output_text", text: "" } },
-        { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot1) },
+        {
+          type: "response.content_part.added",
+          output_index: 0,
+          part: { type: "output_text", text: "" },
+        },
+        { type: "response.output_text.delta", output_index: 0, delta: snapshot1 },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_1", snapshot1),
+        },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot2) },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_2", snapshot2),
+        },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot3) },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_3", snapshot3),
+        },
         { type: "response.completed", response: { id: "resp_1", status: "completed" } },
       ]),
       output,
@@ -2667,7 +2685,7 @@ describe("processResponsesStream", () => {
       {
         type: "text",
         text: snapshot3,
-        textSignature: JSON.stringify({ v: 1, id: snapshotItemId, phase: "final_answer" }),
+        textSignature: JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" }),
       },
     ]);
     // Balanced lifecycle: exactly one text_start, every event on index 0, and
@@ -2683,10 +2701,10 @@ describe("processResponsesStream", () => {
       events.filter((event) => event.type === "text_end").map((event) => event.content),
     ).toEqual([snapshot1, snapshot2, snapshot3]);
     expect(textBlockSignatures).toEqual([
-      ["text_start", 0, JSON.stringify({ v: 1, id: snapshotItemId, phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: snapshotItemId, phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: snapshotItemId, phase: "final_answer" })],
-      ["text_end", 0, JSON.stringify({ v: 1, id: snapshotItemId, phase: "final_answer" })],
+      ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_end", 0, JSON.stringify({ v: 1, id: "msg_3", phase: "final_answer" })],
     ]);
   });
 
@@ -2709,10 +2727,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "message", id: "msg_1", phase: "final_answer" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: {
               type: "message",
               id: "msg_1",
@@ -2722,10 +2742,12 @@ describe("processResponsesStream", () => {
           },
           {
             type: "response.output_item.added",
+            output_index: 1,
             item: { type: "message", id: "msg_2", phase: "final_answer" },
           },
           {
             type: "response.output_item.done",
+            output_index: 1,
             item: {
               type: "message",
               id: "msg_2",

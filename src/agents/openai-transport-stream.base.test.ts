@@ -420,7 +420,6 @@ describe("openai transport stream", () => {
     const snapshot1 = "Scaled dot-product attention";
     const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
     const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
-    const snapshotItemId = "msg_snapshot";
     const messageItem = (id: string, text: string) => ({
       type: "message",
       id,
@@ -432,20 +431,35 @@ describe("openai transport stream", () => {
       streamChunks([
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
-        { type: "response.output_text.delta", delta: snapshot1 },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot1) },
+        { type: "response.output_text.delta", output_index: 0, delta: snapshot1 },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_1", snapshot1),
+        },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot2) },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_2", snapshot2),
+        },
         {
           type: "response.output_item.added",
-          item: { type: "message", id: snapshotItemId, phase: "final_answer" },
+          output_index: 0,
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem(snapshotItemId, snapshot3) },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: messageItem("msg_3", snapshot3),
+        },
         {
           type: "response.completed",
           response: { id: "resp-snapshots", status: "completed" },
@@ -474,7 +488,7 @@ describe("openai transport stream", () => {
       {
         type: "text",
         text: snapshot3,
-        textSignature: '{"v":1,"id":"msg_snapshot","phase":"final_answer"}',
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
       },
     ]);
     // Balanced lifecycle: one text_start, all events on index 0, and each
@@ -490,10 +504,10 @@ describe("openai transport stream", () => {
       ["text_end", 0],
     ]);
     expect(textBlockSignatures).toEqual([
-      ["text_start", 0, '{"v":1,"id":"msg_snapshot","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_snapshot","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_snapshot","phase":"final_answer"}'],
-      ["text_end", 0, '{"v":1,"id":"msg_snapshot","phase":"final_answer"}'],
+      ["text_start", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_1","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_2","phase":"final_answer"}'],
+      ["text_end", 0, '{"v":1,"id":"msg_3","phase":"final_answer"}'],
     ]);
   });
 
@@ -512,14 +526,20 @@ describe("openai transport stream", () => {
       streamChunks([
         {
           type: "response.output_item.added",
+          output_index: 0,
           item: { type: "message", id: "msg_1", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_1", "Hello") },
+        { type: "response.output_item.done", output_index: 0, item: messageItem("msg_1", "Hello") },
         {
           type: "response.output_item.added",
+          output_index: 1,
           item: { type: "message", id: "msg_2", phase: "final_answer" },
         },
-        { type: "response.output_item.done", item: messageItem("msg_2", "Hello world!") },
+        {
+          type: "response.output_item.done",
+          output_index: 1,
+          item: messageItem("msg_2", "Hello world!"),
+        },
         {
           type: "response.completed",
           response: { id: "resp-distinct-prefix", status: "completed" },
@@ -699,13 +719,13 @@ describe("openai transport stream", () => {
             output: [
               {
                 type: "message",
-                id: "msg_snapshot",
+                id: "msg_1",
                 role: "assistant",
                 content: [{ type: "output_text", text: "The answer" }],
               },
               {
                 type: "message",
-                id: "msg_snapshot",
+                id: "msg_2",
                 role: "assistant",
                 content: [{ type: "output_text", text: "The answer is 42." }],
               },
@@ -724,13 +744,13 @@ describe("openai transport stream", () => {
       model,
     );
 
-    // The repeated item strictly extends itself and collapses; msg_3 shrinks back
+    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
     // and is an independently identified message, so it stays a real block.
     expect(output.content).toEqual([
       {
         type: "text",
         text: "The answer is 42.",
-        textSignature: '{"v":1,"id":"msg_snapshot"}',
+        textSignature: '{"v":1,"id":"msg_2"}',
       },
       {
         type: "text",

@@ -53,6 +53,7 @@ import {
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
+  isResponsesMessageSnapshotLineage,
   isResponsesTextContentPartType,
   resolveResponsesMessageSnapshotCollapse,
 } from "./openai-responses-stream-compat.js";
@@ -703,6 +704,7 @@ export async function processResponsesStream<TApi extends Api>(
     block: TextContent;
     index: number;
     itemId: string | undefined;
+    outputIndex: number | undefined;
     phase: TextSignatureV1["phase"] | undefined;
   };
   type ResponsesOutputSlot =
@@ -717,6 +719,7 @@ export async function processResponsesStream<TApi extends Api>(
         item: ResponsesStreamOutputMessage;
         block: TextContent | null;
         contentIndex: number | undefined;
+        outputIndex: number | undefined;
         pendingText: string | null;
         collapseCandidate: TextBlockReference | null;
       }
@@ -834,10 +837,15 @@ export async function processResponsesStream<TApi extends Api>(
       const messageItem = item as ResponsesStreamOutputMessage;
       const itemId = readIdentityValue(messageItem.id);
       const phase = messageItem.phase ?? undefined;
-      const collapseCandidate =
-        lastTextBlock?.itemId && lastTextBlock.itemId === itemId && lastTextBlock.phase === phase
-          ? lastTextBlock
-          : null;
+      const outputIndex = readOutputIndex(event);
+      const collapseCandidate = isResponsesMessageSnapshotLineage({
+        prior: lastTextBlock,
+        nextPhase: phase,
+        nextItemId: itemId,
+        nextOutputIndex: outputIndex,
+      })
+        ? lastTextBlock
+        : null;
       const block: TextContent | null = collapseCandidate
         ? null
         : {
@@ -850,6 +858,7 @@ export async function processResponsesStream<TApi extends Api>(
         item: messageItem,
         block,
         contentIndex: block ? blocks.length : undefined,
+        outputIndex,
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
       } satisfies ResponsesOutputSlot;
@@ -1271,10 +1280,12 @@ export async function processResponsesStream<TApi extends Api>(
                   text: outputSlot.collapseCandidate.block.text,
                   phase: outputSlot.collapseCandidate.phase,
                   itemId: outputSlot.collapseCandidate.itemId,
+                  outputIndex: outputSlot.collapseCandidate.outputIndex,
                 },
                 nextText: finalText,
                 nextPhase: phase,
                 nextItemId: readIdentityValue(item.id),
+                nextOutputIndex: readOutputIndex(event) ?? outputSlot.outputIndex,
               })
             : ({ kind: "keep" } as const);
         outputSlot.pendingText = null;
@@ -1319,6 +1330,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: outputSlot.block,
             index: contentIndex,
             itemId: readIdentityValue(item.id),
+            outputIndex: readOutputIndex(event) ?? outputSlot.outputIndex,
             phase,
           };
           stream.push({
