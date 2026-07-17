@@ -11,7 +11,7 @@ export const EDITOR_LABELS: Record<EditorId, string> = {
   zed: "Zed",
 };
 
-export function editorOpenUrl(editor: EditorId, absPath: string, line?: number | null): string {
+function editorOpenUrl(editor: EditorId, absPath: string, line?: number | null): string {
   const normalizedPath = absPath.replaceAll("\\", "/");
   const urlPath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
   const encodedPath = urlPath
