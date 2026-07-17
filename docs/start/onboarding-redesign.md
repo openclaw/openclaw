@@ -258,7 +258,7 @@ restart` from the real environment and verify the plist. Product follow-up:
   `gh workflow run ci.yml --ref <branch> -f target_ref=<head-sha>
 -f release_gate=true -f pull_request_number=<pr>` (the run must be on the
   branch ref so `head_sha` matches, and the title becomes
-  "CI release gate <sha>", which `scripts/verify-pr-hosted-gates.mjs`
+  `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
   accepts). Then `scripts/pr` prepare/merge as usual.
 - **Gates that CI enforces beyond focused tests**: docs map
   (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
