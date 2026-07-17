@@ -15,7 +15,13 @@ internal fun String.firstGraphemeOrNull(): String? {
   return if (end == BreakIterator.DONE) null else substring(0, end)
 }
 
-internal fun String.uppercaseFirstGraphemeOrNull(): String? = firstGraphemeOrNull()?.uppercase()
+internal fun String.uppercaseFirstGraphemeOrNull(): String? {
+  val grapheme = firstGraphemeOrNull() ?: return null
+  val firstCodePoint = grapheme.codePointAt(0)
+  val uppercaseCodePoint = Character.toUpperCase(firstCodePoint)
+  // Keep badge width stable while preserving the rest of the grapheme cluster.
+  return String(Character.toChars(uppercaseCodePoint)) + grapheme.substring(Character.charCount(firstCodePoint))
+}
 
 internal fun String.takeUtf16Safe(maxChars: Int): String {
   if (length <= maxChars) return this
