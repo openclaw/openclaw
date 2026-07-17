@@ -23,28 +23,6 @@ extension OpenClawChatViewModel {
         Task { await self.performCompact() }
     }
 
-    public func setSessionPinned(_ sessionKey: String, pinned: Bool) {
-        Task {
-            do {
-                try await self.transport.patchSession(
-                    key: sessionKey,
-                    label: nil,
-                    category: nil,
-                    pinned: pinned,
-                    archived: nil,
-                    unread: nil)
-            } catch {
-                self.errorText = error.localizedDescription
-                return
-            }
-            await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
-        }
-    }
-
-    /// One-shot session list fetch for search and archived browsing. Falls back
-    /// to locally filtering the cached active list when the gateway is
-    /// unreachable; archived rows exist only server-side, so archived mode
-    /// returns empty offline.
     public func fetchSessionList(search: String?, archived: Bool) async -> [OpenClawChatSessionEntry] {
         let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
         let query = normalizedSearch?.isEmpty == false ? normalizedSearch : nil

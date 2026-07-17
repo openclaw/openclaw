@@ -172,12 +172,6 @@ public struct OpenClawChatSessionWorktree: Codable, Sendable, Hashable {
     public let id: String?
     public let branch: String?
     public let repoRoot: String?
-
-    public init(id: String? = nil, branch: String? = nil, repoRoot: String? = nil) {
-        self.id = id
-        self.branch = branch
-        self.repoRoot = repoRoot
-    }
 }
 
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {

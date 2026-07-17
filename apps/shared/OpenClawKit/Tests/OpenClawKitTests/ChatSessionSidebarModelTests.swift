@@ -210,10 +210,9 @@ struct ChatSessionSidebarModelTests {
         #expect(entry.hasActiveRun == true)
         #expect(entry.hasActiveSubagentRun == true)
         #expect(entry.lastInteractionAt == 1_700_000_000_000)
-        #expect(entry.worktree == OpenClawChatSessionWorktree(
-            id: "wt-1",
-            branch: "feature/chat",
-            repoRoot: "/repo"))
+        #expect(entry.worktree?.id == "wt-1")
+        #expect(entry.worktree?.branch == "feature/chat")
+        #expect(entry.worktree?.repoRoot == "/repo")
     }
 
     @Test func `tree nests children and bubbles run failure and unread badges`() {
