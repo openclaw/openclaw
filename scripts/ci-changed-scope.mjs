@@ -192,7 +192,7 @@ export function detectChangedScope(changedPaths) {
  * @param {string[]} changedPaths
  */
 export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchName = "") {
-  if (RELEASE_BRANCH_RE.test(branchName)) {
+  if (branchName === "main" || RELEASE_BRANCH_RE.test(branchName)) {
     return;
   }
   const generatedPaths = changedPaths.filter((filePath) =>

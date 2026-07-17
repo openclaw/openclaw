@@ -73,6 +73,12 @@ describe("control-ui-i18n generated ownership", () => {
         "release/2026.7.3",
       ),
     ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "main",
+      ),
+    ).not.toThrow();
 
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(true);
     expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
