@@ -76,7 +76,7 @@ describe("parallel-free web search provider", () => {
     expect(provider.autoDetectOrder).toBeUndefined();
   });
 
-  it("advertises the free MCP's tighter 100-char session_id cap in its tool schema", () => {
+  it("advertises the shared count contract and free MCP's tighter session_id cap", () => {
     const provider = createParallelFreeWebSearchProvider();
     const tool = provider.createTool({ config: {}, searchConfig: {} });
     if (!tool) {
@@ -86,6 +86,12 @@ describe("parallel-free web search provider", () => {
       tool.parameters as { properties: Record<string, { maxLength?: number }> }
     ).properties.session_id;
     expect(expectDefined(sessionIdParam, "Parallel session_id parameter").maxLength).toBe(100);
+    const countParam = (
+      tool.parameters as {
+        properties: Record<string, { type?: string; minimum?: number; maximum?: number }>;
+      }
+    ).properties.count;
+    expect(countParam).toMatchObject({ type: "integer", minimum: 1, maximum: 40 });
   });
 
   it("searches via the free MCP and brands the result, with no API key", async () => {
