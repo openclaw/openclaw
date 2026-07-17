@@ -91,6 +91,7 @@ function buildDirectDmContext(
     },
     access: { commands: { authorized: params.commandAuthorized === true } },
     extra: {
+      NativeDirectUserId: params.peer.id,
       OriginatingChannel: params.originatingChannel ?? params.channel,
       ...params.extraContext,
     },
@@ -183,8 +184,10 @@ export async function dispatchInboundDirectDmWithRuntime(
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
+    ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     OriginatingChannel: params.originatingChannel ?? params.channel,
     OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
