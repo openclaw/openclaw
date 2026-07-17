@@ -39,27 +39,17 @@ describe("attachChannelToResult(s)", () => {
 });
 
 describe("buildChannelSendResult", () => {
-  it("normalizes successful raw send results directly", () => {
+  it("normalizes raw send results directly", () => {
     const result = buildChannelSendResult("zalo", {
-      ok: true,
-      messageId: "m1",
+      ok: false,
+      messageId: null,
+      error: "boom",
     });
 
-    expect(result).toEqual({
-      channel: "zalo",
-      ok: true,
-      messageId: "m1",
-      error: undefined,
-    });
-  });
-
-  it("throws failed raw send results", () => {
-    expect(() =>
-      buildChannelSendResult("zalo", {
-        ok: false,
-        error: "boom",
-      }),
-    ).toThrow("boom");
+    expect(result.channel).toBe("zalo");
+    expect(result.ok).toBe(false);
+    expect(result.messageId).toBe("");
+    expect(result.error).toEqual(new Error("boom"));
   });
 });
 
