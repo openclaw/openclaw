@@ -201,7 +201,28 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     );
   });
 
-  it("denies the denied directory itself, not just paths under it", () => {
+  it.each([
+    {
+      label: "the bare denied directory",
+      requestedPath: path.join(os.homedir(), ".ssh"),
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the denied directory with a trailing separator",
+      requestedPath: `${path.join(os.homedir(), ".ssh")}/`,
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "the bare denied directory on Windows",
+      requestedPath: "C:\\Users\\me\\.ssh",
+      expected: { ok: false, code: "POLICY_DENIED", askable: false },
+    },
+    {
+      label: "a sibling sharing only the denied directory prefix",
+      requestedPath: path.join(os.homedir(), ".sshrc"),
+      expected: { ok: true },
+    },
+  ])("handles $label", ({ requestedPath, expected }) => {
     withConfig({
       n1: {
         allowReadPaths: ["/**"],
@@ -209,46 +230,8 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
       },
     });
     expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: path.join(os.homedir(), ".ssh"),
-      }),
-      { ok: false, code: "POLICY_DENIED", askable: false },
-    );
-  });
-
-  it("denies a trailing-separator form of the denied directory", () => {
-    withConfig({
-      n1: {
-        allowReadPaths: ["/**"],
-        denyPaths: ["**/.ssh/**"],
-      },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: `${path.join(os.homedir(), ".ssh")}/`,
-      }),
-      { ok: false, code: "POLICY_DENIED", askable: false },
-    );
-  });
-
-  it("keeps allowing sibling paths that only share the denied directory prefix", () => {
-    withConfig({
-      n1: {
-        allowReadPaths: ["/**"],
-        denyPaths: ["**/.ssh/**"],
-      },
-    });
-    expectResultFields(
-      evaluateFilePolicy({
-        nodeId: "n1",
-        kind: "read",
-        path: path.join(os.homedir(), ".sshrc"),
-      }),
-      { ok: true },
+      evaluateFilePolicy({ nodeId: "n1", kind: "read", path: requestedPath }),
+      expected,
     );
   });
 
