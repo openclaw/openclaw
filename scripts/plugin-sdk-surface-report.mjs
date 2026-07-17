@@ -264,7 +264,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
-      8152,
+      // +1: shared plugin interactive handler result.
+      8153,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

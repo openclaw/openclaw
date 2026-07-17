@@ -140,6 +140,18 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as ComponentContext;
 
+  const mockPluginDispatchResult = (result: { handled?: boolean; submitText?: string }) => {
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        afterInvoke?: (value: typeof result) => Promise<void>;
+        onMatched?: () => Promise<void>;
+      };
+      await typedParams.onMatched?.();
+      await typedParams.afterInvoke?.(result);
+      return { matched: true, handled: result.handled ?? true, duplicate: false, result };
+    });
+  };
+
   const createComponentInteractionBase = () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
@@ -529,16 +541,7 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "quick-replies:continue" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
-      const typedParams = params as {
-        afterInvoke?: (result: { handled?: boolean; submitText?: string }) => Promise<void>;
-        onMatched?: () => Promise<void>;
-      };
-      await typedParams.onMatched?.();
-      const result = { handled: true, submitText: "  Continue here  " };
-      await typedParams.afterInvoke?.(result);
-      return { matched: true, handled: true, duplicate: false, result };
-    });
+    mockPluginDispatchResult({ handled: true, submitText: "  Continue here  " });
 
     const button = createDiscordComponentButton(createComponentContext());
     const { interaction } = createComponentButtonInteraction();
@@ -572,15 +575,7 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "quick-replies:unsafe" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
-      const typedParams = params as {
-        afterInvoke?: (value: unknown) => Promise<void>;
-        onMatched?: () => Promise<void>;
-      };
-      await typedParams.onMatched?.();
-      await typedParams.afterInvoke?.(result);
-      return { matched: true, handled: result.handled, duplicate: false, result };
-    });
+    mockPluginDispatchResult(result);
 
     const button = createDiscordComponentButton(
       authorized ? createComponentContext() : createComponentContext({ allowFrom: ["owner-1"] }),
@@ -598,16 +593,7 @@ describe("discord component interactions", () => {
       entries: [createButtonEntry({ callbackData: "quick-replies:thread" })],
       modals: [],
     });
-    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
-      const typedParams = params as {
-        afterInvoke?: (result: { handled: true; submitText: string }) => Promise<void>;
-        onMatched?: () => Promise<void>;
-      };
-      await typedParams.onMatched?.();
-      const result = { handled: true as const, submitText: "Stay in thread" };
-      await typedParams.afterInvoke?.(result);
-      return { matched: true, handled: true, duplicate: false, result };
-    });
+    mockPluginDispatchResult({ handled: true, submitText: "Stay in thread" });
 
     const button = createDiscordComponentButton(createComponentContext());
     const { interaction } = createComponentButtonInteraction({
