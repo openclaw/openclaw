@@ -301,6 +301,8 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const dimensions = this.dimensions;
+    const startedAtMs =
+      options?.timeoutMs && Number.isFinite(options.timeoutMs) ? Date.now() : null;
     try {
       const response = await this.postEmbedding(text, { includeDimensions: true, options });
       return normalizeEmbeddingVector(response.data?.[0]?.embedding);
@@ -310,7 +312,14 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       }
     }
 
-    const response = await this.postEmbedding(text, { includeDimensions: false, options });
+    const fallbackOptions =
+      startedAtMs === null || options?.timeoutMs === undefined
+        ? options
+        : { timeoutMs: Math.max(1, options.timeoutMs - (Date.now() - startedAtMs)) };
+    const response = await this.postEmbedding(text, {
+      includeDimensions: false,
+      options: fallbackOptions,
+    });
     const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
     return truncateEmbeddingVector(embedding, dimensions, this.model);
   }

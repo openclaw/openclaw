@@ -2694,6 +2694,8 @@ describe("memory plugin e2e", () => {
   });
 
   test("retries without rejected dimensions and truncates the fallback vector", async () => {
+    let nowMs = 1_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const rejectedDimensions = Object.assign(
       new Error("422 Extra inputs are not permitted: body.dimensions"),
       {
@@ -2712,6 +2714,7 @@ describe("memory plugin e2e", () => {
     const embeddingsCreate = vi.fn(async (body: unknown) => {
       const request = body as Record<string, unknown>;
       if (request.dimensions === 1024) {
+        nowMs += 500;
         throw rejectedDimensions;
       }
       return { data: [{ embedding: [3, 4, ...Array.from({ length: 1023 }, () => 0)] }] };
@@ -2737,11 +2740,12 @@ describe("memory plugin e2e", () => {
     vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
       ensureGlobalUndiciEnvProxyDispatcher,
     }));
+    const post = vi.fn((_path: string, opts: { body?: unknown }) =>
+      invokeEmbeddingCreate(embeddingsCreate, opts.body),
+    );
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        post = vi.fn((_path: string, opts: { body?: unknown }) =>
-          invokeEmbeddingCreate(embeddingsCreate, opts.body),
-        );
+        post = post;
       },
     }));
     vi.doMock("./lancedb-runtime.js", () => ({
@@ -2810,6 +2814,8 @@ describe("memory plugin e2e", () => {
         model: "text-embedding-3-small",
         input: "hello dimensions",
       });
+      expect(post.mock.calls[0]?.[1]).toMatchObject({ timeout: 15_000 });
+      expect(post.mock.calls[1]?.[1]).toMatchObject({ timeout: 14_500 });
       const truncatedVector = expectDefined(
         vectorSearch.mock.calls[0]?.[0],
         "truncated LanceDB search vector",
@@ -2817,6 +2823,7 @@ describe("memory plugin e2e", () => {
       expect(truncatedVector).toHaveLength(1024);
       expect(truncatedVector.slice(0, 2)).toEqual([0.6, 0.8]);
     } finally {
+      dateNow.mockRestore();
       vi.doUnmock("openclaw/plugin-sdk/runtime-env");
       vi.doUnmock("openai");
       vi.doUnmock("./lancedb-runtime.js");
