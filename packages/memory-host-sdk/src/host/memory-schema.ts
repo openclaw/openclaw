@@ -367,19 +367,29 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   preservedEmbeddingCacheTable?: string,
 ): void {
-  // A (path, source) the canonical index already has CHUNKS for keeps its whole
-  // canonical chunk set: importing legacy chunk ids there would mix stale text
-  // into a file sync considers current and never re-indexes. But a source with
-  // only a canonical row and no chunks yet (indexing interrupted before its
-  // chunks were written, or embedding pending/failed) still needs its legacy
-  // chunks — dropping them would leave the file silently unsearchable, since the
-  // matching source hash stops sync from re-indexing it. Snapshot the
-  // chunk-owning sources before the import so the exclusion (and the chunks
-  // assertion) sees canonical state from before these inserts add legacy chunks.
+  // A (path, source) the canonical index already has chunks for keeps its whole
+  // canonical chunk set. A chunkless canonical source imports legacy chunks only
+  // when both source rows describe the same content. Diverged chunkless sources
+  // are invalidated after the copy so sync cannot skip their required rebuild.
+  // Snapshot exclusions before inserts so the predicate sees canonical state.
   db.exec(`
-    DROP TABLE IF EXISTS temp.legacy_import_chunk_owned_sources;
-    CREATE TEMP TABLE legacy_import_chunk_owned_sources AS
-    SELECT DISTINCT path, source FROM main.${MEMORY_INDEX_CHUNKS_TABLE};
+    CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
+    SELECT DISTINCT path, source, 0 AS force_reindex
+    FROM main.${MEMORY_INDEX_CHUNKS_TABLE}
+    UNION ALL
+    SELECT canonical.path, canonical.source, 1 AS force_reindex
+    FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+    JOIN ${schema}.files AS legacy
+      ON legacy.path = canonical.path AND legacy.source IS canonical.source
+    WHERE (
+      canonical.hash IS NOT legacy.hash
+      OR canonical.mtime IS NOT legacy.mtime
+      OR canonical.size IS NOT legacy.size
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
+        WHERE chunk.path = canonical.path AND chunk.source IS canonical.source
+      );
   `);
   try {
     db.exec(`
@@ -396,8 +406,16 @@ function copyLegacyMemoryIndexRows(
       SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       FROM ${schema}.chunks AS legacy
       WHERE NOT EXISTS (
-        SELECT 1 FROM temp.legacy_import_chunk_owned_sources AS owned
-        WHERE owned.path = legacy.path AND owned.source IS legacy.source
+        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+        WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+      );
+
+      DELETE FROM main.${MEMORY_INDEX_SOURCES_TABLE}
+      WHERE EXISTS (
+        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+        WHERE excluded.force_reindex = 1
+          AND excluded.path = main.${MEMORY_INDEX_SOURCES_TABLE}.path
+          AND excluded.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
       );
     `);
     assertLegacyRowsCopied(
@@ -418,6 +436,12 @@ function copyLegacyMemoryIndexRows(
          SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
          WHERE canonical.path = legacy.path
            AND canonical.source IS legacy.source
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+         WHERE excluded.force_reindex = 1
+           AND excluded.path = legacy.path
+           AND excluded.source IS legacy.source
        )`,
       "files",
     );
@@ -428,15 +452,17 @@ function copyLegacyMemoryIndexRows(
        WHERE NOT EXISTS (
          SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
          WHERE canonical.id = legacy.id
+           AND canonical.path IS legacy.path
+           AND canonical.source IS legacy.source
        )
        AND NOT EXISTS (
-         SELECT 1 FROM temp.legacy_import_chunk_owned_sources AS owned
-         WHERE owned.path = legacy.path AND owned.source IS legacy.source
+         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+         WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
        )`,
       "chunks",
     );
   } finally {
-    db.exec("DROP TABLE IF EXISTS temp.legacy_import_chunk_owned_sources");
+    db.exec("DROP TABLE temp.legacy_import_chunk_excluded_sources");
   }
   if (
     preservedEmbeddingCacheTable !== "embedding_cache" &&
