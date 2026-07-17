@@ -376,6 +376,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Allow all groups, still require @mention
   - H3: Allow specific groups only
   - H3: Restrict senders within a group
+  - H3: Bot-authored messages
   - H2: Get group/user IDs
   - H3: Group IDs (chatid, format: ocxxx)
   - H3: User IDs (openid, format: ouxxx)

@@ -253,6 +253,11 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
+  it("accepts only boolean bot ingress", () => {
+    expect(FeishuConfigSchema.parse({ allowBots: true }).allowBots).toBe(true);
+    expect(() => FeishuConfigSchema.parse({ allowBots: "mentions" })).toThrow();
+  });
+
   it("accepts top-level and account-level nested streaming config", () => {
     const result = FeishuConfigSchema.parse({
       streaming: {
