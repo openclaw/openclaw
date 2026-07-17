@@ -5831,9 +5831,11 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /plugins/llama-cpp
 - Headings:
-  - H2: Configuration
-  - H2: Native Runtime
-  - H2: Runtime diagnostics
+  - H2: Local text inference
+  - H3: Use another GGUF model
+  - H2: Memory embedding configuration
+  - H2: Native runtime
+  - H2: Memory runtime diagnostics
   - H2: Troubleshooting
 
 ## plugins/logbook.md
