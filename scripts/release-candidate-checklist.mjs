@@ -1215,7 +1215,7 @@ export function validateFullManifest(manifest, params) {
       `full validation must record runReleaseSoak=true for ${params.releaseProfile} release candidates`,
     );
   }
-  if (manifest.controls?.performanceBlocking !== true) {
+  if (params.releaseProfile !== "beta" && manifest.controls?.performanceBlocking !== true) {
     throw new Error("full validation manifest must record blocking product performance evidence");
   }
 }

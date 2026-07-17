@@ -226,8 +226,35 @@ function successfulRunOrThrow(
   if (isSuccessfulRecentRun(run, nowMs)) {
     return run;
   }
-  if (workflowName === "CI" && isGateProvenInProgressRun(run, ciGateJobs, nowMs)) {
-    return run;
+  if (workflowName === "CI") {
+    if (isGateProvenInProgressRun(run, ciGateJobs, nowMs)) {
+      return run;
+    }
+    // A terminal non-success stays blocking unless a NEWER pending SCHEDULED
+    // rerun on the same head has already passed its own gate — the gate needs
+    // every selected lane, so that attempt is authoritative proof the failure
+    // is re-resolved. The newer-than bound stops a stalled older run's gate
+    // from masking a later failure, and manual runs can never mask one.
+    if (run?.status === "completed" && run.conclusion !== "success") {
+      const failedRunCreatedAtMs = Date.parse(String(run?.created_at ?? ""));
+      const gateProvenRerun = matchingRuns.find((candidate) => {
+        if (candidate === run || candidate.event !== "pull_request") {
+          return false;
+        }
+        const candidateCreatedAtMs = Date.parse(String(candidate?.created_at ?? ""));
+        if (
+          !Number.isFinite(candidateCreatedAtMs) ||
+          !Number.isFinite(failedRunCreatedAtMs) ||
+          candidateCreatedAtMs <= failedRunCreatedAtMs
+        ) {
+          return false;
+        }
+        return isGateProvenInProgressRun(candidate, ciGateJobs, nowMs);
+      });
+      if (gateProvenRerun) {
+        return gateProvenRerun;
+      }
+    }
   }
   throw new Error(
     `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
@@ -541,25 +568,44 @@ function loadCiGateJobs(repo, workflowRuns, sha, nowMs = Date.now()) {
   );
   return candidates.flatMap((run) => {
     const attempt = run.run_attempt ?? 1;
-    const payload = JSON.parse(
-      execGhApiRead(`repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100`, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
-    );
-    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    // The jobs endpoint pages at 100 and full-scope runs already sit near
+    // that; page until the gate job is visible so growth past one page can
+    // never silently disable the early-proof path.
+    const jobs = [];
+    for (let page = 1; page <= 5; page += 1) {
+      const payload = JSON.parse(
+        execGhApiRead(
+          `repos/${repo}/actions/runs/${run.id}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ),
+      );
+      const pageJobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+      jobs.push(...pageJobs);
+      const totalCount = Number(payload?.total_count ?? 0);
+      if (
+        pageJobs.length === 0 ||
+        jobs.length >= totalCount ||
+        jobs.some((job) => job?.name === CI_GATE_CHECK_NAME)
+      ) {
+        break;
+      }
+    }
     // Re-read the run after fetching its attempt jobs and drop the evidence if
-    // the attempt advanced or the run completed in between: otherwise a rerun
-    // starting in that window would let the just-fetched prior-attempt gate
-    // vouch for an attempt that has not reached its own gate.
+    // the attempt advanced in between: otherwise a rerun starting in that
+    // window would let the just-fetched prior-attempt gate vouch for an
+    // attempt that has not reached its own gate. Same-attempt completion is
+    // fine — a run that finished successfully still proves this attempt, and
+    // a non-success completion must not be blessed by its own earlier gate.
     const current = JSON.parse(
       execGhApiRead(`repos/${repo}/actions/runs/${run.id}`, {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
     );
+    const sameAttempt = (current?.run_attempt ?? attempt) === attempt;
     const stillPending = current?.status === "in_progress" || current?.status === "queued";
-    if (!stillPending || (current?.run_attempt ?? attempt) !== attempt) {
+    const completedSuccess = current?.status === "completed" && current?.conclusion === "success";
+    if (!sameAttempt || (!stillPending && !completedSuccess)) {
       return [];
     }
     return jobs;

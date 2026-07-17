@@ -641,6 +641,7 @@ final class NodeAppModel {
         }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
+            widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID)
     }
@@ -4877,7 +4878,7 @@ extension NodeAppModel {
             role: "operator",
             scopes: scopes,
             scopesAreExplicit: forceExplicitScopes,
-            caps: [],
+            caps: [OpenClawGatewayClientCapability.inlineWidgets],
             commands: [],
             permissions: [:],
             clientId: clientId,

@@ -707,6 +707,25 @@ describe("release candidate checklist", () => {
     ).toThrow("blocking product performance");
   });
 
+  it("keeps product performance advisory for beta release candidates", () => {
+    expect(() =>
+      validateFullManifest(
+        {
+          workflowName: "Full Release Validation",
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+          rerunGroup: "all",
+          runReleaseSoak: "false",
+          controls: { performanceBlocking: false },
+        },
+        {
+          targetSha: "candidate-sha",
+          releaseProfile: "beta",
+        },
+      ),
+    ).not.toThrow();
+  });
+
   it("binds SHA-pinned full validation evidence through its manifest", () => {
     const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
 

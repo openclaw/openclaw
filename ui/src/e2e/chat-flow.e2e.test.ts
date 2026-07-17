@@ -271,7 +271,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     await closeOpenBrowserContexts();
   });
 
-  it("renders per-pane headers in split view without desktop topbar chrome", async () => {
+  it("renders always-on pane headers without desktop topbar chrome", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -299,6 +299,22 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       const splitEntry = page.getByRole("button", { name: "Open split view" });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".chat-pane__header").count()).toBe(1);
+      await page.evaluate(() => {
+        document.documentElement.classList.add("openclaw-native-macos");
+        document.querySelector(".shell")?.classList.add("shell--nav-collapsed");
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-pane__header")
+            .evaluate((header) => getComputedStyle(header).paddingLeft),
+        )
+        .toBe("90px");
+      await page.evaluate(() => {
+        document.documentElement.classList.remove("openclaw-native-macos");
+        document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
+      });
       await page.setViewportSize({ height: 900, width: 1100 });
       await expect.poll(() => splitEntry.isVisible()).toBe(true);
       await page.setViewportSize({ height: 900, width: 1440 });
@@ -321,8 +337,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .poll(async () => (await gateway.getRequests("chat.startup")).length)
         .toBeGreaterThan(startupRequestsBeforeSplit);
 
-      // Each pane owns an in-flow header (title + workspace/split/close
-      // actions); no fixed toolbar layer mirrors the split geometry.
+      // Each pane owns the same in-flow header in classic and split layouts.
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       const headers = page.locator(".chat-pane__header");
       await expect.poll(() => panes.count()).toBe(2);
@@ -354,8 +369,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await expect.poll(() => headers.first().locator(".chat-workspace-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      // Pane headers render a static session title; keyboard focus lands on
-      // the pane buttons and marks the pane active.
+      // Keyboard focus on a header action marks the pane active.
       await headers.first().getByRole("button", { name: "Split down" }).focus();
       await expect.poll(() => headers.first().getAttribute("class")).toContain("--active");
 
@@ -418,7 +432,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await expect.poll(() => panes.count()).toBe(3);
       await expect
-        .poll(() => page.locator(".chat-pane__session-title").allTextContents())
+        .poll(async () =>
+          (await page.locator(".chat-pane__session-title").allTextContents()).map((title) =>
+            title.trim(),
+          ),
+        )
         .toContain("Session B");
       await expect
         .poll(() => new URL(page.url()).searchParams.get("session"))
@@ -1330,18 +1348,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      // Collapsed rails render nothing; the floating opener (with the
-      // changed-file badge) is the only pointer affordance.
+      // Collapsed rails render nothing; the title-bar toggle carries the
+      // changed-file badge.
       const opener = page.locator(".chat-workspace-toggle");
       await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
       await opener.click();
-      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
-        timeout: 10_000,
-      });
-      expect(await opener.count()).toBe(0);
+      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
+      await expect.poll(() => opener.getAttribute("aria-expanded")).toBe("true");
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });
@@ -1361,14 +1377,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         }),
       ).toBe(0);
 
-      await page.getByRole("button", { name: "Collapse session workspace" }).click();
+      await page.locator(".chat-workspace-rail__collapse-toggle").click();
       await opener.waitFor({ timeout: 10_000 });
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
 
       await opener.click();
-      await page.getByRole("button", { name: "Collapse session workspace" }).waitFor({
-        timeout: 10_000,
-      });
+      await page.locator(".chat-workspace-rail__collapse-toggle").waitFor({ timeout: 10_000 });
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AGENTS.md" }).waitFor({
         timeout: 10_000,
       });

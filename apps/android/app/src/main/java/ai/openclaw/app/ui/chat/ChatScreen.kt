@@ -14,6 +14,7 @@ import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -420,6 +421,7 @@ fun ChatScreen(
       onReplyMessage = viewModel::setChatReplyDraft,
       speechState = messageSpeechState,
       onToggleListen = viewModel::toggleChatMessageSpeech,
+      resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       modifier = Modifier.weight(1f),
     )
 
@@ -810,6 +812,7 @@ private fun ChatMessageList(
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   modifier: Modifier = Modifier,
 ) {
   val timeline =
@@ -849,6 +852,8 @@ private fun ChatMessageList(
               onReplyMessage = onReplyMessage,
               speechState = speechState,
               onToggleListen = onToggleListen,
+              inlineWidgetResolverReady = healthOk,
+              resolveInlineWidgetResource = resolveInlineWidgetResource,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(
@@ -867,6 +872,8 @@ private fun ChatMessageList(
               onReplyMessage = onReplyMessage,
               speechState = null,
               onToggleListen = onToggleListen,
+              inlineWidgetResolverReady = healthOk,
+              resolveInlineWidgetResource = resolveInlineWidgetResource,
             )
           ChatTimelineItem.Thinking -> ChatThinkingBubble()
         }
@@ -1047,6 +1054,8 @@ private fun ChatBubble(
   onReplyMessage: (String) -> Unit,
   speechState: MessageSpeechState?,
   onToggleListen: (String, String) -> Unit,
+  inlineWidgetResolverReady: Boolean,
+  resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
@@ -1055,6 +1064,7 @@ private fun ChatBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
+        "canvas" -> normalizedRole == "assistant" && part.widget != null
         else -> part.isAudioAttachment()
       }
     }
@@ -1111,6 +1121,12 @@ private fun ChatBubble(
                 ChatBase64Image(
                   base64 = checkNotNull(part.base64),
                   mimeType = part.mimeType,
+                )
+              part.type == "canvas" && normalizedRole == "assistant" ->
+                ChatInlineWidget(
+                  preview = checkNotNull(part.widget),
+                  resolverReady = inlineWidgetResolverReady,
+                  resolveResource = resolveInlineWidgetResource,
                 )
               else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
