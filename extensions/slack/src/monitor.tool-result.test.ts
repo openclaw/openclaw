@@ -282,15 +282,18 @@ describe("monitorSlackProvider tool results", () => {
     });
   }
 
-  async function runMentionGatedChannelMessageAndFlush() {
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
-    await flush();
+  async function runMentionGatedChannelMessage() {
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
   }
 
   function expectReactionFlow(expected: {
@@ -640,13 +643,17 @@ describe("monitorSlackProvider tool results", () => {
       channel: { name: "general", is_channel: true },
     });
 
-    await runSlackMessageOnce(monitorSlackProvider, {
-      event: makeSlackMessageEvent({
-        text: "<@bot-user> hello",
-        ts: "456",
-        channel_type: "channel",
-      }),
-    });
+    await runSlackMessageOnce(
+      monitorSlackProvider,
+      {
+        event: makeSlackMessageEvent({
+          text: "<@bot-user> hello",
+          ts: "456",
+          channel_type: "channel",
+        }),
+      },
+      { awaitDispatch: true },
+    );
 
     expect(reactMock).toHaveBeenCalledWith({
       channel: "C1",
@@ -659,7 +666,7 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(false);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(sendMock).not.toHaveBeenCalled();
     expect(reactMock).toHaveBeenCalledTimes(1);
@@ -674,7 +681,7 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(sendMock).not.toHaveBeenCalled();
     expect(reactMock).toHaveBeenCalledTimes(1);
@@ -707,7 +714,7 @@ describe("monitorSlackProvider tool results", () => {
     };
     mockGeneralChannelInfo();
 
-    await runMentionGatedChannelMessageAndFlush();
+    await runMentionGatedChannelMessage();
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(sendMock).not.toHaveBeenCalled();
@@ -722,7 +729,7 @@ describe("monitorSlackProvider tool results", () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
-    await runMentionGatedChannelMessageAndFlush();
+    await expect(runMentionGatedChannelMessage()).rejects.toThrow("boom");
 
     expect(sendMock).not.toHaveBeenCalled();
     expectReactionFlow({
