@@ -4533,6 +4533,10 @@ describe("active-memory plugin", () => {
     const lateWriteDone = new Promise<void>((resolve) => {
       resolveLateWrite = resolve;
     });
+    let releaseLateWrite: () => void = () => {};
+    const lateWriteRelease = new Promise<void>((resolve) => {
+      releaseLateWrite = resolve;
+    });
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await new Promise<void>((resolve) => {
@@ -4550,9 +4554,7 @@ describe("active-memory plugin", () => {
             },
           },
         ]);
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 100);
-        });
+        await lateWriteRelease;
         await writeTranscriptJsonl(params.sessionFile, [
           {
             message: {
@@ -4573,16 +4575,20 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await requireHook("before_prompt_build")(
-      { prompt: "what food do i usually order? unsettled timeout", messages: [] },
-      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
-    );
+    try {
+      const result = await requireHook("before_prompt_build")(
+        { prompt: "what food do i usually order? unsettled timeout", messages: [] },
+        { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+      );
 
-    expect(result).toBeUndefined();
-    const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "Active Memory: status=timeout");
-    expectLinesNotToContain(lines, "timeout_partial");
-    await lateWriteDone;
+      expect(result).toBeUndefined();
+      const lines = getActiveMemoryLines(sessionKey);
+      expectLinesToContain(lines, "Active Memory: status=timeout");
+      expectLinesNotToContain(lines, "timeout_partial");
+    } finally {
+      releaseLateWrite();
+      await lateWriteDone;
+    }
   });
 
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
