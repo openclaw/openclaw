@@ -3,6 +3,7 @@
  *
  * Manages live capture, manual import, summarization, and process-local transcript sessions.
  */
+import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
@@ -70,7 +71,39 @@ const TranscriptsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const MEETING_TRANSCRIPTS_MIGRATION_MARKER = ".sqlite-migrated";
+
+function hasUnmigratedLegacyTranscripts(transcriptsDir: string): boolean {
+  try {
+    // If the migration marker exists, legacy data has already been imported.
+    if (fs.existsSync(path.join(transcriptsDir, MEETING_TRANSCRIPTS_MIGRATION_MARKER))) {
+      return false;
+    }
+    // Scan for dated session directories containing metadata.json.
+    const entries = fs.readdirSync(transcriptsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
+        continue;
+      }
+      const dateDir = path.join(transcriptsDir, entry.name);
+      const sessionDirs = fs.readdirSync(dateDir, { withFileTypes: true });
+      for (const session of sessionDirs) {
+        if (
+          session.isDirectory() &&
+          fs.existsSync(path.join(dateDir, session.name, "metadata.json"))
+        ) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // Directory does not exist or is unreadable — no legacy data.
+  }
+  return false;
+}
+
 function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
+  const transcriptsDir = path.join(ctx.stateDir, "transcripts");
   let stateDb: OpenClawStateDatabase | undefined;
   try {
     stateDb = openOpenClawStateDatabase({ env: process.env }) as OpenClawStateDatabase;
@@ -79,11 +112,17 @@ function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
     // permanently unavailable (e.g. Node <24.15.0 with SQLite 3.51.2).
     // Transient errors (lock, corruption, permissions) propagate.
     if (err instanceof Error && err.message.includes("SQLite support is unavailable or unsafe")) {
-      return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+      return new TranscriptsStore(transcriptsDir);
     }
     throw err;
   }
-  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), stateDb);
+  // Gate SQLite writes/reads behind a verified legacy-import marker.
+  // Without it, existing file-backed transcripts would disappear from list/read
+  // until the operator runs `openclaw doctor --fix`.
+  if (hasUnmigratedLegacyTranscripts(transcriptsDir)) {
+    return new TranscriptsStore(transcriptsDir);
+  }
+  return new TranscriptsStore(transcriptsDir, stateDb);
 }
 
 async function waitForPendingAutoStartsToSettle(

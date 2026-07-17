@@ -137,5 +137,13 @@ export async function runDoctorMeetingTranscripts(
   }
 
   report.repaired = options.shouldRepair && report.issues.length === 0;
+  if (report.repaired) {
+    try {
+      fs.writeFileSync(path.join(options.transcriptsDir, ".sqlite-migrated"), "");
+    } catch {
+      report.issues.push("Failed to write migration marker file");
+      report.repaired = false;
+    }
+  }
   return report;
 }
