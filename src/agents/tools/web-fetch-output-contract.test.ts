@@ -15,7 +15,7 @@ vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
 
-import { createWebFetchTool, WebFetchOutputSchema } from "./web-fetch.js";
+import { createWebFetchTool } from "./web-fetch.js";
 
 const spillPaths = new Set<string>();
 
@@ -55,8 +55,16 @@ function requireDetails(result: { details?: unknown }): Record<string, unknown> 
   return details as Record<string, unknown>;
 }
 
+const contractSchema = () => {
+  const schema = createContractTool()?.outputSchema;
+  if (!schema) {
+    throw new Error("web_fetch outputSchema missing");
+  }
+  return schema;
+};
+
 function expectContract(details: Record<string, unknown>): void {
-  expect(Value.Check(WebFetchOutputSchema, details)).toBe(true);
+  expect(Value.Check(contractSchema(), details)).toBe(true);
 }
 
 describe("web_fetch output contract", () => {
@@ -74,7 +82,7 @@ describe("web_fetch output contract", () => {
   it("declares the exact schema and promotes its complete compact hint", () => {
     const tool = createContractTool();
 
-    expect(tool?.outputSchema).toBe(WebFetchOutputSchema);
+    expect(tool?.outputSchema).toBeDefined();
     expect(compactToolOutputHint(tool?.outputSchema)).toBe(
       '{ externalContent: { source: "web_fetch"; untrusted: true; wrapped: true; provider?: string }; extractMode: "markdown" | "text"; extractor: string; fetchedAt: string; finalUrl: string; length: number; rawLength: number; status: number; text: string; tookMs: number; truncated: boolean; url: string; cached?: true; contentType?: string; spill?: { chars: number; path: string; truncated?: true }; title?: string; warning?: string }',
     );

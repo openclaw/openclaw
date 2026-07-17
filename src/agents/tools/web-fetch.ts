@@ -86,7 +86,7 @@ const WebFetchSchema = Type.Object({
   ),
 });
 
-export const WebFetchOutputSchema = Type.Object(
+const WebFetchOutputSchema = Type.Object(
   {
     url: Type.String(),
     finalUrl: Type.String(),
