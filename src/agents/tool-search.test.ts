@@ -416,16 +416,46 @@ describe("Tool Search", () => {
     const catalogRef = createToolSearchCatalogRef();
     const target = pluginTool("orchard_bad_output", "Return a bad orchard result");
     target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    const projected: unknown[] = [];
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
     const runtime = new ToolSearchRuntime(
       {
         catalogRef,
-        executeTool: async () => jsonResult({ id: 42 }),
+        executeTool: async (params) => {
+          const result = jsonResult({ id: 42 });
+          const acceptedResult = await params.acceptResultBeforeProjection(result);
+          projected.push(acceptedResult);
+          return acceptedResult;
+        },
       },
       resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
     );
 
     await expect(runtime.callValue("orchard_bad_output")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
+    expect(projected).toEqual([]);
+  });
+
+  it("revalidates mutable results after executor-side acceptance", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_mutated_output", "Return a mutable orchard result");
+    target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: async (params) => {
+          const result = jsonResult({ id: "P-1" });
+          await params.acceptResultBeforeProjection(result);
+          (result.details as { id: unknown }).id = 42;
+          return result;
+        },
+      },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.callValue("orchard_mutated_output")).rejects.toThrow(
       "returned details that do not match its declared outputSchema",
     );
   });

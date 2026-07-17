@@ -90,6 +90,9 @@ export type ToolSearchCatalogToolExecutor = (params: {
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
+  acceptResultBeforeProjection: (
+    result: AgentToolResult<unknown>,
+  ) => Promise<AgentToolResult<unknown>>;
 }) => Promise<AgentToolResult<unknown>>;
 
 /** Transcript projection for target tool calls made through Tool Search. */
@@ -943,6 +946,27 @@ export function projectToolSearchTargetTranscriptMessages(
     inserted.add(projection);
   }
   return projected;
+}
+
+function freezeJsonSnapshot(value: unknown): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  for (const nested of Object.values(value)) {
+    freezeJsonSnapshot(nested);
+  }
+  return Object.freeze(value);
+}
+
+/** Capture a stable JSON-safe result before delayed transcript settlement. */
+export function snapshotToolSearchTargetTranscriptResult(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  const snapshot = toJsonSafe(result);
+  if (!isRecord(snapshot)) {
+    throw new Error("Tool Search target result could not be captured for transcript projection.");
+  }
+  return freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>;
 }
 
 /** Create an explicit catalog holder for callers that cannot rely on session keys. */
@@ -1953,14 +1977,24 @@ export class ToolSearchRuntime {
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
     const executeTool =
       this.ctx.executeTool ??
-      (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) =>
-        await params.tool.execute(
+      (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
+        const result = await params.tool.execute(
           params.toolCallId,
           params.input,
           params.signal,
           params.onUpdate,
           undefined as never,
-        ));
+        );
+        return await params.acceptResultBeforeProjection(result);
+      });
+    const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+      if (isPreExecutionBlockedToolResult(candidate)) {
+        await assertCatalogOutputMatchesSchema(entry, candidate);
+      }
+      const snapshot = snapshotToolSearchTargetTranscriptResult(candidate);
+      await assertCatalogOutputMatchesSchema(entry, snapshot);
+      return snapshot;
+    };
     const result = await executeTool({
       tool: entry.tool,
       toolName: entry.name,
@@ -1971,13 +2005,14 @@ export class ToolSearchRuntime {
       input: input ?? {},
       signal: options?.signal ?? this.ctx.abortSignal,
       onUpdate: options?.onUpdate,
+      acceptResultBeforeProjection,
     });
-    // Hooks may replace details after execution, so validate the final catalog
-    // value at the host boundary before Code Mode trusts the declared shape.
-    await assertCatalogOutputMatchesSchema(entry, result);
+    // Production executors queue the accepted snapshot. Repeat acceptance here
+    // so headless/custom executors cannot return a mutable unvalidated value.
+    const acceptedResult = await acceptResultBeforeProjection(result);
     return {
       tool: compactToolSearchCatalogEntry(entry),
-      result,
+      result: acceptedResult,
     };
   };
 
