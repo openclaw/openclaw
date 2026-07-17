@@ -10,7 +10,8 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { hasActiveInternalDiagnosticEventListeners } from "../infra/diagnostic-events.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -472,7 +473,9 @@ export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAge
   // Observability services register before turns and keep subscriptions process-stable.
   // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    isClaudeCliProvider(params.provider) && hasActiveInternalDiagnosticEventListeners()
+    isClaudeCliProvider(params.provider) &&
+    areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventListeners()
       ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
           runCliAgentInternal(params, diagnosticLifecycle),
         )

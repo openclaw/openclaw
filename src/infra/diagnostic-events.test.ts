@@ -1,6 +1,8 @@
 // Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hasInternalDiagnosticEventListeners } from "./diagnostic-event-listener-presence.js";
 import {
+  areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
   emitTrustedDiagnosticEvent,
@@ -8,7 +10,6 @@ import {
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   formatDiagnosticTraceparentForPropagation,
-  hasActiveInternalDiagnosticEventListeners,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -48,20 +49,22 @@ describe("diagnostic-events", () => {
   }
 
   it("reports active internal diagnostic listeners only while dispatch is enabled", () => {
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+    const hasActiveListeners = () =>
+      areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventListeners();
+    expect(hasActiveListeners()).toBe(false);
 
     const stopInternal = onInternalDiagnosticEvent(() => undefined);
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(true);
+    expect(hasActiveListeners()).toBe(true);
     setDiagnosticsEnabledForProcess(false);
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+    expect(hasActiveListeners()).toBe(false);
     setDiagnosticsEnabledForProcess(true);
     stopInternal();
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+    expect(hasActiveListeners()).toBe(false);
 
     const stopTrusted = onTrustedInternalDiagnosticEvent(() => undefined);
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(true);
+    expect(hasActiveListeners()).toBe(true);
     stopTrusted();
-    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+    expect(hasActiveListeners()).toBe(false);
   });
 
   it("emits monotonic seq and timestamps to subscribers", () => {

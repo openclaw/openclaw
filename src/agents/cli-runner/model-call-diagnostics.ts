@@ -7,9 +7,10 @@ import {
   diagnosticErrorFailureKind,
   diagnosticErrorMessage,
 } from "../../infra/diagnostic-error-metadata.js";
+import { hasInternalDiagnosticEventListeners } from "../../infra/diagnostic-event-listener-presence.js";
 import {
+  areDiagnosticsEnabledForProcess,
   emitTrustedDiagnosticEventWithPrivateData,
-  hasActiveInternalDiagnosticEventListeners,
   type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
 } from "../../infra/diagnostic-events.js";
@@ -319,7 +320,8 @@ export function createClaudeCliModelCallDiagnostics(params: {
   // snapshot avoids trace ids, capture buffers, and byte accounting when nobody consumes them.
   if (
     params.context.backendResolved.id !== "claude-cli" ||
-    !hasActiveInternalDiagnosticEventListeners()
+    !areDiagnosticsEnabledForProcess() ||
+    !hasInternalDiagnosticEventListeners()
   ) {
     return undefined;
   }
