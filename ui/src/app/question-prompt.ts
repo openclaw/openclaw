@@ -379,6 +379,26 @@ function parseQuestionGetResult(value: unknown): QuestionRecord | null {
   return isRecord(value) ? parseQuestionRecord(value.question) : null;
 }
 
+function isQuestionNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "GatewayClientRequestError" &&
+    isRecord((error as Error & { details?: unknown }).details) &&
+    (error as Error & { details: Record<string, unknown> }).details.reason === "QUESTION_NOT_FOUND"
+  );
+}
+
+function markResolvedElsewhere(state: QuestionPromptState, prompt: QuestionPrompt): void {
+  prompt.status = "answered";
+  prompt.answers = undefined;
+  prompt.answeredElsewhere = true;
+  prompt.localResolutionConfirmed = false;
+  prompt.locallyExpired = false;
+  prompt.submitting = false;
+  prompt.error = null;
+  prompt.revision = ++state.revision;
+}
+
 export async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
@@ -449,6 +469,14 @@ export async function refreshPendingQuestions(
       continue;
     }
     const missingResult = missingResults[index];
+    if (
+      current &&
+      missingResult?.status === "rejected" &&
+      isQuestionNotFoundError(missingResult.reason)
+    ) {
+      markResolvedElsewhere(state, current);
+      continue;
+    }
     const record =
       missingResult?.status === "fulfilled" ? parseQuestionGetResult(missingResult.value) : null;
     if (record) {

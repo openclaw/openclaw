@@ -132,4 +132,56 @@ describe("question gateway methods", () => {
       details: { reason: "QUESTION_ID_IN_USE" },
     });
   });
+
+  it("rejects secret questions and duplicate normalized option labels", async () => {
+    const secret = await call("question.request", {
+      ...requestParams,
+      questions: [{ ...requestParams.questions[0], isSecret: true }],
+    });
+    expect(secret[0]).toBe(false);
+    expect((secret[2] as { message: string }).message).toContain(
+      "question 'destination': secret questions are not supported yet",
+    );
+
+    const duplicateLabels = await call("question.request", {
+      ...requestParams,
+      questions: [
+        {
+          ...requestParams.questions[0],
+          options: [{ label: " Deploy " }, { label: "deploy" }],
+        },
+      ],
+    });
+    expect(duplicateLabels[0]).toBe(false);
+    expect((duplicateLabels[2] as { message: string }).message).toContain(
+      "question 'destination' has duplicate option label",
+    );
+  });
+
+  it("returns INVALID_REQUEST for answers that violate the stored question", async () => {
+    const requested = await call("question.request", {
+      ...requestParams,
+      questions: [
+        {
+          ...requestParams.questions[0],
+          options: [{ label: "Home" }, { label: "Office" }],
+          isOther: false,
+        },
+      ],
+    });
+    const id = (requested[1] as { id: string }).id;
+
+    const resolved = await call("question.resolve", {
+      id,
+      answers: { answers: { destination: { answers: ["Somewhere else"] } } },
+    });
+
+    expect(resolved[0]).toBe(false);
+    expect(resolved[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("question 'destination'"),
+      details: { reason: "QUESTION_INVALID_ANSWER" },
+    });
+    expect(manager.get(id)?.status).toBe("pending");
+  });
 });

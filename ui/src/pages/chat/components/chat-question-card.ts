@@ -132,7 +132,12 @@ export function renderChatQuestionCard(
       updatePromptDrafts(prompt, answersById);
       options.onChange();
     },
-    onSubmit: options.onSubmit,
+    onSubmit: async (answersById) => {
+      await options.onSubmit(answersById);
+      if (prompt.status === "pending" && prompt.error) {
+        throw new Error(prompt.error);
+      }
+    },
     onDismissError: prompt.error
       ? () => {
           prompt.error = null;

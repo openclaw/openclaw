@@ -46,6 +46,13 @@ function requestedPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function questionNotFoundError() {
+  return Object.assign(new Error("question was not found"), {
+    name: "GatewayClientRequestError",
+    details: { reason: "QUESTION_NOT_FOUND" },
+  });
+}
+
 afterEach(() => {
   for (const state of states.splice(0)) {
     disposeQuestionPromptState(state);
@@ -494,6 +501,32 @@ describe("refreshPendingQuestions", () => {
       status: "answered",
       answeredElsewhere: true,
       answers: { answers: { format: { answers: ["Detailed"] } } },
+    });
+  });
+
+  it("terminalizes a missing pending question after authoritative not-found", async () => {
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "question.list") {
+        return { questions: [] };
+      }
+      throw questionNotFoundError();
+    });
+    const state = createState();
+    const client = { request };
+    setQuestionPromptClient(state, client);
+    handleQuestionPromptEvent(state, {
+      event: "question.requested",
+      payload: requestedPayload(),
+    });
+
+    await expect(refreshPendingQuestions(state, client)).resolves.toBe(true);
+
+    expect(state.prompts.get("question-1")).toMatchObject({
+      status: "answered",
+      answeredElsewhere: true,
+      locallyExpired: false,
+      submitting: false,
+      error: null,
     });
   });
 

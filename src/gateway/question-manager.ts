@@ -19,6 +19,7 @@ export const QuestionManagerErrorCodes = {
   NOT_FOUND: "QUESTION_NOT_FOUND",
   ALREADY_TERMINAL: "QUESTION_ALREADY_TERMINAL",
   ID_IN_USE: "QUESTION_ID_IN_USE",
+  INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
 } as const;
 
 export type QuestionManagerErrorCode =
@@ -173,6 +174,7 @@ export class QuestionManager {
 
   resolve(id: string, answers: QuestionAnswers, resolvedBy?: string): QuestionResolveResult {
     const entry = this.requirePendingEntry(id);
+    this.validateAnswers(entry.record.questions, answers);
     entry.record = {
       ...entry.record,
       status: "answered",
@@ -233,6 +235,43 @@ export class QuestionManager {
       throw this.notFound(id);
     }
     return entry;
+  }
+
+  private validateAnswers(questions: Question[], answers: QuestionAnswers): void {
+    const submittedIds = Object.keys(answers.answers);
+    const questionsById = new Map(questions.map((question) => [question.id, question]));
+    const unknownId = submittedIds.find((id) => !questionsById.has(id));
+    if (unknownId) {
+      throw this.invalidAnswer(unknownId, "is not part of this request");
+    }
+    for (const question of questions) {
+      const values = answers.answers[question.id]?.answers;
+      if (!values || values.length === 0) {
+        throw this.invalidAnswer(question.id, "requires an answer");
+      }
+      if (values.some((value) => !value.trim())) {
+        throw this.invalidAnswer(question.id, "contains an empty answer");
+      }
+      if (!question.multiSelect && values.length > 1) {
+        throw this.invalidAnswer(question.id, "does not allow multiple answers");
+      }
+      if (
+        question.options.length > 0 &&
+        !question.isOther &&
+        values.some(
+          (value) => !question.options.some((option) => option.label.trim() === value.trim()),
+        )
+      ) {
+        throw this.invalidAnswer(question.id, "contains an unknown option");
+      }
+    }
+  }
+
+  private invalidAnswer(id: string, reason: string): QuestionManagerError {
+    return new QuestionManagerError(
+      QuestionManagerErrorCodes.INVALID_ANSWER,
+      `question '${id}' ${reason}`,
+    );
   }
 
   private notFound(id: string): QuestionManagerError {

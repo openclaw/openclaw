@@ -63,6 +63,21 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
         `question '${question.id}' must have either no options or 2 to 4 options`,
       );
     }
+    if (question.isSecret) {
+      throw new QuestionRequestValidationError(
+        `question '${question.id}': secret questions are not supported yet`,
+      );
+    }
+    const optionLabels = new Set<string>();
+    for (const option of question.options) {
+      const normalizedLabel = option.label.trim().toLowerCase();
+      if (optionLabels.has(normalizedLabel)) {
+        throw new QuestionRequestValidationError(
+          `question '${question.id}' has duplicate option label '${option.label}'`,
+        );
+      }
+      optionLabels.add(normalizedLabel);
+    }
     return {
       ...question,
       header: truncateUtf16Safe(question.header, 12),

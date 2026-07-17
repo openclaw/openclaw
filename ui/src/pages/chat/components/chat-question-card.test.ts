@@ -193,7 +193,10 @@ describe("shared question card", () => {
   });
 
   describe("gateway adapter", () => {
-    async function draw(prompt: QuestionPrompt, onSubmit = vi.fn()) {
+    async function draw(
+      prompt: QuestionPrompt,
+      onSubmit: (answers: Record<string, string[]>) => void | Promise<void> = vi.fn(),
+    ) {
       const redraw = () => {
         render(
           renderChatQuestionCard(prompt, {
@@ -290,6 +293,24 @@ describe("shared question card", () => {
       await cardIn(container);
       expect(container.querySelector<HTMLButtonElement>(".chat-question__submit")?.disabled).toBe(
         false,
+      );
+    });
+
+    it("clears the private submitted latch after a handled gateway rejection", async () => {
+      const prompt = gatewayPrompt();
+      await draw(prompt, async () => {
+        prompt.error = "gateway unavailable";
+      });
+      const card = await cardIn(container);
+      container.querySelector<HTMLInputElement>('input[type="radio"]')?.click();
+      await card.updateComplete;
+
+      container.querySelector<HTMLButtonElement>(".chat-question__submit")?.click();
+
+      await vi.waitFor(() =>
+        expect(container.querySelector<HTMLButtonElement>(".chat-question__submit")?.disabled).toBe(
+          false,
+        ),
       );
     });
   });
