@@ -3113,8 +3113,8 @@ describe("resolveModel", () => {
   });
 
   it.each(["sync", "async"] as const)(
-    "rejects configured fallbacks for ambiguous manifest aliases in the $path resolver",
-    async (path) => {
+    "rejects configured fallbacks for ambiguous manifest aliases in the $resolver resolver",
+    async (resolver) => {
       resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
         provider: "azure-openai-responses",
         ambiguous: true,
@@ -3132,7 +3132,7 @@ describe("resolveModel", () => {
       };
 
       const result =
-        path === "sync"
+        resolver === "sync"
           ? resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg)
           : await resolveModelAsyncForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
 

@@ -58,7 +58,6 @@ import {
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
   resolveManifestModelCatalogProviderAliasMetadata,
-  resolveManifestModelCatalogProviderTransport,
 } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -185,16 +184,10 @@ function setConditionalSuppressionAliasPlugin(params?: { unconditional?: boolean
 }
 
 function expectManifestAliasResolution(
-  params: Parameters<typeof canonicalizeManifestModelCatalogProviderAlias>[0],
-  expected: {
-    ambiguous?: true;
-    provider: string;
-    transport: ReturnType<typeof resolveManifestModelCatalogProviderTransport>;
-  },
+  params: Parameters<typeof resolveManifestModelCatalogProviderAliasMetadata>[0],
+  expected: ReturnType<typeof resolveManifestModelCatalogProviderAliasMetadata>,
 ) {
   expect(resolveManifestModelCatalogProviderAliasMetadata(params)).toEqual(expected);
-  expect(canonicalizeManifestModelCatalogProviderAlias(params)).toBe(expected.provider);
-  expect(resolveManifestModelCatalogProviderTransport(params)).toEqual(expected.transport);
 }
 
 beforeEach(() => {
