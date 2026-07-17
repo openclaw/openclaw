@@ -5,6 +5,8 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -118,6 +120,7 @@ beforeAll(loadOAuthModuleForTest);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  setActiveDegradedSecretOwners([]);
   // SecretRef cases consume the materialized store published by runtime activation.
   setRuntimeAuthProfileStoreSnapshot({
     version: 1,
@@ -158,6 +161,7 @@ beforeEach(() => {
 
 afterAll(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  setActiveDegradedSecretOwners([]);
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.resetModules();
@@ -346,6 +350,51 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
       store,
     });
     expect(result).toBeNull();
+  });
+
+  it("uses current expired metadata before applying degraded owner state", async () => {
+    const profileId = "github-copilot:expired-ref";
+    const tokenRef = { source: "env" as const, provider: "default", id: "EXPIRED_TOKEN" };
+    setRuntimeAuthProfileStoreSnapshot({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "token",
+          provider: "github-copilot",
+          token: "unused",
+          tokenRef,
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: resolveAuthProfileSecretOwnerId({ profileId }),
+        state: "unavailable",
+        paths: [`auth-profiles.${profileId}.token`],
+        refKeys: ["env:default:EXPIRED_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "github-copilot", "token"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "token",
+              provider: "github-copilot",
+              tokenRef,
+              expires: Date.now() - 1,
+            },
+          },
+        },
+        profileId,
+      }),
+    ).resolves.toBeNull();
   });
 });
 

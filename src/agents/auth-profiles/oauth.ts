@@ -324,8 +324,14 @@ function resolveRuntimeAuthProfile(params: {
         runtimeProfile.type === params.profile.type &&
         runtimeProfile.provider === params.profile.provider)),
   );
+  const profile =
+    published && runtimeProfile?.type === "api_key" && params.profile.type === "api_key"
+      ? { ...params.profile, ["key"]: runtimeProfile.key }
+      : published && runtimeProfile?.type === "token" && params.profile.type === "token"
+        ? { ...params.profile, ["token"]: runtimeProfile.token }
+        : params.profile;
   return {
-    profile: published && runtimeProfile ? runtimeProfile : params.profile,
+    profile,
     published,
   };
 }
@@ -399,18 +405,19 @@ export async function resolveApiKeyForProfile(
     profileIds: [profileId],
     context: `auth profile ${profileId}`,
   });
-  assertRuntimeAuthProfileSecretOwnerAvailable({
-    agentDir: params.agentDir,
-    profileId,
-    published: runtimeProfile.published,
-  });
   if (cred.type === "api_key") {
     if (!evaluateStoredCredentialEligibility({ credential: cred }).eligible) {
       return null;
     }
+    assertRuntimeAuthProfileSecretOwnerAvailable({
+      agentDir: params.agentDir,
+      profileId,
+      published: runtimeProfile.published,
+    });
     const keyRef =
       coerceSecretRef(cred.keyRef, refDefaults) ?? coerceSecretRef(cred.key, refDefaults);
-    if (keyRef && !runtimeProfile.published) {
+    const key = normalizeOptionalSecretInput(cred.key);
+    if (keyRef && (!runtimeProfile.published || !key)) {
       throwUnmaterializedAuthProfileSecretRef({
         agentDir: params.agentDir,
         profileId,
@@ -418,7 +425,6 @@ export async function resolveApiKeyForProfile(
         ref: keyRef,
       });
     }
-    const key = normalizeOptionalSecretInput(cred.key);
     if (!key) {
       return null;
     }
@@ -435,9 +441,15 @@ export async function resolveApiKeyForProfile(
     if (expiryState === "expired" || expiryState === "invalid_expires") {
       return null;
     }
+    assertRuntimeAuthProfileSecretOwnerAvailable({
+      agentDir: params.agentDir,
+      profileId,
+      published: runtimeProfile.published,
+    });
     const tokenRef =
       coerceSecretRef(cred.tokenRef, refDefaults) ?? coerceSecretRef(cred.token, refDefaults);
-    if (tokenRef && !runtimeProfile.published) {
+    const token = normalizeOptionalSecretInput(cred.token);
+    if (tokenRef && (!runtimeProfile.published || !token)) {
       throwUnmaterializedAuthProfileSecretRef({
         agentDir: params.agentDir,
         profileId,
@@ -445,7 +457,6 @@ export async function resolveApiKeyForProfile(
         ref: tokenRef,
       });
     }
-    const token = normalizeOptionalSecretInput(cred.token);
     if (!token) {
       return null;
     }
