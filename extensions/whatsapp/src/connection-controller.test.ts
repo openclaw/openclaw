@@ -1054,9 +1054,10 @@ describe("WhatsAppConnectionController", () => {
     }
   });
 
-  it("resolves waitForClose as aborted when the stop signal is already aborted", async () => {
+  it("settles close and cancels setup when the stop signal is already aborted", async () => {
     const abort = new AbortController();
-    abort.abort();
+    const stopReason = new Error("already stopped");
+    abort.abort(stopReason);
     const preAbortedController = new WhatsAppConnectionController({
       accountId: "work",
       authDir: "/tmp/wa-auth",
@@ -1076,14 +1077,29 @@ describe("WhatsAppConnectionController", () => {
       abortSignal: abort.signal,
     });
 
-    createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
-    waitForWaConnectionMock.mockResolvedValueOnce(undefined);
-    await preAbortedController.openConnection({
-      connectionId: "conn-pre-aborted",
-      createListener: async () => createListenerStub() as never,
+    let ownerAcquireSignal: AbortSignal | undefined;
+    connectionOwnerMocks.acquire.mockImplementationOnce(async (_authDir, signal) => {
+      ownerAcquireSignal = signal;
+      return { release: connectionOwnerMocks.release };
     });
 
-    await expect(preAbortedController.waitForClose()).resolves.toBe("aborted");
-    await preAbortedController.shutdown();
+    try {
+      const abortPromise = (
+        preAbortedController as unknown as { abortPromise?: Promise<"aborted"> }
+      ).abortPromise;
+      await expect(abortPromise).resolves.toBe("aborted");
+      await expect(
+        preAbortedController.openConnection({
+          connectionId: "conn-pre-aborted",
+          createListener: async () => createListenerStub() as never,
+        }),
+      ).rejects.toThrow("controller is shutting down");
+
+      expect(ownerAcquireSignal?.aborted).toBe(true);
+      expect(ownerAcquireSignal?.reason).toBe(stopReason);
+      expect(createWaSocketMock).not.toHaveBeenCalled();
+    } finally {
+      await preAbortedController.shutdown();
+    }
   });
 });

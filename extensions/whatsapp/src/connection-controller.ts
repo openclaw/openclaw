@@ -518,6 +518,8 @@ export class WhatsAppConnectionController {
     if (abortSignal?.aborted) {
       this.abortPromise = Promise.resolve("aborted");
       this.stopDisconnectRetries();
+      this.ownerAcquireAbortController.abort(abortSignal.reason);
+      this.setupAbortController.abort(abortSignal.reason);
     } else if (abortSignal) {
       this.abortPromise = new Promise<"aborted">((resolve) => {
         abortSignal.addEventListener("abort", () => resolve("aborted"), {
