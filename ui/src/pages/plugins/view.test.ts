@@ -49,6 +49,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -60,6 +61,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
@@ -165,6 +167,34 @@ describe("renderPlugins", () => {
           ?.textContent,
       ).toBe(expected);
     }
+  });
+
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
   });
 
   it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {

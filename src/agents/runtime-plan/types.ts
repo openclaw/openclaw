@@ -159,39 +159,16 @@ type AgentRuntimeMessagePresentationOption = {
   value?: string;
 };
 
-/**
- * @deprecated Use AgentRuntimeMessagePresentationButton.
- */
-type AgentRuntimeInteractiveReplyButton = AgentRuntimeMessagePresentationButton;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationOption.
- */
-type AgentRuntimeInteractiveReplyOption = AgentRuntimeMessagePresentationOption;
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentationBlock.
- */
-type AgentRuntimeInteractiveReplyBlock =
-  | {
-      type: "text";
-      text: string;
-    }
-  | {
-      type: "buttons";
-      buttons: AgentRuntimeInteractiveReplyButton[];
-    }
-  | {
-      type: "select";
-      placeholder?: string;
-      options: AgentRuntimeInteractiveReplyOption[];
-    };
-
-/**
- * @deprecated Use AgentRuntimeMessagePresentation.
- */
-type AgentRuntimeInteractiveReply = {
-  blocks: AgentRuntimeInteractiveReplyBlock[];
+type AgentRuntimeLegacyInteractiveReply = {
+  blocks: Array<
+    | { type: "text"; text: string }
+    | { type: "buttons"; buttons: AgentRuntimeMessagePresentationButton[] }
+    | {
+        type: "select";
+        placeholder?: string;
+        options: AgentRuntimeMessagePresentationOption[];
+      }
+  >;
 };
 
 /** Portable reply presentation severity/style hint. */
@@ -291,7 +268,7 @@ type AgentRuntimeReplyPayload = {
   /**
    * @deprecated Use presentation.
    */
-  interactive?: AgentRuntimeInteractiveReply;
+  interactive?: AgentRuntimeLegacyInteractiveReply;
   btw?: {
     question: string;
   };

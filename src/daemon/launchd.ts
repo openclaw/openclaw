@@ -9,7 +9,7 @@ import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-f
 import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
 import { sleep } from "../utils.js";
 import {
@@ -545,37 +545,9 @@ export async function disableCurrentOpenClawUpdateLaunchdJob(
   });
 }
 
-function parseGatewayPortFromProgramArguments(
-  programArguments: string[] | undefined,
-): number | null {
-  if (!Array.isArray(programArguments) || programArguments.length === 0) {
-    return null;
-  }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const current = programArguments[index]?.trim();
-    if (!current) {
-      continue;
-    }
-    if (current === "--port") {
-      const next = parseTcpPort(programArguments[index + 1] ?? "");
-      if (next !== null) {
-        return next;
-      }
-      continue;
-    }
-    if (current.startsWith("--port=")) {
-      const value = parseTcpPort(current.slice("--port=".length));
-      if (value !== null) {
-        return value;
-      }
-    }
-  }
-  return null;
-}
-
 async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
-  const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
+  const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
     return fromArgs;
   }

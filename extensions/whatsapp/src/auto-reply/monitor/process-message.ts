@@ -5,7 +5,6 @@ import {
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { runChannelInboundEvent } from "openclaw/plugin-sdk/channel-inbound";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
@@ -544,12 +543,11 @@ export async function processMessage(params: {
         };
       },
       resolveTurn: () => ({
+        cfg: params.cfg,
         channel: "whatsapp",
         accountId: params.route.accountId,
-        routeSessionKey: params.route.sessionKey,
-        storePath,
+        route: { agentId: params.route.agentId, sessionKey: params.route.sessionKey },
         ctxPayload,
-        recordInboundSession,
         record: {
           onRecordError: (err) => {
             params.replyLogger.warn(

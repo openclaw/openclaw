@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Quick Chat</title>
+    <link rel="stylesheet" href="quickchat.css" />
+  </head>
+  <body>
+    <main id="composer" class="composer">
+      <div class="composer-row">
+        <span id="agent-chip" class="agent-chip" aria-hidden="true">A</span>
+        <input
+          id="message"
+          type="text"
+          placeholder="Message Agent"
+          aria-label="Quick Chat message"
+          autocomplete="off"
+        />
+        <button id="send" class="send" type="button" aria-label="Send message" disabled>
+          <span id="send-icon" class="send-icon" aria-hidden="true">↑</span>
+        </button>
+      </div>
+      <p id="status" class="status" role="alert"></p>
+    </main>
+    <script type="module" src="quickchat.js"></script>
+  </body>
+</html>

@@ -85,9 +85,11 @@ To use a Claude subscription when the Gateway host has no Claude CLI login, run
 printed token as **Anthropic setup-token** under **Connect with an API key or
 token**.
 
-Gemini CLI and Antigravity remain available for normal use after setup. Their
-installed CLIs are shown for context but are not auto-tested because neither can
-enforce the tool-free inference probe.
+Installed Gemini CLI, Antigravity, Pi, and OpenCode CLIs are shown for context
+when they cannot be selected as the reusable guided-setup inference route.
+Gemini and Antigravity cannot enforce the tool-free inference probe. Pi and
+OpenCode are whole-agent harnesses rather than setup inference routes; their
+session integrations require separate runtime and plugin setup.
 
 You can also sign in through the provider's own OAuth or device-pairing flow.
 The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google

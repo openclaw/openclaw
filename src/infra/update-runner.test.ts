@@ -215,6 +215,9 @@ describe("runGatewayUpdate", () => {
       );
       await fs.chmod(fakeGitPath, 0o755);
 
+      // Keep install-surface candidates on the fixture root so this test exercises
+      // one timed-out process tree instead of repeating the timeout for Vitest's cwd.
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
       let childPid: number | null = null;
       let childExited = false;
       try {
@@ -231,6 +234,7 @@ describe("runGatewayUpdate", () => {
         expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
         childExited = await waitForProcessExit(childPid);
       } finally {
+        cwdSpy.mockRestore();
         if (childPid && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
         }

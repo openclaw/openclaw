@@ -28,6 +28,20 @@ export class ReefRelayError extends Error {
   }
 }
 
+export function isDefinitiveReefRegistrationFailure(error: unknown): boolean {
+  return (
+    error instanceof ReefRelayError &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 408 &&
+    error.status !== 429
+  );
+}
+
+export function isReefOwnershipRejection(error: unknown): boolean {
+  return error instanceof ReefRelayError && error.message === "unknown_handle";
+}
+
 export class ReefTransportClient {
   // Ed25519 is deterministic: identical (method, path, ts, body) requests produce
   // identical signatures, which collide with the relay's replay key. Keep ts

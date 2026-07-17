@@ -227,9 +227,12 @@ cwd creates a fresh approval.
 
 Codex MCP tool approval elicitations route through OpenClaw's plugin approval
 flow when Codex marks `_meta.codex_approval_kind` as `"mcp_tool_call"`. Codex
-`request_user_input` prompts are sent back to the originating chat, and the
-next queued follow-up message answers that native server request instead of
-being steered as extra context. Other MCP elicitation requests fail closed.
+`request_user_input` prompts are sent back to the originating chat. A single
+non-secret choice uses typed channel buttons when the channel supports them,
+and the Control UI shows non-secret questions as a structured card. The next
+queued follow-up message answers that native server request instead of being
+steered as extra context. Secret questions stay on the warned text-reply path.
+Other MCP elicitation requests fail closed.
 
 For the general plugin approval flow that carries these prompts, see
 [Plugin permission requests](/plugins/plugin-permission-requests).

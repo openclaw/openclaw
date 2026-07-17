@@ -209,7 +209,7 @@ type ReplyRunRegistry = {
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,
-    timeoutMs?: number,
+    timeoutMs?: number | null,
     opts?: { signal?: AbortSignal },
   ): Promise<boolean>;
   resolveSessionId(sessionKey: string): string | undefined;
@@ -1195,7 +1195,7 @@ export function clearReplyRunForResetBySessionId(sessionId: string): void {
 
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs: number,
+  timeoutMs?: number | null,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {

@@ -129,6 +129,10 @@ export type OpenClawConfig = {
       | undefined;
   };
   wizard?: {
+    /** Guided-onboarding discovery consent: "full" scans silently, "guarded" asks first. */
+    accessMode?: "full" | "guarded";
+    /** Offer installed-application plugin and skill recommendations during onboarding. */
+    appRecommendations?: boolean;
     /** Last setup wizard completion timestamp. */
     lastRunAt?: string;
     /** OpenClaw version used by the last completed wizard run. */
@@ -278,6 +282,8 @@ export type RuntimeConfig = BrandedConfigState<"runtime">;
 export type ConfigValidationIssue = {
   /** Dot-path to the invalid or legacy config value. */
   path: string;
+  /** Structured validator path used internally for lossless source diagnostics. */
+  pathSegments?: Array<string | number>;
   /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */

@@ -21,11 +21,13 @@ import {
   replaceSessionEntry,
   withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -204,6 +206,10 @@ async function removeTempDir(dir: string): Promise<void> {
 function createDirectChatContext(): GatewayRequestContext {
   return {
     loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
+    loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      entries: [],
+      routeVariants: [],
+    }),
     logGateway: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -214,6 +220,7 @@ function createDirectChatContext(): GatewayRequestContext {
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers: new Map(),
+    chatRunPlanSnapshots: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatDeltaLastBroadcastText: new Map(),
@@ -422,6 +429,63 @@ async function prepareMainHistoryHarness(params: {
 }
 
 describe("gateway server chat", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s replays the active plan snapshot in inFlightRun",
+    async (method) => {
+      const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+      try {
+        testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+        await writeMainSessionStore(sessionDir);
+        const context = createDirectChatContext();
+        const controller = new AbortController();
+        context.chatAbortControllers.set("run-active", {
+          controller,
+          sessionId: "sess-main",
+          sessionKey: "main",
+          startedAtMs: 1_000,
+          expiresAtMs: 10_000,
+          projectSessionActive: true,
+        });
+        context.chatRunBuffers.set("run-active", "partial reply");
+        context.chatRunPlanSnapshots?.set("run-active", {
+          explanation: "Replay on reconnect",
+          steps: [{ step: "Reconnect clients", status: "in_progress" }],
+        });
+        const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+        const { chatHandlers } = await import("./server-methods/chat.js");
+
+        await expectDefined(
+          chatHandlers[method],
+          `${method} test invariant`,
+        )({
+          req: { type: "req", id: method, method, params: { sessionKey: "main" } },
+          params: { sessionKey: "main" },
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toEqual({
+          runId: "run-active",
+          text: "partial reply",
+          plan: {
+            explanation: "Replay on reconnect",
+            steps: [{ step: "Reconnect clients", status: "in_progress" }],
+          },
+        });
+      } finally {
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+        await removeTempDir(sessionDir);
+      }
+    },
+  );
+
   test("chat.history returns catalog-backed session metadata with history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -3916,12 +3980,12 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
         dedupe: new Map(),
       } as unknown as GatewayRequestContext;
-      let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      let turnAdoptionLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       const dispatchRelease = createDeferred();
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-        queuedLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.queuedFollowupLifecycle;
-        queuedLifecycle?.onEnqueued?.();
+        turnAdoptionLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.turnAdoptionLifecycle;
+        turnAdoptionLifecycle?.onDeferred?.();
         await dispatchRelease.promise;
         return {};
       });
@@ -3961,8 +4025,8 @@ describe("gateway server chat", () => {
         context,
       });
 
-      await vi.waitFor(() => expect(queuedLifecycle).toBeDefined(), FAST_WAIT_OPTS);
-      expect(queuedLifecycle?.ownerKey).toBe("connection:conn-tui");
+      await vi.waitFor(() => expect(turnAdoptionLifecycle).toBeDefined(), FAST_WAIT_OPTS);
+      expect(turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
@@ -4032,18 +4096,18 @@ describe("gateway server chat", () => {
       queuedEntry?.controller.abort();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
 
-      queuedLifecycle?.onComplete?.();
+      turnAdoptionLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(false);
       await vi.waitFor(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
         FAST_WAIT_OPTS,
       );
 
-      let failedDispatchLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+      let failedDispatchLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
       dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
         failedDispatchLifecycle = (args as { replyOptions?: GetReplyOptions }).replyOptions
-          ?.queuedFollowupLifecycle;
-        failedDispatchLifecycle?.onEnqueued?.();
+          ?.turnAdoptionLifecycle;
+        failedDispatchLifecycle?.onDeferred?.();
         throw new Error("post-enqueue bookkeeping failed");
       });
       await expectDefined(
@@ -4096,7 +4160,7 @@ describe("gateway server chat", () => {
         payload: { status: "ok" },
       });
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(true);
-      failedDispatchLifecycle?.onComplete?.();
+      failedDispatchLifecycle?.onSettled?.();
       expect(context.chatQueuedTurns.has("idem-queued-followup-post-error")).toBe(false);
     } finally {
       dispatchInboundMessageMock.mockReset();
@@ -5911,6 +5975,10 @@ describe("gateway server chat", () => {
           targetId: "msg-active",
         }),
       ]);
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
 
       const stale = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -6045,6 +6113,35 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history returns retryable unavailable while a dirty projection rebuilds", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ message: { role: "user", content: "ready after rebuild" } }),
+      ]);
+      const databaseOptions = {
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      };
+      const database = openOpenClawAgentDatabase(databaseOptions);
+      database.db
+        .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
+        .run("sess-main");
+
+      const rebuilding = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+      expect(rebuilding.ok).toBe(false);
+      expect(rebuilding.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+
+      await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      const ready = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+      });
+      expect(ready.ok).toBe(true);
+      expect(JSON.stringify(ready.payload?.messages)).toContain("ready after rebuild");
+    });
+  });
+
   test("chat.history offset pagination advances from the projected first-page boundary", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -6174,6 +6271,69 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history pagination ignores non-message event sequence gaps", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      let parentId: string | null = null;
+      for (let index = 1; index <= 5; index += 1) {
+        const messageId = `message-${index}`;
+        await appendTranscriptMessage(scope, {
+          eventId: messageId,
+          parentId,
+          message: {
+            role: index % 2 === 0 ? "assistant" : "user",
+            content: [{ type: "text", text: `message ${index}` }],
+            timestamp: Date.now() + index,
+          },
+        });
+        parentId = messageId;
+        if (index < 5) {
+          const controlId = `control-${index}`;
+          await appendTranscriptEvent(scope, { type: "custom", id: controlId, parentId });
+          parentId = controlId;
+        }
+      }
+
+      type HistoryPage = {
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      };
+      const pages: HistoryPage[] = [];
+      let offset: number | undefined;
+      do {
+        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
+          sessionKey: "main",
+          limit: 2,
+          ...(offset !== undefined ? { offset } : {}),
+        });
+        expect(page.ok).toBe(true);
+        pages.push(page.payload ?? {});
+        offset = page.payload?.nextOffset;
+      } while (pages.at(-1)?.hasMore);
+
+      expect(pages.map((page) => page.messages?.map(readOpenClawSeq))).toEqual([
+        [4, 5],
+        [2, 3],
+        [1],
+      ]);
+      expect(pages.map((page) => page.nextOffset)).toEqual([2, 4, undefined]);
+      expect(pages.map((page) => page.hasMore)).toEqual([true, true, false]);
+      expect(pages.map((page) => page.totalMessages)).toEqual([5, 5, 5]);
+    });
+  });
+
   test("chat.history centers a bounded page around a message id", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -6203,6 +6363,10 @@ describe("gateway server chat", () => {
           },
         );
       }
+      await waitForSessionTranscriptIndexReconcile({
+        agentId: "main",
+        path: path.join(sessionDir, "openclaw-agent.sqlite"),
+      });
 
       const history = await rpcReq<{
         messages?: Array<{ __openclaw?: { seq?: number } }>;
@@ -6219,7 +6383,7 @@ describe("gateway server chat", () => {
       });
 
       expect(history.ok).toBe(true);
-      expect(history.payload?.messages?.map(readOpenClawSeq)).toEqual([4, 5, 6]);
+      expect(history.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3, 4]);
       expect(history.payload?.offset).toBeUndefined();
       expect(history.payload?.nextOffset).toBeUndefined();
       expect(history.payload?.hasMore).toBeUndefined();
