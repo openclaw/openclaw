@@ -4431,7 +4431,8 @@ describe("TelegramPollingSession", () => {
     releaseRunnerStop?.();
     await runPromise;
     expect(leaseReleased).toBe(true);
-    // The cleanup barrier also started bot.shutdown concurrently with the wait.
+    // After the runner drain settles, the cleanup barrier also runs
+    // bot.shutdown before releasing the lease.
     expect(botStop).toHaveBeenCalledTimes(1);
   });
 
@@ -4481,7 +4482,9 @@ describe("TelegramPollingSession", () => {
       await vi.advanceTimersByTimeAsync(1);
       await runPromise;
       expect(leaseReleased).toBe(true);
-      expect(botStop).toHaveBeenCalledTimes(1);
+      // The runner stop wedges past the shared deadline, so the barrier
+      // force-completes without ever starting the queued bot stop.
+      expect(botStop).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -5210,7 +5213,7 @@ describe("waitForGracefulStop", () => {
     pollStopGraceMs = testing.POLL_STOP_GRACE_MS;
   });
 
-  it("starts every stop concurrently and resolves once all of them settle", async () => {
+  it("starts stops in order, holding the bot stop until the runner stop settles", async () => {
     const started: string[] = [];
     let releaseRunner: (() => void) | undefined;
     let releaseBot: (() => void) | undefined;
@@ -5232,15 +5235,22 @@ describe("waitForGracefulStop", () => {
       settled = true;
     });
 
-    // Both shutdown paths start together instead of serial 15s grace windows.
-    expect(started).toEqual(["runner", "bot"]);
+    // The runner drain starts first; grammY runner.stop() is the middleware-
+    // completion boundary, so the bot stop must not start while it is pending.
+    expect(started).toEqual(["runner"]);
     await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual(["runner"]);
     expect(settled).toBe(false);
 
     releaseRunner?.();
-    await Promise.resolve();
-    await Promise.resolve();
-    // The barrier holds while the bot stop is still pending.
+    // Flush the settle -> race -> next-stop microtask chain.
+    for (let flush = 0; flush < 5; flush += 1) {
+      await Promise.resolve();
+    }
+    // The bot stop starts only after the runner drain settles, and the barrier
+    // keeps holding while the bot stop is still pending.
+    expect(started).toEqual(["runner", "bot"]);
     expect(settled).toBe(false);
 
     releaseBot?.();
@@ -5248,21 +5258,60 @@ describe("waitForGracefulStop", () => {
     expect(settled).toBe(true);
   });
 
+  it("shares one grace budget across sequential stops, leaving later stops only the remainder", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseRunner: (() => void) | undefined;
+      const runnerStop = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseRunner = resolve;
+          }),
+      );
+      const botStop = vi.fn(() => new Promise<void>(() => {}));
+      let settled = false;
+      const wait = waitForGracefulStop([runnerStop, botStop]).then(() => {
+        settled = true;
+      });
+
+      // The runner drain consumes 10s of the single shared 15s budget before
+      // the bot stop is even started.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(botStop).not.toHaveBeenCalled();
+      releaseRunner?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(botStop).toHaveBeenCalledTimes(1);
+
+      // The bot stop gets only the remaining 5s, not a fresh 15s window.
+      await vi.advanceTimersByTimeAsync(pollStopGraceMs - 10_000 - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await wait;
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forces completion at the grace deadline when a stop never settles", async () => {
     vi.useFakeTimers();
     try {
       const wedgedStop = vi.fn(() => new Promise<void>(() => {}));
+      const laterStop = vi.fn(async () => undefined);
       let settled = false;
-      const wait = waitForGracefulStop([wedgedStop]).then(() => {
+      const wait = waitForGracefulStop([wedgedStop, laterStop]).then(() => {
         settled = true;
       });
       expect(wedgedStop).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(pollStopGraceMs - 1);
       expect(settled).toBe(false);
+      // Stops queued behind the wedged stop never start.
+      expect(laterStop).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await wait;
       expect(settled).toBe(true);
+      expect(laterStop).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

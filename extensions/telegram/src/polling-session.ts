@@ -55,26 +55,44 @@ type TelegramBot = ReturnType<typeof createTelegramBot>;
 
 // Shared cleanup barrier for session shutdown. Abort/restart paths TRIGGER the
 // stops, but this wait is time-bounded only: it must not resolve early on the
-// owner abort signal. runUntilAbort returns (and the account monitor releases
-// the polling lease) only after every stop promise has settled or the grace
-// deadline expired, so a replacement monitor cannot start a competing poller
-// while grammY runner.stop() is still draining middleware (Telegram 409s).
+// owner abort signal. Stops run in order against one absolute grace deadline:
+// grammY runner.stop() is the middleware-completion boundary, so the bot stop
+// starts only after the runner drain settles and gets just the remaining
+// budget. runUntilAbort returns (and the account monitor releases the polling
+// lease) only after every stop promise has settled or the grace deadline
+// expired, so a replacement monitor cannot start a competing poller while
+// grammY runner.stop() is still draining middleware (Telegram 409s).
 const waitForGracefulStop = async (stops: ReadonlyArray<() => Promise<void>>) => {
-  // Start every stop concurrently; stop handles memoize their in-flight
-  // promise, so stops already triggered by abort/restart are joined, not
-  // restarted.
-  const allSettled = Promise.allSettled(stops.map((stop) => stop()));
+  let deadlineFired = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      deadlineFired = true;
+      resolve();
+    }, POLL_STOP_GRACE_MS);
+    timer.unref?.();
+  });
   try {
-    // Already-settled stops resolve through the microtask queue before the
-    // deadline timer can fire, so the clean-shutdown fast path stays immediate.
-    await Promise.race([
-      allSettled,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, POLL_STOP_GRACE_MS);
-        timer.unref?.();
-      }),
-    ]);
+    for (const stop of stops) {
+      // Past the shared deadline the barrier force-completes; stops queued
+      // behind a wedged stop never start.
+      if (deadlineFired) {
+        break;
+      }
+      // Stop handles memoize their in-flight promise, so stops already
+      // triggered by abort/restart are joined, not restarted. The first stop
+      // starts synchronously, and already-settled stops resolve through the
+      // microtask queue before the deadline timer can fire, so the
+      // clean-shutdown fast path stays immediate. A failed stop settles its
+      // slot; the barrier still sequences the remaining stops.
+      let stopPromise: Promise<void>;
+      try {
+        stopPromise = Promise.resolve(stop());
+      } catch {
+        continue;
+      }
+      await Promise.race([stopPromise.catch(() => undefined), deadline]);
+    }
   } finally {
     if (timer) {
       clearTimeout(timer);
