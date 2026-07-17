@@ -34,6 +34,7 @@ import {
   getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
+  type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -128,7 +129,7 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: HookContext = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
@@ -381,6 +382,35 @@ describe("before_tool_call loop detection behavior", () => {
         },
       });
     });
+  });
+
+  it("reaches the global breaker after critical loop vetoes", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const tool = createWrappedTool("read", execute, {
+      agentId: "main",
+      sessionKey: "main",
+      loopDetection: {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 3,
+        globalCircuitBreakerThreshold: 5,
+      },
+    });
+    const params = { path: "/workspace/input.txt" };
+
+    for (let i = 0; i < 3; i += 1) {
+      await expectUnblockedToolExecution(tool, `read-${i}`, params);
+    }
+
+    await tool.execute("critical-veto-1", params, undefined, undefined);
+    await tool.execute("critical-veto-2", params, undefined, undefined);
+    const result = await tool.execute("global-veto", params, undefined, undefined);
+
+    expectToolLoopBlockedResult(result, "global circuit breaker");
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 
   it("does nothing when loopDetection.enabled is false", async () => {
