@@ -108,7 +108,7 @@ function loadBundleCommandsFromRoot(params: {
       continue;
     }
     const frontmatter = parseFrontmatterBlock(raw);
-    if (parseFrontmatterBool(frontmatter["disable-model-invocation"], false)) {
+    if (!parseFrontmatterBool(frontmatter["user-invocable"], true)) {
       continue;
     }
     const promptTemplate = stripFrontmatterBlock(raw);
