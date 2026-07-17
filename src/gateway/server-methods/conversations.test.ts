@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { ConversationInputError } from "../conversation-errors.js";
+import {
+  ConversationInputError,
+  ConversationOperationConflictError,
+} from "../conversation-errors.js";
 import type { runGatewayConversationSend } from "../conversation-send.js";
 import type { runGatewayConversationTurn } from "../conversation-turn.js";
 import { createConversationHandlers } from "./conversations.js";
@@ -318,6 +321,45 @@ describe("conversations.turn Gateway handler", () => {
     await invoke({ handler, context: gatewayContext, respond: retryRespond });
     expect(runConversationTurn).toHaveBeenCalledTimes(2);
     expect(retryRespond).toHaveBeenCalledWith(true, result, undefined, { channel: "reef" });
+  });
+
+  it("does not let a durable operation conflict poison the authoritative retry identity", async () => {
+    const runConversationTurn = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ConversationOperationConflictError(
+          `Conversation delivery operation was reused with different input: ${request.turnId}`,
+        ),
+      )
+      .mockResolvedValueOnce(result);
+    const handler = createConversationHandlers({
+      cancelConversationTurn: vi.fn(),
+      runConversationSend: vi.fn(),
+      runConversationTurn,
+    })["conversations.turn"]!;
+    const gatewayContext = context();
+    const conflictRespond = vi.fn<RespondFn>();
+
+    await invoke({
+      handler,
+      context: gatewayContext,
+      respond: conflictRespond,
+      request: { ...request, message: "conflicting message" },
+    });
+    expect(conflictRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+      expect.any(Object),
+    );
+    expect([...gatewayContext.dedupe.keys()].some((key) => key.endsWith(":identity"))).toBe(false);
+
+    const authoritativeRespond = vi.fn<RespondFn>();
+    await invoke({ handler, context: gatewayContext, respond: authoritativeRespond });
+    expect(runConversationTurn).toHaveBeenCalledTimes(2);
+    expect(authoritativeRespond).toHaveBeenCalledWith(true, result, undefined, {
+      channel: "reef",
+    });
   });
 
   it("maps unsupported conversation input to a stable invalid-request response", async () => {

@@ -5,3 +5,11 @@ export class ConversationInputError extends Error {
     this.name = "ConversationInputError";
   }
 }
+
+/** Durable operation id already belongs to a different request identity. */
+export class ConversationOperationConflictError extends ConversationInputError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationOperationConflictError";
+  }
+}

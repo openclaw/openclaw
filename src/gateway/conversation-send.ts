@@ -12,7 +12,10 @@ import {
   sendGatewayConversationMessage,
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
-import { ConversationInputError } from "./conversation-errors.js";
+import {
+  ConversationInputError,
+  ConversationOperationConflictError,
+} from "./conversation-errors.js";
 
 type ConversationSendDeps = ConversationDeliveryDeps & {
   resolveConversation: typeof resolveConversation;
@@ -82,10 +85,10 @@ export async function runGatewayConversationSend(
       ...(sent.operation.queueId ? { queueId: sent.operation.queueId } : {}),
     };
   } catch (error) {
-    if (
-      error instanceof ConversationDeliveryInputError ||
-      error instanceof ConversationDeliveryRejectedError
-    ) {
+    if (error instanceof ConversationDeliveryInputError) {
+      throw new ConversationOperationConflictError(error.message);
+    }
+    if (error instanceof ConversationDeliveryRejectedError) {
       throw new ConversationInputError(error.message);
     }
     throw error;

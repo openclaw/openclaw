@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConversationDeliveryRecord } from "../config/sessions/conversation-delivery-store.js";
+import {
+  ConversationDeliveryInputError,
+  type ConversationDeliveryRecord,
+} from "../config/sessions/conversation-delivery-store.js";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
-import { ConversationInputError } from "./conversation-errors.js";
+import {
+  ConversationInputError,
+  ConversationOperationConflictError,
+} from "./conversation-errors.js";
 import { runGatewayConversationSend } from "./conversation-send.js";
 
 const conversation = {
@@ -239,6 +245,30 @@ describe("runGatewayConversationSend", () => {
       ),
     ).rejects.toBeInstanceOf(ConversationInputError);
     expect(deps.beginOperation).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("preserves durable operation conflicts for Gateway identity recovery", async () => {
+    const deps = createDeps();
+    deps.beginOperation.mockImplementationOnce(() => {
+      throw new ConversationDeliveryInputError(
+        "Conversation delivery operation was reused with different input: send-reused",
+      );
+    });
+
+    await expect(
+      runGatewayConversationSend(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          operationId: "send-reused",
+          conversationRef: conversation.conversationRef,
+          message: "different",
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationOperationConflictError);
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 });

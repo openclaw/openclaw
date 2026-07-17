@@ -1466,7 +1466,8 @@ export async function runPreparedReply(
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
   });
-  const conversationRef = conversationIdentityFromMsgContext({ ctx: sessionCtx })?.conversationRef;
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
+  const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =
     normalizeOptionalString(sessionCtx.MessageSidFull) ??
     normalizeOptionalString(sessionCtx.MessageSid);
@@ -1478,7 +1479,7 @@ export async function runPreparedReply(
       ? undefined
       : normalizeOptionalString(String(sessionCtx.MessageThreadId));
   const transportChannel =
-    normalizeOptionalString(replyRoute.channel) ??
+    normalizeOptionalString(conversationIdentity?.channel) ??
     normalizeOptionalString(sessionCtx.OriginatingChannel) ??
     normalizeOptionalString(sessionCtx.Provider);
   const transport =

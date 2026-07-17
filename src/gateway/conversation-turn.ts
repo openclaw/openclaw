@@ -15,7 +15,10 @@ import {
   type ConversationDeliveryDeps,
 } from "../infra/outbound/conversation-delivery.js";
 import { registerPendingConversationTurn } from "../sessions/conversation-turns.js";
-import { ConversationInputError } from "./conversation-errors.js";
+import {
+  ConversationInputError,
+  ConversationOperationConflictError,
+} from "./conversation-errors.js";
 
 type ConversationTurnDeps = ConversationDeliveryDeps & {
   registerPendingConversationTurn: typeof registerPendingConversationTurn;
@@ -196,7 +199,7 @@ export async function runGatewayConversationTurn(
     });
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
-      throw new ConversationInputError(error.message);
+      throw new ConversationOperationConflictError(error.message);
     }
     throw error;
   }

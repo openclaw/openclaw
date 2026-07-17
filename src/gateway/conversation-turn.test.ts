@@ -366,7 +366,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toMatchObject({
-      name: "ConversationInputError",
+      name: "ConversationOperationConflictError",
       message: expect.stringContaining("reused with different input"),
     });
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();

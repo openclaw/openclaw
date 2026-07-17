@@ -11,7 +11,10 @@ import {
   type ConversationTurnParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
-import { ConversationInputError } from "../conversation-errors.js";
+import {
+  ConversationInputError,
+  ConversationOperationConflictError,
+} from "../conversation-errors.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -95,6 +98,17 @@ function bindConversationOperationIdentity(
   return identity;
 }
 
+function releaseConversationOperationIdentity(params: {
+  context: GatewayRequestContext;
+  operationKey: string;
+  requestIdentity: string;
+}): void {
+  const identityKey = `${params.operationKey}:identity`;
+  if (params.context.dedupe.get(identityKey)?.requestIdentity === params.requestIdentity) {
+    params.context.dedupe.delete(identityKey);
+  }
+}
+
 async function runConversationOperation<T extends { channel: string }>(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
@@ -114,6 +128,7 @@ async function runConversationOperation<T extends { channel: string }>(params: {
     return;
   }
   const { dedupeKey, inflightMap } = inflight;
+  let releaseRequestIdentity = false;
   const work = (async (): Promise<GatewayInflightResult> => {
     try {
       const payload = await params.execute();
@@ -131,6 +146,7 @@ async function runConversationOperation<T extends { channel: string }>(params: {
       return result;
     } catch (cause) {
       const isTerminalInputError = cause instanceof ConversationInputError;
+      const isOperationConflict = cause instanceof ConversationOperationConflictError;
       const error = errorShape(
         isTerminalInputError ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
         cause instanceof Error ? cause.message : String(cause),
@@ -140,7 +156,9 @@ async function runConversationOperation<T extends { channel: string }>(params: {
         error,
         meta: { error: formatForLog(cause) },
       };
-      if (isTerminalInputError) {
+      if (isOperationConflict) {
+        releaseRequestIdentity = true;
+      } else if (isTerminalInputError) {
         cacheGatewayDedupeResult({
           context: params.context,
           dedupeKey,
@@ -151,7 +169,19 @@ async function runConversationOperation<T extends { channel: string }>(params: {
       return result;
     }
   })();
-  await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond: params.respond });
+  try {
+    await runGatewayInflightWork({ inflightMap, dedupeKey, work, respond: params.respond });
+  } finally {
+    if (releaseRequestIdentity) {
+      // The durable row belongs to another request. Release this speculative
+      // claim after in-flight joins drain so its authoritative identity can retry.
+      releaseConversationOperationIdentity({
+        context: params.context,
+        operationKey: dedupeKey,
+        requestIdentity: params.requestIdentity,
+      });
+    }
+  }
 }
 
 export function createConversationHandlers(
