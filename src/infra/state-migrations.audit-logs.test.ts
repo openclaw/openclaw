@@ -1,10 +1,16 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { listConfigAuditRecordsForTests } from "../config/io.audit.js";
+import {
+  CONFIG_AUDIT_MAX_ENTRIES,
+  CONFIG_AUDIT_SCOPE,
+  listConfigAuditRecordsForTests,
+} from "../config/io.audit.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { listSystemAgentAuditEntriesForTests } from "../system-agent/audit.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 describe("legacy core audit log migration", () => {
@@ -19,16 +25,18 @@ describe("legacy core audit log migration", () => {
       const crestodianPath = path.join(stateDir, "audit", "crestodian.jsonl");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.mkdir(path.dirname(systemPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({
-          ts: "2026-07-01T00:00:00.000Z",
-          source: "config-io",
-          event: "config.write",
-          argv: ["openclaw", "config", "set", "token", "secret-value"],
-          execArgv: [],
-        })}\n`,
-      );
+      const unredactedConfigRecord = {
+        ts: "2026-07-01T00:00:00.000Z",
+        source: "config-io",
+        event: "config.write",
+        argv: ["openclaw", "config", "set", "token", "secret-value"],
+        execArgv: [],
+      };
+      const unredactedDigest = createHash("sha256")
+        .update(JSON.stringify(unredactedConfigRecord))
+        .digest("hex")
+        .slice(0, 16);
+      await fs.writeFile(configPath, `${JSON.stringify(unredactedConfigRecord)}\n`);
       await fs.writeFile(
         systemPath,
         `${JSON.stringify({
@@ -61,6 +69,12 @@ describe("legacy core audit log migration", () => {
       const configRecords = listConfigAuditRecordsForTests({ env, homedir: () => stateDir });
       expect(configRecords).toHaveLength(1);
       expect(JSON.stringify(configRecords)).not.toContain("secret-value");
+      const configEntries = createSqliteAuditRecordStore({
+        scope: CONFIG_AUDIT_SCOPE,
+        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+        env,
+      }).entries();
+      expect(configEntries[0]?.key).not.toContain(unredactedDigest);
       expect(
         listSystemAgentAuditEntriesForTests({ env })
           .map((entry) => entry.value.operation)

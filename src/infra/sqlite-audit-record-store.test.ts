@@ -24,4 +24,21 @@ describe("SQLite audit record store", () => {
       expect(store.entries().map((entry) => entry.key)).toEqual(["two", "three"]);
     });
   });
+
+  it("preserves insertion order and prunes the oldest row when timestamps tie", async () => {
+    await withTempDir({ prefix: "openclaw-audit-store-ties-" }, async (stateDir) => {
+      const store = createSqliteAuditRecordStore<{ value: number }>({
+        scope: "tied-timestamps",
+        maxEntries: 2,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+
+      store.register("z-first", { value: 1 }, 1);
+      store.register("a-second", { value: 2 }, 1);
+      expect(store.entries().map((entry) => entry.key)).toEqual(["z-first", "a-second"]);
+
+      store.register("m-third", { value: 3 }, 1);
+      expect(store.entries().map((entry) => entry.key)).toEqual(["a-second", "m-third"]);
+    });
+  });
 });

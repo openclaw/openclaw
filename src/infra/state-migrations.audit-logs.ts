@@ -111,7 +111,7 @@ function prepareLegacyAuditRecords(source: LegacyAuditLogSource): {
       source.kind === "config"
         ? sanitizeConfigAuditRecord(parsed as ConfigAuditRecord)
         : (redactSecrets(parsed) as SystemAgentAuditEntry);
-    const digest = createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
+    const digest = createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
     records.push({
       key: `legacy:${source.kind}:${index + 1}:${digest}`,
       value,

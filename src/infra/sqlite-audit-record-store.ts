@@ -1,6 +1,6 @@
 // Shared SQLite storage for append-only diagnostic audit records.
 import type { DatabaseSync } from "node:sqlite";
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -19,6 +19,10 @@ type DiagnosticEventRow = Pick<
   Selectable<DiagnosticEventsTable>,
   "event_key" | "payload_json" | "created_at"
 >;
+
+// diagnostic_events has ordinary SQLite rowids. They preserve append order across
+// timestamp ties; event_key is record identity and must not determine chronology.
+const auditInsertionSequence = sql<number>`rowid`;
 
 export type SqliteAuditRecordEntry<T> = {
   key: string;
@@ -67,7 +71,7 @@ function pruneAuditRecords(params: {
       .where("scope", "=", params.scope)
       .where("event_key", "!=", params.protectedKey)
       .orderBy("created_at", "asc")
-      .orderBy("event_key", "asc")
+      .orderBy(auditInsertionSequence, "asc")
       .limit(overflow),
   ).rows;
   for (const row of rows) {
@@ -128,7 +132,7 @@ export function createSqliteAuditRecordStore<T>(
           .select(["event_key", "payload_json", "created_at"])
           .where("scope", "=", scope)
           .orderBy("created_at", "asc")
-          .orderBy("event_key", "asc"),
+          .orderBy(auditInsertionSequence, "asc"),
       ).rows.map((row) => parseAuditRecord<T>(row));
     },
   };
