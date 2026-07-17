@@ -41,7 +41,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
     buildWhatsAppInboundContext: buildContextMock,
     createWhatsAppReplyPlan: (...args: unknown[]) => {
       const params = args[0] as { replyResolver?: unknown };
-      dispatchBufferedReplyMock(params);
+      void dispatchBufferedReplyMock(params);
       return {
         dispatcherOptions: {},
         delivery: { deliver: async () => {} },

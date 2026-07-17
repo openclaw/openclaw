@@ -214,7 +214,7 @@ export type ChannelEventDeliveryAdapter = {
     info: ChannelDeliveryInfo,
     result: ChannelDeliveryResult | void,
   ) => Promise<void> | void;
-  onError?: (err: unknown, info: { kind: string }) => void;
+  onError?: (err: unknown, info: { kind: string }) => Promise<void> | void;
 };
 
 /** Options for recording inbound session route state around a turn. */
