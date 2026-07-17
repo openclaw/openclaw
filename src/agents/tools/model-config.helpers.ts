@@ -136,6 +136,8 @@ export function hasProviderAuthForTool(params: {
     hasRuntimeAvailableProviderAuth({
       provider: params.provider,
       cfg: params.cfg,
+      store: params.authStore,
+      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       allowPluginSyntheticAuth: false,
     })
@@ -256,6 +258,8 @@ function hasDirectProviderApiKeyAuthForTool(params: {
     hasRuntimeAvailableProviderAuth({
       provider: params.provider,
       cfg: params.cfg,
+      store: params.authStore,
+      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       modelApi: params.modelApi,
       allowPluginSyntheticAuth: false,

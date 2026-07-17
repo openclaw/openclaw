@@ -179,6 +179,11 @@ export async function hasAuthForModelProvider(params: {
       return preparedAnswer;
     }
   }
+  const scopedAgentDir =
+    params.agentDir ??
+    (params.agentId && params.cfg
+      ? resolveAgentDir(params.cfg, params.agentId, params.env)
+      : undefined);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
@@ -186,6 +191,8 @@ export async function hasAuthForModelProvider(params: {
     hasRuntimeAvailableProviderAuth({
       provider,
       cfg: params.cfg,
+      store: params.store,
+      agentDir: scopedAgentDir,
       workspaceDir: params.workspaceDir,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
@@ -195,18 +202,13 @@ export async function hasAuthForModelProvider(params: {
   ) {
     return true;
   }
-  const slowPathAgentDir =
-    params.agentDir ??
-    (params.agentId && params.cfg
-      ? resolveAgentDir(params.cfg, params.agentId, params.env)
-      : undefined);
   const store =
     params.store ??
     (params.discoverExternalCliAuth === false
-      ? ensureAuthProfileStoreWithoutExternalProfiles(slowPathAgentDir, {
+      ? ensureAuthProfileStoreWithoutExternalProfiles(scopedAgentDir, {
           allowKeychainPrompt: false,
         })
-      : ensureAuthProfileStore(slowPathAgentDir, {
+      : ensureAuthProfileStore(scopedAgentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
   if (listProfilesForProvider(store, provider).length > 0) {
@@ -217,7 +219,7 @@ export async function hasAuthForModelProvider(params: {
           modelApi: params.modelApi,
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
-          agentDir: slowPathAgentDir,
+          agentDir: scopedAgentDir,
           store,
         });
   }

@@ -17,11 +17,38 @@ vi.mock("../auth-profiles/external-cli-sync.js", () => ({
 // snapshot keyed by config/workspace. Stub the env resolver so a provider is
 // only "env-authed" when config/workspaceDir actually reach it, mirroring a
 // config-scoped (non-bundled) provider plugin without loading plugin runtime.
-const authMocks = vi.hoisted(() => ({ resolveEnvApiKey: vi.fn() }));
+const authMocks = vi.hoisted(() => ({
+  resolveEnvApiKey: vi.fn(),
+  hasRuntimeAvailableProviderAuth:
+    vi.fn<
+      (params: {
+        provider: string;
+        cfg?: OpenClawConfig;
+        store?: AuthProfileStore;
+        agentDir?: string;
+        workspaceDir?: string;
+        modelApi?: string;
+      }) => boolean
+    >(),
+}));
 
 vi.mock("../model-auth.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, resolveEnvApiKey: authMocks.resolveEnvApiKey };
+  authMocks.hasRuntimeAvailableProviderAuth.mockImplementation(
+    actual.hasRuntimeAvailableProviderAuth as (params: {
+      provider: string;
+      cfg?: OpenClawConfig;
+      store?: AuthProfileStore;
+      agentDir?: string;
+      workspaceDir?: string;
+      modelApi?: string;
+    }) => boolean,
+  );
+  return {
+    ...actual,
+    resolveEnvApiKey: authMocks.resolveEnvApiKey,
+    hasRuntimeAvailableProviderAuth: authMocks.hasRuntimeAvailableProviderAuth,
+  };
 });
 
 const AGENT_DIR = "/tmp/openclaw-model-config-helper";
@@ -96,6 +123,7 @@ const hasDirectOpenAiKey = (
 
 beforeEach(() => {
   authMocks.resolveEnvApiKey.mockReset();
+  authMocks.hasRuntimeAvailableProviderAuth.mockClear();
   authMocks.resolveEnvApiKey.mockImplementation(
     (provider: string, _env?: unknown, options?: { config?: unknown }) =>
       provider === "acme" && options?.config
@@ -176,6 +204,31 @@ describe("hasProviderAuthForTool", () => {
     expect(hasProviderAuthForTool({ provider: "hatchery", authStore })).toBe(true);
   });
 
+  it("scopes fast provider auth checks to the tool auth store", () => {
+    const authStore = store({
+      "hatchery:default": {
+        provider: "hatchery",
+        type: "api_key",
+        key: "sk-profile", // pragma: allowlist secret
+      },
+    });
+
+    expect(
+      hasProviderAuthForTool({
+        provider: "hatchery",
+        agentDir: AGENT_DIR,
+        authStore,
+      }),
+    ).toBe(true);
+    expect(authMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "hatchery",
+        agentDir: AGENT_DIR,
+        store: authStore,
+      }),
+    );
+  });
+
   it("rejects providers without config, env, or profile auth", () => {
     expect(hasProviderAuthForTool({ provider: "unconfigured-provider" })).toBe(false);
   });
@@ -215,6 +268,20 @@ describe("resolveOpenAiImageMediaCandidate", () => {
 
     expect(hasDirectOpenAiKey({ authStore })).toBe(true);
     expect(resolveMedia({ authStore })).toEqual(openAiKeep);
+  });
+
+  it("scopes direct provider fast auth checks to the tool auth store", () => {
+    const authStore = store({ "openai:api-key": apiKey("openai") });
+
+    expect(hasDirectOpenAiKey({ authStore })).toBe(true);
+    expect(authMocks.hasRuntimeAvailableProviderAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        agentDir: AGENT_DIR,
+        store: authStore,
+        modelApi: "openai-responses",
+      }),
+    );
   });
 
   it("uses Codex when an ineligible direct API key profile is stale", () => {
