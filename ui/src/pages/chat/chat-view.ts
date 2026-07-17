@@ -8,7 +8,7 @@ import type {
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ChatFollowUpMode, ChatSendShortcut } from "../../app/settings.ts";
+import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -16,6 +16,7 @@ import type {
   ChatQueueItem,
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
+import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
@@ -123,7 +124,7 @@ export type ChatProps = {
   chatMessageMaxWidth?: string | null;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
-  followUpMode?: ChatFollowUpMode;
+  followUpMode?: ControlUiFollowUpMode;
   assistantAvatar: string | null;
   userName?: string | null;
   userAvatar?: string | null;

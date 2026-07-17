@@ -98,11 +98,6 @@ export function validateWindowsSourceRelease(
     digest: unknown;
   }[];
 }>;
-export function isDirectReleaseCandidateExecution(
-  directPath: string | undefined,
-  modulePath: string,
-  resolveRealPath?: (path: string) => string,
-): boolean;
 export function validateCandidateCheckout({
   targetSha,
   targetHeadSha,

@@ -397,8 +397,8 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
   </Accordion>
   <Accordion title="Stop and abort">
     - Click **Stop** (calls `chat.abort`).
-    - While a run is active, normal follow-ups steer into the running turn by default. Messages fall back to the queue when steering is unavailable; click **Steer** on a queued message to inject it into the running turn.
-    - **Settings → Appearance → Chat → Follow-ups while the agent is working** changes that default: `Steer into the active run` (default) sends follow-ups into the running turn immediately, while `Queue until the run ends` holds them until the run finishes. Either way, queued rows keep their per-message **Steer** and remove controls, and messages fall back to the queue when steering is unavailable.
+    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. Steering rejection also falls back to that queue. Click **Steer** on a queued message to inject it manually.
+    - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
     - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session.
 
