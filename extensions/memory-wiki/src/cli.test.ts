@@ -192,6 +192,73 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("registers apply synthesis and reads the body from --body-file", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bodyPath = path.join(rootDir, "synthesis-body.md");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(bodyPath, "Alpha from a body file.", "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, { config });
+
+    await program.parseAsync(
+      [
+        "wiki",
+        "apply",
+        "synthesis",
+        "CLI Body File",
+        "--body-file",
+        bodyPath,
+        "--source-id",
+        "source.alpha",
+      ],
+      { from: "user" },
+    );
+
+    const page = await fs.readFile(path.join(rootDir, "syntheses", "cli-body-file.md"), "utf8");
+    expect(page).toContain("Alpha from a body file.");
+    expect(page).toContain("source.alpha");
+  });
+
+  it("rejects oversized apply synthesis --body-file before writing a synthesis page", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bodyPath = path.join(rootDir, "oversized-body.md");
+    await fs.mkdir(rootDir, { recursive: true });
+    await fs.writeFile(bodyPath, `${"x".repeat(1_048_577)}`, "utf8");
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, { config });
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "Oversized Body",
+          "--body-file",
+          bodyPath,
+          "--source-id",
+          "source.alpha",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(
+      "wiki apply synthesis --body-file is too large (1,048,577 bytes); limit is 1,048,576 bytes.",
+    );
+
+    await expect(
+      fs.readFile(path.join(rootDir, "syntheses", "oversized-body.md"), "utf8"),
+    ).rejects.toThrow();
+    const index = await fs.readFile(path.join(rootDir, "index.md"), "utf8").catch(() => "");
+    expect(index).not.toContain("Oversized Body");
+  });
+
   it("resolves --agent for local commands and requires it with multiple agent vaults", async () => {
     const { rootDir, config } = await createCliVault({
       config: { vault: { scope: "agent" } },

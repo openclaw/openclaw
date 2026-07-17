@@ -58,6 +58,7 @@ const GATEWAY_TERMINAL_STRING_MAX_CHARS = 2_000;
 const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
 const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
 const GATEWAY_RESPONSE_MAX_CODE_CHARS = 256;
+const WIKI_APPLY_BODY_FILE_MAX_BYTES = 1_048_576;
 const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
   String.raw`(?:\x1B\[[0-?]*[ -/]*[@-~]|\x1B[@-Z\\-_]|\x9B[0-?]*[ -/]*[@-~])`,
   "g",
@@ -375,12 +376,58 @@ function parseWikiSearchEnumOption<T extends string>(
   throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
+function formatBytes(value: number): string {
+  return `${value.toLocaleString("en-US")} bytes`;
+}
+
+function createOversizedWikiApplyBodyFileError(size?: number): Error {
+  const observed = typeof size === "number" ? ` (${formatBytes(size)})` : "";
+  return new Error(
+    `wiki apply synthesis --body-file is too large${observed}; limit is ${formatBytes(WIKI_APPLY_BODY_FILE_MAX_BYTES)}.`,
+  );
+}
+
+async function readWikiApplyBodyFile(bodyFile: string): Promise<string> {
+  const handle = await fs.open(bodyFile, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error("wiki apply synthesis --body-file must point to a regular file.");
+    }
+    if (stat.size > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+      throw createOversizedWikiApplyBodyFileError(stat.size);
+    }
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let position = 0;
+    while (totalBytes <= WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+      const nextLength = Math.min(64 * 1024, WIKI_APPLY_BODY_FILE_MAX_BYTES + 1 - totalBytes);
+      const chunk = Buffer.alloc(nextLength);
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
+      if (bytesRead === 0) {
+        break;
+      }
+      chunks.push(chunk.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+      position += bytesRead;
+      if (totalBytes > WIKI_APPLY_BODY_FILE_MAX_BYTES) {
+        throw createOversizedWikiApplyBodyFileError(totalBytes);
+      }
+    }
+
+    return Buffer.concat(chunks, totalBytes).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
   if (params.body?.trim()) {
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    return await readWikiApplyBodyFile(params.bodyFile);
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }
