@@ -315,6 +315,19 @@ vi.mock("./monitor/reply.runtime.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type DispatchParams = Parameters<typeof actual.dispatchChannelInboundTurn>[0];
+  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
+  const replyResolver: ReplyResolver = (...args) =>
+    slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
+  return {
+    ...actual,
+    dispatchChannelInboundTurn: (params: DispatchParams) =>
+      actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
+  };
+});
+
 vi.mock("./resolve-channels.js", () => ({
   resolveSlackChannelAllowlist: async ({ entries }: { entries: string[] }) =>
     entries.map((input) => ({ input, resolved: false })),
