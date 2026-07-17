@@ -1056,60 +1056,25 @@ function resolveMainSessionResumePolicy(
 }
 
 async function markSessionFailed(params: {
-  expectedRecoveryRunId?: string;
-  expectedRecoverySourceRunId?: string;
-  expectedSessionId: string;
+  observation: MainSessionRecoveryObservation;
   storePath: string;
   sessionKey: string;
   reason: string;
 }): Promise<boolean> {
-  const marked = await applySessionEntryReplacements({
-    sessionKeys: [params.sessionKey],
-    storePath: params.storePath,
-    update: (entries) => {
-      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
-      const entry = current?.entry;
-      if (
-        !entry ||
-        entry.sessionId !== params.expectedSessionId ||
-        entry.status !== "running" ||
-        entry.abortedLastRun !== true ||
-        normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !==
-          params.expectedRecoveryRunId ||
-        normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
-          params.expectedRecoverySourceRunId
-      ) {
-        return { result: false };
-      }
-      entry.status = "failed";
-      entry.abortedLastRun = true;
-      entry.endedAt = Date.now();
-      entry.updatedAt = entry.endedAt;
-      entry.pendingFinalDelivery = undefined;
-      entry.pendingFinalDeliveryText = undefined;
-      entry.pendingFinalDeliveryCreatedAt = undefined;
-      entry.pendingFinalDeliveryLastAttemptAt = undefined;
-      entry.pendingFinalDeliveryAttemptCount = undefined;
-      entry.pendingFinalDeliveryLastError = undefined;
-      entry.pendingFinalDeliveryContext = undefined;
-      entry.pendingFinalDeliveryIntentId = undefined;
-      Object.assign(
-        entry,
-        buildRestartRecoveryClaimCleanupPatch({
-          entry,
-          recordTerminalSource: true,
-        }),
-      );
-      return {
-        result: true,
-        replacements: [{ sessionKey: params.sessionKey, entry }],
-      };
+  const marked = await commitMainSessionRecovery({
+    command: {
+      kind: "fail_recovery",
+      now: Date.now(),
+      observation: params.observation,
     },
+    requireWriteSuccess: true,
+    target: { sessionKey: params.sessionKey, storePath: params.storePath },
   });
-  if (marked) {
+  if (marked.transition.kind === "failed") {
     log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+    return true;
   }
-  return marked;
+  return false;
 }
 
 type RecoveryCheckpointCompletion =
@@ -1427,6 +1392,7 @@ async function failUnresumableMainSession(params: {
   entry: SessionEntry;
   expectedRecoverySourceRunId?: string;
   gatewayRuntime: GatewayRecoveryRuntime;
+  observation: MainSessionRecoveryObservation;
   reason: string;
   sessionKey: string;
   storePath: string;
@@ -1449,9 +1415,7 @@ async function failUnresumableMainSession(params: {
     return "failed";
   }
   const marked = await markSessionFailed({
-    expectedRecoveryRunId: normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId),
-    expectedRecoverySourceRunId: params.expectedRecoverySourceRunId,
-    expectedSessionId: params.entry.sessionId,
+    observation: params.observation,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     reason: params.reason,
@@ -1722,6 +1686,7 @@ async function recoverStore(params: {
           entry.restartRecoveryDeliverySourceRunId,
         ),
         gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
         reason: "message-tool-only recovery authority is unavailable",
         sessionKey,
         storePath: params.storePath,
@@ -1752,6 +1717,7 @@ async function recoverStore(params: {
         entry,
         expectedRecoverySourceRunId,
         gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
         reason: resumeBlockReason,
         sessionKey,
         storePath: params.storePath,
@@ -1883,6 +1849,7 @@ async function recoverStore(params: {
           entry,
           expectedRecoverySourceRunId,
           gatewayRuntime: params.gatewayRuntime,
+          observation: recoveryView.observation,
           reason: completion.reason,
           sessionKey,
           storePath: params.storePath,
@@ -1897,6 +1864,7 @@ async function recoverStore(params: {
         entry,
         expectedRecoverySourceRunId,
         gatewayRuntime: params.gatewayRuntime,
+        observation: recoveryView.observation,
         reason: resumePolicy.reason,
         sessionKey,
         storePath: params.storePath,

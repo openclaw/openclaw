@@ -2395,6 +2395,46 @@ describe("main-session-restart-recovery", () => {
     expect(notices).toHaveLength(1);
   });
 
+  it("retries tombstoning after a transcript metadata conflict", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-exhausted",
+          revision: 1,
+          chargedAttempts: 3,
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "continue this turn" },
+    ]);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      code: "session-rebound",
+      reason: "session metadata changed",
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 1,
+    });
+
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: { tombstone: expect.any(Object) },
+    });
+  });
+
   it("tombstones when the final owner-release retry consumes the last charge", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -4386,6 +4426,9 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: true,
       restartRecoveryTerminalRunIds: ["control-ui-run"],
     });
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery,
+    ).toBeUndefined();
 
     const failedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     if (!failedEntry) {
@@ -4625,6 +4668,7 @@ describe("main-session-restart-recovery", () => {
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:demo-channel:room-1"]?.mainRestartRecovery).toBeUndefined();
   });
 
   it("resumes a restart interrupted at the Code Mode wait control", async () => {

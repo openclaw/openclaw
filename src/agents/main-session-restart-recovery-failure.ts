@@ -1,12 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
-import type { MainSessionRecoveryObservation } from "./main-session-recovery-state.js";
+import {
+  isMainSessionRecoveryExhausted,
+  type MainSessionRecoveryObservation,
+} from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { buildUnresumableSessionNoticeIdempotencyKey } from "./main-session-restart-claim.js";
 import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-dispatch.js";
@@ -57,17 +61,44 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
   if (!deliveryContext) {
     // The transcript notice and tombstone share one SQLite transaction so a
     // foreground takeover cannot leave behind a false terminal notice.
-    const notice = await writeUnresumableSessionNotice({
-      ...params,
-      text: TOMBSTONED_SESSION_NOTICE,
-    });
-    if (notice === "stale") {
-      return "skipped";
+    let entry = params.entry;
+    let observation = params.observation;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const notice = await writeUnresumableSessionNotice({
+        ...params,
+        entry,
+        observation,
+        text: TOMBSTONED_SESSION_NOTICE,
+      });
+      if (notice === "written") {
+        return "tombstoned";
+      }
+      if (notice === "failed") {
+        return "notice_failed";
+      }
+      const current = loadSessionEntry({
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        readConsistency: "latest",
+      }) as SessionEntry | undefined;
+      const state = current?.mainRestartRecovery;
+      if (
+        !current ||
+        current.sessionId !== params.entry.sessionId ||
+        state?.cycleId !== params.observation.cycleId ||
+        state.tombstone ||
+        !isMainSessionRecoveryExhausted(current)
+      ) {
+        return "skipped";
+      }
+      entry = current;
+      observation = {
+        sessionId: current.sessionId,
+        cycleId: state.cycleId,
+        revision: state.revision,
+      };
     }
-    if (notice === "failed") {
-      return "notice_failed";
-    }
-    return "tombstoned";
+    return "notice_failed";
   }
   const tombstonedEntry = await claimMainRestartRecoveryTombstone(params);
   if (!tombstonedEntry) {
