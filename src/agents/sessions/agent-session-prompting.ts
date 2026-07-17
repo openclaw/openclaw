@@ -26,6 +26,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         await this.agent.continue();
       }
     } finally {
+      this.systemPromptOverride = undefined;
       this.flushPendingBashMessages();
     }
   }
@@ -51,7 +52,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       this.retryCount = 0;
     }
 
-    return await this.checkCompaction(msg);
+    if (await this.checkCompaction(msg)) {
+      return true;
+    }
+
+    // Messages queued by agent_end handlers arrive after the loop's final queue drain.
+    return this.agent.hasQueuedMessages();
   }
 
   private createUserContent(
@@ -149,17 +155,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
       }
 
-      // Check if we need to compact before sending (catches aborted responses)
+      // Check if we need to compact before sending (catches aborted responses).
+      // The pending user prompt below starts the next run; no intermediate continuation is needed.
       const lastAssistant = this.findLastAssistantMessage();
-      if (lastAssistant && (await this.checkCompaction(lastAssistant, false))) {
-        try {
-          await this.agent.continue();
-          while (await this.handlePostAgentRun()) {
-            await this.agent.continue();
-          }
-        } finally {
-          this.flushPendingBashMessages();
-        }
+      if (lastAssistant) {
+        await this.checkCompaction(lastAssistant, false);
       }
 
       // Build messages array (custom message if any, then user message)
@@ -199,10 +199,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         }
       }
       // Apply extension-modified system prompt, or reset to base
-      if (result?.systemPrompt) {
+      if (result?.systemPrompt !== undefined) {
+        this.systemPromptOverride = result.systemPrompt;
         this.agent.state.systemPrompt = result.systemPrompt;
       } else {
         // Ensure we're using the base prompt (in case previous turn had modifications)
+        this.systemPromptOverride = undefined;
         this.agent.state.systemPrompt = this.baseSystemPrompt;
       }
     } catch (error) {

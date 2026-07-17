@@ -125,6 +125,7 @@ export abstract class AgentSessionBase {
   protected baseSystemPrompt = "";
   protected baseSystemPromptOptions!: BuildSystemPromptOptions;
   protected exactBaseSystemPrompt: string | undefined;
+  protected systemPromptOverride: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -360,7 +361,7 @@ export abstract class AgentSessionBase {
         this.lastAssistantMessage = event.message;
 
         const assistantMsg = event.message;
-        if (assistantMsg.stopReason !== "error") {
+        if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
           this.overflowRecoveryAttempted = false;
         }
 
@@ -540,6 +541,21 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    const abortOperations = [
+      () => this.abortRetry(),
+      () => this.abortCompaction(),
+      () => this.abortBranchSummary(),
+      () => this.abortBash(),
+      () => this.agent.abort(),
+    ];
+    for (const abortOperation of abortOperations) {
+      try {
+        abortOperation();
+      } catch {
+        // One broken abort hook must not prevent the remaining work from being cancelled.
+      }
+    }
+
     this.currentExtensionRunner.invalidate(
       "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
     );
@@ -626,7 +642,7 @@ export abstract class AgentSessionBase {
 
     // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
-    this.agent.state.systemPrompt = this.baseSystemPrompt;
+    this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }
 
   /** Set an exact base prompt owned by the current runtime. */
@@ -788,5 +804,8 @@ export abstract class AgentSessionBase {
     skipAbortedCheck?: boolean,
   ): Promise<boolean>;
   abstract abortRetry(): void;
+  abstract abortCompaction(): void;
+  abstract abortBranchSummary(): void;
+  abstract abortBash(): void;
   protected abstract flushPendingBashMessages(): void;
 }

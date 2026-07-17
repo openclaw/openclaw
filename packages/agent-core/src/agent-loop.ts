@@ -1063,6 +1063,7 @@ async function finalizeExecutedToolCall(
       );
       if (afterResult) {
         result = {
+          ...result,
           content: afterResult.content ?? result.content,
           details: afterResult.details ?? result.details,
           terminate: afterResult.terminate ?? result.terminate,
@@ -1112,7 +1113,7 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
     role: "toolResult",
     toolCallId: finalized.toolCall.id,
     toolName: finalized.toolCall.name,
-    content: finalized.result.content,
+    content: finalized.result.content ?? [],
     details: finalized.result.details,
     isError: finalized.isError,
     timestamp: Date.now(),
