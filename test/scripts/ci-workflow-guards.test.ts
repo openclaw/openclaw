@@ -2075,11 +2075,15 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
     );
+    expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
+    expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
+    expect(installStep.run).toContain("install_attempts=2");
+    expect(installStep.run).toContain("install_attempts=3");
     expect(installStep.run).toContain(
-      'timeout --signal=TERM --kill-after=15s 4m pnpm "${install_args[@]}"',
+      "for (( attempt = 1; attempt <= install_attempts; attempt += 1 )); do",
     );
-    expect(installStep.run).toContain("pnpm install failed or timed out; retrying once");
-    expect(installStep.run).toContain("if ! run_pnpm_install; then");
+    expect(installStep.run).toContain('if [ "$install_status" -ne 0 ]; then');
+    expect(installStep.run).not.toContain("accepting the populated sticky tree");
     // Read-only consumers never capture; only the designated writer refreshes
     // the archive and publishes the fingerprint after a successful install.
     expect(installStep.run).toContain('[ "$STICKY_WRITER" = "true" ]');

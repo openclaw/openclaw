@@ -398,10 +398,11 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
         run_pnpm_install() {
           if [ "$STICKY_DISK" = "true" ]; then
-            # pnpm can occasionally retain a child after printing Done on a
-            # sticky COW mount. Bound that attempt, then let the existing retry
-            # finish from the now-populated store and module tree.
-            timeout --signal=TERM --kill-after=15s 4m pnpm "${install_args[@]}"
+            # Pnpm can keep retrying optional platform tarballs after the
+            # required tree is linked. Retry the whole frozen transaction from
+            # its warmed store instead of letting minute backoffs outlive this cap.
+            timeout --signal=TERM --kill-after=15s 4m \
+              pnpm "${install_args[@]}" --config.fetch-retries=0
           else
             pnpm "${install_args[@]}"
           fi
@@ -424,9 +425,25 @@ runs:
           if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
             rm -f "$sticky_marker"
           fi
-          if ! run_pnpm_install; then
-            echo "::warning::pnpm install failed or timed out; retrying once"
-            run_pnpm_install
+          install_attempts=2
+          if [ "$STICKY_DISK" = "true" ]; then
+            install_attempts=3
+          fi
+          install_status=1
+          for (( attempt = 1; attempt <= install_attempts; attempt += 1 )); do
+            if run_pnpm_install; then
+              install_status=0
+              break
+            else
+              install_status="$?"
+            fi
+            if [ "$attempt" -lt "$install_attempts" ]; then
+              echo "::warning::pnpm install attempt ${attempt}/${install_attempts} failed or timed out; retrying"
+            fi
+          done
+          if [ "$install_status" -ne 0 ]; then
+            echo "::error::pnpm install failed after ${install_attempts} attempts"
+            exit "$install_status"
           fi
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             rm -rf node_modules
