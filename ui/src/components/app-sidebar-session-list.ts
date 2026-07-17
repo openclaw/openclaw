@@ -7,7 +7,7 @@ import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { writeSessionDragData, writeSessionGroupDragData } from "../lib/sessions/drag.ts";
-import { groupSidebarSessionRows, sidebarSectionHasHeader } from "../lib/sessions/grouping.ts";
+import { sidebarSectionHasHeader } from "../lib/sessions/grouping.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { AppSidebarMenusElement } from "./app-sidebar-menus.ts";
 import {
@@ -428,11 +428,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       codingTrailingPresent?: boolean;
     },
   ) {
-    const visibleRows = limitSidebarSessionRows(rows, this.visibleSessionLimit);
-    const sections = groupSidebarSessionRows(visibleRows, {
-      grouping: this.sessionsGrouping,
-      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-    });
+    const { sections, expandedRows, visibleRows } = this.zonedVisibleSections(rows);
     return html`
       ${options.showDraft ? this.renderDraftSessionRow() : nothing}
       ${sections.map((section) => {
@@ -446,7 +442,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
         }
         return this.renderSessionSection(section);
       })}
-      ${this.renderSessionPagination(rows, visibleRows.length)}
+      ${this.renderSessionPagination(expandedRows, visibleRows.length)}
     `;
   }
 

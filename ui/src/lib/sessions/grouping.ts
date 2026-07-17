@@ -24,7 +24,7 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
-type SidebarSessionSection<Row> = {
+export type SidebarSessionSection<Row> = {
   id: "pinned" | "ungrouped" | "groups" | "work" | `category:${string}`;
   category?: string;
   /** Built-in smart group-conversation section (kind "group" rows). */

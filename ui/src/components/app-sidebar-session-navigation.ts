@@ -11,6 +11,7 @@ import {
 import {
   groupSidebarSessionRows,
   sidebarSectionHasHeader,
+  type SidebarSessionSection,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
 import {
@@ -214,24 +215,48 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     });
   };
 
+  protected isSessionSectionCollapsed(sectionId: string): boolean {
+    return (
+      sidebarSectionHasHeader(sectionId, this.sessionsGrouping) &&
+      this.collapsedSessionSections.has(sectionId)
+    );
+  }
+
+  /**
+   * Zone partition with the visible-page limit applied only to expanded
+   * sections: collapsed zones keep full rows (true header counts) but do not
+   * consume the page budget, so a collapsed Coding zone cannot crowd threads
+   * out of the first page.
+   */
+  protected zonedVisibleSections(rows: SidebarRecentSession[]): {
+    sections: SidebarSessionSection<SidebarRecentSession>[];
+    expandedRows: SidebarRecentSession[];
+    visibleRows: SidebarRecentSession[];
+  } {
+    const sections = groupSidebarSessionRows(rows, {
+      grouping: this.sessionsGrouping,
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+    });
+    const expandedRows = sections.flatMap((section) =>
+      this.isSessionSectionCollapsed(section.id) ? [] : section.rows,
+    );
+    const visibleRows = limitSidebarSessionRows(expandedRows, this.visibleSessionLimit);
+    const keep = new Set(visibleRows.map((row) => row.key));
+    return {
+      sections: sections.map((section) =>
+        this.isSessionSectionCollapsed(section.id)
+          ? section
+          : { ...section, rows: section.rows.filter((row) => keep.has(row.key)) },
+      ),
+      expandedRows,
+      visibleRows,
+    };
+  }
+
   /** Rows in on-screen order; shift ranges and batch actions share this ordering. */
   protected visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const navigationState = this.getSessionNavigationState();
-    const sections = groupSidebarSessionRows(
-      limitSidebarSessionRows(
-        this.selectedAgentSessionRows(navigationState),
-        this.visibleSessionLimit,
-      ),
-      {
-        grouping: this.sessionsGrouping,
-        knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-      },
-    );
-    return sections.flatMap((section) => {
-      // Mirrors renderSessionSection: only headered sections can collapse.
-      const showHeader = sidebarSectionHasHeader(section.id, this.sessionsGrouping);
-      return showHeader && this.collapsedSessionSections.has(section.id) ? [] : section.rows;
-    });
+    return this.zonedVisibleSections(this.selectedAgentSessionRows(navigationState)).visibleRows;
   }
 
   protected selectedVisibleSessions(): SidebarRecentSession[] {
