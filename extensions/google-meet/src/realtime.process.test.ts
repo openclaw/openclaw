@@ -8,14 +8,16 @@ import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/re
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
-import {
-  createLocalMeetRealtimeAudioTransport,
-  type MeetRealtimeAudioSpawn,
-} from "./realtime-local-audio-transport.js";
-import { formatGoogleMeetRealtimeVoiceModelLog, startMeetAgentRealtimeEngine } from "./realtime.js";
+import type { MeetRealtimeAudioTransport } from "./realtime-audio-transport.js";
+import { createLocalMeetRealtimeAudioTransport } from "./realtime-local-audio-transport.js";
+import { startMeetAgentRealtimeEngine, startMeetRealtimeEngine } from "./realtime.js";
 
 const tempDirs: string[] = [];
 const spawnedChildren: ChildProcess[] = [];
+
+type MeetRealtimeAudioSpawn = NonNullable<
+  Parameters<typeof createLocalMeetRealtimeAudioTransport>[0]["spawn"]
+>;
 
 function writeBridgeCommand(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-bridge-"));
@@ -212,15 +214,55 @@ describe("local Meet realtime transport process stream errors", () => {
 });
 
 describe("Google Meet realtime model logs", () => {
-  it("keeps a whole code point when a provider id crosses the log boundary", () => {
+  it("keeps a whole code point when a provider id crosses the log boundary", async () => {
     const prefix = "a".repeat(179);
-    const log = formatGoogleMeetRealtimeVoiceModelLog({
-      strategy: "native",
-      provider: { id: `${prefix}😀tail` } as RealtimeVoiceProviderPlugin,
-      providerConfig: {},
-      audioFormat: "pcm16-24khz",
+    const providerId = `${prefix}😀tail`;
+    const bridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: providerId,
+      label: "Long identifier provider",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const transport: MeetRealtimeAudioTransport = {
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop: vi.fn(async () => {}),
+      writeOutput: vi.fn(async () => {}),
+      clearOutput: vi.fn(async () => {}),
+      dispose: vi.fn(async () => {}),
+    };
+    const logger = {
+      debug: vi.fn(),
+      error: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const handle = await startMeetRealtimeEngine({
+      config: resolveGoogleMeetConfig({
+        realtime: { strategy: "native", provider: providerId },
+      }),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "long-provider-log",
+      logger,
+      providers: [provider],
+      transport,
     });
 
-    expect(log).toContain(`provider=${prefix} model=provider-default`);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining(`provider=${prefix} model=provider-default`),
+    );
+    await handle.stop();
   });
 });

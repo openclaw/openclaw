@@ -65,36 +65,36 @@ type ResolvedRealtimeTranscriptionProvider = {
   providerConfig: RealtimeTranscriptionProviderConfig;
 };
 
-export type GoogleMeetRealtimeTranscriptEntry = RealtimeVoiceTranscriptEntry;
-export const recordGoogleMeetRealtimeTranscript = recordRealtimeVoiceTranscript;
+type GoogleMeetRealtimeTranscriptEntry = RealtimeVoiceTranscriptEntry;
+const recordGoogleMeetRealtimeTranscript = recordRealtimeVoiceTranscript;
 
-export function getGoogleMeetRealtimeTranscriptHealth(
+function getGoogleMeetRealtimeTranscriptHealth(
   transcript: GoogleMeetRealtimeTranscriptEntry[],
 ): Pick<GoogleMeetChromeHealth, keyof ReturnType<typeof getRealtimeVoiceTranscriptHealth>> {
   return getRealtimeVoiceTranscriptHealth(transcript);
 }
 
-export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEventLogEntry;
+type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEventLogEntry;
 
-export const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
+const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
 // Playback duration plus a tail blocks live loopback; transcript lookback catches delayed echo.
 const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
 const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 
-export function recordGoogleMeetRealtimeEvent(
+function recordGoogleMeetRealtimeEvent(
   events: GoogleMeetRealtimeEventEntry[],
   event: Parameters<typeof recordRealtimeVoiceBridgeEvent>[1],
 ): void {
   recordRealtimeVoiceBridgeEvent(events, event);
 }
 
-export function getGoogleMeetRealtimeEventHealth(
+function getGoogleMeetRealtimeEventHealth(
   events: GoogleMeetRealtimeEventEntry[],
 ): Pick<GoogleMeetChromeHealth, keyof ReturnType<typeof getRealtimeVoiceBridgeEventHealth>> {
   return getRealtimeVoiceBridgeEventHealth(events);
 }
 
-export function isGoogleMeetLikelyAssistantEchoTranscript(params: {
+function isGoogleMeetLikelyAssistantEchoTranscript(params: {
   transcript: GoogleMeetRealtimeTranscriptEntry[];
   text: string;
   nowMs?: number;
@@ -120,7 +120,7 @@ function extendGoogleMeetOutputEchoSuppression(params: {
   });
 }
 
-export function recordGoogleMeetOutputActivity(params: {
+function recordGoogleMeetOutputActivity(params: {
   tracker: RealtimeVoiceOutputActivityTracker;
   audio: Buffer;
   audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
@@ -138,7 +138,7 @@ export function recordGoogleMeetOutputActivity(params: {
   return suppression;
 }
 
-export function resolveGoogleMeetRealtimeProvider(params: {
+function resolveGoogleMeetRealtimeProvider(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeVoiceProviderPlugin[];
@@ -154,7 +154,7 @@ export function resolveGoogleMeetRealtimeProvider(params: {
   });
 }
 
-export function resolveGoogleMeetRealtimeTranscriptionProvider(params: {
+function resolveGoogleMeetRealtimeTranscriptionProvider(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
@@ -188,7 +188,7 @@ export function resolveGoogleMeetRealtimeTranscriptionProvider(params: {
   return { provider, providerConfig };
 }
 
-export function buildGoogleMeetSpeakExactUserMessage(text: string): string {
+function buildGoogleMeetSpeakExactUserMessage(text: string): string {
   return [
     "Speak this exact OpenClaw answer to the meeting, without adding, removing, or rephrasing words.",
     `Answer: ${JSON.stringify(text)}`,
@@ -218,7 +218,7 @@ function resolveProviderModelForLog(params: {
   );
 }
 
-export function formatGoogleMeetRealtimeVoiceModelLog(params: {
+function formatGoogleMeetRealtimeVoiceModelLog(params: {
   strategy: string;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
@@ -239,7 +239,7 @@ export function formatGoogleMeetRealtimeVoiceModelLog(params: {
   ].join(" ");
 }
 
-export function formatGoogleMeetAgentAudioModelLog(params: {
+function formatGoogleMeetAgentAudioModelLog(params: {
   provider: RealtimeTranscriptionProviderPlugin;
   providerConfig: RealtimeTranscriptionProviderConfig;
   audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
@@ -268,7 +268,7 @@ type GoogleMeetTtsResultLogFields = {
   fallbackFrom?: string;
 };
 
-export function formatGoogleMeetAgentTtsResultLog(
+function formatGoogleMeetAgentTtsResultLog(
   prefix: string,
   result: GoogleMeetTtsResultLogFields,
 ): string {
@@ -282,7 +282,7 @@ export function formatGoogleMeetAgentTtsResultLog(
   ].join(" ");
 }
 
-export function formatGoogleMeetTranscriptSummaryLog(prefix: string, text: string): string {
+function formatGoogleMeetTranscriptSummaryLog(prefix: string, text: string): string {
   return `[google-meet] ${prefix}: chars=${text.length}`;
 }
 
@@ -298,18 +298,14 @@ function normalizeGoogleMeetTtsPromptText(text: string | undefined): string | un
   return trimmed;
 }
 
-export function pushGoogleMeetTalkEvent(
-  events: TalkEvent[],
-  event: TalkEvent,
-  maxEntries = 40,
-): void {
+function pushGoogleMeetTalkEvent(events: TalkEvent[], event: TalkEvent, maxEntries = 40): void {
   events.push(event);
   if (events.length > maxEntries) {
     events.splice(0, events.length - maxEntries);
   }
 }
 
-export function summarizeGoogleMeetTalkEvents(
+function summarizeGoogleMeetTalkEvents(
   events: TalkEvent[],
 ): NonNullable<GoogleMeetChromeHealth["recentTalkEvents"]> {
   return events.slice(-20).map((event) => ({

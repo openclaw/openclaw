@@ -26,20 +26,10 @@ import {
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
 import { convertGoogleMeetTtsAudioForBridge } from "./src/realtime-audio-format.js";
-import {
-  createLocalMeetRealtimeAudioTransport,
-  type MeetRealtimeAudioSpawn,
-} from "./src/realtime-local-audio-transport.js";
+import type { MeetRealtimeAudioTransport } from "./src/realtime-audio-transport.js";
+import { createLocalMeetRealtimeAudioTransport } from "./src/realtime-local-audio-transport.js";
 import { createNodeMeetRealtimeAudioTransport } from "./src/realtime-node-audio-transport.js";
-import {
-  isGoogleMeetLikelyAssistantEchoTranscript,
-  GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  recordGoogleMeetOutputActivity,
-  resolveGoogleMeetRealtimeProvider,
-  resolveGoogleMeetRealtimeTranscriptionProvider,
-  startMeetAgentRealtimeEngine,
-  startMeetRealtimeEngine,
-} from "./src/realtime.js";
+import { startMeetAgentRealtimeEngine, startMeetRealtimeEngine } from "./src/realtime.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   invokeGoogleMeetGatewayMethodForTest,
@@ -58,6 +48,38 @@ import type { GoogleMeetSession } from "./src/transports/types.js";
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
 };
+
+const TEST_TALKBACK_DEBOUNCE_MS = 900;
+
+type MeetRealtimeAudioSpawn = NonNullable<
+  Parameters<typeof createLocalMeetRealtimeAudioTransport>[0]["spawn"]
+>;
+
+function createTestMeetRealtimeAudioTransport(): {
+  transport: MeetRealtimeAudioTransport;
+  deliverInput: (audio: Buffer) => void;
+} {
+  let inputHandler: ((audio: Buffer) => void) | undefined;
+  const transport: MeetRealtimeAudioTransport = {
+    onFatal: vi.fn(),
+    startInput: vi.fn((handler) => {
+      inputHandler = handler;
+    }),
+    stop: vi.fn(async () => {}),
+    writeOutput: vi.fn(async () => {}),
+    clearOutput: vi.fn(async () => {}),
+    dispose: vi.fn(async () => {}),
+  };
+  return {
+    transport,
+    deliverInput: (audio) => {
+      if (!inputHandler) {
+        throw new Error("Expected Google Meet realtime input to be started");
+      }
+      inputHandler(audio);
+    },
+  };
+}
 
 type TestLocalAgentEngineParams = Omit<
   Parameters<typeof startMeetAgentRealtimeEngine>[0],
@@ -862,7 +884,19 @@ describe("google-meet plugin", () => {
     expect(google.realtime.transcriptionProvider).toBe("openai");
   });
 
-  it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", () => {
+  it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", async () => {
+    let voiceRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const voiceBridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
     const voiceProviders: RealtimeVoiceProviderPlugin[] = [
       {
         id: "openai",
@@ -879,19 +913,30 @@ describe("google-meet plugin", () => {
         autoSelectOrder: 2,
         resolveConfig: ({ rawConfig }) => rawConfig,
         isConfigured: () => true,
-        createBridge: () => {
-          throw new Error("unused");
+        createBridge: (request) => {
+          voiceRequest = request;
+          return voiceBridge;
         },
       },
     ];
+    let transcriptionRequest:
+      | Parameters<RealtimeTranscriptionProviderPlugin["createSession"]>[0]
+      | undefined;
+    const transcriptionSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
     const transcriptionProviders: RealtimeTranscriptionProviderPlugin[] = [
       {
         id: "openai",
         label: "OpenAI",
         autoSelectOrder: 1,
         isConfigured: () => true,
-        createSession: () => {
-          throw new Error("unused");
+        createSession: (request) => {
+          transcriptionRequest = request;
+          return transcriptionSession;
         },
       },
     ];
@@ -904,21 +949,35 @@ describe("google-meet plugin", () => {
       },
     });
 
-    const voiceProvider = resolveGoogleMeetRealtimeProvider({
+    const voiceTransport = createTestMeetRealtimeAudioTransport();
+    const voiceHandle = await startMeetRealtimeEngine({
       config,
       fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "provider-resolution-voice",
+      logger: noopLogger,
       providers: voiceProviders,
+      transport: voiceTransport.transport,
     });
-    expect(voiceProvider.provider.id).toBe("google");
-    expect(voiceProvider.providerConfig).toEqual({
+    expect(voiceHandle.providerId).toBe("google");
+    expect(voiceRequest?.providerConfig).toEqual({
       model: "gemini-2.5-flash-native-audio-preview-12-2025",
     });
-    const transcriptionProvider = resolveGoogleMeetRealtimeTranscriptionProvider({
+    await voiceHandle.stop();
+
+    const transcriptionTransport = createTestMeetRealtimeAudioTransport();
+    const transcriptionHandle = await startMeetAgentRealtimeEngine({
       config,
       fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "provider-resolution-transcription",
+      logger: noopLogger,
       providers: transcriptionProviders,
+      transport: transcriptionTransport.transport,
     });
-    expect(transcriptionProvider.provider.id).toBe("openai");
+    expect(transcriptionHandle.providerId).toBe("openai");
+    expect(transcriptionRequest).toBeDefined();
+    await transcriptionHandle.stop();
   });
 
   it("declares advanced config metadata in the plugin entry and manifest", () => {
@@ -6812,7 +6871,7 @@ describe("google-meet plugin", () => {
     );
     inputStdout.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
     callbacks?.onTranscript?.("Please summarize the launch.");
-    await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+    await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
 
     expect(sendAudio).toHaveBeenCalledTimes(1);
     const audioChunk = mockCallArg(sendAudio, 0) as Buffer;
@@ -7387,10 +7446,24 @@ describe("google-meet plugin", () => {
       }
       expect(callbacks.autoRespondToAudio).toBe(false);
       expect(callbacks.tools).toStrictEqual([]);
+      callbacks.onTranscript?.(
+        "assistant",
+        "Hi Molty, glad to have you here. Let me know if there's anything specific you'd like to cover or if you need any support during the meeting.",
+        true,
+      );
+      callbacks.onTranscript?.(
+        "user",
+        "Let me know if there's anything specific you'd like to cover or if you need any support during the",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
+      expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+
+      callbacks.onTranscript?.("user", "yes yes yes yes", true);
       callbacks?.onTranscript?.("user", "Are we still on track?", true);
       callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
 
-      await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
       await vi.waitFor(() => {
         expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
       });
@@ -7402,6 +7475,7 @@ describe("google-meet plugin", () => {
       expect(consultArgs.spawnedBy).toBe("agent:jay:main");
       expect(consultArgs.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
       expect(consultArgs.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+      expect(JSON.stringify(consultArgs)).toContain("yes yes yes yes");
       expect(JSON.stringify(consultArgs)).toContain(
         "Are we still on track?\\nPlease include launch blockers.",
       );
@@ -7417,75 +7491,68 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("tracks queued playback time when suppressing realtime input echo", () => {
-    const markPlaybackStarted = vi.fn();
-    const markAudio = vi.fn();
-    const tracker = {
-      markPlaybackStarted,
-      markAudio,
-    } as unknown as Parameters<typeof recordGoogleMeetOutputActivity>[0]["tracker"];
-    const first = recordGoogleMeetOutputActivity({
-      tracker,
-      audio: Buffer.alloc(48_000),
-      audioFormat: "pcm16-24khz",
-      nowMs: 1_000,
-      lastOutputPlayableUntilMs: 0,
-      suppressInputUntilMs: 0,
-    });
-    const second = recordGoogleMeetOutputActivity({
-      tracker,
-      audio: Buffer.alloc(48_000),
-      audioFormat: "pcm16-24khz",
-      nowMs: 1_100,
-      lastOutputPlayableUntilMs: first.lastOutputPlayableUntilMs,
-      suppressInputUntilMs: first.suppressInputUntilMs,
-    });
+  it("extends realtime input suppression across queued playback", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+      const bridge = {
+        connect: vi.fn(async () => {}),
+        sendAudio: vi.fn(),
+        sendUserMessage: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        triggerGreeting: vi.fn(),
+        isConnected: vi.fn(() => true),
+      };
+      const provider: RealtimeVoiceProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 1,
+        resolveConfig: ({ rawConfig }) => rawConfig,
+        isConfigured: () => true,
+        createBridge: (request) => {
+          callbacks = request;
+          return bridge;
+        },
+      };
+      const audioTransport = createTestMeetRealtimeAudioTransport();
+      const handle = await startMeetRealtimeEngine({
+        config: resolveGoogleMeetConfig({
+          realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        meetingSessionId: "queued-playback",
+        logger: noopLogger,
+        providers: [provider],
+        transport: audioTransport.transport,
+      });
+      if (!callbacks) {
+        throw new Error("Expected realtime bridge callbacks");
+      }
 
-    expect(first.durationMs).toBe(1_000);
-    expect(first.lastOutputPlayableUntilMs).toBe(2_000);
-    expect(first.suppressInputUntilMs).toBe(5_000);
-    expect(second.durationMs).toBe(1_000);
-    expect(second.lastOutputPlayableUntilMs).toBe(3_000);
-    expect(second.suppressInputUntilMs).toBe(6_000);
-    expect(markPlaybackStarted).toHaveBeenCalledTimes(2);
-    expect(markAudio).toHaveBeenNthCalledWith(1, {
-      audioMs: 1_000,
-      sourceAudioBytes: 48_000,
-      sinkAudioBytes: 48_000,
-    });
-  });
+      callbacks.onAudio(Buffer.alloc(48_000));
+      vi.setSystemTime(1_100);
+      callbacks.onAudio(Buffer.alloc(48_000));
+      vi.setSystemTime(5_500);
+      audioTransport.deliverInput(Buffer.from([1, 2, 3, 4]));
+      expect(bridge.sendAudio).not.toHaveBeenCalled();
 
-  it("detects assistant transcript echoes before agent consult", () => {
-    const nowMs = Date.parse("2026-05-04T01:00:00.000Z");
-    const transcript = [
-      {
-        at: new Date(nowMs - 1_000).toISOString(),
-        role: "assistant" as const,
-        text: "Hi Molty, glad to have you here. Let me know if there's anything specific you'd like to cover or if you need any support during the meeting.",
-      },
-    ];
-
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "Let me know if there's anything specific you'd like to cover or if you need any support during the",
-        nowMs,
-      }),
-    ).toBe(true);
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "Tell me a story.",
-        nowMs,
-      }),
-    ).toBe(false);
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "yes yes yes yes",
-        nowMs,
-      }),
-    ).toBe(false);
+      vi.setSystemTime(6_001);
+      audioTransport.deliverInput(Buffer.from([5, 6, 7]));
+      expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from([5, 6, 7]));
+      expect(handle.getHealth()).toMatchObject({
+        lastInputBytes: 3,
+        lastOutputBytes: 96_000,
+        suppressedInputBytes: 4,
+      });
+      await handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses a local barge-in input command to clear active Chrome playback", async () => {

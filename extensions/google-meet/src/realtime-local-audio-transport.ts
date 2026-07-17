@@ -24,7 +24,7 @@ type BridgeProcess = {
   on(event: "error", listener: (error: Error) => void): unknown;
 };
 
-export type MeetRealtimeAudioSpawn = (
+type MeetRealtimeAudioSpawn = (
   command: string,
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
