@@ -307,6 +307,12 @@ const normalizedProviderFixtures: Array<{
     provider: "minimax",
     query: "requested minimax query",
     result: {
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        wrapped: true,
+        provider: "minimax",
+      },
       query: "minimax query",
       provider: "minimax",
       count: 1,
@@ -335,7 +341,7 @@ const normalizedProviderFixtures: Array<{
           siteName: "minimax.example",
         },
       ],
-      externalContent: externalContent(),
+      externalContent: externalContent("minimax"),
     },
   },
   {
@@ -654,6 +660,19 @@ describe("web_search normalized output contract", () => {
     }
     expect(normalized.results[0]?.snippet).toBe(wrappedSnippet);
     expect(normalized.results[0]?.title).toBe("Wrapped title");
+  });
+
+  it("preserves nonconforming result rows as a raw payload", () => {
+    const payload = {
+      results: [{ name: "Custom", link: "https://example.com/custom" }],
+    };
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-demo",
+      query: "raw rows",
+      result: payload,
+    });
+
+    expect(normalized).toEqual({ kind: "raw", provider: "external-demo", data: payload });
   });
 
   it("wraps answer content and citation titles for unwrapped providers", () => {

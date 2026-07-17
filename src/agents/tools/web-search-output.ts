@@ -163,9 +163,18 @@ export function normalizeWebSearchOutput(params: {
         ? result.query
         : params.query;
 
-  if (Array.isArray(result.results)) {
-    const results = result.results.map((entry) => {
-      const row = isRecord(entry) ? entry : {};
+  // A results branch requires conforming rows; anything else is preserved as
+  // raw so nonstandard external payloads are never silently gutted.
+  const rows = Array.isArray(result.results) ? result.results : undefined;
+  const conformingRows = rows?.every(
+    (entry): entry is Record<string, unknown> =>
+      isRecord(entry) &&
+      typeof entry.title === "string" &&
+      typeof entry.url === "string" &&
+      entry.url.length > 0,
+  );
+  if (rows && conformingRows) {
+    const results = rows.map((row) => {
       const snippet =
         typeof row.snippet === "string"
           ? row.snippet
@@ -174,12 +183,19 @@ export function normalizeWebSearchOutput(params: {
             : Array.isArray(row.snippets)
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
+      // On the core-wrapping path only purely structural published values
+      // survive; free-form dates could smuggle instructions past the stamp.
+      const published =
+        typeof row.published === "string" &&
+        (alreadyWrapped || /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u.test(row.published))
+          ? row.published
+          : undefined;
       return {
-        title: typeof row.title === "string" ? wrapText(row.title) : "",
-        url: typeof row.url === "string" ? row.url : "",
+        title: wrapText(row.title as string),
+        url: row.url as string,
         ...(snippet !== undefined ? { snippet: wrapText(snippet) } : {}),
-        ...(typeof row.published === "string" ? { published: row.published } : {}),
-        ...(typeof row.siteName === "string" ? { siteName: row.siteName } : {}),
+        ...(published !== undefined ? { published } : {}),
+        ...(typeof row.siteName === "string" ? { siteName: wrapText(row.siteName) } : {}),
       };
     });
     return {
