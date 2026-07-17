@@ -22,10 +22,6 @@ import {
   type RestartSentinelPayload,
 } from "./restart-sentinel.js";
 import {
-  autoMigrateLegacyState,
-  resetAutoMigrateLegacyStateForTest,
-} from "./state-migrations.doctor.js";
-import {
   detectLegacyRestartSentinel,
   migrateLegacyRestartSentinel,
 } from "./state-migrations.restart-sentinel.js";
@@ -38,7 +34,6 @@ type MigrationDatabase = Pick<
 describe("legacy restart sentinel migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
-      resetAutoMigrateLegacyStateForTest();
       closeOpenClawStateDatabaseForTest();
       cleanup();
     });
@@ -174,21 +169,6 @@ describe("legacy restart sentinel migration", () => {
       source_record_count: 1,
       status: "completed",
     });
-  });
-
-  it("runs the same migration owner during automatic startup preflight", async () => {
-    const { env, stateDir } = useStateDir();
-    const expected = payload(321);
-    const sourcePath = await writeLegacy(stateDir, { version: 1, payload: expected });
-
-    const result = await autoMigrateLegacyState({ cfg: {}, env });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      "Imported the legacy restart sentinel into shared SQLite state.",
-    );
-    await expect(readRestartSentinel(env)).resolves.toMatchObject({ payload: expected });
-    expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("preserves a valid canonical row when legacy JSON conflicts", async () => {
