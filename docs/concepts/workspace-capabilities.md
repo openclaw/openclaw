@@ -1,133 +1,118 @@
 ---
-summary: "Workspace capability descriptors for local integrations and durable operating procedures"
+summary: "Optional inventory records for workspace-local integrations"
 read_when:
-  - You need to document a workspace-local integration or bridge
-  - You want agents to discover approved local capability paths before saying a task is unsupported
-title: "Workspace capabilities"
-sidebarTitle: "Workspace capabilities"
+  - You maintain a workspace with local integrations or bridges
+  - You need to distinguish capability inventory from skills and plugins
+title: "Workspace capability inventory"
+sidebarTitle: "Workspace capability inventory"
 ---
 
-Workspace capabilities are optional, non-authoritative Markdown descriptors for local integrations, bridge queues, task flows, ACP delegation paths, and durable operating procedures that belong to one agent workspace.
+`capabilities/*.md` is an optional, advanced convention for concise inventory
+records about integrations intentionally exposed to one agent workspace. A
+record identifies what exists and points to its responsible owner and
+authoritative instructions; it is not an instruction package or runtime
+extension.
 
-Use them when a capability is local to the workspace and should be documented across sessions, but does not need to become a runtime-discovered skill, plugin, or gateway feature yet. To make descriptors discoverable by agents, link them from a bootstrap-visible file such as `AGENTS.md` or `TOOLS.md`.
+Use this pattern only for advanced local setups that need a small inventory of
+bridges, devices, services, or other workspace-specific entry points. Put
+repeatable agent instructions in a [workspace skill](/tools/skills), add runtime
+capabilities through a [plugin](/tools/plugin), and use [ClawHub](/clawhub) for
+shared distribution and discovery.
 
 <Warning>
-Capability descriptors are documentation and operating guidance. They do not grant tool access, bypass approvals, change sandbox policy, or create new runtime permissions. The Gateway remains the source of truth for sessions, routing, auth, and tool policy.
+Inventory records are not discovered or loaded automatically, do not grant tool
+access, and do not change runtime permissions. The Gateway remains authoritative
+for access, auth, routing, and tool policy. The linked workspace skill or plugin
+documentation remains authoritative for operating instructions.
 </Warning>
 
 ## Location
 
-Store descriptors under:
+Keep a concise inventory under:
 
 ```text
 capabilities/
   index.md
-  graph-mail.md
   windows-bridge.md
 ```
 
-`capabilities/index.md` is optional, but recommended. Keep it short: list each descriptor, the supported request types, and the safest first check.
+Start with `capabilities/index.md`. Add a separate file only when one record's
+metadata would make the index difficult to scan. Use stable, lowercase
+filenames such as `windows-bridge.md`.
 
-## Descriptor format
+## Inventory record format
 
-Use one file per durable capability. Prefer stable, lowercase filenames such as `graph-mail.md` or `windows-bridge.md`.
+Keep records short and point to the existing source of truth:
 
 ```markdown
 # Capability name
 
-## Status
-
-- Proposed, active, deprecated, or temporarily unavailable.
-- Last verified date and the command or read-only check used.
-
-## Scope
-
-- Workspace, project, host, or external service this descriptor covers.
-- Requests that are out of scope.
-
-## Purpose
-
-What this capability enables and when to use it.
-
-## Supported requests
-
-- Request type the capability can handle.
-- Request type the capability cannot handle.
-
-## Entry points
-
-- Tools, commands, queues, task flows, ACP runtimes, or files involved.
-- Read-only checks that are safe before taking action.
-
-## Gateway and policy requirements
-
-- Required gateway settings, tool policy, auth state, or approvals.
-- Confirmation that this descriptor does not override those requirements.
-
-## Relationship to workspace skills
-
-- Whether this should remain a descriptor or become a workspace skill.
-- Link to the skill if one already provides the agent-facing instructions.
-
-## Safety boundaries
-
-- Required approvals.
-- Secrets or data that must not be exposed.
-- Operations that are destructive or externally visible.
-- Risk level and any known failure modes.
-
-## Verification
-
-- How to confirm the capability is available.
-- How to inspect status without changing runtime state.
-
-## Fallback
-
-- What to inspect before saying the task is unsupported.
-- When to ask the user for help.
+- Status: active, unavailable, or deprecated
+- Scope: workspace, project, host, or external service
+- Use for: one-sentence capability summary
+- Owner: plugin, service, or operator responsible for availability
+- Canonical instructions: link to workspace skill or plugin documentation
+- Entry point: tool, plugin, queue, command, or file name
+- Availability check: read-only status check
+- Last verified: date and environment
+- Safety: approval or data boundary summary
 ```
+
+Keep records to metadata and links. Do not copy setup steps, command sequences,
+configuration, authentication details, fallback procedures, or safety policy
+into them.
+
+The canonical instructions field is required. If there is no authoritative
+workspace skill or plugin documentation to link, create that source before
+advertising the capability to agents.
 
 ## What belongs here
 
 Good candidates:
 
-- A Windows bridge queue that lets a Linux-hosted agent request Windows-only work.
-- A Microsoft Graph mail scan flow that already has auth and local wrapper scripts.
-- A taskflow recipe for a long-running workspace job.
-- An ACP delegation path to a configured local runtime.
-- A local device, service, or script with specific approval boundaries.
+- A host-specific bridge whose operating instructions live in a workspace skill.
+- A local service exposed by a plugin but not useful outside this workspace.
+- A device or queue that needs a visible status and owner pointer.
+- A temporary compatibility entry that names its removal condition.
 
-Poor candidates:
+Do not use inventory records for:
 
-- Agent-facing instruction packages that should be loaded by the skills runtime.
-- General persona rules. Put those in `AGENTS.md` or `SOUL.md`.
-- Tool availability policy. Configure that through gateway and tool policy settings.
-- Secrets, tokens, refresh credentials, or private OAuth state.
-- A replacement router, proxy, or wrapper around the Gateway.
+- Step-by-step agent procedures or reusable prompts. Put those in a
+  [workspace skill](/tools/skills).
+- Tools, auth flows, lifecycle hooks, providers, or other runtime behavior. Put
+  those in a [plugin](/tools/plugin).
+- Reusable community integrations or skills. Publish and discover those through
+  [ClawHub](/clawhub).
+- Facts, preferences, or session observations. Put those in
+  [memory](/concepts/memory).
+- Persona rules. Put those in `AGENTS.md` or `SOUL.md`.
+- Secrets, tokens, refresh credentials, private OAuth state, or executable
+  command sequences.
 
-## Relationship to workspace skills
-
-Workspace skills and workspace capabilities are different surfaces:
-
-- Use workspace skills when the item is an agent-facing instruction package that should be discovered and selected by the skills runtime.
-- Use workspace capabilities when the item is a workspace-local descriptor for an integration, bridge queue, ACP runtime, manual fallback, or operating boundary that should not become runtime-discovered instructions yet.
-
-If a capability becomes a stable agent procedure, prefer moving the procedure into `skills/**/SKILL.md` and keeping the capability descriptor as a short inventory record or removing it. Do not maintain two competing sources of truth for the same procedure.
+Do not duplicate a skill or plugin's instructions in a capability record. If
+the owner already provides an inventory or discovery surface, link to it or
+remove the local record.
 
 ## Discovery behavior
 
-Descriptors are not part of the fixed bootstrap file set by default. The standard bootstrap files are documented in [System prompt](/concepts/system-prompt#workspace-bootstrap-injection), and extra bootstrap injection currently accepts recognized bootstrap basenames.
+Capability records are not part of the fixed bootstrap file set. The standard
+bootstrap files are documented in
+[System prompt](/concepts/system-prompt#workspace-bootstrap-injection), and
+extra bootstrap injection accepts recognized bootstrap basenames.
 
-To make capability descriptors visible, use one of these narrow approaches:
+When a workspace intentionally exposes its local inventory, link the concise
+`capabilities/index.md` from `TOOLS.md`. The index should only identify the
+available surface, its owner, and its canonical instructions; the agent must
+read the linked skill or plugin documentation before acting.
 
-- Link the important descriptors from `TOOLS.md`.
-- Keep a concise `capabilities/index.md` and reference it from `AGENTS.md` or `TOOLS.md`.
-- Use an existing bootstrap or prompt hook when the workspace intentionally surfaces this context.
-
-Do not add a separate listener, session store, auth layer, or shadow tool router just to discover capabilities.
+Do not inject every record by default or add a listener, session store, auth
+layer, or shadow tool router for discovery.
 
 ## Agent guidance
 
-When a user asks for work that sounds unavailable, agents can check the workspace capability index before answering that the task is impossible if that index was intentionally linked from a bootstrap-visible file. A descriptor can point to the right bridge, taskflow, ACP runtime, or manual fallback without changing the runtime security model.
-
-If the descriptor says an action is externally visible, destructive, or changes OpenClaw runtime state, follow the normal approval and safety rules before acting.
+An agent can consult an intentionally linked inventory before concluding that
+a local task is unsupported. Finding a record is only a discovery step: verify
+the stated owner and availability, then follow the linked instructions and
+normal approval rules. If the owner or instructions are missing, stale, or
+ambiguous, do not act from the record; verify through the runtime surface or ask
+the user for direction.

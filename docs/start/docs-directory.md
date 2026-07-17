@@ -31,7 +31,6 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Web surfaces (Control UI)](/web)
 - [Discovery and transports](/gateway/discovery)
 - [Remote access](/gateway/remote)
-- [Workspace capabilities](/concepts/workspace-capabilities)
 
 ## Channels and UX
 
