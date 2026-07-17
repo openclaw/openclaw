@@ -1,7 +1,12 @@
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
-import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
+import {
+  createOpenClawDelegateToolsForRun,
+  OpenClawDelegateOutputSchema,
+} from "./openclaw-delegate-tool.js";
 
 vi.mock("./in-process-gateway.js", () => ({
   callInProcessGatewayTool: vi.fn(),
@@ -47,6 +52,11 @@ describe("openclaw delegation tool", () => {
       needsApproval: true,
       proposalId: "system-agent:proposal-1",
     });
+    expect(tool.outputSchema).toBe(OpenClawDelegateOutputSchema);
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(compactToolOutputHint(tool.outputSchema)).toBe(
+      "{ reply: string; action?: string; needsApproval?: true; proposalId?: string }",
+    );
     expect(tool.catalogMode).toBeUndefined();
   });
 
