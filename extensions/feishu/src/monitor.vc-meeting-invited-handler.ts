@@ -1,12 +1,9 @@
 import * as crypto from "node:crypto";
-import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
-import { resolveFeishuDmIngressAccess } from "./policy.js";
-import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu } from "./send.js";
+
+const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
 
 type FeishuVcIdentity = {
   open_id?: string | null;
@@ -71,7 +68,7 @@ function resolveVcInviter(event: FeishuVcMeetingInvitedEvent): ResolvedVcInviter
 function buildJoinPrompt(params: { meetingNo: string; callId?: string }): string {
   const base = `Use the available tool to join the meeting with meeting number ${params.meetingNo} immediately. Do not ask for confirmation.`;
   return params.callId
-    ? `${base} If the join tool supports a call_id parameter, pass call_id="${params.callId}"; otherwise join by meeting number only.`
+    ? `${base} If the join tool supports a call_id parameter, pass call_id=${JSON.stringify(params.callId)}; otherwise join by meeting number only.`
     : base;
 }
 
@@ -81,7 +78,7 @@ export function resolveVcMeetingInvitedTurn(
 ): VcMeetingInvitedTurn | null {
   const meetingNo = pickString(event.meeting?.meeting_no);
   const inviter = resolveVcInviter(event);
-  if (!meetingNo || !inviter) {
+  if (!meetingNo || !FEISHU_MEETING_NUMBER_PATTERN.test(meetingNo) || !inviter) {
     return null;
   }
 
@@ -149,76 +146,10 @@ async function dispatchVcMeetingInvitedTurn(params: {
     event: buildSyntheticMessageEvent(params.turn),
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
+    // VC invite callbacks have an inviter identity but no p2p chat id. Keep
+    // pre-dispatch policy/error replies on the canonical user target.
+    directPreDispatchTarget: `user:${params.turn.inviter.senderId}`,
   });
-}
-
-async function shouldDispatchVcMeetingInvitedTurn(params: {
-  cfg: ClawdbotConfig;
-  accountId: string;
-  runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
-  turn: VcMeetingInvitedTurn;
-}): Promise<boolean> {
-  const account = resolveFeishuRuntimeAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const core = params.channelRuntime
-    ? ({ channel: params.channelRuntime } as PluginRuntime)
-    : getFeishuRuntime();
-  const pairing = createChannelPairingController({
-    core,
-    channel: "feishu",
-    accountId: account.accountId,
-  });
-  const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const ingress = await resolveFeishuDmIngressAccess({
-    cfg: params.cfg,
-    accountId: account.accountId,
-    dmPolicy,
-    allowFrom: account.config.allowFrom ?? [],
-    readAllowFromStore: pairing.readAllowFromStore,
-    senderOpenId: params.turn.inviter.senderId,
-    senderUserId: params.turn.inviter.userId,
-    conversationId: params.turn.inviter.senderId,
-    mayPair: true,
-  });
-
-  if (ingress.ingress.admission === "dispatch") {
-    return true;
-  }
-
-  const log = params.runtime?.log ?? console.log;
-  if (ingress.ingress.admission === "pairing-required") {
-    await pairing.issueChallenge({
-      senderId: params.turn.inviter.senderId,
-      senderIdLine: `Your Feishu user id: ${params.turn.inviter.senderId}`,
-      meta: { name: params.turn.inviter.name },
-      onCreated: () => {
-        log(
-          `feishu[${account.accountId}]: vc meeting invite pairing request sender=${params.turn.inviter.senderId}`,
-        );
-      },
-      sendPairingReply: async (text) => {
-        await sendMessageFeishu({
-          cfg: params.cfg,
-          to: `user:${params.turn.inviter.senderId}`,
-          text,
-          accountId: account.accountId,
-        });
-      },
-      onReplyError: (err) => {
-        log(
-          `feishu[${account.accountId}]: vc meeting invite pairing reply failed for ${params.turn.inviter.senderId}: ${String(err)}`,
-        );
-      },
-    });
-  } else {
-    log(
-      `feishu[${account.accountId}]: blocked unauthorized vc meeting invite sender ${params.turn.inviter.senderId} (dmPolicy=${dmPolicy})`,
-    );
-  }
-  return false;
 }
 
 export function createFeishuVcMeetingInvitedHandler(params: {
@@ -237,20 +168,9 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       const turn = resolveVcMeetingInvitedTurn(data as FeishuVcMeetingInvitedEvent);
       if (!turn) {
         log(
-          `feishu[${accountId}]: vc meeting invited event missing meeting_no ` +
+          `feishu[${accountId}]: vc meeting invited event has invalid meeting_no ` +
             "or inviter identity, skipping",
         );
-        return;
-      }
-      if (
-        !(await shouldDispatchVcMeetingInvitedTurn({
-          cfg,
-          accountId,
-          runtime,
-          channelRuntime: params.channelRuntime,
-          turn,
-        }))
-      ) {
         return;
       }
       const promise = dispatchVcMeetingInvitedTurn({

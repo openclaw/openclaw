@@ -481,6 +481,7 @@ async function dispatchMessage(params: {
   event: FeishuMessageEvent;
   channelRuntime?: PluginRuntime["channel"];
   botOpenId?: string;
+  directPreDispatchTarget?: string;
 }) {
   const runtime = createRuntimeEnv();
   const feishuConfig = params.cfg.channels?.feishu;
@@ -504,6 +505,7 @@ async function dispatchMessage(params: {
     botOpenId: params.botOpenId,
     runtime,
     channelRuntime: params.channelRuntime,
+    directPreDispatchTarget: params.directPreDispatchTarget,
   });
   return runtime;
 }
@@ -1802,6 +1804,37 @@ describe("handleFeishuMessage command authorization", () => {
 
     const message = mockCallArg<{ to?: string }>(mockSendMessageFeishu, 0, 0);
     expect(message.to).toBe("chat:oc_dm_chat_1");
+  });
+
+  it("replies to the explicit pre-dispatch target for synthetic DMs", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "pairing",
+        },
+      },
+    } as ClawdbotConfig;
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_synthetic_inviter" } },
+      message: {
+        message_id: "synthetic-invite",
+        chat_id: "ou_synthetic_inviter",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "join the meeting" }),
+      },
+    };
+    mockReadAllowFromStore.mockResolvedValue([]);
+    mockUpsertPairingRequest.mockResolvedValue({ code: "ABCDEFGH", created: true });
+
+    await dispatchMessage({
+      cfg,
+      event,
+      directPreDispatchTarget: "user:ou_synthetic_inviter",
+    });
+
+    const message = mockCallArg<{ to?: string }>(mockSendMessageFeishu, 0, 0);
+    expect(message.to).toBe("user:ou_synthetic_inviter");
   });
   it("creates pairing request and drops unauthorized DMs in pairing mode", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);

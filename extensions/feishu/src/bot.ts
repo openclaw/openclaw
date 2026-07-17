@@ -286,6 +286,8 @@ export async function handleFeishuMessage(params: {
   accountId?: string;
   processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
+  /** Override for policy/error replies from synthetic DMs that lack a real chat id. */
+  directPreDispatchTarget?: string;
 }): Promise<void> {
   const {
     cfg,
@@ -298,6 +300,7 @@ export async function handleFeishuMessage(params: {
     accountId,
     processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
+    directPreDispatchTarget: directPreDispatchTargetOverride,
   } = params;
 
   // Resolve account with merged config
@@ -324,6 +327,9 @@ export async function handleFeishuMessage(params: {
   let ctx = parseFeishuMessageEvent(event, botOpenId, botName);
   const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
+  const directPreDispatchTarget = isDirect
+    ? normalizeOptionalString(directPreDispatchTargetOverride)
+    : undefined;
   const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
   const localBotOpenId = botOpenId?.trim();
 
@@ -729,7 +735,7 @@ export async function handleFeishuMessage(params: {
           sendPairingReply: async (text) => {
             await sendMessageFeishu({
               cfg: authorization.cfg,
-              to: `chat:${ctx.chatId}`,
+              to: directPreDispatchTarget ?? `chat:${ctx.chatId}`,
               text,
               accountId: account.accountId,
             });
@@ -921,7 +927,7 @@ export async function handleFeishuMessage(params: {
             : ctx.messageId;
         await sendMessageFeishu({
           cfg: effectiveCfg,
-          to: `chat:${ctx.chatId}`,
+          to: directPreDispatchTarget ?? `chat:${ctx.chatId}`,
           text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
           replyToMessageId: replyTargetMessageId,
           replyInThread,

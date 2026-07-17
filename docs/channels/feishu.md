@@ -221,6 +221,13 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 6. Ensure the gateway is running: `openclaw gateway status`
 7. Check logs: `openclaw logs --follow`
 
+Subscribing to `vc.bot.meeting_invited_v1` enables automatic invite-triggered agent turns for
+authorized inviters; there is no separate OpenClaw enable switch. Joining also requires an
+available Feishu VC join tool configured for app identity with the
+`vc:meeting.bot.join:write` scope. For example, the official
+[`lark-cli` VC agent skill](https://github.com/larksuite/cli/tree/main/skills/lark-vc-agent)
+provides `vc +meeting-join`.
+
 ### QR setup does not react in the Feishu mobile app
 
 1. Rerun setup: `openclaw channels login --channel feishu`
