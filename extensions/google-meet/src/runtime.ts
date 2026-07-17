@@ -519,6 +519,8 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,
+              trackedMeetingUrl: session.url,
+              trackedTargetId: session.chrome?.browserTab?.targetId,
               url: session.url,
             })
           : await recoverCurrentMeetTab({
@@ -526,10 +528,22 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               mode: session.mode,
               readOnly: options.readOnly,
+              trackedMeetingUrl: session.url,
+              trackedTargetId: session.chrome?.browserTab?.targetId,
               url: session.url,
             });
-      if (result.found && result.browser && session.chrome) {
-        session.chrome.health = { ...session.chrome.health, ...result.browser };
+      if (result.found && session.chrome) {
+        if (result.targetId) {
+          const currentTab = session.chrome.browserTab;
+          session.chrome.browserTab = {
+            targetId: result.targetId,
+            openedByPlugin:
+              result.targetId === currentTab?.targetId ? currentTab.openedByPlugin : false,
+          };
+        }
+        if (result.browser) {
+          session.chrome.health = { ...session.chrome.health, ...result.browser };
+        }
         session.updatedAt = nowIso();
       }
     } catch (error) {

@@ -377,6 +377,7 @@ describe("talk realtime gateway relay", () => {
       tools: [],
       model: "browser-model",
       voice: "voice-a",
+      language: "de",
     });
     await Promise.resolve();
 
@@ -396,6 +397,7 @@ describe("talk realtime gateway relay", () => {
       providerConfig: { model: "provider-model" },
       audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       instructions: "be brief",
+      language: "de",
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: true,
     });

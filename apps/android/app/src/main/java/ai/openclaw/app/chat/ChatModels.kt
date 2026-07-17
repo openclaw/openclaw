@@ -145,6 +145,7 @@ internal val defaultChatThinkingLevelSelection =
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val ownerAgentId: String? = null,
   val displayName: String? = null,
   val label: String? = null,
   val category: String? = null,

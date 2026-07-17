@@ -414,6 +414,8 @@ export async function recoverCurrentMeetTab(params: {
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  trackedMeetingUrl?: string;
+  trackedTargetId?: string;
   url?: string;
 }): Promise<{
   transport: "chrome";
@@ -433,7 +435,9 @@ export async function recoverCurrentMeetTab(params: {
       locationLabel: "in local Chrome",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
-      url: params.url,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.trackedMeetingUrl,
+      trackedTargetId: params.trackedTargetId,
     })),
   };
 }
@@ -443,6 +447,8 @@ export async function recoverCurrentMeetTabOnNode(params: {
   config: GoogleMeetConfig;
   mode?: GoogleMeetMode;
   readOnly?: boolean;
+  trackedMeetingUrl?: string;
+  trackedTargetId?: string;
   url?: string;
 }): Promise<{
   transport: "chrome-node";
@@ -475,7 +481,9 @@ export async function recoverCurrentMeetTabOnNode(params: {
       locationLabel: "on the selected Chrome node",
       mode: params.mode ?? "bidi",
       readOnly: params.readOnly,
-      url: params.url,
+      requestedMeetingUrl: params.url,
+      trackedMeetingUrl: params.trackedMeetingUrl,
+      trackedTargetId: params.trackedTargetId,
     })),
   };
 }

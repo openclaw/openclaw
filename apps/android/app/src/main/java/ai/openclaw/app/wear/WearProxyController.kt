@@ -1,6 +1,8 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRpcError
 import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.coroutines.CancellationException
@@ -15,6 +17,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import java.util.Locale
 
 internal class WearProxyGatewayException(
   val code: String,
@@ -25,8 +28,14 @@ internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
+  private val startRealtimeTalk:
+    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _, _, _ -> null },
+  private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
 ) {
-  suspend fun handle(request: WearMessage.Request): WearMessage.Response =
+  suspend fun handle(
+    request: WearMessage.Request,
+    sourceNodeId: String = "",
+  ): WearMessage.Response =
     try {
       val result =
         when (request.method) {
@@ -35,6 +44,8 @@ internal class WearProxyController(
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
           WearRpcMethod.ChatSend -> sendChat(request.params)
           WearRpcMethod.ChatAbort -> abortChat(request.params)
+          WearRpcMethod.TalkStart -> talkStart(sourceNodeId, request.params)
+          WearRpcMethod.TalkStop -> talkStop(sourceNodeId, request.params)
         }
       WearMessage.Response(requestId = request.requestId, ok = true, result = result)
     } catch (err: WearProxyInvalidRequest) {
@@ -46,6 +57,39 @@ internal class WearProxyController(
     } catch (_: Throwable) {
       failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
     }
+
+  private suspend fun talkStart(
+    sourceNodeId: String,
+    params: JsonObject,
+  ): JsonElement {
+    if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
+    params.requireOnly("sessionKey", "attemptId", "language")
+    val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
+    val language =
+      params
+        .optionalStringParam("language", 2)
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf { value -> value.length == 2 && value.all { it in 'a'..'z' } }
+        ?: if ("language" in params) throw WearProxyInvalidRequest("Invalid language") else null
+    val snapshot =
+      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language)
+        ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
+    return WearRealtimeTalkCodec.encode(snapshot)
+  }
+
+  private suspend fun talkStop(
+    sourceNodeId: String,
+    params: JsonObject,
+  ): JsonElement {
+    if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
+    params.requireOnly("attemptId")
+    val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
+    val snapshot =
+      stopRealtimeTalk(sourceNodeId, attemptId)
+        ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk belongs to another Watch")
+    return WearRealtimeTalkCodec.encode(snapshot)
+  }
 
   private fun proxyStatus(params: JsonObject): JsonObject {
     params.requireOnly()
@@ -146,6 +190,7 @@ internal class WearProxyController(
     const val MAX_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_OFFSET = 100_000
     const val MAX_SESSION_KEY_CHARS = 512
+    const val MAX_ATTEMPT_ID_CHARS = 128
     const val MAX_MESSAGE_CHARS = 4_000
     const val MAX_IDEMPOTENCY_KEY_CHARS = 128
     const val MAX_RUN_ID_CHARS = 128

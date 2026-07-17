@@ -698,10 +698,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       currentTreeAllowance,
     );
     const fullReleaseAllowance =
-      "${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}";
+      "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}";
+    const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
+      (step: WorkflowStep) => step.name === "Summarize target",
+    );
     const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
       (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
     );
+    expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
   });
 

@@ -1521,6 +1521,9 @@ struct GatewayNodeSessionTests {
         // Model an old push callback that was already queued on the session actor:
         // cleanup retires socket 1, then socket 2 becomes the active route before it runs.
         await gateway._test_handleChannelDisconnected("socket 1 lost", socketGeneration: 1)
+        // Replacement invokes are intentionally rejected until disconnect lifecycle cleanup
+        // clears its barrier, so establish the post-cleanup state this test models.
+        await gateway._test_waitForLifecycleCallbacks()
         await gateway._test_handlePush(
             .event(EventFrame(
                 type: "event",

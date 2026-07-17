@@ -5094,6 +5094,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Wear OS companion
   - H2: Install outside Google Play
   - H2: Mirror and control Android from a remote Mac
   - H3: Before you begin
@@ -7073,6 +7074,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/teams-meetings.md
+
+- Route: /plugins/reference/teams-meetings
+- Headings:
+  - H1: Microsoft Teams meetings plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/telegram.md
 
 - Route: /plugins/reference/telegram
@@ -7512,6 +7522,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Lint enforcement (in-repo plugins)
   - H2: Test configuration
   - H2: Related
+
+## plugins/teams-meetings.md
+
+- Route: /plugins/teams-meetings
+- Headings:
+  - H2: Setup
+  - H2: Modes
+  - H2: Guest join limits
+  - H2: Tool and gateway surface
 
 ## plugins/tool-plugins.md
 
