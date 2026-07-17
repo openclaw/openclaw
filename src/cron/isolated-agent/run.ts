@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   releaseAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -155,6 +156,9 @@ const runtimePluginsLoader = createLazyImportLoader(
 const codexNativeWebSearchLoader = createLazyImportLoader(
   () => import("../../agents/codex-native-web-search.js"),
 );
+const webToolRuntimeContextLoader = createLazyImportLoader(
+  () => import("../../agents/tools/web-tool-runtime-context.js"),
+);
 const webSearchRuntimeLoader = createLazyImportLoader(() => import("../../web-search/runtime.js"));
 
 async function loadSessionAccessorRuntime() {
@@ -195,6 +199,10 @@ async function loadRuntimePlugins() {
 
 async function loadCodexNativeWebSearch() {
   return await codexNativeWebSearchLoader.load();
+}
+
+async function loadWebToolRuntimeContext() {
+  return await webToolRuntimeContextLoader.load();
 }
 
 async function loadWebSearchRuntime() {
@@ -389,21 +397,27 @@ async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { listWebSearchProviders, resolveWebSearchProviderId } = await loadWebSearchRuntime();
-    const webSearchProviders = listWebSearchProviders({ config: params.cfg });
+    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+    const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
+      {
+        config: params.cfg,
+        lateBindRuntimeConfig: true,
+      },
+    );
+    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+    const hasWebSearchProvider = hasUsableWebSearchProvider({
+      config,
+      agentDir: params.agentDir,
+      runtimeWebSearch,
+      preferRuntimeProviders,
+    });
     return createCronRunDiagnosticsFromMissingWebSearchProvider({
       toolsAllow,
-      hasWebSearchProvider: Boolean(
-        resolveWebSearchProviderId({
-          config: params.cfg,
-          agentDir: params.agentDir,
-          providers: webSearchProviders,
-        }),
-      ),
+      hasWebSearchProvider,
     });
   } catch (error) {
     logWarn(
-      `[cron:${params.jobId}] Failed to inspect web_search providers for toolsAllow diagnostics: ${String(error)}`,
+      `[cron:${params.jobId}] Failed to inspect web_search provider state for toolsAllow diagnostics: ${String(error)}`,
     );
     return undefined;
   }
@@ -901,7 +915,7 @@ async function prepareCronRunContext(params: {
   const configuredProvider = cfgWithAgentDefaults.models?.providers?.[provider];
   const modelApi =
     findModelInCatalog(thinkingCatalog, provider, model)?.api ??
-    configuredProvider?.models.find((candidate) => candidate.id === model)?.api ??
+    configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
     configuredProvider?.api;
   const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
     cfg: cfgWithAgentDefaults,
@@ -1641,7 +1655,9 @@ export async function runCronIsolatedAgentTurn(params: {
   const ownsRunContext = params.job.sessionTarget === "isolated";
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
+  let executionStarted = false;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
+    executionStarted = true;
     if (info?.lifecycleGeneration) {
       runLifecycleGeneration = info.lifecycleGeneration;
     }
@@ -1759,8 +1775,10 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     };
-    const execution = await prepared.context.sessionWorkAdmission.run(async () =>
-      executeCronRun(executionParams),
+    const execution = await prepared.context.sessionWorkAdmission.run(() =>
+      withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
+        executeCronRun(executionParams),
+      ),
     );
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
@@ -1787,6 +1805,7 @@ export async function runCronIsolatedAgentTurn(params: {
     return prepared.context.withRunSession({
       status: "error",
       error,
+      executionStarted,
       // Carry the already-resolved run model into the error/timeout row so
       // Task-run history keeps provider/model attribution instead of looking like
       // an un-attributed cron timeout. finalizeCronRun does the same via

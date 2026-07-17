@@ -203,6 +203,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
@@ -355,6 +356,7 @@ enum class GatewayMethod(
   PluginsInstall("plugins.install"),
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
+  PluginsRefresh("plugins.refresh"),
   ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
@@ -377,6 +379,9 @@ enum class GatewayMethod(
   ModelsProbe("models.probe"),
   MigrationsMemoryPlan("migrations.memory.plan"),
   MigrationsMemoryApply("migrations.memory.apply"),
+  UiCommand("ui.command"),
+  ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
 }
 
 enum class GatewayEvent(
@@ -385,6 +390,7 @@ enum class GatewayEvent(
   ConnectChallenge("connect.challenge"),
   Agent("agent"),
   Chat("chat"),
+  UiCommand("ui.command"),
   SessionApproval("session.approval"),
   SessionMessage("session.message"),
   SessionOperation("session.operation"),

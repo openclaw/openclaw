@@ -7,19 +7,118 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  assertControlUiGeneratedArtifactsIsolated,
+  resolveAllowedGeneratedMixBranch,
+  shouldStrictControlUiI18n,
+} from "../../scripts/ci-changed-scope.mjs";
+import {
   analyzeControlUiCatalogs,
-  assertScopedCatalogFallbackUpdate,
   flattenControlUiCatalog,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
+  assertNoControlUiFallbacks,
   buildBatchPrompt,
+  filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+describe("control-ui-i18n generated ownership", () => {
+  it("keeps generated locale snapshots out of source PRs", () => {
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/de.meta.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/de.meta.json",
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/glossary.de.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "release/2026.7.3",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "main",
+      ),
+    ).not.toThrow();
+
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(true);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("allows generated release output on trusted release and main runs only", () => {
+    const trustedActions = {
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true",
+    };
+
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_REF: "refs/heads/main",
+        },
+        "main",
+      ),
+    ).toBe("main");
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
+        "main",
+      ),
+    ).toBe("");
+    expect(resolveAllowedGeneratedMixBranch(trustedActions, "release/2026.7.3")).toBe(
+      "release/2026.7.3",
+    );
+    expect(resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, "release/2026.7.3")).toBe(
+      "",
+    );
+  });
+});
 
 function processIsAlive(pid: number): boolean {
   try {
@@ -104,36 +203,6 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
-  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
-    const current = {
-      fallbacks: { "group.second": ["de", "fr"] },
-      sourceHash: "source",
-      version: 1,
-    };
-
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["fr"] } },
-        "de",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
-  });
-
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
       'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
@@ -174,7 +243,7 @@ describe("control-ui-i18n process runner", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");
   });
@@ -203,6 +272,21 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("makes placeholder-incompatible existing copy pending for bot repair", () => {
+    const reusable = filterPlaceholderCompatibleTranslations(
+      new Map([
+        ["changed", "Waiting for {total}"],
+        ["same", "Waiting for {count}"],
+      ]),
+      new Map([
+        ["changed", "Warten auf {count}"],
+        ["same", "Warten auf {count}"],
+      ]),
+    );
+
+    expect([...reusable]).toEqual([["same", "Warten auf {count}"]]);
   });
 
   it("feeds the exact validation failure back into a retry prompt", () => {
@@ -234,6 +318,21 @@ describe("control-ui-i18n process runner", () => {
       });
 
     expect(fallbacks).toEqual([]);
+  });
+
+  it("makes the strict gate reject recorded English fallbacks", () => {
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 2, locale: "fr" },
+      ]),
+    ).toThrow("fr: 2 fallback keys");
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 0, locale: "fr" },
+      ]),
+    ).not.toThrow();
   });
 
   it("refreshes recorded fallback copy when sync is forced without a provider", () => {

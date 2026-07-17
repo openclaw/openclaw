@@ -5,6 +5,14 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildPluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,10 +20,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
+
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
-const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
@@ -239,7 +248,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     pluginStateTestRuntime.resetPluginStateStoreForTests();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -253,7 +262,7 @@ describe("createTelegramBot", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
     createTelegramBot = (opts) =>
@@ -1171,10 +1180,10 @@ describe("createTelegramBot", () => {
     const commitSpy = vi
       .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
       .mockRejectedValueOnce(commitError);
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
+      queuedLifecycle?.onDeferred?.();
       return undefined;
     });
 
@@ -1233,21 +1242,21 @@ describe("createTelegramBot", () => {
       const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
       flush?.();
       await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
       });
 
-      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(commitError);
+      await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(commitError);
       await flushTelegramTestMicrotasks();
       expect(firstSettled).toBe(false);
       expect(secondSettled).toBe(false);
 
-      await queuedLifecycle?.onAdmitted?.();
+      await queuedLifecycle?.onAdopted?.();
       await expect(Promise.all([firstParticipant.task, secondParticipant.task])).resolves.toEqual([
         { kind: "completed" },
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onComplete?.();
+      queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1289,21 +1298,21 @@ describe("createTelegramBot", () => {
         await commitGate;
       });
     const releaseSpy = vi.spyOn(messageDispatchDedupe, "releaseTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     let runQueuedTurn: (() => Promise<void>) | undefined;
     let modelTurnRan = false;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle?.onDeferred?.();
       runQueuedTurn = async () => {
-        await queuedLifecycle?.onAdmitted?.();
+        await queuedLifecycle?.onAdopted?.();
         if (queuedAbortSignal?.aborted) {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onComplete?.();
+        queuedLifecycle?.onSettled?.();
       };
       return undefined;
     });
@@ -1410,12 +1419,12 @@ describe("createTelegramBot", () => {
     installPerKeySequentializer();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle?.onDeferred?.();
       return undefined;
     });
 
@@ -1466,7 +1475,7 @@ describe("createTelegramBot", () => {
       const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
       flush?.();
       await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
       });
 
       const timeoutError = new Error("spooled replay timed out before admission");
@@ -1478,7 +1487,7 @@ describe("createTelegramBot", () => {
         kind: "failed-retryable",
         error: timeoutError,
       });
-      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(timeoutError);
+      await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(timeoutError);
       expect(commitSpy).not.toHaveBeenCalled();
       expect(replySpy).toHaveBeenCalledTimes(1);
     } finally {
@@ -1711,7 +1720,7 @@ describe("createTelegramBot", () => {
       return { handled: true };
     });
     expect(
-      pluginRuntime.registerPluginInteractiveHandler("openclaw-code-agent", {
+      registerPluginInteractiveHandler("openclaw-code-agent", {
         channel: "telegram",
         namespace: "code-agent",
         handler: pluginHandler,
@@ -5822,17 +5831,14 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const resolvePluginBindingApprovalSpy = vi.spyOn(
-      conversationRuntime,
-      "resolvePluginConversationBindingApproval",
-    );
+    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = {
       update: { update_id: 888 },
       callbackQuery: {
         id: "cbq-plugin-binding-retry-1",
-        data: conversationRuntime.buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
+        data: buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },

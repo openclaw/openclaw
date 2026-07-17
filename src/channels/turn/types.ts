@@ -1,6 +1,9 @@
 // Type contracts for channel turn normalization, admission, dispatch, and delivery.
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
-import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchFromConfigResult } from "../../auto-reply/reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "../../auto-reply/reply/get-reply.types.js";
@@ -275,11 +278,8 @@ export type AssembledChannelTurn = {
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
-  /**
-   * Observes turn adoption without waiting for settle. Threaded into
-   * replyOptions for the agent runner (after recovery persist attempt).
-   */
-  onTurnAdopted?: () => void | Promise<void>;
+  /** Canonical adoption lifecycle threaded into replyOptions. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -383,10 +383,6 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
-  /**
-   * Observes turn adoption without waiting for settle. Fired after the
-   * recovery-context persist attempt (context may be absent when source
-   * delivery is suppressed). Default callers still await full settle.
-   */
-  onTurnAdopted?: () => void | Promise<void>;
+  /** Canonical adoption lifecycle for this turn. */
+  turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };

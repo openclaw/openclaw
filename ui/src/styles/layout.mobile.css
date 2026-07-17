@@ -89,6 +89,19 @@
   --shell-nav-width: 0px;
 }
 
+/* Plain-browser chat owns the only narrow chrome row in its pane header. */
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome {
+  --shell-topbar-height: 0px;
+  grid-template-rows: 0px minmax(0, 1fr);
+}
+
+html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
+  .shell--mobile-nav.shell--merged-chat-chrome
+  .topbar {
+  display: none;
+}
+
 .shell--mobile-nav .shell-nav,
 .shell--mobile-nav.shell--nav-collapsed .shell-nav {
   position: fixed;

@@ -492,6 +492,7 @@ describe("operator scope authorization", () => {
 
   it.each([
     "approval.get",
+    "approval.history",
     "approval.resolve",
     "exec.approval.get",
     "exec.approval.list",

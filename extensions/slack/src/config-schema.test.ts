@@ -306,4 +306,19 @@ describe("slack config schema", () => {
       "accounts.ops.signingSecret",
     );
   });
+
+  it("accepts canonical implicit mention policy at root and account scope", () => {
+    expectSlackConfigValid({
+      implicitMentions: { replyToBot: false, threadParticipation: true },
+      accounts: {
+        ops: {
+          implicitMentions: { quotedBot: false },
+        },
+      },
+    });
+  });
+
+  it("rejects the retired thread requireExplicitMention runtime key", () => {
+    expectSlackConfigIssue({ thread: { requireExplicitMention: true } }, "thread");
+  });
 });

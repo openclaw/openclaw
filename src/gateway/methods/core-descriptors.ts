@@ -141,6 +141,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.files.get", scope: "operator.read" },
   // Workspace file writes require the same admin scope as agents.files.set.
   { name: "sessions.files.set", scope: "operator.admin" },
+  { name: "sessions.files.reveal", scope: "operator.admin" },
   { name: "artifacts.list", scope: "operator.read" },
   { name: "artifacts.get", scope: "operator.read" },
   { name: "artifacts.download", scope: "operator.read" },
@@ -307,6 +308,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "plugins.install", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.setEnabled", scope: "operator.admin", controlPlaneWrite: true },
   { name: "plugins.uninstall", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "plugins.refresh", scope: "operator.admin", controlPlaneWrite: true },
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
   { name: "controlUi.sessionPullRequests", scope: "operator.read" },
@@ -365,6 +367,9 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // Memory migration reads host assistant state and writes agent workspaces.
   { name: "migrations.memory.plan", scope: "operator.admin" },
   { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "ui.command", scope: "operator.write" },
+  { name: "approval.history", scope: "operator.approvals" },
+  { name: "plugin.surface.refresh", scope: "operator.read" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

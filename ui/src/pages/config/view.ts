@@ -2,6 +2,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
+import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   normalizeChatFollowUpMode,
@@ -168,8 +169,9 @@ export type ConfigProps = {
   setTextScale: (value: number) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  chatFollowUpMode: ChatFollowUpMode;
-  setChatFollowUpMode: (value: ChatFollowUpMode) => void;
+  chatFollowUpMode: ChatFollowUpMode | undefined;
+  serverQueueMode: QueueMode | undefined;
+  setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMicrophoneState;
@@ -1083,6 +1085,11 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
 }
 
 function renderChatPreferencesSection(props: ConfigProps) {
+  const followUpSelection = props.chatFollowUpMode ?? "server";
+  const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
+  const followUpDescription = props.chatFollowUpMode
+    ? t("chat.followUpModeOverriding", { mode: serverQueueMode })
+    : t("chat.followUpModeUsingServer", { mode: serverQueueMode });
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
@@ -1100,15 +1107,44 @@ function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
         })}
-        ${renderSettingsSelectRow({
+        ${renderSettingsRow({
           title: t("chat.followUpMode"),
-          value: props.chatFollowUpMode,
-          setting: "follow-up-mode",
-          options: [
-            { value: "steer", label: t("chat.followUpModeSteer") },
-            { value: "queue", label: t("chat.followUpModeQueue") },
-          ],
-          onChange: (value) => props.setChatFollowUpMode(normalizeChatFollowUpMode(value)),
+          description: followUpDescription,
+          control: html`
+            <select
+              class="settings-select"
+              data-settings-follow-up-mode
+              aria-label=${t("chat.followUpMode")}
+              .value=${followUpSelection}
+              @change=${(event: Event) => {
+                const value = (event.currentTarget as HTMLSelectElement).value;
+                props.setChatFollowUpMode(
+                  value === "server" ? undefined : normalizeChatFollowUpMode(value),
+                );
+              }}
+            >
+              <option value="server" ?selected=${followUpSelection === "server"}>
+                ${t("chat.followUpModeServer", { mode: serverQueueMode })}
+              </option>
+              <option value="steer" ?selected=${followUpSelection === "steer"}>
+                ${t("chat.followUpModeSteer")}
+              </option>
+              <option value="queue" ?selected=${followUpSelection === "queue"}>
+                ${t("chat.followUpModeQueue")}
+              </option>
+            </select>
+            ${props.chatFollowUpMode
+              ? html`
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => props.setChatFollowUpMode(undefined)}
+                  >
+                    ${t("chat.followUpModeReset")}
+                  </button>
+                `
+              : nothing}
+          `,
         })}
         ${renderSettingsSelectRow({
           title: t("chat.catalogOpenTarget"),

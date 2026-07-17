@@ -212,6 +212,11 @@
       - any-glob-to-any-file:
           - "apps/android/**"
           - "docs/platforms/android.md"
+"app: wearos":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/android/wear/**"
+          - "apps/android/wear-shared/**"
 "app: ios":
   - changed-files:
       - any-glob-to-any-file:
@@ -411,6 +416,11 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: baseten":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/baseten/**"
+          - "docs/providers/baseten.md"
 "extensions: clawrouter":
   - changed-files:
       - any-glob-to-any-file:

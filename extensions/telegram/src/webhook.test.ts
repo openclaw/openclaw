@@ -20,11 +20,11 @@ import {
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
 import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
-  writeTelegramSpooledUpdate,
-} from "./telegram-ingress-spool.js";
+} from "./telegram-ingress-spool.test-support.js";
 
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 
@@ -238,6 +238,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
@@ -1216,6 +1217,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("stops claimed completion retries when the webhook stops", async () => {
+    vi.useFakeTimers();
     let completeAttempts = 0;
     setTelegramRuntime({
       state: {
@@ -1249,12 +1251,15 @@ describe("startTelegramWebhook", () => {
     });
 
     await vi.waitFor(() =>
-      expect(mockMessages(runtimeLog).join("\n")).toContain("completion retry 1 scheduled"),
+      expect(mockMessages(runtimeLog).join("\n")).toMatch(
+        /completion retry 1 scheduled|tombstone retry 1\//,
+      ),
     );
     await started.stop();
     const attemptsAfterStop = completeAttempts;
-    await sleep(400);
+    await vi.advanceTimersByTimeAsync(400);
 
+    // Stop must abort in-flight tombstone retries (composed webhookAbortSignal).
     expect(completeAttempts).toBe(attemptsAfterStop);
   });
 

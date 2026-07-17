@@ -307,12 +307,15 @@ type CodeModeFailedResult = {
 };
 ```
 
-`exec` returns `waiting` when the QuickJS VM suspends with resumable state that
-still needs a model-visible continuation; the result includes a `runId` for
-`wait`. Namespace bridge calls, including MCP namespace calls, are auto-drained
-inside the same `exec`/`wait` call while they are ready, so a compact code
-block can call an MCP tool without forcing one model tool call per namespace
-await.
+`exec` returns `waiting` when the guest suspends with resumable state that still
+needs a model-visible continuation — an explicit `yield_control(...)`, or a
+bridge tool call that has not resolved within the exec deadline. The result
+includes a `runId` for `wait`. Bridge tool calls — `tools.search`/`describe`/
+`call` and namespace calls, including MCP namespace calls — are auto-drained
+inside the same `exec`/`wait` call while they resolve within the deadline, so a
+compact code block that awaits several tools runs to completion in one model
+turn instead of forcing one model tool call per await. Restart-safe runs never
+auto-drain; their pending work still goes through the replay-safe checks.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -382,8 +385,12 @@ type ToolCatalogEntry = {
   description: string;
   source: "openclaw" | "mcp" | "client";
   sourceName?: string;
+  input: string;
 };
 ```
+
+`input` is a bounded TypeScript-style signature for the common case. Use
+`tools.describe(...)` when the exact full schema is still needed.
 
 Plugin tools use `source: "openclaw"` with `sourceName` set to the owning
 plugin id; there is no separate `"plugin"` source value. `source: "mcp"` is
@@ -404,6 +411,7 @@ Catalog helpers:
 type ToolCatalog = {
   search(query: string, options?: { limit?: number }): Promise<ToolCatalogEntry[]>;
   describe(id: string): Promise<ToolCatalogEntryWithSchema>;
+  callValue(id: string, input?: unknown): Promise<unknown>;
   call(id: string, input?: unknown): Promise<unknown>;
   [safeToolName: string]: unknown;
 };
@@ -414,17 +422,21 @@ Convenience tool functions are installed only for unambiguous safe names:
 ```typescript
 const files = await tools.search("read local file");
 const fileRead = await tools.describe(files[0].id);
-const content = await tools.call(fileRead.id, { path: "README.md" });
+const content = await tools.callValue(fileRead.id, { path: "README.md" });
 
 // If the hidden catalog has an unambiguous `web_search` entry:
 const hits = await tools.web_search({ query: "OpenClaw code mode" });
 ```
 
-MCP catalog entries are not callable through `tools.call(...)` or convenience
-functions in code mode; they are exposed only through the generated `MCP`
-namespace. TypeScript-style declaration files are available through the
-read-only `API` virtual file surface, so agents can inspect MCP signatures
-without adding MCP schemas to the prompt:
+`tools.callValue(...)` returns a normal tool's JSON `details` value directly.
+`tools.call(...)` preserves the raw `{ tool, result }` envelope for callers
+that need content blocks or other result metadata.
+
+MCP catalog entries are not callable through `tools.callValue(...)`,
+`tools.call(...)`, or convenience functions in code mode; they are exposed
+only through the generated `MCP` namespace. TypeScript-style declaration files
+are available through the read-only `API` virtual file surface, so agents can
+inspect MCP signatures without adding MCP schemas to the prompt:
 
 ```typescript
 const files = await API.list("mcp");
@@ -728,7 +740,7 @@ because their structured results cannot cross the QuickJS bridge.
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with
 normal tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
-`tools.describe(...)`, and `tools.call(...)` views omit MCP entries. The
+`tools.describe(...)`, `tools.callValue(...)`, and `tools.call(...)` views omit MCP entries. The
 generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
 exact catalog id and dispatches through the same executor path.
 
@@ -941,7 +953,7 @@ Code mode coverage should prove:
 - all catalog-eligible effective non-MCP tools appear in `ALL_TOOLS`
 - direct-only tools stay model-visible and do not appear in `ALL_TOOLS`
 - denied tools do not appear in `ALL_TOOLS`
-- `tools.search`, `tools.describe`, and `tools.call` work for OpenClaw tools
+- `tools.search`, `tools.describe`, `tools.callValue`, and `tools.call` work for OpenClaw tools
 - `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
   MCP declarations without a bridge/tool call
 - MCP namespace `$api()` remains available as an inline fallback for schemas
@@ -978,7 +990,7 @@ Run these as integration or end-to-end tests when changing the runtime:
 7. In `exec`, read `ALL_TOOLS` and assert the catalog-eligible effective test
    tools are present while direct-only tools are absent.
 8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
-   `tools.describe`, and `tools.call`.
+   `tools.describe`, and `tools.callValue` (or raw `tools.call`).
 9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
    assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and

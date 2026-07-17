@@ -4,8 +4,13 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  SHELL_NAV_DRAWER_TOGGLE_EVENT,
+} from "../components/command-palette-contract.ts";
+import {
   BROWSER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import "./app-host.ts";
 import type {
@@ -13,6 +18,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
+import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 
 type AppLifecycleState = {
@@ -57,6 +63,10 @@ type ShellLazySurfaceState = ShellKeyboardState & {
   terminalPanelElement: TestOptionalCustomElement;
 };
 
+type ShellUiCommandState = ShellKeyboardState & {
+  handleGatewayEvent: (event: { event: string; payload: unknown }) => void;
+};
+
 let lazyElementSequence = 0;
 
 function createLazyElementSpec(label: string): TestOptionalCustomElement {
@@ -85,6 +95,15 @@ type ShellNavigationState = {
   updated: () => void;
 };
 
+type ShellChromeEventState = {
+  runtime: { context: ApplicationContext };
+  navDrawerOpen: boolean;
+  handleShellNavDrawerToggle: (event: Event) => void;
+  openPalette: () => void;
+  connectedCallback: () => void;
+  disconnectedCallback: () => void;
+};
+
 type ShellSettingsSearchLoadState = {
   runtime: {
     context: ApplicationContext;
@@ -102,6 +121,12 @@ type TestWebKitWindow = Window & {
 
 afterEach(() => {
   Reflect.deleteProperty(window, "webkit");
+  document.documentElement.classList.remove(
+    "openclaw-native-macos",
+    "openclaw-native-nav",
+    "openclaw-native-web-chrome",
+  );
+  vi.unstubAllGlobals();
 });
 
 type ShellEpochState = {
@@ -324,6 +349,68 @@ describe("OpenClaw shell settings search", () => {
 });
 
 describe("OpenClaw shell keyboard shortcuts", () => {
+  it("merges shell chrome only for plain-browser mobile chat", () => {
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
+    ).toBe(true);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: false, routeId: "chat", onboarding: false }),
+    ).toBe(false);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "sessions", onboarding: false }),
+    ).toBe(false);
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: true }),
+    ).toBe(false);
+
+    document.documentElement.classList.add("openclaw-native-nav");
+    expect(
+      shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
+    ).toBe(false);
+  });
+
+  it("wires merged header window events for the shell lifecycle", () => {
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+
+    shell.connectedCallback();
+
+    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
+    expect(addEventListener).toHaveBeenCalledWith(
+      SHELL_NAV_DRAWER_TOGGLE_EVENT,
+      expect.any(Function),
+    );
+    shell.disconnectedCallback();
+    addEventListener.mockRestore();
+  });
+
+  it("handles merged header drawer and palette requests", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const openPalette = vi.fn();
+    const trigger = document.createElement("button");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    shell.runtime = {
+      context: {
+        navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
+      } as unknown as ApplicationContext,
+    };
+    Object.defineProperty(shell, "commandPalette", {
+      configurable: true,
+      value: { isOpen: false, openPalette, togglePalette: vi.fn() },
+    });
+
+    shell.handleShellNavDrawerToggle(
+      new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
+    );
+    shell.openPalette();
+
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(openPalette).toHaveBeenCalledOnce();
+  });
+
   it("loads and toggles the command palette on its first shortcut", async () => {
     const element = createLazyElementSpec("command palette");
     const togglePalette = vi.fn();
@@ -402,6 +489,73 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
     });
+  });
+
+  it("routes UI commands to navigation, panels, and chat fallback", () => {
+    const update = vi.fn();
+    const setSessionKey = vi.fn();
+    const navigate = vi.fn();
+    const panelEvent = vi.fn();
+    const uiCommandEvent = vi.fn();
+    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    shell.runtime = {
+      context: {
+        navigation: { update },
+        gateway: { setSessionKey },
+        navigate,
+      } as unknown as ApplicationContext,
+    };
+
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: { command: { kind: "sidebar", visible: false } },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: {
+          kind: "panel",
+          panel: "terminal",
+          open: true,
+          dock: "right",
+          terminalSessionId: "terminal-agent-1",
+        },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "split", direction: "right", sessionKey: "agent:main:other" },
+      },
+    });
+    shell.handleGatewayEvent({
+      event: "ui.command",
+      payload: {
+        command: { kind: "focus", sessionKey: "agent:main:other" },
+        sessionKey: "agent:main:source",
+      },
+    });
+
+    expect(update).toHaveBeenCalledWith({ navCollapsed: true });
+    expect(panelEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: { open: true, dock: "right", terminalSessionId: "terminal-agent-1" },
+      }),
+    );
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:other");
+    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Aother" });
+    expect(uiCommandEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: {
+          command: { kind: "focus", sessionKey: "agent:main:other" },
+          sessionKey: "agent:main:source",
+        },
+      }),
+    );
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
+    window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);
   });
 
   it("opens Settings with Shift-Command-Comma", () => {

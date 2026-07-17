@@ -387,15 +387,32 @@ describe("Code Mode", () => {
 
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
-    expect(execTool.description).toContain("`tools.search(query)`");
+    expect(execTool.description).toContain("one exec invocation");
+    expect(execTool.description).toContain("`ALL_TOOLS` is the complete compact catalog");
+    expect(execTool.description).toContain("`tools.search(query: string, options?)`");
     expect(execTool.description).toContain("enabled catalog tools allowed by policy");
-    expect(execTool.description).toContain("`tools.describe(entry.id)`");
-    expect(execTool.description).toContain("`tools.call(entry.id, args)`");
+    expect(execTool.description).toContain("`tools.describe(id: string)`");
+    expect(execTool.description).toContain("`tools.callValue(id: string, args?)`");
+    expect(execTool.description).toContain("`tools.call(id: string, args?)`");
+    expect(execTool.description).toContain("Never invent or transform a tool id");
+    expect(execTool.description).toContain("returns its JSON value directly");
+    expect(execTool.description).toContain("const hit = ALL_TOOLS.find");
     expect(execTool.description).toContain('"javascript" or "typescript"');
 
-    expect(parameters.properties?.code?.description).toContain("`tools` object");
+    expect(parameters.properties?.code?.description).toContain(
+      "`tools.search` takes a query string, not an object",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "Select exact ids from `ALL_TOOLS` or `tools.search`",
+    );
+    expect(parameters.properties?.code?.description).toContain(
+      "never put dependent calls in Promise.all",
+    );
     expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
     expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.restartSafe?.description).toContain(
+      "Leave unset for ordinary calls",
+    );
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
@@ -427,6 +444,46 @@ describe("Code Mode", () => {
     expect(compacted.tools[0]?.description).toContain("Registered namespace globals");
     expect(compacted.tools[0]?.description).toContain("Tickets: Ticket lookup helpers.");
     expect(compacted.tools[0]?.description).toContain("Tickets.currentAgent() returns undefined.");
+  });
+
+  it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    // Base tool guidance always stays; MCP/API and namespace guidance drop out so
+    // the model never probes an empty virtual API surface.
+    expect(description).toContain("`tools.search(query: string, options?)`");
+    expect(description).not.toContain("API.list");
+    expect(description).not.toContain("MCP tools are available only through");
+    expect(description).not.toContain("Registered plugin namespaces are available");
+    expect(description).not.toContain("Registered namespace globals");
+  });
+
+  it("keeps MCP guidance in the exec schema when the run catalog has MCP tools", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...tools,
+        mcpTool({ name: "github__create_issue", serverName: "github", toolName: "create_issue" }),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    expect(description).toContain("API.list(prefix?)");
+    expect(description).toContain("MCP tools are available only through");
   });
 
   it("validates namespace registrations before exposing globals", () => {
@@ -809,10 +866,9 @@ describe("Code Mode", () => {
       waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const hits = await tools.search("ticket", { limit: 1 });
-        const described = await tools.describe(hits[0].id);
-        const called = await tools.call(described.id, { value: "ship" });
+        const called = await tools.callValue(hits[0].id, { value: "ship" });
         text("created");
-        return called.result.details;
+        return called;
       `,
     });
 
@@ -822,7 +878,154 @@ describe("Code Mode", () => {
       input: { value: "ship" },
     });
     expect(details.output).toEqual([{ type: "text", text: "created" }]);
+    expect(details.telemetry).toMatchObject({ searchCount: 1, describeCount: 0, callCount: 1 });
     expect(ticket.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves sequential bridge tool calls inline within one exec instead of a wait per call", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // maxPendingToolCalls stays a per-batch concurrency cap; five sequential
+    // awaits must drain inline even with a cap of 2.
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    // Five separate awaits would each suspend to the model under a wait-per-call
+    // design; inline resumption collapses them into a single completed exec so
+    // the model spends one turn instead of six.
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-inline",
+        {
+          code: `
+            const ids = [];
+            for (let index = 0; index < 5; index += 1) {
+              const called = await tools.callValue("fake_create_ticket", { value: index });
+              ids.push(called.input.value);
+            }
+            return ids;
+          `,
+        },
+      ),
+    );
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual([0, 1, 2, 3, 4]);
+    expect(ticket.execute).toHaveBeenCalledTimes(5);
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("fails fast without parking a suspended run when the exec call is aborted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // Long timeout so a missing abort short-circuit would block the whole test.
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [
+        ...codeModeTools,
+        // A tool that never settles and ignores its abort signal; only the
+        // host-level abort race can free the cancelled exec.
+        pluginToolWithExecute("fake_stuck", "Stuck helper", async () => {
+          await new Promise<never>(() => {});
+          return null as never;
+        }),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-abort",
+        { code: "await tools.fake_stuck({}); return 'done';" },
+        controller.signal,
+      ),
+    );
+
+    // Abort drops the run instead of parking it; a cancelled call must not pin
+    // one of the process-global suspended-run slots until TTL expiry.
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("code mode execution aborted");
+    expect(details.code).toBe("aborted");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("terminates a running guest promptly when the exec call is aborted", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    // Long timeout so only the abort race can end the hostile loop quickly.
+    const config = {
+      tools: { codeMode: { enabled: true, timeoutMs: 30_000 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 200);
+    const startedAt = Date.now();
+    try {
+      const details = resultDetails(
+        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+          "code-call-abort-live",
+          { code: "while (true) {}" },
+          controller.signal,
+        ),
+      );
+      expect(details.status).toBe("failed");
+      expect(details.error).toBe("code mode execution aborted");
+      expect(details.code).toBe("aborted");
+    } finally {
+      clearTimeout(abortTimer);
+    }
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(testing.activeRuns.size).toBe(0);
   });
 
   it("uses tools recovery guidance for guessed tool ids", async () => {
@@ -926,6 +1129,7 @@ describe("Code Mode", () => {
         const rootApi = await MCP.$api();
         const api = await MCP.github.$api("createIssue", { schema: true });
         const apiFiles = await API.list("mcp");
+        const apiFilesTrailingSlash = await API.list("mcp/");
         const rootFile = await API.read("mcp/index.d.ts");
         const serverFile = await API.read("mcp/github.d.ts");
         const created = await MCP.github.createIssue({
@@ -953,6 +1157,7 @@ describe("Code Mode", () => {
         return {
           apiHeader: api.header,
           apiFilePaths: apiFiles.files.map((file) => file.path),
+          apiFilePathsTrailingSlash: apiFilesTrailingSlash.files.map((file) => file.path),
           listedServerFileBytes: apiFiles.files.find((file) => file.path === "mcp/github.d.ts").bytes,
           serverFileBytes: serverFile.bytes,
           serverFileContent: serverFile.content,
@@ -1004,6 +1209,7 @@ describe("Code Mode", () => {
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),
       apiFilePaths: ["mcp/index.d.ts", "mcp/github.d.ts"],
+      apiFilePathsTrailingSlash: ["mcp/index.d.ts", "mcp/github.d.ts"],
       listedServerFileBytes: expect.any(Number),
       serverFileBytes: expect.any(Number),
       serverFileContent: expect.stringContaining("Repository 名称"),

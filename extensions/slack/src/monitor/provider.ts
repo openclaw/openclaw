@@ -34,6 +34,7 @@ import {
 } from "../accounts.js";
 import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
+import { createSlackStartupAuthClient } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -309,7 +310,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const replyToMode = slackCfg.replyToMode ?? "off";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
-  const threadRequireExplicitMention = slackCfg.thread?.requireExplicitMention ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
   const allowNameMatching = isDangerousNameMatchingEnabled(slackCfg);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
@@ -379,12 +379,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let botId = "";
   const expectedApiAppIdFromAppToken =
     slackMode === "socket" ? parseApiAppIdFromAppToken(appToken) : undefined;
-  let authTestFailed = false;
   let authTestError: string | undefined;
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await app.client.auth.test();
+    const auth = await createSlackStartupAuthClient(botToken, clientOptions).auth.test();
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
     botId = normalizeOptionalString((auth as { bot_id?: string }).bot_id) ?? "";
     // Slack documents bot_id only for bot-token identities. Never treat the user behind a
@@ -396,26 +395,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       accountId: account.accountId,
     });
     if (!authUserId && !enterpriseOrgInstall) {
-      authTestFailed = true;
       authTestError = "auth.test returned no user_id";
     }
   } catch (err) {
-    authTestFailed = true;
     authTestError = err instanceof Error ? err.message : String(err);
   }
   const installationIdentity = resolveSlackInstallationIdentity({
     enterpriseOrgInstall,
-    auth: authTestFailed ? undefined : authTestIdentity,
+    auth: authTestError === undefined ? authTestIdentity : undefined,
     authError: authTestError,
     transportApiAppId: expectedApiAppIdFromAppToken,
   });
   const teamId = installationIdentity.kind === "workspace" ? installationIdentity.teamId : "";
   const apiAppId =
     installationIdentity.kind === "degraded" ? "" : (installationIdentity.apiAppId ?? "");
-  if (authTestFailed) {
+  if (authTestError !== undefined) {
     runtime.log?.(
       warn(
-        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
           "explicit bot-mention detection will be disabled until restart with a valid bot token; " +
           "required-mention channels will fail closed without another trusted activation signal",
       ),
@@ -469,7 +466,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     replyToMode,
     threadHistoryScope,
     threadInheritParent,
-    threadRequireExplicitMention,
     slashCommand,
     textLimit,
     ackReactionScope,

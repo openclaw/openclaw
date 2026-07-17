@@ -61,7 +61,7 @@ export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
-  id: string | null;
+  id: string;
   model: string;
   path: string;
   source: Generated<string>;
@@ -71,7 +71,7 @@ export interface MemoryIndexChunks {
 }
 
 export interface MemoryIndexMeta {
-  key: string | null;
+  key: string;
   value: string;
 }
 
@@ -121,6 +121,13 @@ export interface SessionRoutes {
   updated_at: number;
 }
 
+export interface SessionTranscriptActiveEvents {
+  active_position: number;
+  event_seq: number;
+  message_position: number | null;
+  session_id: string;
+}
+
 export interface SessionTranscriptFts {
   message_id: string | null;
   role: string | null;
@@ -160,6 +167,8 @@ export interface SessionTranscriptFtsIdx {
 }
 
 export interface SessionTranscriptIndexState {
+  active_event_count: Generated<number>;
+  active_message_count: Generated<number>;
   indexed_seq: number;
   leaf_event_id: string | null;
   needs_rebuild: Generated<number>;
@@ -191,6 +200,17 @@ export interface Sessions {
   status: string | null;
   transcript_observed_at: Generated<number | null>;
   transcript_updated_at: Generated<number | null>;
+  updated_at: number;
+}
+
+export interface StateLeases {
+  created_at: number;
+  expires_at: number | null;
+  heartbeat_at: number | null;
+  lease_key: string;
+  owner: string;
+  payload_json: string | null;
+  scope: string;
   updated_at: number;
 }
 
@@ -233,6 +253,7 @@ export interface DB {
   session_conversations: SessionConversations;
   session_entries: SessionEntries;
   session_routes: SessionRoutes;
+  session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;
@@ -241,6 +262,7 @@ export interface DB {
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
   session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
+  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

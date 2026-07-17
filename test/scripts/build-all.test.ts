@@ -38,8 +38,24 @@ function withBuildCacheFixture(
     step: {
       label: string;
       cache: {
-        inputs: string[];
-        outputs: Array<string | { path: string; extensions?: string[]; recursive?: boolean }>;
+        inputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
+        outputs: Array<
+          | string
+          | {
+              path: string;
+              excludeDirectories?: string[];
+              extensions?: string[];
+              recursive?: boolean;
+            }
+        >;
         restore?: "always";
       };
     };
@@ -352,17 +368,61 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("keeps canonical declarations enabled for package artifact builds", () => {
-    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+  it("skips global declarations on CI artifacts and self-builds the plugin-sdk gate", () => {
+    // Global dts emission is ~95% of the tsdown wall clock; PR CI dist
+    // consumers are runtime JS, and the plugin-sdk export gate validates
+    // self-built scoped declarations instead. Release/package builds keep
+    // canonical declarations (full profile, docker packaging).
+    const steps = resolveBuildAllSteps("ciArtifacts");
+    const tsdown = steps.find((step) => step.label === "tsdown");
     if (!tsdown) {
       throw new Error("Missing ciArtifacts tsdown step");
     }
-
-    expect(
-      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } }).options.env,
-    ).toMatchObject({
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+    expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+    });
+
+    const entryDts = steps.find((step) => step.label === "write-plugin-sdk-entry-dts");
+    if (!entryDts) {
+      throw new Error("Missing ciArtifacts write-plugin-sdk-entry-dts step");
+    }
+    expect(entryDts.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "0" });
+    expect(entryDts.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        "package.json",
+        "pnpm-lock.yaml",
+        "tsconfig.plugin-sdk.dts.json",
+        expect.objectContaining({
+          path: "src",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+        expect.objectContaining({
+          path: "packages",
+          excludeDirectories: ["dist", "node_modules"],
+        }),
+      ]),
+    );
+    expect(entryDts.cache?.outputs).toEqual(
+      expect.arrayContaining([
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+      ]),
+    );
+    expect(entryDts.cache?.restore).toBe("always");
+
+    const fullEntryDts = resolveBuildAllSteps("full").find(
+      (step) => step.label === "write-plugin-sdk-entry-dts",
+    );
+    expect(fullEntryDts?.env).toMatchObject({ OPENCLAW_PLUGIN_SDK_CANONICAL_DTS: "1" });
+    expect(fullEntryDts?.cache).toBeDefined();
+    expect(fullEntryDts?.cache?.inputs).not.toContainEqual(
+      expect.objectContaining({ path: "src" }),
+    );
+    expect(fullEntryDts?.cache?.outputs).not.toContainEqual({
+      path: "dist/plugin-sdk",
+      extensions: [".d.ts"],
+      recursive: false,
     });
   });
 
@@ -675,6 +735,39 @@ describe("resolveBuildAllStepCacheState", () => {
         stampedOutputs: ["dist/output.js"],
         stampPath: stale.stampPath,
       });
+    });
+  });
+
+  it("ignores generated and installed directories in broad cache inputs", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const ignoredDist = path.join(rootDir, "src/nested/dist/generated.ts");
+      const ignoredModules = path.join(rootDir, "src/node_modules/dependency.ts");
+      fs.mkdirSync(path.dirname(ignoredDist), { recursive: true });
+      fs.mkdirSync(path.dirname(ignoredModules), { recursive: true });
+      fs.writeFileSync(ignoredDist, "generated");
+      fs.writeFileSync(ignoredModules, "dependency");
+      const broadStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          inputs: [
+            {
+              path: "src",
+              excludeDirectories: ["dist", "node_modules"],
+              extensions: [".ts"],
+            },
+          ],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(broadStep, { rootDir });
+      writeBuildAllStepCacheStamp(broadStep, cacheState, { rootDir });
+
+      fs.writeFileSync(ignoredDist, "changed generated output");
+      fs.writeFileSync(ignoredModules, "changed installed dependency");
+      const fresh = resolveBuildAllStepCacheState(broadStep, { rootDir });
+
+      expect(fresh.fresh).toBe(true);
+      expect(fresh.inputFiles).toBe(1);
     });
   });
 

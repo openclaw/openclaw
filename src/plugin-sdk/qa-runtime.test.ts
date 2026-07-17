@@ -309,7 +309,9 @@ describe("plugin-sdk qa-runtime", () => {
     ).resolves.toBe("http://172.18.0.4:18789/");
 
     expect(runCommand).toHaveBeenCalledTimes(2);
-    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz");
+    expect(fetchImpl).toHaveBeenCalledWith("http://172.18.0.4:18789/healthz", {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("cancels compose service health probe response bodies", async () => {
@@ -356,6 +358,44 @@ describe("plugin-sdk qa-runtime", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(first.wasCanceled()).toBe(true);
     expect(second.wasCanceled()).toBe(true);
+  });
+
+  it("bounds a stalled waitForHealth probe by the remaining overall deadline", async () => {
+    const module = await import("./qa-runtime.js");
+    const runtime = module.createQaDockerRuntime({ auditContext: "qa-test" });
+    let probeSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(
+      async (_input: string, init?: Pick<RequestInit, "signal">) =>
+        await new Promise<never>((_resolve, reject) => {
+          probeSignal = init?.signal ?? undefined;
+          if (!probeSignal) {
+            reject(new Error("health probe signal missing"));
+            return;
+          }
+          const rejectAborted = () => reject(new Error("health probe aborted"));
+          if (probeSignal.aborted) {
+            rejectAborted();
+            return;
+          }
+          probeSignal.addEventListener("abort", rejectAborted, { once: true });
+        }),
+    );
+    const sleepImpl = vi.fn(async () => {});
+    const startedAt = Date.now();
+
+    await expect(
+      runtime.waitForHealth("http://127.0.0.1:18789/healthz", {
+        fetchImpl,
+        sleepImpl,
+        timeoutMs: 25,
+        pollMs: 1_000,
+      }),
+    ).rejects.toThrow("did not become healthy");
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(sleepImpl).not.toHaveBeenCalled();
   });
 
   it("resolves an unpinned QA Docker host port away from an occupied loopback default", async () => {

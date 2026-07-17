@@ -2,12 +2,18 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
+import {
+  buildRestartRecoveryClaimCleanupPatch,
+  resolveRestartRecoveryChannelAuthority,
+} from "../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
 import { CommandLane } from "../process/lanes.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import {
   deliveryContextFromSession,
@@ -15,6 +21,8 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE =
@@ -26,6 +34,65 @@ type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
 
 function normalizeFiniteTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
+  const authority = resolveRestartRecoveryChannelAuthority(entry);
+  // Keep the pre-dispatch gate identical to recovered capability minting.
+  return (
+    authority !== undefined && isTrustedMessageActionTurnIngress(authority.deliveryContext.channel)
+  );
+}
+
+/** Internal continuations never inherit channel authority; every other message-tool recovery must. */
+export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
+  return (
+    entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
+    entry.restartRecoverySourceIngress !== "internal"
+  );
+}
+
+export function resolveRestartRecoveryResumeBlockReason(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  sessionKey: string;
+}): string | undefined {
+  const beforeAgentReplyState = params.entry.restartRecoveryBeforeAgentReplyState;
+  const sourceIngress = params.entry.restartRecoverySourceIngress;
+  const hasLegacyClaimWithoutOwnership =
+    sourceIngress === undefined &&
+    normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
+  // Durable claims written before source ownership existed may have entered
+  // through a channel or Control UI. Treat those claims as external so an
+  // upgrade cannot bypass a newly active policy or side-effect hook.
+  const requiresHookSafetyProof =
+    hasLegacyClaimWithoutOwnership ||
+    beforeAgentReplyState === "admitted" ||
+    beforeAgentReplyState === "continue" ||
+    beforeAgentReplyState === "handled-reply" ||
+    sourceIngress === "channel" ||
+    sourceIngress === "control-ui";
+  if (!requiresHookSafetyProof) {
+    return undefined;
+  }
+  if (!params.cfg) {
+    return "pre-hook recovery runtime config is unavailable";
+  }
+  try {
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    ensureRuntimePluginsLoaded({
+      config: params.cfg,
+      workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
+      allowGatewaySubagentBinding: true,
+    });
+  } catch {
+    return "pre-hook recovery runtime plugins could not be loaded";
+  }
+  // A stored hook result proves that invocation completed, but not that the
+  // same plugin code and config are still loaded after restart. Fail closed
+  // until hook activation owns a stable cross-process implementation digest.
+  const unsafeHook = findRestartRecoveryUnsafeReplyHook();
+  return unsafeHook ? `pre-hook recovery cannot bypass the active ${unsafeHook} hook` : undefined;
 }
 
 function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
@@ -202,6 +269,13 @@ export async function resumeMainSession(params: {
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
   const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
+  if (
+    requiresRestartRecoveryMessageActionAuthority(params.entry) &&
+    !hasRestartRecoveryMessageActionAuthority(params.entry)
+  ) {
+    log.warn(`refusing message-tool-only recovery without channel authority: ${params.sessionKey}`);
+    return false;
+  }
   const recoveryRunId = claimedRunId && claimedRunId !== sourceRunId ? claimedRunId : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
@@ -248,7 +322,9 @@ export async function resumeMainSession(params: {
         ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
         : {}),
       idempotencyKey: recoveryRunId,
-      deliver: Boolean(deliveryContext),
+      deliver:
+        Boolean(deliveryContext) &&
+        params.entry.restartRecoverySourceReplyDeliveryMode !== "message_tool_only",
       lane: CommandLane.Main,
       ...(params.entry.restartRecoverySourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }

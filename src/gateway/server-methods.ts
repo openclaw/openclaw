@@ -11,7 +11,11 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
-import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+import {
+  consumeControlPlaneWriteBudget,
+  CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS,
+  CONTROL_PLANE_RATE_LIMIT_WINDOW_MS,
+} from "./control-plane-rate-limit.js";
 import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
@@ -131,6 +135,10 @@ const loadLogsHandlers = lazyHandlerModule(
 const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
+);
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
 );
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
@@ -345,6 +353,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
     loadHandlers: loadVoicewakeHandlers,
   }),
@@ -492,6 +504,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "plugins.install",
       "plugins.setEnabled",
       "plugins.uninstall",
+      "plugins.refresh",
     ],
     loadHandlers: loadPluginsHandlers,
   }),
@@ -669,6 +682,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.rename",
       "node.list",
       "node.describe",
+      "plugin.surface.refresh",
       "node.pluginSurface.refresh",
       "node.pluginTools.update",
       "node.skills.update",
@@ -742,7 +756,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
+    methods: [
+      "sessions.files.list",
+      "sessions.files.get",
+      "sessions.files.set",
+      "sessions.files.reveal",
+    ],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -831,7 +850,7 @@ export async function handleGatewayRequest(
     if (!methodRegistry.isControlPlaneWrite(req.method)) {
       return false;
     }
-    const budget = consumeControlPlaneWriteBudget({ client });
+    const budget = consumeControlPlaneWriteBudget({ client, method: req.method });
     if (budget.allowed) {
       return false;
     }
@@ -850,7 +869,7 @@ export async function handleGatewayRequest(
           retryAfterMs: budget.retryAfterMs,
           details: {
             method: req.method,
-            limit: "3 per 60s",
+            limit: `${CONTROL_PLANE_RATE_LIMIT_MAX_REQUESTS} per ${CONTROL_PLANE_RATE_LIMIT_WINDOW_MS / 1000}s`,
           },
         },
       ),

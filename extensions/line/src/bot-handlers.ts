@@ -10,7 +10,7 @@ import {
   resolvePairingIdLabel,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -80,18 +80,24 @@ interface LineHandlerContext {
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
-type LineWebhookReplayCache = ClaimableDedupe;
 
 function normalizeLineIngressEntry(value: string): string | null {
   return normalizeLineAllowEntry(value) || null;
 }
 
-export function createLineWebhookReplayCache(): LineWebhookReplayCache {
-  return createClaimableDedupe({
-    ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
-    memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
+type LineReplayEvent = { event: WebhookEvent; accountId: string };
+
+export function createLineWebhookReplayCache() {
+  return createChannelReplayGuard<LineReplayEvent>({
+    dedupe: {
+      ttlMs: LINE_WEBHOOK_REPLAY_WINDOW_MS,
+      memoryMaxSize: LINE_WEBHOOK_REPLAY_MAX_ENTRIES,
+    },
+    buildReplayKey: ({ event, accountId }) => buildLineWebhookReplayKey(event, accountId)?.key,
   });
 }
+
+type LineWebhookReplayCache = ReturnType<typeof createLineWebhookReplayCache>;
 
 function buildLineWebhookReplayKey(
   event: WebhookEvent,
@@ -123,39 +129,6 @@ function buildLineWebhookReplayKey(
         ? `room:${source.roomId ?? ""}`
         : `user:${source?.userId ?? ""}`;
   return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId: `event:${eventId}` };
-}
-
-type LineReplayCandidate = {
-  key: string;
-  eventId: string;
-  cache: LineWebhookReplayCache;
-};
-
-function getLineReplayCandidate(
-  event: WebhookEvent,
-  context: LineHandlerContext,
-): LineReplayCandidate | null {
-  const replay = buildLineWebhookReplayKey(event, context.account.accountId);
-  const cache = context.replayCache;
-  if (!replay || !cache) {
-    return null;
-  }
-  return { key: replay.key, eventId: replay.eventId, cache };
-}
-
-async function claimLineReplayEvent(
-  candidate: LineReplayCandidate,
-): Promise<{ skip: true; inFlightResult?: Promise<void> } | { skip: false }> {
-  const claim = await candidate.cache.claim(candidate.key);
-  if (claim.kind === "claimed") {
-    return { skip: false };
-  }
-  if (claim.kind === "inflight") {
-    logVerbose(`line: skipped in-flight replayed webhook event ${candidate.eventId}`);
-    return { skip: true, inFlightResult: claim.pending.then(() => undefined) };
-  }
-  logVerbose(`line: skipped replayed webhook event ${candidate.eventId}`);
-  return { skip: true };
 }
 
 function resolveLineGroupConfig(params: {
@@ -573,55 +546,64 @@ export async function handleLineWebhookEvents(
 ): Promise<void> {
   let firstError: unknown;
   for (const event of events) {
-    const replayCandidate = getLineReplayCandidate(event, context);
-    const replaySkip = replayCandidate ? await claimLineReplayEvent(replayCandidate) : null;
-    if (replaySkip?.skip) {
-      if (replaySkip.inFlightResult) {
+    try {
+      if (!context.replayCache) {
+        await handleLineWebhookEvent(event, context);
+        continue;
+      }
+      const replayEvent = { event, accountId: context.account.accountId };
+      const result = await context.replayCache.processGuarded(
+        replayEvent,
+        async () => await handleLineWebhookEvent(event, context),
+        { onError: "commit" },
+      );
+      const replayId = buildLineWebhookReplayKey(event, context.account.accountId)?.eventId;
+      if (result.kind === "inflight") {
+        logVerbose(`line: skipped in-flight replayed webhook event ${replayId ?? "unknown"}`);
         try {
-          await replaySkip.inFlightResult;
+          await result.pending;
         } catch (err) {
           context.runtime.error?.(danger(`line: replayed in-flight event failed: ${String(err)}`));
           firstError ??= err;
         }
-      }
-      continue;
-    }
-    try {
-      switch (event.type) {
-        case "message":
-          await handleMessageEvent(event, context);
-          break;
-        case "follow":
-          await handleFollowEvent(event, context);
-          break;
-        case "unfollow":
-          await handleUnfollowEvent(event, context);
-          break;
-        case "join":
-          await handleJoinEvent(event, context);
-          break;
-        case "leave":
-          await handleLeaveEvent(event, context);
-          break;
-        case "postback":
-          await handlePostbackEvent(event, context);
-          break;
-        default:
-          logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
-      }
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
+      } else if (result.kind === "duplicate") {
+        logVerbose(`line: skipped replayed webhook event ${replayId ?? "unknown"}`);
       }
     } catch (err) {
-      if (replayCandidate) {
-        await replayCandidate.cache.commit(replayCandidate.key);
-      }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       firstError ??= err;
     }
   }
   if (firstError) {
     throw toLintErrorObject(firstError, "Non-Error thrown");
+  }
+}
+
+async function handleLineWebhookEvent(
+  event: WebhookEvent,
+  context: LineHandlerContext,
+): Promise<void> {
+  switch (event.type) {
+    case "message":
+      await handleMessageEvent(event, context);
+      break;
+    case "follow":
+      await handleFollowEvent(event, context);
+      break;
+    case "unfollow":
+      await handleUnfollowEvent(event, context);
+      break;
+    case "join":
+      await handleJoinEvent(event, context);
+      break;
+    case "leave":
+      await handleLeaveEvent(event, context);
+      break;
+    case "postback":
+      await handlePostbackEvent(event, context);
+      break;
+    default:
+      logVerbose(`line: unhandled event type: ${(event as WebhookEvent).type}`);
   }
 }
 

@@ -1,7 +1,10 @@
 // Covers startup delivery recovery, backoff, permanent failures, unknown-send
 // reconciliation, commit hooks, and retry budget deferral.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -11,6 +14,7 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
+import { pruneOrphanedDeliveryQueueMedia } from "./delivery-queue-media-spool.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
@@ -18,6 +22,7 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendAttemptStarted,
   recoverPendingDeliveries,
+  type DeliverFn,
 } from "./delivery-queue.js";
 import {
   asDeliverFn,
@@ -30,10 +35,12 @@ import {
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const MAX_RETRIES = 5;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
@@ -64,6 +71,8 @@ describe("delivery-queue recovery", () => {
 
   beforeEach(() => {
     resolveOutboundChannelMessageAdapterMock.mockReset();
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
   });
 
   const enqueueCrashRecoveryEntries = async () => {
@@ -195,28 +204,19 @@ describe("delivery-queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await enqueueCrashRecoveryEntries();
-      let firstDelivered!: () => void;
-      const firstDeliveredPromise = new Promise<void>((resolve) => {
-        firstDelivered = resolve;
-      });
       const deliveryTimes: number[] = [];
       const deliver = vi.fn(async () => {
         deliveryTimes.push(Date.now());
-        if (deliveryTimes.length === 1) {
-          firstDelivered();
-        }
         return [];
       });
 
       const recovery = runRecovery({ deliver, maxRecoveryMs: 60_000 });
-      await firstDeliveredPromise;
-      expect(deliver).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
       expect(deliver).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(1);
+      controlledSleep.release();
       const { result } = await recovery;
 
       expect(deliver).toHaveBeenCalledTimes(2);
@@ -232,28 +232,23 @@ describe("delivery-queue recovery", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       await enqueueCrashRecoveryEntries();
       await enqueueDelivery(
         { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
         tmpDir(),
       );
-      let firstDelivered!: () => void;
-      const firstDeliveredPromise = new Promise<void>((resolve) => {
-        firstDelivered = resolve;
-      });
       const deliveryTimes: number[] = [];
       const deliver = vi.fn(async () => {
         deliveryTimes.push(Date.now());
-        if (deliveryTimes.length === 1) {
-          firstDelivered();
-        }
         return [];
       });
 
       const recovery = runRecovery({ deliver, maxRecoveryMs: 1 });
-      await firstDeliveredPromise;
 
-      await vi.advanceTimersByTimeAsync(1);
+      await expect(controlledSleep.started).resolves.toBe(1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      controlledSleep.release();
       const { result } = await recovery;
 
       expect(deliver).toHaveBeenCalledTimes(1);
@@ -1221,6 +1216,66 @@ describe("delivery-queue recovery", () => {
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
       expectMockMessageContaining(log.warn, "falling back to direct ack");
+    } finally {
+      vi.doUnmock("./delivery-queue-storage.js");
+      vi.resetModules();
+    }
+  });
+
+  it("retains later media until an early recovery ack finishes the batch", async () => {
+    const spoolDir = path.join(tmpDir(), "delivery-queue-media");
+    const firstArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000001.ogg");
+    const secondArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000002.ogg");
+    await fs.mkdir(spoolDir, { recursive: true });
+    await fs.writeFile(firstArtifact, "first-audio");
+    await fs.writeFile(secondArtifact, "second-audio");
+    const oldArtifactTime = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    await fs.utimes(firstArtifact, oldArtifactTime, oldArtifactTime);
+    await fs.utimes(secondArtifact, oldArtifactTime, oldArtifactTime);
+    await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ mediaUrl: firstArtifact }, { mediaUrl: secondArtifact }],
+      },
+      tmpDir(),
+    );
+    vi.resetModules();
+    vi.doMock("./delivery-queue-storage.js", async () => {
+      const actual = await vi.importActual<typeof import("./delivery-queue-storage.js")>(
+        "./delivery-queue-storage.js",
+      );
+      return {
+        ...actual,
+        markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {
+          throw new Error("post-send state db locked");
+        }),
+      };
+    });
+
+    try {
+      const { recoverPendingDeliveries: recoverWithMarkFailure } =
+        await import("./delivery-queue-recovery.js");
+      const firstResult = { channel: "demo-channel-a", messageId: "m1" };
+      const secondResult = { channel: "demo-channel-a", messageId: "m2" };
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        await params.onDeliveryResult?.(firstResult);
+        await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir() });
+        expect(await fs.readFile(secondArtifact, "utf8")).toBe("second-audio");
+        await params.onDeliveryResult?.(secondResult);
+        return [firstResult, secondResult];
+      });
+
+      const summary = await recoverWithMarkFailure({
+        deliver,
+        cfg: baseCfg,
+        stateDir: tmpDir(),
+        log: createRecoveryLog(),
+      });
+
+      expect(summary).toMatchObject({ recovered: 1, failed: 0 });
+      await expect(fs.stat(firstArtifact)).rejects.toThrow();
+      await expect(fs.stat(secondArtifact)).rejects.toThrow();
     } finally {
       vi.doUnmock("./delivery-queue-storage.js");
       vi.resetModules();
