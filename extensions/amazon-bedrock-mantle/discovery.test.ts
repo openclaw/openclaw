@@ -12,8 +12,9 @@ const {
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
-  sanitizeBlankAwsCredentials,
 } = await import("./api.js");
+
+const { sanitizeBlankAwsCredentials } = await import("./discovery.js");
 
 function createTokenProviderFactory(tokenProvider: () => Promise<string>) {
   return vi.fn(() => tokenProvider);

@@ -13,5 +13,4 @@ export {
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
-  sanitizeBlankAwsCredentials,
 } from "./discovery.js";
