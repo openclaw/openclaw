@@ -334,7 +334,14 @@ async function collectMcpDoctorIssues(params: {
           serverName: name,
           serverUrl: resolved.url,
         });
-        if (!authStatus.hasTokens) {
+        if (authStatus.requiresAuthorization) {
+          issues.push(
+            issue(
+              "warning",
+              `OAuth credentials require additional authorization; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+            ),
+          );
+        } else if (!authStatus.hasTokens) {
           issues.push(
             issue(
               "warning",
@@ -695,7 +702,11 @@ export function registerMcpCli(program: Command) {
       for (const entry of status) {
         const transport = entry.enabled ? (entry.transport ?? "invalid") : "disabled";
         const auth = entry.auth === "oauth" ? " oauth" : "";
-        const oauth = entry.authStatus?.hasTokens ? " authorized" : "";
+        const oauth = entry.authStatus?.requiresAuthorization
+          ? " authorization-required"
+          : entry.authStatus?.hasTokens
+            ? " authorized"
+            : "";
         const filters = entry.toolFilter ? " tool-filtered" : "";
         const parallel = entry.supportsParallelToolCalls ? " parallel" : "";
         defaultRuntime.log(`- ${entry.name}: ${transport}${auth}${oauth}${filters}${parallel}`);
@@ -706,7 +717,7 @@ export function registerMcpCli(program: Command) {
           );
           if (entry.auth === "oauth") {
             defaultRuntime.log(
-              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
+              `  oauth: tokens=${entry.authStatus?.hasTokens ? "yes" : "no"} authorization=${entry.authStatus?.requiresAuthorization ? "required" : entry.authStatus?.hasTokens ? "ready" : "missing"} client=${entry.authStatus?.hasClientInformation ? "yes" : "no"}`,
             );
           }
           if (entry.toolFilter) {

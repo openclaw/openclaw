@@ -82,6 +82,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Resolve checked-out ref
         id: ref
@@ -1241,8 +1242,55 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Publish approved bootstrap tarball
+      - name: Check bootstrap npm package version
+        id: bootstrap_npm_package_version
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
+        env:
+          PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
+          PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
+          TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import { fetchNpmRegistryPackumentWithRetry } from "./scripts/lib/npm-publish-plan.mjs";
+
+          const packageName = process.env.PACKAGE_NAME;
+          const packageVersion = process.env.PACKAGE_VERSION;
+          const tarball = fs.readFileSync(process.env.TARBALL_PATH);
+          const expectedIntegrity = `sha512-${crypto.createHash("sha512").update(tarball).digest("base64")}`;
+          const expectedShasum = crypto.createHash("sha1").update(tarball).digest("hex");
+          const registryFetch = await fetchNpmRegistryPackumentWithRetry({
+            packageName,
+            packageUrl: `https://registry.npmjs.org/${encodeURIComponent(packageName)}`,
+          });
+          if (registryFetch.status === 404) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (!registryFetch.ok) {
+            throw new Error(`${packageName}: npm registry returned HTTP ${registryFetch.status}.`);
+          }
+          const publishedDist = registryFetch.packument?.versions?.[packageVersion]?.dist;
+          if (!publishedDist) {
+            console.log("already_published=false");
+            process.exit(0);
+          }
+          if (
+            publishedDist.integrity !== expectedIntegrity ||
+            publishedDist.shasum !== expectedShasum
+          ) {
+            throw new Error(
+              `${packageName}@${packageVersion}: npm registry tarball identity does not match the approved bootstrap artifact.`,
+            );
+          }
+          console.error(`${packageName}@${packageVersion} already matches the approved bootstrap artifact.`);
+          console.log("already_published=true");
+          NODE
+
+      - name: Publish approved bootstrap tarball
+        if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.bootstrap_npm_package_version.outputs.already_published != 'true'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
@@ -1301,12 +1349,17 @@ jobs:
       - name: Record Meta trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
+          ALREADY_PUBLISHED: ${{ steps.bootstrap_npm_package_version.outputs.already_published }}
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
         run: |
           {
             echo "## Meta npm bootstrap follow-up"
             echo
-            echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            if [[ "$ALREADY_PUBLISHED" == "true" ]]; then
+              echo "- Verified existing \`${PACKAGE_NAME}\` against the approved immutable tarball."
+            else
+              echo "- Published \`${PACKAGE_NAME}\` from the verified immutable tarball."
+            fi
             echo "- Configure the GitHub trusted publisher for \`plugin-npm-release.yml\` and environment \`npm-release\` before the next OIDC publish."
           } >> "$GITHUB_STEP_SUMMARY"
 

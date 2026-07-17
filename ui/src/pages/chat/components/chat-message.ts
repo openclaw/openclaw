@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
@@ -51,6 +52,9 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { PlanStatus } from "../tool-stream.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
+import { renderChatQuestionCard } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -556,14 +560,36 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<
+  ChatItem,
+  { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" } | { kind: "plan" }
+>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   basePath?: string;
   authToken?: string | null;
+  planStatus?: PlanStatus | null;
+  planActive?: boolean;
+  questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
+  onQuestionChange?: () => void;
+  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
 };
+
+function renderQuestionStreamPart(
+  part: Extract<StreamGroupPart, { kind: "question" }>,
+  opts: StreamGroupOptions,
+) {
+  const prompt = opts.questionPrompts?.get(part.questionId);
+  return prompt
+    ? renderChatQuestionCard(prompt, {
+        nowMs: Date.now(),
+        onChange: opts.onQuestionChange ?? (() => {}),
+        onSubmit: (answers) => opts.onQuestionSubmit?.(prompt.id, answers),
+      })
+    : nothing;
+}
 
 // One assistant group per contiguous run of streaming items: a reply that
 // arrives as several stream segments renders under a single avatar/footer
@@ -578,14 +604,14 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   // While the agent works with nothing streamed yet the run is pure claw: no
   // avatar next to it - the punching pincer is the whole signal. The avatar
   // arrives with the first stream part.
-  const indicatorOnly = parts.every((part) => part.kind === "reading-indicator");
-  const avatar = indicatorOnly
+  const workingOnly = parts.every((part) => part.kind !== "stream");
+  const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
 
   return html`
     <div
-      class="chat-group assistant ${indicatorOnly ? "chat-group--working" : ""}"
+      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
       data-chat-row-key=${parts[0]?.key ?? nothing}
     >
       ${avatar}
@@ -593,16 +619,23 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${parts.map((part) =>
           part.kind === "reading-indicator"
             ? renderChatWorkingIndicator(part)
-            : renderGroupedMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: part.text }],
-                  timestamp: part.startedAt,
-                },
-                part.key,
-                { isStreaming: part.isStreaming, showReasoning: false },
-                onOpenSidebar,
-              ),
+            : part.kind === "question"
+              ? renderQuestionStreamPart(part, opts)
+              : part.kind === "plan"
+                ? renderChatPlanChecklist(opts.planStatus, {
+                    active: opts.planActive === true,
+                    variant: "card",
+                  })
+                : renderGroupedMessage(
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: part.text }],
+                      timestamp: part.startedAt,
+                    },
+                    part.key,
+                    { isStreaming: part.isStreaming, showReasoning: false },
+                    onOpenSidebar,
+                  ),
         )}
         ${footerStartedAt !== null
           ? html`

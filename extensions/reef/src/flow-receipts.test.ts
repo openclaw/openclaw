@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   composeOutbound,
@@ -14,21 +13,25 @@ import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
+  flowStores,
   guard,
   peerTrust,
   reefKeys,
+  resetFlowStoresForTests,
   transport,
   trust,
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { processReefInboxEntriesInOrder, ReefReceiptNotifier } from "./owner-notice.js";
-import { ReviewApprovalStore } from "./state.js";
 import type { ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
   REEF_OUTBOUND_DELIVERY_TTL_MS,
 } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
+
+beforeEach(resetFlowStoresForTests);
+afterEach(resetFlowStoresForTests);
 
 describe("ReefMessageFlow delivery receipts", () => {
   it("quarantines an unmatched forged receipt without scanning audit history", async () => {
@@ -40,12 +43,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -89,12 +92,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -167,12 +170,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -224,12 +227,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trust({ alice: peerTrust(alice) }).store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -280,12 +283,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -347,12 +350,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -419,12 +422,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: relay as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -545,12 +548,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -609,12 +612,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });
@@ -679,12 +682,12 @@ describe("ReefMessageFlow delivery receipts", () => {
       config: config(),
       trust: trusted.store,
       keys: bob,
-      stateDir: `/tmp/reef-flow-${randomUUID()}`,
+
       transport: transport() as unknown as ReefTransportClient,
       guard: guard(allow),
       audit,
       replay: new MemoryReplayStore(),
-      reviews: new ReviewApprovalStore(`/tmp/reef-reviews-${randomUUID()}`),
+      ...flowStores(),
       onIngress: async () => {},
       onOwnerNotice: async () => {},
     });

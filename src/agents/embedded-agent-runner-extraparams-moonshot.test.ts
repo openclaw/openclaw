@@ -180,58 +180,61 @@ describe("applyExtraParamsToAgent Moonshot", () => {
 
     expect(payload.thinking).toEqual({ type: "disabled" });
   });
-  it("omits thinking controls and broadens pinned tool choice for kimi-k2.7-code", () => {
-    const payload = runExtraParamsPayloadCase({
-      provider: "moonshot",
-      modelId: "kimi-k2.7-code",
-      thinkingLevel: "off",
-      payload: {
-        model: "kimi-k2.7-code",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-            ],
-          },
-        ],
-      },
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "moonshot/kimi-k2.7-code": {
-                params: {
-                  thinking: { type: "disabled", keep: "all" },
-                  extra_body: {
+  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
+    "omits thinking controls and broadens pinned tool choice for %s",
+    (modelId) => {
+      const payload = runExtraParamsPayloadCase({
+        provider: "moonshot",
+        modelId,
+        thinkingLevel: "off",
+        payload: {
+          model: modelId,
+          messages: [
+            {
+              role: "assistant",
+              tool_calls: [
+                { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
+              ],
+            },
+          ],
+        },
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                [`moonshot/${modelId}`]: {
+                  params: {
                     thinking: { type: "disabled", keep: "all" },
-                    reasoning_effort: "low",
-                    tool_choice: { type: "tool", name: "read" },
-                    temperature: 0,
-                    top_p: 0.5,
-                    n: 2,
-                    presence_penalty: 1,
-                    frequency_penalty: 1,
+                    extra_body: {
+                      thinking: { type: "disabled", keep: "all" },
+                      reasoning_effort: "low",
+                      tool_choice: { type: "tool", name: "read" },
+                      temperature: 0,
+                      top_p: 0.5,
+                      n: 2,
+                      presence_penalty: 1,
+                      frequency_penalty: 1,
+                    },
                   },
                 },
               },
             },
           },
         },
-      },
-    });
+      });
 
-    expect(payload).not.toHaveProperty("thinking");
-    expect(payload).not.toHaveProperty("reasoning_effort");
-    expect(payload.tool_choice).toBe("auto");
-    expect(payload).not.toHaveProperty("temperature");
-    expect(payload).not.toHaveProperty("top_p");
-    expect(payload).not.toHaveProperty("n");
-    expect(payload).not.toHaveProperty("presence_penalty");
-    expect(payload).not.toHaveProperty("frequency_penalty");
-    const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(expectDefined(messages[0], "messages[0] test invariant").reasoning_content).toBe("");
-  });
+      expect(payload).not.toHaveProperty("thinking");
+      expect(payload).not.toHaveProperty("reasoning_effort");
+      expect(payload.tool_choice).toBe("auto");
+      expect(payload).not.toHaveProperty("temperature");
+      expect(payload).not.toHaveProperty("top_p");
+      expect(payload).not.toHaveProperty("n");
+      expect(payload).not.toHaveProperty("presence_penalty");
+      expect(payload).not.toHaveProperty("frequency_penalty");
+      const messages = payload.messages as Array<Record<string, unknown>>;
+      expect(expectDefined(messages[0], "messages[0] test invariant").reasoning_content).toBe("");
+    },
+  );
 
   it("forces Kimi K3 max reasoning while preserving pinned tool choice", () => {
     const pinnedToolChoice = { type: "function", function: { name: "read" } };

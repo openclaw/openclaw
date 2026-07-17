@@ -5,6 +5,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -597,7 +598,22 @@ describe("runCodexAppServerAttempt", () => {
     const config = {
       auth: { profiles: { [authProfileId]: { provider: "openai", mode: "api_key" as const } } },
     };
-    vi.stubEnv("OPENAI_WORK_KEY", "work-key");
+    replaceRuntimeAuthProfileStoreSnapshots([
+      {
+        agentDir,
+        store: {
+          version: 1,
+          profiles: {
+            [authProfileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "OPENAI_WORK_KEY" },
+              key: "work-key",
+            },
+          },
+        },
+      },
+    ]);
     let clientOptions: CodexAppServerClientOptions | undefined;
     const harness = createStartedThreadHarness(async () => undefined, {
       onStart: (_profileId, _agentDir, options) => {
@@ -2233,6 +2249,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
+    const llmInput = vi.fn();
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",
       prependSystemContext: "pre system",
@@ -2241,7 +2258,10 @@ describe("runCodexAppServerAttempt", () => {
       appendContext: "tail context",
     }));
     initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", handler: beforePromptBuild },
+        { hookName: "llm_input", handler: llmInput },
+      ]),
     );
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2259,11 +2279,19 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledOnce();
     const [hookInput, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
-      { messages?: Array<{ role?: string }>; prompt?: string },
+      {
+        messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+        prompt?: string;
+      },
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([]);
+    expect(hookInput.messages).toEqual([
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "previous turn" }],
+      }),
+    ]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
@@ -2280,6 +2308,14 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
     ]);
+    expect(JSON.stringify(turnStartParams)).not.toContain("previous turn");
+    const [llmInputPayload] = mockCall(llmInput, "llm_input") as [
+      { historyMessages?: unknown[]; prompt?: string },
+      unknown,
+    ];
+    expect(llmInputPayload.prompt).toBe("queued context\n\nhello\n\ntail context");
+    expect(llmInputPayload.historyMessages).toEqual([]);
+    expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
@@ -2373,8 +2409,15 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
     let hookCalls = 0;
-    const beforePromptBuild = vi.fn(async () => {
+    type HookInputForTest = {
+      messages?: Array<{ content?: Array<{ text?: string; type?: string }>; role?: string }>;
+    };
+    const beforePromptBuild = vi.fn(async (event: unknown) => {
       hookCalls += 1;
+      (event as HookInputForTest).messages?.push({
+        role: "assistant",
+        content: [{ type: "text", text: `hook-side mutation ${hookCalls}` }],
+      });
       return {
         systemPrompt: `custom codex system ${hookCalls}`,
         prependContext: `queued context ${hookCalls}`,
@@ -2398,7 +2441,17 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(beforePromptBuild).toHaveBeenCalled();
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const [, secondHookInput] = beforePromptBuild.mock.calls.map(
+      ([event]) => event as HookInputForTest,
+    );
+    const secondHookMessageTexts =
+      secondHookInput?.messages?.flatMap(
+        (message) => message.content?.map((part) => part.text ?? "") ?? [],
+      ) ?? [];
+    expect(secondHookMessageTexts).toContain("prior visible context");
+    expect(secondHookMessageTexts).toContain("prior assistant context");
+    expect(secondHookMessageTexts).not.toContain("hook-side mutation 1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
@@ -2409,6 +2462,7 @@ describe("runCodexAppServerAttempt", () => {
       "";
     expect(inputText).toContain("queued context");
     expect(inputText).toContain("prior visible context");
+    expect(inputText).not.toContain("hook-side mutation");
   });
 
   it("does not replay mirrored history already covered by an existing Codex binding", async () => {

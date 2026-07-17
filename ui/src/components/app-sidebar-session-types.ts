@@ -3,6 +3,10 @@ import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
+  normalizeCatalogProjectGrouping,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
+import {
   normalizeSidebarSessionsGrouping,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
@@ -94,6 +98,7 @@ export function sidebarSessionMetaId(key: string): string {
 }
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
@@ -121,6 +126,12 @@ export function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   );
 }
 
+export function loadStoredSidebarCatalogGrouping(): CatalogProjectGrouping {
+  return normalizeCatalogProjectGrouping(
+    getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY),
+  );
+}
+
 export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
@@ -141,6 +152,10 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
 
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
+}
+
+export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY, value);
 }
 
 export function storeSidebarSessionsShowCron(show: boolean) {

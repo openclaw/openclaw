@@ -5,6 +5,8 @@ mod discovery;
 mod gateway;
 mod installer;
 mod notify;
+mod pending_approvals;
+mod quickchat;
 mod tray;
 mod updater;
 
@@ -18,6 +20,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State, Url, WebviewWindow};
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_global_shortcut::{Code, Modifiers};
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(3);
@@ -144,6 +147,7 @@ struct DesktopInner {
     cli: Mutex<Option<OpenClawCli>>,
     navigation: Mutex<NavigationState>,
     operation: Mutex<()>,
+    pending_approvals: Mutex<pending_approvals::PendingApprovalState>,
     local_url: Url,
     tray: Mutex<Option<tray::TrayHandles>>,
     quitting: AtomicBool,
@@ -161,6 +165,7 @@ impl DesktopState {
                 cli: Mutex::new(None),
                 navigation: Mutex::new(NavigationState::default()),
                 operation: Mutex::new(()),
+                pending_approvals: Mutex::new(pending_approvals::PendingApprovalState::default()),
                 local_url,
                 tray: Mutex::new(None),
                 quitting: AtomicBool::new(false),
@@ -274,7 +279,7 @@ impl DesktopState {
         self.inner.quitting.load(Ordering::SeqCst)
     }
 
-    fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
+    pub(crate) fn resolve_cli(&self) -> Result<OpenClawCli, CliError> {
         if let Some(cli) = self.inner.cli.lock().expect("CLI mutex poisoned").clone() {
             return Ok(cli);
         }
@@ -292,6 +297,41 @@ impl DesktopState {
             .as_ref()
         {
             tray.update(snapshot);
+        }
+    }
+
+    fn poll_pending_approvals(&self, app: &AppHandle, cli: &OpenClawCli, generation: u64) {
+        let pending = match pending_approvals::fetch(cli) {
+            Ok(pending) => pending,
+            Err(error) => {
+                eprintln!("Could not poll pending approvals: {error}");
+                return;
+            }
+        };
+        if !self.watchdog_is_current(generation) {
+            return;
+        }
+        let diff = self
+            .inner
+            .pending_approvals
+            .lock()
+            .expect("pending approval mutex poisoned")
+            .update(&pending);
+        if let Some(tray) = self
+            .inner
+            .tray
+            .lock()
+            .expect("tray mutex poisoned")
+            .as_ref()
+        {
+            tray.update_pending_count(diff.count);
+        }
+        if !main_window(app).is_ok_and(|window| matches!(window.is_focused(), Ok(false))) {
+            return;
+        }
+        // Notifications are a doorbell only; approval stays in the dashboard or CLI.
+        for request in diff.new {
+            notify::notify(app, "OpenClaw", &request.notification_body());
         }
     }
 
@@ -413,6 +453,9 @@ impl DesktopState {
             };
             if snapshot.reachable {
                 state.update_tray(&snapshot);
+                drop(_operation);
+                // Pairing polls ride connected watchdog ticks; the reconnect loop never runs them.
+                state.poll_pending_approvals(&app, &cli, generation);
                 continue;
             }
 
@@ -619,6 +662,7 @@ async fn gateway_action(
 }
 
 fn main() {
+    let global_shortcuts_supported = tray::global_shortcuts_supported();
     // Single-instance must run first so it can pass deep-link argv to the primary process.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -628,20 +672,41 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
-        ))
-        .plugin(tauri_plugin_notification::init())
+        ));
+    // global-hotkey's Linux backend is X11-only; omit it on Wayland instead of using XWayland.
+    // A GlobalShortcuts portal can follow later.
+    let builder = if global_shortcuts_supported {
+        builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::Space) {
+                            quickchat::toggle_quickchat(app);
+                        } else if shortcut
+                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
+                        {
+                            tray::show_window(app);
+                        }
+                    }
+                })
+                .build(),
+        )
+    } else {
+        builder
+    };
+    let builder = notify::register(builder)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&["canvas"])
+                .with_denylist(&["canvas", quickchat::QUICKCHAT_LABEL])
                 .build(),
         );
     #[cfg(target_os = "linux")]
     let builder = canvas::register_protocol(builder);
 
-    let builder = builder.setup(|app| {
+    let builder = builder.setup(move |app| {
         let window = app
             .get_webview_window("main")
             .expect("tauri.conf.json must define the main window");
@@ -660,6 +725,7 @@ fn main() {
         }
 
         app.manage(discovery::GatewayDiscovery::default());
+        app.manage(quickchat::QuickChatState::default());
         app.manage(updater::UpdaterState::default());
         #[cfg(target_os = "linux")]
         match canvas::CanvasBridge::start(app.handle().clone()) {
@@ -668,7 +734,7 @@ fn main() {
             }
             Err(error) => eprintln!("Canvas bridge unavailable: {error}"),
         }
-        state.set_tray(tray::build(app, state.clone())?);
+        state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
         Ok(())
     });
     #[cfg(target_os = "linux")]
@@ -681,6 +747,11 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_hide,
+        quickchat::quickchat_identity,
+        quickchat::quickchat_ready,
+        quickchat::quickchat_send,
+        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -694,6 +765,11 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_hide,
+        quickchat::quickchat_identity,
+        quickchat::quickchat_ready,
+        quickchat::quickchat_send,
+        quickchat::quickchat_show_dashboard,
         updater::open_release_page,
         updater::relaunch,
         updater::updater_ready
@@ -701,6 +777,20 @@ fn main() {
 
     let app = builder
         .on_window_event(|window, event| {
+            if window.label() == quickchat::QUICKCHAT_LABEL {
+                match event {
+                    tauri::WindowEvent::Focused(false) => {
+                        quickchat::request_hide(window.app_handle());
+                        return;
+                    }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        quickchat::request_hide(window.app_handle());
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {

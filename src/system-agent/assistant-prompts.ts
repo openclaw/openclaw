@@ -9,8 +9,10 @@ import type { SystemAgentOverview } from "./overview.js";
  * touch the system through OpenClaw's typed command vocabulary; parsing
  * stays deliberately narrow so free-form model text never executes directly.
  */
-/** Timeout for one assistant turn (local CLI backends cold-start slowly). */
+/** Timeout for one assistant turn on an external, potentially metered route. */
 export const SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS = 30_000;
+/** Local startup stages can consume nearly 30s before dispatch; leave inference a real budget. */
+export const SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS = 120_000;
 
 /** System prompt: persona plus the closed command vocabulary. */
 export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [

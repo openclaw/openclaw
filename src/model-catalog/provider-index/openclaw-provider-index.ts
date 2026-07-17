@@ -43,6 +43,13 @@ export const OPENCLAW_PROVIDER_INDEX = {
             input: ["text", "image"],
             contextWindow: 262144,
           },
+          {
+            id: "kimi-k2.7-code-highspeed",
+            name: "Kimi K2.7 Code HighSpeed",
+            reasoning: true,
+            input: ["text", "image"],
+            contextWindow: 262144,
+          },
         ],
       },
     },

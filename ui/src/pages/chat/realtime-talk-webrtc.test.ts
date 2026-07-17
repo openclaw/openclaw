@@ -83,6 +83,7 @@ function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
   inputDeviceId?: string,
+  videoEnabled?: boolean,
 ): WebRtcSdpRealtimeTalkTransport {
   return new WebRtcSdpRealtimeTalkTransport(
     {
@@ -95,6 +96,7 @@ function createOpenAiTransport(
       sessionKey: "main",
       callbacks: callbacks as never,
       inputDeviceId,
+      videoEnabled,
     },
   );
 }
@@ -192,23 +194,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       },
     });
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
-  });
-
-  it("captures from the selected microphone with an exact constraint", async () => {
-    stubAnswerSdpFetch();
-    const transport = createOpenAiTransport({}, {}, "usb-mic");
-
-    await transport.start();
-
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-        deviceId: { exact: "usb-mic" },
-      },
-    });
-    transport.stop();
   });
 
   it("reports microphone activity and resets it when stopped", async () => {

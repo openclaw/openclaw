@@ -468,6 +468,40 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("requires operator.questions for question broadcasts", () => {
+    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const clients = new Set<GatewayWsClient>([
+      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    ]);
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("question.requested", { id: "question-1" });
+    broadcast("question.resolved", { id: "question-1", status: "expired" });
+
+    expect(questionSocket.send).toHaveBeenCalledTimes(2);
+    expect(readSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("requires operator.read for progressive session catalog events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcastToConnIds } =
+      makeScopedBroadcastContext();
+    const targets = new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]);
+
+    broadcastToConnIds(
+      "sessions.catalog.host",
+      { progressId: "progress-1", agentId: "main", catalog: { id: "codex", hosts: [] } },
+      targets,
+    );
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["sessions.catalog.host"]);
+    expectSentEvents(writeSocket, ["sessions.catalog.host"]);
+    expectSentEvents(adminSocket, ["sessions.catalog.host"]);
+  });
+
   it("requires operator.read for task ledger broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();

@@ -9,7 +9,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage, type PortListener } from "../infra/ports.js";
-import { parseTcpPort } from "../infra/tcp-port.js";
+import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -561,26 +561,6 @@ function parsePositivePort(raw: string | undefined): number | null {
   return parseTcpPort(raw);
 }
 
-function parsePortFromProgramArguments(programArguments?: string[]): number | null {
-  if (!programArguments?.length) {
-    return null;
-  }
-  for (let i = 0; i < programArguments.length; i += 1) {
-    const arg = programArguments[i];
-    if (!arg) {
-      continue;
-    }
-    const inlineMatch = arg.match(/^--port=(\d+)$/);
-    if (inlineMatch) {
-      return parsePositivePort(inlineMatch[1]);
-    }
-    if (arg === "--port") {
-      return parsePositivePort(programArguments[i + 1]);
-    }
-  }
-  return null;
-}
-
 function isNodeHostArgv(programArguments: string[]): boolean {
   const normalized = programArguments.map((arg) =>
     normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/")),
@@ -622,7 +602,7 @@ function findInstalledProcessPid(
     const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
     if (
       !matchesProcess(argv) ||
-      parsePortFromProgramArguments(argv) !== port ||
+      parseTcpPortFromArgs(argv) !== port ||
       !matchesInstalledProgramArguments(argv, installedArguments)
     ) {
       continue;
@@ -648,7 +628,7 @@ async function resolveScheduledTaskProcess(
     return null;
   }
   const port =
-    parsePortFromProgramArguments(installedArguments) ??
+    parseTcpPortFromArgs(installedArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -690,7 +670,7 @@ function shouldManageGatewayListenerPort(env: GatewayServiceEnv): boolean {
 async function resolveScheduledTaskPort(env: GatewayServiceEnv): Promise<number | null> {
   const command = await readScheduledTaskCommand(env).catch(() => null);
   return (
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env)
   );
@@ -951,7 +931,7 @@ async function resolveFallbackRuntime(
   if (!shouldManageGatewayListenerPort(env)) {
     const installedArguments = command?.programArguments;
     const port =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(env);
     if (!port) {
@@ -983,7 +963,7 @@ async function resolveFallbackRuntime(
     };
   }
   const port =
-    parsePortFromProgramArguments(command?.programArguments) ??
+    parseTcpPortFromArgs(command?.programArguments) ??
     parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(env);
   if (!port) {
@@ -1081,7 +1061,7 @@ async function assertReplacementPortAvailableForTakeover(params: {
     return;
   }
   const port =
-    parsePortFromProgramArguments(params.programArguments) ??
+    parseTcpPortFromArgs(params.programArguments) ??
     parsePositivePort(params.environment?.OPENCLAW_GATEWAY_PORT) ??
     resolveConfiguredGatewayPort(params.env);
   if (!port) {
@@ -1437,7 +1417,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     const command = await readScheduledTaskCommand(params.env).catch(() => null);
     const installedArguments = command?.programArguments;
     const taskPort =
-      parsePortFromProgramArguments(installedArguments) ??
+      parseTcpPortFromArgs(installedArguments) ??
       parsePositivePort(command?.environment?.OPENCLAW_GATEWAY_PORT) ??
       resolveConfiguredGatewayPort(params.env);
     const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
@@ -1485,8 +1465,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
       }
       const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
       return (
-        isGatewayArgv(argv, { allowGatewayBinary: true }) &&
-        parsePortFromProgramArguments(argv) === taskPort
+        isGatewayArgv(argv, { allowGatewayBinary: true }) && parseTcpPortFromArgs(argv) === taskPort
       );
     });
   };

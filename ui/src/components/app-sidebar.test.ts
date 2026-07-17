@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
+  SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
@@ -17,12 +18,13 @@ import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts"
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
+import "./app-sidebar.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   createLobsterPetLook,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
-import "./app-sidebar.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
@@ -78,6 +80,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: { event: string; payload: unknown }) => void>();
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -87,6 +90,10 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
   } as unknown as ApplicationGateway;
   return {
     gateway,
@@ -94,6 +101,11 @@ function createGatewayHarness(client: GatewayBrowserClient) {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
         listener(snapshot);
+      }
+    },
+    publishEvent(event: string, payload: unknown) {
+      for (const listener of eventListeners) {
+        listener({ event, payload });
       }
     },
   };
@@ -308,6 +320,38 @@ describe("AppSidebar update card wiring", () => {
     expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("AppSidebar brand actions", () => {
+  it("starts a session for the active agent and leaves the sessions header sort-only", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+      agents: [{ id: "main" }, { id: "research" }],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      agentsList,
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    await sidebar.updateComplete;
+
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand .sidebar-new-session");
+    expect(button?.getAttribute("aria-label")).toBe("New session");
+    expect(button?.disabled).toBe(false);
+    expect(
+      sidebar.querySelector(".sidebar-recent-sessions__head--root .sidebar-session-new"),
+    ).toBeNull();
+
+    button?.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
   });
 });
 
@@ -1321,9 +1365,9 @@ describe("AppSidebar session scroll fade", () => {
   it("shows fades only toward additional session content", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body");
     if (!scroller) {
-      throw new Error("Expected sidebar session scroller");
+      throw new Error("Expected sidebar body scroller");
     }
 
     let scrollHeight = 100;
@@ -1339,7 +1383,7 @@ describe("AppSidebar session scroll fade", () => {
       scroller.scrollTop = scrollTop;
       scroller.dispatchEvent(new Event("scroll"));
       await sidebar.updateComplete;
-      expect(scroller.classList.contains(`sidebar-recent-sessions--scroll-${expected}`)).toBe(true);
+      expect(scroller.classList.contains(`sidebar-shell__body--scroll-${expected}`)).toBe(true);
     };
 
     await expectScrollState(0, "none");
@@ -1351,6 +1395,27 @@ describe("AppSidebar session scroll fade", () => {
 });
 
 describe("AppSidebar session catalog pagination", () => {
+  it("keeps the current refetch guard when an older request finishes", () => {
+    const live = new SessionCatalogLiveState();
+    const older = live.beginRefetch(true);
+    const current = live.beginRefetch(true);
+
+    live.endRefetch(older);
+    expect(live.refetching).toBe(true);
+    live.endRefetch(current);
+    expect(live.refetching).toBe(false);
+  });
+
+  it("invalidates request ownership when live state is cleared", () => {
+    const live = new SessionCatalogLiveState();
+    const first = live.beginRequest(1);
+    live.clear();
+    const second = live.beginRequest(1);
+
+    expect(live.ownsRequest(first.requestOwner)).toBe(false);
+    expect(live.ownsRequest(second.requestOwner)).toBe(true);
+  });
+
   const catalogPage = (
     sessions: Array<{ threadId: string; name: string }>,
     nextCursor?: string,
@@ -1652,6 +1717,496 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("renders each catalog host before the aggregate list response finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = deferred<SessionsCatalogListResult>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const progressId = (request.mock.calls[0]?.[1] as { progressId?: string })?.progressId;
+      expect(progressId).toEqual(expect.any(String));
+      const catalog = catalogPage([{ threadId: "thread-fast", name: "Fast host" }]).catalogs[0];
+      if (!progressId || !catalog) {
+        throw new Error("progressive catalog fixture is incomplete");
+      }
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog,
+      } satisfies SessionsCatalogHostEvent);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Fast host");
+      expect(request).toHaveBeenCalledTimes(1);
+
+      pending.resolve(catalogPage([{ threadId: "thread-fast", name: "Fast host" }]));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a late host event after a newer catalog request starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const initialPage = catalogPage([]);
+      const initialCatalog = initialPage.catalogs[0];
+      const localHost = initialCatalog?.hosts[0];
+      if (!initialCatalog || !localHost) {
+        throw new Error("initial catalog fixture is incomplete");
+      }
+      const removedHost = {
+        ...localHost,
+        hostId: "node:removed",
+        label: "Removed node",
+        kind: "node" as const,
+        sessions: [],
+        error: { code: "NODE_INVOKE_FAILED", message: "Node timed out" },
+      };
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          catalogs: [{ ...initialCatalog, hosts: [localHost, removedHost] }],
+        })
+        .mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const oldProgressId = (request.mock.calls[0]?.[1] as { progressId?: string })?.progressId;
+      expect(oldProgressId).toEqual(expect.any(String));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      const staleCatalog = catalogPage([{ threadId: "thread-obsolete", name: "Obsolete session" }])
+        .catalogs[0];
+      const staleHost = staleCatalog?.hosts[0];
+      if (!oldProgressId || !staleCatalog || !staleHost) {
+        throw new Error("stale catalog fixture is incomplete");
+      }
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId: oldProgressId,
+        agentId: "main",
+        catalog: {
+          ...staleCatalog,
+          hosts: [{ ...staleHost, hostId: "node:removed", label: "Removed node", kind: "node" }],
+        },
+      } satisfies SessionsCatalogHostEvent);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).not.toContain("Obsolete session");
+      expect(sidebar.sessionCatalogs[0]?.hosts).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("accepts a slow older host when a newer scan has only timed out", async () => {
+    vi.useFakeTimers();
+    try {
+      const timeoutPage = catalogPage([]);
+      const catalog = timeoutPage.catalogs[0];
+      const localHost = catalog?.hosts[0];
+      if (!catalog || !localHost) {
+        throw new Error("slow catalog fixture is incomplete");
+      }
+      const timeoutHost = {
+        ...localHost,
+        hostId: "node:slow",
+        label: "Slow node",
+        kind: "node" as const,
+        sessions: [],
+        error: { code: "NODE_INVOKE_FAILED", message: "Node timed out" },
+      };
+      const finalPage = {
+        catalogs: [{ ...catalog, hosts: [localHost, timeoutHost] }],
+      } satisfies SessionsCatalogListResult;
+      const pendingTimeout = deferred<SessionsCatalogListResult>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(finalPage)
+        .mockReturnValueOnce(pendingTimeout.promise)
+        .mockResolvedValue(finalPage);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const oldProgressId = (request.mock.calls[0]?.[1] as { progressId?: string })?.progressId;
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (!oldProgressId) {
+        throw new Error("first catalog request has no progress id");
+      }
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId: oldProgressId,
+        agentId: "main",
+        catalog: {
+          ...catalog,
+          hosts: [
+            {
+              ...timeoutHost,
+              sessions: [
+                {
+                  threadId: "thread-eventual",
+                  name: "Eventually ready",
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+              error: undefined,
+            },
+          ],
+        },
+      } satisfies SessionsCatalogHostEvent);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Eventually ready");
+      pendingTimeout.resolve(finalPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Eventually ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discovers an external session on the stable poll and then follows changes quickly", async () => {
+    vi.useFakeTimers();
+    try {
+      const empty = catalogPage([]);
+      const discovered = catalogPage([{ threadId: "thread-external", name: "External session" }]);
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(empty)
+        .mockResolvedValueOnce(discovered)
+        .mockResolvedValue(discovered);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(sidebar.textContent).not.toContain("External session");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(sidebar.textContent).toContain("External session");
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns to the stable cadence when only a progressive host order changed", async () => {
+    vi.useFakeTimers();
+    try {
+      const basePage = catalogPage([{ threadId: "thread-local", name: "Local session" }]);
+      const catalog = basePage.catalogs[0];
+      const localHost = catalog?.hosts[0];
+      if (!catalog || !localHost) {
+        throw new Error("ordered catalog fixture is incomplete");
+      }
+      const pairedHost = {
+        ...localHost,
+        hostId: "node:paired",
+        label: "A paired node",
+        kind: "node" as const,
+        sessions: [],
+      };
+      const stablePage: SessionsCatalogListResult = {
+        catalogs: [
+          {
+            ...catalog,
+            hosts: [{ ...localHost, label: "Z local Gateway" }, pairedHost],
+          },
+        ],
+      };
+      const pending = deferred<SessionsCatalogListResult>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(stablePage)
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue(stablePage);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      const progressId = (request.mock.calls[1]?.[1] as { progressId?: string })?.progressId;
+      if (!progressId) {
+        throw new Error("second catalog request has no progress id");
+      }
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: { ...catalog, hosts: [pairedHost] },
+      } satisfies SessionsCatalogHostEvent);
+      pending.resolve(stablePage);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes immediately when paired-node presence changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces the visibility and focus events from one tab activation", async () => {
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    const visibilitySpy = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => visibility);
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      visibility = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      visibility = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(49);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      visibilitySpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not poll an older Gateway that does not advertise session catalogs", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      globalThis.dispatchEvent(new Event("focus"));
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
+      });
+      gateway.publishEvent("presence", {
+        presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to final pages when an older Gateway rejects progressId", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+        )
+        .mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+        progressId: expect.any(String),
+      });
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+      });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a legacy fallback that settles after the Gateway client changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const legacyFallback = deferred<SessionsCatalogListResult>();
+      const legacyRequest = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid params" }),
+        )
+        .mockReturnValueOnce(legacyFallback.promise);
+      const legacyGateway = createGatewayHarness({
+        request: legacyRequest,
+      } as unknown as GatewayBrowserClient);
+      legacyGateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const sessions = createSessions("main", ["agent:main:main"]);
+      const { provider, sidebar } = await mountSidebar(legacyGateway.gateway, sessions);
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(legacyRequest).toHaveBeenCalledTimes(2);
+
+      const currentRequest = vi.fn().mockResolvedValue(catalogPage([]));
+      const currentGateway = createGatewayHarness({
+        request: currentRequest,
+      } as unknown as GatewayBrowserClient);
+      currentGateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      provider.setContext(createContext(currentGateway.gateway, sessions));
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      legacyFallback.resolve(catalogPage([]));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(currentRequest).toHaveBeenCalledTimes(2);
+      expect(currentRequest).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+        progressId: expect.any(String),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes catalog creation capability for the expanded agent", async () => {
     vi.useFakeTimers();
     try {
@@ -1680,6 +2235,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
+        progressId: expect.any(String),
       });
 
       const selection = context.agentSelection.state as {
@@ -1695,6 +2251,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
         agentId: "research",
         limitPerHost: 40,
+        progressId: expect.any(String),
       });
     } finally {
       vi.useRealTimers();
@@ -2046,6 +2603,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
+        progressId: expect.any(String),
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
         agentId: "main",
@@ -2068,6 +2626,66 @@ describe("AppSidebar session catalog pagination", () => {
       expect(catalogRows()).toHaveLength(3);
       expect(sidebar.textContent).toContain("Oldest");
       expect(loadMore()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a progressive host update that arrives during expanded-page refetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const pageOne = catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2");
+      const pageTwo = catalogPage([{ threadId: "thread-2", name: "Older" }]);
+      const pendingRefetch = deferred<SessionsCatalogListResult>();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(pageOne)
+        .mockResolvedValueOnce(pageTwo)
+        .mockResolvedValueOnce(pageOne)
+        .mockReturnValueOnce(pendingRefetch.promise)
+        .mockResolvedValue(pageOne);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(request).toHaveBeenCalledTimes(4);
+
+      const progressId = (request.mock.calls[2]?.[1] as { progressId?: string })?.progressId;
+      const catalog = pageOne.catalogs[0];
+      const host = catalog?.hosts[0];
+      if (!progressId || !catalog || !host) {
+        throw new Error("expanded progressive fixture is incomplete");
+      }
+      gateway.publishEvent("sessions.catalog.host", {
+        progressId,
+        agentId: "main",
+        catalog: {
+          ...catalog,
+          hosts: [{ ...host, label: "Progressive Gateway" }],
+        },
+      } satisfies SessionsCatalogHostEvent);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Progressive Gateway");
+
+      pendingRefetch.resolve(pageTwo);
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Progressive Gateway");
+      expect(request).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
     }

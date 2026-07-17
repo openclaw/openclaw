@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
@@ -37,7 +38,6 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
-const recordInboundSessionMock = vi.hoisted(() => vi.fn(async (_params: unknown) => {}));
 const dispatchInboundMessageMock = vi.hoisted(() =>
   vi.fn(
     async (_params: DispatchInboundMessageParams) =>
@@ -92,7 +92,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   return {
     ...actual,
     readChannelAllowFromStore: readChannelAllowFromStoreMock,
-    recordInboundSession: recordInboundSessionMock,
     upsertChannelPairingRequest: vi.fn(),
   };
 });
@@ -130,7 +129,6 @@ describe("iMessage monitor last-route updates", () => {
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    recordInboundSessionMock.mockClear();
     dispatchInboundMessageMock.mockClear();
     createChannelInboundDebouncerMock.mockClear();
     debouncerControl.reset();
@@ -933,6 +931,11 @@ describe("iMessage monitor last-route updates", () => {
   );
 
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-last-route-"));
+    tempDirs.push(stateDir);
+    const configuredStore = path.join(stateDir, "sessions.json");
+    const storePath = resolveStorePath(configuredStore, { agentId: "main" });
+    const sessionKey = "agent:main:imessage:direct:+15550001111";
     const runtimeErrorMock = vi.fn();
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     const client = {
@@ -969,7 +972,7 @@ describe("iMessage monitor last-route updates", () => {
       config: {
         channels: { imessage: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
         messages: { inbound: { debounceMs: 0 } },
-        session: { dmScope: "per-channel-peer", mainKey: "main" },
+        session: { dmScope: "per-channel-peer", mainKey: "main", store: configuredStore },
       } as never,
       runtime: { error: runtimeErrorMock, exit: vi.fn(), log: vi.fn() },
     });
@@ -979,25 +982,13 @@ describe("iMessage monitor last-route updates", () => {
     });
     expect(runtimeErrorMock).not.toHaveBeenCalled();
     await vi.waitFor(() => {
-      expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+      expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+        lastChannel: "imessage",
+        lastTo: "imessage:+15550001111",
+        lastAccountId: "default",
+      });
     });
-    const recordParams = recordInboundSessionMock.mock.calls.at(0)?.[0] as
-      | {
-          sessionKey?: string;
-          updateLastRoute?: {
-            channel?: string;
-            mainDmOwnerPin?: unknown;
-            sessionKey?: string;
-            to?: string;
-          };
-        }
-      | undefined;
-    expect(recordParams?.sessionKey).toBe("agent:main:imessage:direct:+15550001111");
-    expect(recordParams?.updateLastRoute?.sessionKey).toBe(recordParams?.sessionKey);
-    expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
-    expect(recordParams?.updateLastRoute?.channel).toBe("imessage");
-    expect(recordParams?.updateLastRoute?.to).toBe("imessage:+15550001111");
-    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })).toBeUndefined();
   });
 
   it("suppresses stale backlog rows but dispatches fresh live rows", async () => {

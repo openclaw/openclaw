@@ -131,12 +131,20 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
-/* Shipped Mac app builds without web chrome still use openclaw-native-nav
-   above; new hosts render the replacement controls in this document. Unlike
-   that rule this keeps the drawer hamburger: the web toolbar hides in compact
-   layouts, so narrow windows still need the in-page toggle. */
+/* Shipped Mac builds without web chrome only replace the sidebar toggle via
+   openclaw-native-nav. Web-chrome hosts replace toggle, search, and new-session
+   controls in-document; they keep the drawer hamburger because that toolbar
+   hides in compact layouts. */
 html.openclaw-native-web-chrome .shell-nav-expand,
 html.openclaw-native-web-chrome .sidebar-brand__collapse {
+  display: none;
+}
+
+/* The titlebar strip replaces brand search/new-session only while it is
+   visible; compact layouts hide the strip (.shell--mobile-nav), so the drawer
+   keeps its own copies there, matching the plain-browser drawer. */
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-search,
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .sidebar-new-session {
   display: none;
 }
 
@@ -803,6 +811,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 }
 
 .sidebar-shell {
+  --sidebar-pad-x: 10px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -810,7 +819,7 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   /* 9px top pad centers the brand row's 30px icons on the app's shared
      24px chrome centerline (pane-header actions, floating toggles). The
      macOS app overrides this with its 50px titlebar clearance. */
-  padding: 9px 10px 12px;
+  padding: 9px var(--sidebar-pad-x) 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -932,21 +941,31 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   stroke-linejoin: round;
 }
 
-.sidebar-shell__footer {
-  flex-shrink: 0;
-}
-
 .sidebar-shell__body {
   min-height: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
-  /* Children manage their own scrolling; clip so an overgrown section can
-     never paint over the sidebar footer. */
-  overflow: hidden;
+  /* Keep the pre-unification horizontal clip: with only overflow-y set,
+     overflow-x would compute to auto and overwide rows would mint a
+     horizontal scrollbar beside the divider. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
+  scrollbar-width: thin;
+  /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
+     both values share --sidebar-pad-x so they cannot drift. */
+  margin-right: calc(-1 * var(--sidebar-pad-x));
+  padding-right: var(--sidebar-pad-x);
+}
+
+.sidebar-shell__body::-webkit-scrollbar,
+.sidebar-shell__body::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .sidebar-shell__footer {
+  flex-shrink: 0;
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
@@ -1084,11 +1103,11 @@ html.openclaw-native-macos
 
 .sidebar-update-card__action {
   width: 100%;
-  min-height: 62px;
+  min-height: 34px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 34px 10px 12px;
+  gap: 8px;
+  padding: 4px 34px 4px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
@@ -1118,7 +1137,6 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__icon,
-.sidebar-update-card__arrow,
 .sidebar-update-card__dismiss {
   display: inline-flex;
   align-items: center;
@@ -1126,44 +1144,31 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
 }
 
-.sidebar-update-card__copy {
+.sidebar-update-card__text {
   min-width: 0;
-  display: flex;
   flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-update-card__title {
+  overflow: hidden;
   color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.sidebar-update-card__subtitle {
-  color: var(--muted);
   font-size: 12px;
-  line-height: 1.2;
-}
-
-.sidebar-update-card__arrow {
-  flex: 0 0 auto;
-  color: var(--muted);
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-update-card__dismiss {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 50%;
+  right: 5px;
+  transform: translateY(-50%);
   width: 24px;
   height: 24px;
   padding: 0;
@@ -1180,7 +1185,6 @@ html.openclaw-native-macos
 }
 
 .sidebar-update-card__icon svg,
-.sidebar-update-card__arrow svg,
 .sidebar-update-card__dismiss svg {
   width: 16px;
   height: 16px;
@@ -1192,23 +1196,13 @@ html.openclaw-native-macos
 }
 
 .sidebar-nav {
-  /* Nav stays pinned above the session list; the cap keeps sessions reachable
-     when an expanded More section outgrows a short window (nav then scrolls). */
-  flex: 0 0 auto;
-  max-height: 60%;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 0;
-  scrollbar-width: none;
 }
 
 .sidebar-sessions {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* Sessions own the leftover height below the pinned nav and scroll inside. */
-  flex: 1 1 auto;
-  min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
 }
@@ -1231,29 +1225,18 @@ html.openclaw-native-macos
   height: 22px;
 }
 
-/* min-height: 0 down this chain lets the recent list shrink and scroll instead
-   of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin: 0 -8px;
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
-  scrollbar-width: thin;
   /* Sessions are app chrome, not hyperlinks: the whole region uses the
      default arrow cursor; the pointer hand is reserved for real links. */
   cursor: default;
 }
 
-.sidebar-recent-sessions::-webkit-scrollbar,
-.sidebar-recent-sessions::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.sidebar-recent-sessions--scroll-top {
-  --sidebar-sessions-mask: linear-gradient(
+.sidebar-shell__body--scroll-top {
+  --sidebar-body-mask: linear-gradient(
     to bottom,
     black 0,
     black calc(100% - 23px),
@@ -1261,8 +1244,8 @@ html.openclaw-native-macos
   );
 }
 
-.sidebar-recent-sessions--scroll-middle {
-  --sidebar-sessions-mask: linear-gradient(
+.sidebar-shell__body--scroll-middle {
+  --sidebar-body-mask: linear-gradient(
     to bottom,
     transparent 0,
     black 23px,
@@ -1271,22 +1254,15 @@ html.openclaw-native-macos
   );
 }
 
-.sidebar-recent-sessions--scroll-bottom {
-  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+.sidebar-shell__body--scroll-bottom {
+  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
 }
 
-.sidebar-recent-sessions--scroll-top,
-.sidebar-recent-sessions--scroll-middle,
-.sidebar-recent-sessions--scroll-bottom {
-  -webkit-mask-image: var(--sidebar-sessions-mask);
-  mask-image: var(--sidebar-sessions-mask);
-}
-
-/* The scroller's children must not flex-shrink: shrink squeezes each section
-   to its min-height while the fixed-height rows inside overflow and paint
-   over the following section. Fixed sizing makes the list scroll instead. */
-.sidebar-recent-sessions > * {
-  flex: 0 0 auto;
+.sidebar-shell__body--scroll-top,
+.sidebar-shell__body--scroll-middle,
+.sidebar-shell__body--scroll-bottom {
+  -webkit-mask-image: var(--sidebar-body-mask);
+  mask-image: var(--sidebar-body-mask);
 }
 
 .sidebar-recent-sessions__group {
@@ -1455,7 +1431,8 @@ html.openclaw-native-macos
 }
 
 .sidebar-session-sort:hover,
-.sidebar-session-sort[aria-expanded="true"] {
+.sidebar-session-sort[aria-expanded="true"],
+.sidebar-session-sort[aria-pressed="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
 }
@@ -1624,6 +1601,65 @@ html.openclaw-native-macos
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+.sidebar-session-catalog-project__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 18px;
+  padding: 2px 12px 0 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-catalog-project__head:hover,
+.sidebar-session-catalog-project__head:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-project__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.sidebar-session-catalog-project__icon svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
+.sidebar-session-catalog-project__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.sidebar-session-catalog-project__count {
+  width: 20px;
+  flex: 0 0 20px;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.58;
+  text-align: center;
 }
 
 .sidebar-session-catalog-host__sessions .sidebar-recent-session__link {
@@ -1827,10 +1863,6 @@ html.openclaw-native-macos
 
 .sidebar-recent-session__aside {
   padding-right: 2px;
-}
-
-.sidebar-nav::-webkit-scrollbar {
-  display: none;
 }
 
 .nav-collapse-toggle {

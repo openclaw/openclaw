@@ -4,6 +4,8 @@
  * Runs the configured runtime provider and returns normalized cached search results.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
+import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
@@ -94,7 +96,7 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
-      const { config, preferRuntimeProviders, runtimeWebSearch } =
+      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
         resolveWebSearchToolRuntimeContext({
           config: options?.config,
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
@@ -102,6 +104,12 @@ export function createWebSearchTool(options?: {
         });
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
+      }
+      if (providerSelectionId) {
+        assertSecretOwnerAvailable(
+          "capability",
+          runtimeWebSecretOwnerId("search", providerSelectionId),
+        );
       }
       const result = await runWebSearch({
         config,

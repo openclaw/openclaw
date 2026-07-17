@@ -658,6 +658,13 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthStores {
+  format_version: number;
+  store_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
 export interface MediaBlobs {
   blob: Uint8Array;
   content_type: string | null;
@@ -726,6 +733,7 @@ export interface NodeHostConfig {
   gateway_port: number | null;
   gateway_tls: number | null;
   gateway_tls_fingerprint: string | null;
+  installed_apps_sharing: Generated<number>;
   node_id: string;
   token: string | null;
   updated_at_ms: number;
@@ -745,6 +753,15 @@ export interface OfficialExternalPluginCatalogSnapshots {
   trust_signature_count: number | null;
   trust_threshold: number | null;
   trust_verified_at: string | null;
+  updated_at_ms: number;
+}
+
+export interface OnboardingRecommendations {
+  accepted_at_ms: number | null;
+  config_key: string;
+  inventory_hash: string;
+  matches_json: string;
+  offered_at_ms: number;
   updated_at_ms: number;
 }
 
@@ -986,6 +1003,13 @@ export interface SubagentRuns {
   requester_display_key: string;
   requester_origin_json: string | null;
   requester_session_key: string;
+  requester_settle_wake_attempt_count: number | null;
+  requester_settle_wake_batch_run_ids_json: string | null;
+  requester_settle_wake_last_error: string | null;
+  requester_settle_wake_next_attempt_at: number | null;
+  requester_settle_wake_replay_count: number | null;
+  requester_settle_wake_retire_after: number | null;
+  requester_settle_wake_status: string | null;
   run_id: string;
   run_timeout_seconds: number | null;
   session_started_at: number | null;
@@ -1321,6 +1345,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
@@ -1328,6 +1353,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;

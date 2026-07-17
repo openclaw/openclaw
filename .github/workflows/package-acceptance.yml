@@ -154,6 +154,11 @@ on:
         required: false
         default: false
         type: boolean
+      telegram_advisory:
+        description: Treat only Telegram acceptance failures as advisory
+        required: false
+        default: false
+        type: boolean
       workflow_ref:
         description: Trusted repo ref for workflow scripts and Docker E2E harness
         required: false
@@ -447,6 +452,7 @@ jobs:
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Setup Node environment
@@ -806,7 +812,7 @@ jobs:
       published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
-      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
       package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}
@@ -887,7 +893,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
-      advisory: ${{ inputs.advisory }}
+      advisory: ${{ inputs.advisory || inputs.telegram_advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}
@@ -930,6 +936,7 @@ jobs:
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
           TELEGRAM_ENABLED: ${{ needs.resolve_package.outputs.telegram_enabled }}
+          TELEGRAM_ADVISORY: ${{ inputs.telegram_advisory }}
         shell: bash
         run: |
           set -euo pipefail
@@ -964,7 +971,8 @@ jobs:
               result_failed=true
             fi
             if [[ "$result_failed" == "true" ]]; then
-              if [[ "$ADVISORY" == "true" && "$name" != "resolve_package" ]]; then
+              if [[ ("$ADVISORY" == "true" && "$name" != "resolve_package") ||
+                    ("$TELEGRAM_ADVISORY" == "true" && "$name" == "package_telegram") ]]; then
                 echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
                 continue
               fi

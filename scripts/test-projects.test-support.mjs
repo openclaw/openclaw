@@ -449,6 +449,10 @@ const OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS = [
   "src/plugins/official-external-plugin-catalog.test.ts",
   "test/release-check.test.ts",
 ];
+const RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS = [
+  "src/plugins/recommended-tool-installs.test.ts",
+  "test/release-check.test.ts",
+];
 const DOCKERFILE_CACHE_AND_DIGEST_TEST_TARGETS = [
   "src/docker-build-cache.test.ts",
   "src/docker-image-digests.test.ts",
@@ -526,6 +530,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [".github/workflows/macos-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [
+    ".github/workflows/mantis-scenario.yml",
+    ["test/scripts/mantis-telegram-desktop-proof-workflow.test.ts"],
+  ],
   [
     ".github/workflows/mantis-telegram-desktop-proof.yml",
     [
@@ -689,6 +697,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-node-env/sticky-importers.sh",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
@@ -822,7 +834,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/ci-workflow-guards.test.ts",
     ],
   ],
-  ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
+  [
+    "scripts/ci-changed-scope.mjs",
+    ["src/scripts/ci-changed-scope.test.ts", "test/scripts/control-ui-i18n.test.ts"],
+  ],
   ["scripts/periphery-intersection.mjs", ["test/scripts/periphery-intersection.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
@@ -1185,6 +1200,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/lib/official-external-plugin-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
   ["scripts/lib/official-external-provider-catalog.json", OFFICIAL_EXTERNAL_CATALOG_TEST_TARGETS],
+  ["scripts/lib/recommended-tool-installs.json", RECOMMENDED_TOOL_INSTALLS_TEST_TARGETS],
   ["scripts/lib/direct-run.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/prompt-snapshot-files.ts", ["test/scripts/prompt-snapshots.test.ts"]],
   [
@@ -1598,6 +1614,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/fixtures/packed-plugin-sdk-type-smoke.ts", ["test/release-check.test.ts"]],
   ["scripts/repro/code-mode-namespace-live.ts", ["test/scripts/code-mode-namespace-live.test.ts"]],
+  ["scripts/repro/tool-surface-live-bench.ts", ["test/scripts/tool-surface-live-bench.test.ts"]],
   [
     "scripts/repro/code-mode-namespace-live-docker.sh",
     ["test/scripts/code-mode-namespace-live.test.ts", "test/scripts/docker-build-helper.test.ts"],
@@ -1835,11 +1852,26 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/lib/fixtures/mock-openai-config.mjs", ["test/scripts/mock-openai-config.test.ts"]],
   ["scripts/e2e/lib/fixtures/plugins.mjs", ["test/scripts/fixture-plugin-commands.test.ts"]],
   [
+    "scripts/e2e/lib/codex-app-server-fixture.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs",
+    [
+      "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    ],
+  ],
+  [
     "scripts/e2e/lib/incremental-line-reader.mjs",
     [
       "test/scripts/incremental-line-reader.test.ts",
       "test/scripts/config-reload-log-scanner.test.ts",
       "test/scripts/codex-media-path-client.test.ts",
+      "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
     ],
   ],
   [
@@ -1986,6 +2018,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs",
+    ["test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
+  ],
+  [
     "scripts/e2e/lib/openai-chat-tools/client.mjs",
     ["test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts"],
   ],
@@ -2091,7 +2127,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/e2e/cron-mcp-cleanup-seed.ts", ["test/scripts/docker-e2e-seeds.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
+  ["scripts/build-discord-activity-sdk.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
+  ["scripts/run-node-watch-paths.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["extensions/canvas/scripts/bundle-a2ui.mjs", ["extensions/canvas/scripts/bundle-a2ui.test.ts"]],
   ["extensions/canvas/scripts/copy-a2ui.mjs", ["extensions/canvas/scripts/copy-a2ui.test.ts"]],
 ]);

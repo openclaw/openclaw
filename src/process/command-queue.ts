@@ -34,8 +34,29 @@ export class CommandLaneClearedError extends Error {
  * released so queued work is not blocked forever.
  */
 class CommandLaneTaskTimeoutError extends Error {
-  constructor(lane: string, timeoutMs: number) {
-    super(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
+  constructor(
+    lane: string,
+    details:
+      | { cause: "task-budget"; elapsedMs: number; taskBudgetMs: number }
+      | { cause: "progress-idle"; elapsedMs: number; idleMs: number; taskBudgetMs: number }
+      | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
+      | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
+  ) {
+    const message = (() => {
+      switch (details.cause) {
+        case "task-budget":
+          return `elapsed ${details.elapsedMs}ms reached task budget ${details.taskBudgetMs}ms`;
+        case "progress-idle":
+          return `no progress for ${details.idleMs}ms (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
+        case "abort-grace":
+          return `abort grace ${details.graceMs}ms elapsed (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
+        case "release-signal":
+          return `lane release requested after ${details.elapsedMs}ms (task budget ${details.taskBudgetMs}ms)`;
+        default:
+          throw new TypeError("Unsupported command lane timeout cause");
+      }
+    })();
+    super(`Command lane "${lane}" task timed out: ${message}`);
     this.name = "CommandLaneTaskTimeoutError";
   }
 }
@@ -306,9 +327,22 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
   let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    const rejectForTimeout = () => {
+    const elapsedSinceStartMs = () => Math.max(0, Date.now() - startedAtMs);
+    const rejectForTimeout = (
+      details:
+        | { cause: "task-budget" }
+        | { cause: "progress-idle"; idleMs: number }
+        | { cause: "abort-grace"; graceMs: number }
+        | { cause: "release-signal" },
+    ) => {
       timedOut = true;
-      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+      reject(
+        new CommandLaneTaskTimeoutError(lane, {
+          ...details,
+          elapsedMs: elapsedSinceStartMs(),
+          taskBudgetMs: taskTimeoutMs,
+        }),
+      );
     };
     const armTimer = (delayMs: number, onTimeout: () => void) => {
       if (timeoutHandle) {
@@ -325,19 +359,29 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
       const remainingMs = taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
-        rejectForTimeout();
+        rejectForTimeout(
+          entry.taskTimeoutProgressAtMs
+            ? { cause: "progress-idle", idleMs: elapsedMs }
+            : { cause: "task-budget" },
+        );
         return;
       }
       armTimer(remainingMs, armProgressTimeout);
     };
     const armAbortTimeout = () => {
-      armTimer(taskTimeoutAbortGraceMs, rejectForTimeout);
+      const abortStartedAtMs = Date.now();
+      armTimer(taskTimeoutAbortGraceMs, () =>
+        rejectForTimeout({
+          cause: "abort-grace",
+          graceMs: Math.max(0, Date.now() - abortStartedAtMs),
+        }),
+      );
     };
     const abortSignal = entry.taskTimeoutAbortSignal;
     const releaseSignal = entry.taskTimeoutReleaseSignal;
     const onRelease = () => {
       removeReleaseListener?.();
-      rejectForTimeout();
+      rejectForTimeout({ cause: "release-signal" });
     };
     if (releaseSignal?.aborted) {
       onRelease();

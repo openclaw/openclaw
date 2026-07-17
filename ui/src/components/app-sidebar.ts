@@ -78,6 +78,10 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   private renderBrand() {
     const collapseLabel = t("nav.collapse");
+    const chipAgentId = this.activeChipAgent().activeId;
+    const newSessionTitle = this.connected
+      ? t("chat.runControls.newSession")
+      : t("chat.runControls.newSessionDisconnected");
     return html`
       <div class="sidebar-brand">
         <a
@@ -105,6 +109,17 @@ class AppSidebar extends AppSidebarSessionListElement {
         </a>
         <div class="sidebar-brand__actions">
           ${this.renderSearch()}
+          <openclaw-tooltip .content=${newSessionTitle}>
+            <button
+              class="sidebar-brand__icon sidebar-new-session"
+              type="button"
+              ?disabled=${!this.connected}
+              @click=${() => this.onOpenNewSession?.(chipAgentId)}
+              aria-label=${t("chat.runControls.newSession")}
+            >
+              ${icons.plus}
+            </button>
+          </openclaw-tooltip>
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
             <button
               class="sidebar-brand__icon sidebar-brand__collapse"
@@ -155,7 +170,11 @@ class AppSidebar extends AppSidebarSessionListElement {
       <aside class="sidebar">
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${this.renderBrand()}
-          <div class="sidebar-shell__body">
+          <div
+            class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionsScrollState}"
+            @scroll=${(event: Event) =>
+              this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+          >
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               <div class="nav-section__items">
                 ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}

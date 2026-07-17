@@ -21,10 +21,25 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node presence activity updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
   });
+
+  it("advertises question methods and events", () => {
+    expect(GATEWAY_EVENTS).toContain("question.requested");
+    expect(GATEWAY_EVENTS).toContain("question.resolved");
+    expect(listGatewayMethods()).toEqual(
+      expect.arrayContaining([
+        "question.request",
+        "question.waitAnswer",
+        "question.resolve",
+        "question.get",
+        "question.list",
+      ]),
+    );
+  });
 });
 
 describe("listGatewayMethods", () => {
   it("advertises plugin surface refresh for capability rotation", () => {
+    expect(listGatewayMethods()).toContain("plugin.surface.refresh");
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
@@ -43,13 +58,22 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-5)).toEqual([
+    expect(listGatewayMethods().slice(-7)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
+      "plugin.surface.refresh",
+      "conversations.list",
     ]);
+    const methods = listGatewayMethods();
+    expect(methods.indexOf("node.pluginSurface.refresh")).toBe(
+      methods.indexOf("node.describe") + 1,
+    );
+    expect(methods.indexOf("node.pluginTools.update")).toBe(
+      methods.indexOf("node.pluginSurface.refresh") + 1,
+    );
   });
 
   it("advertises ClawHub skill trust methods", () => {
@@ -64,6 +88,11 @@ describe("listGatewayMethods", () => {
 
   it("advertises Control UI session pull request detection", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
+  it("advertises session workspace reveal", () => {
+    expect(listGatewayMethods()).toContain("sessions.files.reveal");
+    expect(coreGatewayHandlers["sessions.files.reveal"]).toBeTypeOf("function");
   });
 
   it("advertises the versioned activity audit method", () => {
@@ -97,7 +126,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-12)).toEqual([
+    expect(coreMethods.slice(-14)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -110,6 +139,8 @@ describe("listGatewayMethods", () => {
       "migrations.memory.apply",
       "ui.command",
       "approval.history",
+      "plugin.surface.refresh",
+      "conversations.list",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
     expect(methods.indexOf("approval.resolve")).toBe(methods.indexOf("approval.get") + 1);

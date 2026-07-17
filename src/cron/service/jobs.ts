@@ -38,6 +38,7 @@ import {
   normalizeRequiredName,
 } from "./normalize.js";
 import { mergeCronPayload } from "./payload-merge.js";
+import { isQueuedCronRun, isQueuedForceCronRun } from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
@@ -219,6 +220,7 @@ function shouldRepairFutureCronNextRunAtMs(params: {
     job.schedule.kind !== "cron" ||
     !hasScheduledNextRunAtMs(nextRun) ||
     nowMs >= nextRun ||
+    typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number"
   ) {
     return false;
@@ -595,7 +597,17 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       job.state.nextRunAtMs = undefined;
       changed = true;
     }
-    if (job.state.runningAtMs !== undefined) {
+    if (
+      job.state.queuedAtMs !== undefined &&
+      !isQueuedForceCronRun(state, job.id, job.state.queuedAtMs)
+    ) {
+      job.state.queuedAtMs = undefined;
+      changed = true;
+    }
+    if (
+      job.state.runningAtMs !== undefined &&
+      !isQueuedForceCronRun(state, job.id, job.state.runningAtMs)
+    ) {
       job.state.runningAtMs = undefined;
       changed = true;
     }
@@ -607,8 +619,26 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
+  const queuedAt = job.state.queuedAtMs;
+  if (
+    typeof queuedAt === "number" &&
+    nowMs - queuedAt > STUCK_RUN_MS &&
+    !isQueuedCronRun(state, job.id, queuedAt)
+  ) {
+    state.deps.log.warn(
+      { jobId: job.id, queuedAtMs: queuedAt },
+      "cron: clearing stuck queued marker",
+    );
+    job.state.queuedAtMs = undefined;
+    changed = true;
+  }
+
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+  if (
+    typeof runningAt === "number" &&
+    nowMs - runningAt > STUCK_RUN_MS &&
+    !isQueuedCronRun(state, job.id, runningAt)
+  ) {
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",
@@ -781,6 +811,7 @@ export function recomputeNextRunsForMaintenance(
       } else if (
         recomputeExpired &&
         now >= job.state.nextRunAtMs &&
+        typeof job.state.queuedAtMs !== "number" &&
         typeof job.state.runningAtMs !== "number"
       ) {
         // Only advance when the expired slot was already executed, or when
@@ -1305,7 +1336,7 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (!job.state) {
     job.state = {};
   }
-  if (typeof job.state.runningAtMs === "number") {
+  if (typeof job.state.queuedAtMs === "number" || typeof job.state.runningAtMs === "number") {
     return false;
   }
   if (opts.forced) {
