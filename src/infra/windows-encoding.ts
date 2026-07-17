@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
+// These synchronous probes run during gateway startup and first output decode.
+// A stalled encoding probe should not block the process indefinitely.
+const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
+
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
@@ -54,6 +58,8 @@ export function resolveWindowsConsoleEncoding(): string | null {
       windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     });
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
@@ -81,6 +87,8 @@ export function resolveWindowsSystemEncoding(): string | null {
         windowsHide: true,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
+        killSignal: "SIGKILL",
       },
     );
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
