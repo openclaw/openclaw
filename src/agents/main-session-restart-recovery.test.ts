@@ -2132,20 +2132,17 @@ describe("main-session-restart-recovery", () => {
     });
     vi.mocked(callGateway)
       .mockImplementationOnce(async () => {
-        await replaceSessionEntry(
-          { sessionKey: "agent:main:fresh", storePath },
-          {
-            sessionId: "fresh-session",
-            updatedAt: Date.now(),
-            status: "running",
-            abortedLastRun: true,
-            mainRestartRecovery: {
-              cycleId: "cycle-fresh-exhausted",
-              revision: 1,
-              chargedAttempts: 3,
-            },
+        await replaceSessionEntry({ sessionKey: "agent:main:fresh", storePath }, {
+          sessionId: "fresh-session",
+          updatedAt: Date.now(),
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-fresh-exhausted",
+            revision: 1,
+            chargedAttempts: 3,
           },
-        );
+        } as SessionEntry);
         throw new Error("final ambiguous dispatch failure");
       })
       .mockResolvedValueOnce({ runId: "run-resumed" });

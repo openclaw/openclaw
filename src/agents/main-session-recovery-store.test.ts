@@ -552,6 +552,7 @@ describe("main session recovery store", () => {
       target: { sessionKey, storePath },
     });
     const staleInspection = inspectMainSessionRecoveryRequired({
+      expectedSessionId: "session-1",
       lifecycleGeneration,
       target: { sessionKey, storePath },
     });
