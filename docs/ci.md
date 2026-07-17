@@ -10,11 +10,11 @@ read_when:
 
 OpenClaw CI runs on pushes to `main` (Markdown and `docs/**` paths are ignored
 at the trigger), on every non-draft pull request, and on manual dispatch.
-Canonical `main` pushes first pass through a 90-second
-hosted-runner admission window; the `CI` concurrency group cancels that waiting
-run when a newer commit lands, so sequential merges do not each register a full
-Blacksmith matrix. Pull requests and manual dispatches skip the wait. The
-`preflight` job then classifies the diff and turns expensive lanes off when
+On canonical `main` pushes the `preflight` job holds fan-out until a
+90-second debounce window has elapsed; the `CI` concurrency group cancels that
+waiting run when a newer commit lands, so sequential merges do not each
+register a full Blacksmith matrix. Pull requests and manual dispatches skip
+the wait. `preflight` classifies the diff and turns expensive lanes off when
 only unrelated areas changed. Manual `workflow_dispatch` runs intentionally
 bypass smart scoping and fan out the full graph for release candidates and
 broad validation. Android lanes stay opt-in through `include_android` (or the
@@ -48,7 +48,7 @@ dispatch.
 | `macos-swift`                      | Swift lint and build for the macOS app, plus tests for the app and shared OpenClawKit package                                                                                                                         | macOS-relevant changes                         |
 | `ios-build`                        | Xcode project generation plus the iOS app simulator build                                                                                                                                                             | iOS app, shared app kit, or Swabble changes    |
 | `android`                          | Android unit tests for both flavors plus one debug APK build                                                                                                                                                          | Android-relevant changes                       |
-| `openclaw/ci-gate`                 | Final aggregate: requires admission, preflight, and security; accepts skips only for manifest-disabled downstream lanes                                                                                               | Every non-draft CI run                         |
+| `openclaw/ci-gate`                 | Final aggregate: requires preflight and security; accepts skips only for manifest-disabled downstream lanes                                                                                                           | Every non-draft CI run                         |
 | `test-performance-agent`           | Separate workflow: daily Codex slow-test optimization after trusted activity                                                                                                                                          | Main CI success or manual dispatch             |
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                          | Scheduled and manual dispatch                  |
 
@@ -60,7 +60,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 2. `security-fast`, `check-*`, `check-additional-*`, `check-docs`, and `skills-python` fail quickly without waiting on the heavier artifact and platform matrix jobs.
 3. `build-artifacts` and the advisory `control-ui-i18n` check overlap with the fast Linux lanes. Source PRs exclude generated locale snapshots; the standalone refresh workflow repairs and auto-merges an isolated generated PR in the background. Canonical `release/YYYY.M.PATCH` branches may include release-prep locale repairs with the other generated release output.
 4. Heavier platform and runtime lanes fan out after that: `checks-fast-core`, `checks-fast-contracts-plugins-*`, `checks-fast-contracts-channels-*`, `checks-node-*`, `checks-windows`, `macos-node`, `macos-swift`, `ios-build`, and `android`.
-5. `openclaw/ci-gate` waits for every selected lane. Admission, preflight, and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
+5. `openclaw/ci-gate` waits for every selected lane. Preflight and security must succeed; downstream jobs may skip only when the manifest did not select them. A failed or canceled selected lane fails the aggregate.
 
 The merge coordinator may reuse an authenticated successful `openclaw/ci-gate`
 for the same pull-request head for up to 24 hours. This avoids rewriting a
