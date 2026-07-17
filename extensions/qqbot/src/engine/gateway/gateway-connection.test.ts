@@ -303,7 +303,14 @@ describe("GatewayConnection disconnect status", () => {
       expect(resolveSocket).toBeDefined();
     });
     controller.abort();
+    // Simulate a socket still in CONNECTING state: the real ws library
+    // emits an error event when close() aborts an in-progress handshake.
+    // Production code must own that error before calling close().
     const ws = new FakeWebSocket();
+    ws.readyState = 0; // WebSocket.CONNECTING
+    ws.close = vi.fn(() => {
+      ws.emit("error", new Error("socket hang up"));
+    });
     resolveSocket?.(ws);
 
     await expect(started).resolves.toBeUndefined();

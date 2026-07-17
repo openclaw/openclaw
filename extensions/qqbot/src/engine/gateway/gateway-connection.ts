@@ -199,6 +199,9 @@ export class GatewayConnection {
       // Abort can land while socket creation is in flight. Never adopt a
       // connection created after this lifecycle owner has already stopped.
       if (this.isAborted) {
+        // ws.close() on a CONNECTING socket emits an error event from
+        // abortHandshake(); own it so Node does not treat it as unhandled.
+        ws.on("error", () => {});
         ws.close();
         this.isConnecting = false;
         return;
