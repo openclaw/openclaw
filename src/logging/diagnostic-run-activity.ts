@@ -7,6 +7,11 @@ import {
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
 import {
+  diagnosticModelCallActivityKey,
+  diagnosticSessionRefs,
+  diagnosticToolActivityKey,
+} from "./diagnostic-run-activity-keys.js";
+import {
   activityMarkerBelongsToOwner,
   activityMarkerStartedAfter,
   recoveryOwnerRefs,
@@ -25,6 +30,7 @@ type SessionActivity = {
   sessionId?: string;
   sessionKey?: string;
   activeRuns: Map<string, DiagnosticActiveRun>;
+  activeReplyOperations: Set<string>;
   activeEmbeddedRuns: Map<string, ActiveEmbeddedRun>;
   activeTools: Map<string, ActiveTool>;
   activeModelCalls: Map<string, ActiveModelCall>;
@@ -106,19 +112,6 @@ const activityByRunId = new Map<string, SessionActivity>();
 const sessionActivities = new Set<SessionActivity>();
 let embeddedRunSequence = 0;
 
-function sessionRefs(params: { sessionId?: string; sessionKey?: string }): string[] {
-  const refs: string[] = [];
-  const sessionId = params.sessionId?.trim();
-  const sessionKey = params.sessionKey?.trim();
-  if (sessionId) {
-    refs.push(`id:${sessionId}`);
-  }
-  if (sessionKey) {
-    refs.push(`key:${sessionKey}`);
-  }
-  return refs;
-}
-
 function registerSessionActivityRefs(
   activity: SessionActivity,
   params: { sessionId?: string; sessionKey?: string },
@@ -126,7 +119,7 @@ function registerSessionActivityRefs(
   sessionActivities.add(activity);
   activity.sessionId ??= params.sessionId;
   activity.sessionKey ??= params.sessionKey;
-  for (const ref of sessionRefs(params)) {
+  for (const ref of diagnosticSessionRefs(params)) {
     activityByRef.set(ref, activity);
   }
 }
@@ -158,6 +151,9 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
   target.sessionId ??= source.sessionId;
   target.sessionKey ??= source.sessionKey;
   mergeDiagnosticActiveRuns(target.activeRuns, source.activeRuns);
+  for (const replyOperation of source.activeReplyOperations) {
+    target.activeReplyOperations.add(replyOperation);
+  }
   for (const [key, embeddedRun] of source.activeEmbeddedRuns) {
     target.activeEmbeddedRuns.set(key, embeddedRun);
   }
@@ -195,7 +191,7 @@ function resolveSessionActivity(params: {
     }
   }
 
-  for (const ref of sessionRefs(params)) {
+  for (const ref of diagnosticSessionRefs(params)) {
     const byRef = activityByRef.get(ref);
     if (!byRef) {
       continue;
@@ -220,6 +216,7 @@ function resolveSessionActivity(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     activeRuns: new Map(),
+    activeReplyOperations: new Set(),
     activeEmbeddedRuns: new Map(),
     activeTools: new Map(),
     activeModelCalls: new Map(),
@@ -233,6 +230,7 @@ function resolveSessionActivity(params: {
 function isIdleSessionActivity(activity: SessionActivity): boolean {
   return (
     activity.activeRuns.size === 0 &&
+    activity.activeReplyOperations.size === 0 &&
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
     activity.activeModelCalls.size === 0
@@ -262,22 +260,6 @@ function touchSessionActivity(activity: SessionActivity, reason: string, now = D
   activityRetention.prune(now);
 }
 
-function toolKey(event: {
-  runId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  toolCallId?: string;
-  toolName: string;
-}): string {
-  return `${event.runId ?? event.sessionId ?? event.sessionKey ?? "unknown"}:${
-    event.toolCallId ?? event.toolName
-  }`;
-}
-
-function modelCallKey(event: { runId?: string; provider?: string; model?: string }): string {
-  return `${event.runId ?? "unknown"}:${event.provider ?? "provider"}:${event.model ?? "model"}`;
-}
-
 function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   if (activityRetention.isCompletedRunEvent(event)) {
     return;
@@ -291,7 +273,7 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
   }
   registerActiveRun(activity, event);
   const now = Date.now();
-  activity.activeTools.set(toolKey(event), {
+  activity.activeTools.set(diagnosticToolActivityKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
@@ -317,7 +299,7 @@ function recordToolEnded(
   if (!activity) {
     return;
   }
-  activity.activeTools.delete(toolKey(event));
+  activity.activeTools.delete(diagnosticToolActivityKey(event));
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
@@ -333,7 +315,7 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
     return;
   }
   registerActiveRun(activity, event);
-  activity.activeModelCalls.set(modelCallKey(event), {
+  activity.activeModelCalls.set(diagnosticModelCallActivityKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
@@ -352,7 +334,7 @@ function recordModelEnded(
   if (!activity) {
     return;
   }
-  activity.activeModelCalls.delete(modelCallKey(event));
+  activity.activeModelCalls.delete(diagnosticModelCallActivityKey(event));
   touchSessionActivity(activity, "model_call:ended");
 }
 
@@ -370,6 +352,25 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
   }
   registerActiveRun(activity, params);
   touchSessionActivity(activity, params.reason);
+}
+
+export function setDiagnosticReplyOperationActive(params: {
+  sessionId: string;
+  sessionKey: string;
+  active: boolean;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: params.active });
+  if (!activity) {
+    return;
+  }
+  if (!params.active) {
+    activity.activeReplyOperations.delete(params.sessionKey);
+    return;
+  }
+  if (!activity.activeReplyOperations.has(params.sessionKey)) {
+    activity.activeReplyOperations.add(params.sessionKey);
+    touchSessionActivity(activity, "reply_operation:started");
+  }
 }
 
 function recordRunCompleted(
