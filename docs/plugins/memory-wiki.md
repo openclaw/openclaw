@@ -196,13 +196,10 @@ claims:
 
 ## Compile pipeline
 
-Compile reads wiki pages, normalizes summaries, and emits stable
-machine-facing artifacts under:
-
-- `.openclaw-wiki/cache/agent-digest.json`
-- `.openclaw-wiki/cache/claims.jsonl`
-
-Agents and runtime code read these digests instead of scraping Markdown.
+Compile reads wiki pages, normalizes summaries, and persists a machine-facing
+snapshot in OpenClaw's shared SQLite plugin state. Runtime code uses the
+lifecycle-owned in-memory snapshot instead of scraping Markdown or reading
+cache files on request.
 Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
@@ -270,7 +267,7 @@ plugin supports corpus selection.
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
-append a compact compiled snapshot from `agent-digest.json`: top pages only,
+append a compact compiled snapshot from plugin state: top pages only,
 top claims only, contradiction count, question count, confidence/freshness
 qualifiers. This is opt-in because it changes prompt shape; it mainly matters
 for context engines or prompt assembly that explicitly consume memory

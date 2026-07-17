@@ -32,14 +32,20 @@ describe("memory-wiki plugin", () => {
       registerCli,
       registerGatewayMethod,
       registerMemoryCorpusSupplement,
+      registerMemoryPromptPreparation,
       registerMemoryPromptSupplement,
+      registerService,
       registerTool,
     } = createPluginApi();
 
     plugin.register(api);
 
     expect(registerMemoryCorpusSupplement).toHaveBeenCalledTimes(1);
+    expect(registerMemoryPromptPreparation).toHaveBeenCalledTimes(1);
     expect(registerMemoryPromptSupplement).toHaveBeenCalledTimes(1);
+    expect(registerService).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "memory-wiki-compiled-cache-owner-cleanup" }),
+    );
     expect(registerGatewayMethod.mock.calls.map((call) => call[0])).toEqual([
       "wiki.status",
       "wiki.importRuns",

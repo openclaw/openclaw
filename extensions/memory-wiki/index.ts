@@ -2,6 +2,13 @@
 import { definePluginEntry, type OpenClawConfig } from "./api.js";
 import { registerWikiCli } from "./src/cli.js";
 import {
+  activateMemoryWikiCompiledCacheOwner,
+  configureMemoryWikiCompiledCacheStore,
+  createMemoryWikiCompiledCacheStore,
+  deactivateMemoryWikiCompiledCacheOwnersExcept,
+  resolveMemoryWikiCompiledCacheOwnerId,
+} from "./src/compiled-cache.js";
+import {
   memoryWikiConfigSchema,
   resolveMemoryWikiAgentConfig,
   resolveMemoryWikiConfig,
@@ -14,7 +21,11 @@ import {
   configureMemoryWikiImportRunStateStore,
   createMemoryWikiImportRunStateStore,
 } from "./src/import-runs-state.js";
-import { createWikiPromptSectionBuilder } from "./src/prompt-section.js";
+import { loadMemoryWikiVaultGeneration } from "./src/log.js";
+import {
+  createWikiPromptSectionBuilder,
+  createWikiPromptSectionPreparer,
+} from "./src/prompt-section.js";
 import {
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
@@ -56,8 +67,38 @@ export default definePluginEntry({
     configureMemoryWikiImportRunStateStore(
       createMemoryWikiImportRunStateStore(api.runtime.state.openKeyedStore),
     );
+    const compiledCacheStore = createMemoryWikiCompiledCacheStore(api.runtime.state.openBlobStore, {
+      onReadError(error) {
+        api.logger.warn(`memory-wiki: compiled cache unavailable: ${String(error)}`);
+      },
+    });
+    configureMemoryWikiCompiledCacheStore(compiledCacheStore);
+    api.registerService({
+      id: "memory-wiki-compiled-cache-owner-cleanup",
+      async start() {
+        const appConfig = getAppConfig();
+        const activeConfigs =
+          config.vault.scope === "global"
+            ? [resolveConfig(undefined, appConfig)]
+            : resolveMemoryWikiConfiguredAgentIds(appConfig).map((agentId) =>
+                resolveConfig(agentId, appConfig),
+              );
+        const activeOwnerIds = new Set<string>();
+        for (const activeConfig of activeConfigs) {
+          const generation = await loadMemoryWikiVaultGeneration(activeConfig.vault.path);
+          if (!generation) {
+            continue;
+          }
+          activateMemoryWikiCompiledCacheOwner(activeConfig, generation);
+          activeOwnerIds.add(resolveMemoryWikiCompiledCacheOwnerId(activeConfig));
+        }
+        deactivateMemoryWikiCompiledCacheOwnersExcept(activeOwnerIds);
+        await compiledCacheStore.deleteOwnersExcept(activeOwnerIds);
+      },
+    });
 
-    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder({ config, resolveConfig }));
+    api.registerMemoryPromptSupplement(createWikiPromptSectionBuilder());
+    api.registerMemoryPromptPreparation(createWikiPromptSectionPreparer({ config, resolveConfig }));
     api.registerMemoryCorpusSupplement(createWikiCorpusSupplement({ resolveConfig, getAppConfig }));
     registerMemoryWikiGatewayMethods({
       api,
