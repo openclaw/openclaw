@@ -71,7 +71,9 @@ function makeMediaSender() {
     sendVideoMsg: vi.fn(async () => ({ channel: "qqbot", messageId: "video-1" })),
     sendDocument: vi.fn(async () => ({ channel: "qqbot", messageId: "file-1" })),
     sendMedia: vi.fn(
-      async (): Promise<
+      async (_opts: {
+        mediaUrl: string;
+      }): Promise<
         { channel: "qqbot"; messageId: string } | { channel: "qqbot"; error: string }
       > => ({ channel: "qqbot", messageId: "media-1" }),
     ),
