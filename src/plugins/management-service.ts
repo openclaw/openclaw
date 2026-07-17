@@ -77,6 +77,7 @@ type ManagedPluginCatalogEntry = {
   state: "enabled" | "disabled" | "not-installed" | "error";
   featured?: boolean;
   order?: number;
+  hasIcon?: boolean;
   install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
   error?: string;
   category?: string;
@@ -141,6 +142,13 @@ export function clearManagedPluginOfficialCatalogCache(): void {
   officialCatalogCache = undefined;
 }
 
+function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
+  if (!manifest || typeof manifest !== "object") {
+    return undefined;
+  }
+  return normalizeOptionalString((manifest as { icon?: unknown }).icon);
+}
+
 function mergeCatalogMetadata(
   hosted: OfficialExternalPluginCatalogEntry,
   bundled: OfficialExternalPluginCatalogEntry,
@@ -150,6 +158,7 @@ function mergeCatalogMetadata(
   const bundledManifest = getOfficialExternalPluginCatalogManifest(bundled);
   const bundledCatalog = bundledManifest?.catalog;
   const bundledPlugin = bundledManifest?.plugin;
+  const bundledIcon = resolveCatalogManifestIcon(bundledManifest);
   const bundledName = normalizeOptionalString(bundled.name);
   const bundledDescription = normalizeOptionalString(bundled.description);
   const bundledKind = normalizeOptionalString(bundled.kind);
@@ -180,6 +189,7 @@ function mergeCatalogMetadata(
       ...hostedManifest,
       ...(bundledPlugin ? { plugin: { ...hostedManifest?.plugin, ...bundledPlugin } } : {}),
       ...(mergedCatalog ? { catalog: mergedCatalog } : {}),
+      ...(!resolveCatalogManifestIcon(hostedManifest) && bundledIcon ? { icon: bundledIcon } : {}),
     },
   };
 }
@@ -391,6 +401,45 @@ function resolveInstalledOfficialCatalogEntry(params: {
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+function resolveOfficialCatalogIconUrl(
+  entries: readonly OfficialExternalPluginCatalogEntry[],
+  pluginId: string,
+): string | undefined {
+  const entry = entries.find(
+    (candidate) => resolveOfficialExternalPluginId(candidate) === pluginId,
+  );
+  return resolveCatalogManifestIcon(getOfficialExternalPluginCatalogManifest(entry ?? {}));
+}
+
+function resolvePluginIconUrlFromCatalogFacts(params: {
+  metadata: ReturnType<typeof loadPluginMetadataSnapshot>;
+  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
+  pluginId: string;
+}): string | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  return (
+    normalizeOptionalString(params.metadata.byPluginId.get(normalizedPluginId)?.icon) ??
+    resolveOfficialCatalogIconUrl(params.officialEntries, normalizedPluginId)
+  );
+}
+
+/** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
+export async function resolveManagedPluginIconUrl(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  env?: NodeJS.ProcessEnv;
+  officialCatalog?: OfficialCatalogResult;
+}): Promise<string | undefined> {
+  const env = params.env ?? process.env;
+  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
+  return resolvePluginIconUrlFromCatalogFacts({
+    metadata,
+    officialEntries: officialCatalog.entries,
+    pluginId: params.pluginId,
+  });
+}
+
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */
 export async function listManagedPlugins(params: {
   config: OpenClawConfig;
@@ -514,6 +563,13 @@ export async function listManagedPlugins(params: {
       state: error ? "error" : record.enabled ? "enabled" : "disabled",
       ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
       ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
+      ...(resolvePluginIconUrlFromCatalogFacts({
+        metadata,
+        officialEntries: officialCatalog.entries,
+        pluginId: record.pluginId,
+      })
+        ? { hasIcon: true }
+        : {}),
       ...(error ? { error } : {}),
       ...(category ? { category } : {}),
       removable,
@@ -552,6 +608,7 @@ export async function listManagedPlugins(params: {
       state: "not-installed",
       ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
       ...(catalog.order !== undefined ? { order: catalog.order } : {}),
+      ...(resolveCatalogManifestIcon(manifest) ? { hasIcon: true } : {}),
       ...(install ? { install } : {}),
     });
   }
