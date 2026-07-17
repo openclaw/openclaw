@@ -180,7 +180,7 @@ jobs:
             for attempt in 1 2 3; do
               timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
+                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
               fetch_status="$?"
               if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
@@ -190,6 +190,25 @@ jobs:
                 return "$fetch_status"
               fi
               echo "::warning::checkout fetch for '$ref' timed out on attempt $attempt; retrying"
+              sleep 5
+            done
+          }
+
+          # Diff-base resolution needs the head's parent commits and trees
+          # (merge-head-diff-base.mjs and the name-only diffs), but not the
+          # parents' blobs. Fetching them blob-less keeps preflight several
+          # times faster than a full --depth=2 snapshot fetch.
+          fetch_parent_metadata() {
+            local sha="$1"
+            for attempt in 1 2 3; do
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
+                -c protocol.version=2 \
+                fetch --no-tags --prune --no-recurse-submodules --depth=2 \
+                --filter=blob:none origin "$sha" && return 0
+              if [ "$attempt" = "3" ]; then
+                return 1
+              fi
+              echo "::warning::parent metadata fetch for '$sha' failed on attempt $attempt; retrying"
               sleep 5
             done
           }
@@ -239,6 +258,7 @@ jobs:
               exit 1
             fi
           fi
+          fetch_parent_metadata "$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Resolve checkout SHA
