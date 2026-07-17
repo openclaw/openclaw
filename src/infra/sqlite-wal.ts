@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { Result } from "@openclaw/normalization-core/result";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -175,14 +175,18 @@ function isMountCommandTimeout(error: unknown): boolean {
 
 function readMountEntries(): Result<MountEntry[], "timeout"> {
   try {
-    return ok(parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")));
+    return {
+      ok: true,
+      value: parseProcMountInfoEntries(fs.readFileSync(PROC_MOUNTINFO_PATH, "utf8")),
+    };
   } catch {
     // macOS/BSD expose filesystem type names in `mount` output instead of
     // Linux superblock magic, so keep this fallback for named filesystem types.
   }
   try {
-    return ok(
-      parseMountCommandEntries(
+    return {
+      ok: true,
+      value: parseMountCommandEntries(
         String(
           childProcess.execFileSync("mount", [], {
             killSignal: "SIGKILL",
@@ -190,9 +194,11 @@ function readMountEntries(): Result<MountEntry[], "timeout"> {
           }),
         ),
       ),
-    );
+    };
   } catch (error) {
-    return isMountCommandTimeout(error) ? err("timeout") : ok([]);
+    return isMountCommandTimeout(error)
+      ? { ok: false, error: "timeout" }
+      : { ok: true, value: [] };
   }
 }
 
