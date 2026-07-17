@@ -72,11 +72,6 @@ export function buildTelegramArtifactInputs(params: {
   runId: string;
   sourceSha: string;
 }): Record<string, string | number>;
-export function isDirectReleaseCandidateExecution(
-  directPath: string | undefined,
-  modulePath: string,
-  resolveRealPath?: (path: string) => string,
-): boolean;
 /**
  * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
  */
