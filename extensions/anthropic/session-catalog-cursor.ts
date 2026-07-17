@@ -1,4 +1,4 @@
-export const CLAUDE_SESSION_CURSOR_MAX_LENGTH = 256;
+const CLAUDE_SESSION_CURSOR_MAX_LENGTH = 256;
 
 export function isExactClaudeSessionCursor(value: unknown): value is string {
   return (
