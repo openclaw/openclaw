@@ -1,6 +1,6 @@
 // Qa Lab tests cover canonical scenario lane matching behavior.
 import { describe, expect, it } from "vitest";
-import { readQaScenarioById } from "./scenario-catalog.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   describeQaProviderLaneMismatches,
   scenarioMatchesQaProviderLane,
@@ -8,12 +8,14 @@ import {
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 describe("QA scenario lane matching", () => {
-  it.each([
-    "codex-harness-no-meta-leak",
-    "medium-game-plan-codex-harness",
-    "medium-game-plan-openclaw-harness",
-  ])("selects %s for the GPT-5.6 Luna live lane", (scenarioId) => {
-    const scenario = readQaScenarioById(scenarioId);
+  const planningCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+  const planningScenarios = readQaScenarioPack().scenarios.filter((scenario) =>
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningCoverageIds.has(coverageId),
+    ),
+  );
+
+  it.each(planningScenarios)("selects $id for the GPT-5.6 Luna live lane", (scenario) => {
     expect(
       scenarioMatchesQaProviderLane({
         scenario,

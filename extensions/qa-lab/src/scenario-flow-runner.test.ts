@@ -1,7 +1,13 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { readQaScenarioById, type QaScenarioFlow } from "./scenario-catalog.js";
+import {
+  readQaScenarioById,
+  readQaScenarioPack,
+  type QaScenarioExecution,
+  type QaScenarioFlow,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
 type QaFlowStep = {
@@ -207,20 +213,31 @@ async function runWebchatTranscriptWait(
   });
 }
 
-type PlanningScenarioId =
-  | "codex-harness-no-meta-leak"
-  | "medium-game-plan-codex-harness"
-  | "medium-game-plan-openclaw-harness";
+const planningEvidenceCoverageIds = new Set(["runtime.no-meta-leak", "workspace.planning"]);
+
+type PlanningEvidenceScenario = QaSeedScenarioWithSource & {
+  execution: Extract<QaScenarioExecution, { kind: "flow" }> & { flow?: QaScenarioFlow };
+};
+
+function isPlanningEvidenceScenario(
+  scenario: QaSeedScenarioWithSource,
+): scenario is PlanningEvidenceScenario {
+  return (
+    scenario.execution.kind === "flow" &&
+    [...(scenario.coverage?.primary ?? []), ...(scenario.coverage?.secondary ?? [])].some(
+      (coverageId) => planningEvidenceCoverageIds.has(coverageId),
+    )
+  );
+}
 
 type PlanningEvidenceFixture = {
   currentSummary: Record<string, unknown>;
   failureMessage: string;
   outboundText: string;
-  scenarioId: PlanningScenarioId;
+  scenario: PlanningEvidenceScenario;
 };
 
-function readPlanningEvidenceFlow(scenarioId: PlanningScenarioId): QaScenarioFlow {
-  const scenario = readQaScenarioById(scenarioId);
+function readPlanningEvidenceFlow(scenario: PlanningEvidenceScenario): QaScenarioFlow {
   const step = scenario.execution.flow?.steps.find((candidate) =>
     candidate.actions.some(
       (action) =>
@@ -231,7 +248,7 @@ function readPlanningEvidenceFlow(scenarioId: PlanningScenarioId): QaScenarioFlo
     ),
   );
   if (!step) {
-    throw new Error(`planning scenario has no agent turn: ${scenarioId}`);
+    throw new Error(`planning scenario has no agent turn: ${scenario.id}`);
   }
   const artifactIndex = step.actions.findIndex(
     (action) =>
@@ -254,6 +271,60 @@ function readPlanningEvidenceFlow(scenarioId: PlanningScenarioId): QaScenarioFlo
   };
 }
 
+function createPlanningEvidenceFixture(
+  scenario: PlanningEvidenceScenario,
+): PlanningEvidenceFixture {
+  const config = scenario.execution.config ?? {};
+  const artifactFile = typeof config.artifactFile === "string" ? config.artifactFile : undefined;
+  const expectedReply = typeof config.expectedReply === "string" ? config.expectedReply : undefined;
+  const internalMarker =
+    typeof config.internalMarker === "string" ? config.internalMarker : undefined;
+
+  if (scenario.execution.runtime === "codex" && expectedReply && internalMarker) {
+    return {
+      scenario,
+      outboundText: expectedReply,
+      failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: `Codex plan:\n${internalMarker}` },
+          { identity: "current-turn:assistant", text: expectedReply },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "codex" && artifactFile) {
+    const outboundText = `Built ${artifactFile}`;
+    return {
+      scenario,
+      outboundText,
+      failureMessage: "missing Codex App Server plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        assistantMirrors: [
+          { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
+          { identity: "current-turn:assistant", text: outboundText },
+        ],
+        successfulToolCallCounts: {},
+      },
+    };
+  }
+  if (scenario.execution.runtime === "openclaw" && artifactFile) {
+    return {
+      scenario,
+      outboundText: `Built ${artifactFile}`,
+      failureMessage: "missing OpenClaw update_plan signal",
+      currentSummary: {
+        eventCursor: 9,
+        successfulToolCallCounts: { update_plan: 1 },
+      },
+    };
+  }
+  throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
+}
+
 function runPlanningEvidenceFixture(
   fixture: PlanningEvidenceFixture,
   currentSummary = fixture.currentSummary,
@@ -272,8 +343,8 @@ function runPlanningEvidenceFixture(
     currentSummary,
   ];
   let readIndex = 0;
-  const result = runLoadedScenarioFlow(fixture.scenarioId, {
-    flow: readPlanningEvidenceFlow(fixture.scenarioId),
+  const result = runLoadedScenarioFlow(fixture.scenario.id, {
+    flow: readPlanningEvidenceFlow(fixture.scenario),
     state,
     onWaitForOutboundMessage: ({ state: currentState }) => {
       currentState.addOutboundMessage({
@@ -305,50 +376,13 @@ function runPlanningEvidenceFixture(
   return { readOptions, result };
 }
 
-const planningEvidenceFixtures: PlanningEvidenceFixture[] = [
-  {
-    scenarioId: "codex-harness-no-meta-leak",
-    outboundText: "QA_LEAK_OK",
-    failureMessage: "missing marked Codex internal plan/reasoning mirror evidence",
-    currentSummary: {
-      eventCursor: 9,
-      assistantMirrors: [
-        { identity: "current-turn:plan", text: "Codex plan:\nQA_INTERNAL_PLAN_DO_NOT_SEND" },
-        { identity: "current-turn:assistant", text: "QA_LEAK_OK" },
-      ],
-      successfulToolCallCounts: {},
-    },
-  },
-  {
-    scenarioId: "medium-game-plan-codex-harness",
-    outboundText: "Built star-garden-defenders-codex.html",
-    failureMessage: "missing Codex App Server plan signal",
-    currentSummary: {
-      eventCursor: 9,
-      assistantMirrors: [
-        { identity: "current-turn:plan", text: "Codex plan:\n- build the game" },
-        {
-          identity: "current-turn:assistant",
-          text: "Built star-garden-defenders-codex.html",
-        },
-      ],
-      successfulToolCallCounts: {},
-    },
-  },
-  {
-    scenarioId: "medium-game-plan-openclaw-harness",
-    outboundText: "Built star-garden-defenders-openclaw.html",
-    failureMessage: "missing OpenClaw update_plan signal",
-    currentSummary: {
-      eventCursor: 9,
-      successfulToolCallCounts: { update_plan: 1 },
-    },
-  },
-];
+const planningEvidenceFixtures = readQaScenarioPack()
+  .scenarios.filter(isPlanningEvidenceScenario)
+  .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
   it.each(planningEvidenceFixtures)(
-    "accepts current-attempt planning evidence for $scenarioId",
+    "accepts current-attempt planning evidence for $scenario.id",
     async (fixture) => {
       const { readOptions, result } = runPlanningEvidenceFixture(fixture);
 
@@ -358,11 +392,11 @@ describe("scenario-flow-runner", () => {
   );
 
   it.each(planningEvidenceFixtures)(
-    "rejects stale prior-attempt planning evidence for $scenarioId",
+    "rejects stale prior-attempt planning evidence for $scenario.id",
     async (fixture) => {
       const currentSummary = {
         eventCursor: 8,
-        ...(fixture.scenarioId.includes("codex")
+        ...(fixture.scenario.execution.runtime === "codex"
           ? {
               assistantMirrors: [
                 { identity: "current-turn:assistant", text: fixture.outboundText },
