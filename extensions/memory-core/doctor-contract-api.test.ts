@@ -609,6 +609,9 @@ describe("memory-core doctor dreaming migration", () => {
         );
         await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
 
+        await expect(hostEventsMigration().detectLegacyState(migrationParams())).resolves.toEqual({
+          preview: [expect.stringContaining("requires safe-path repair")],
+        });
         const result = await hostEventsMigration().migrateLegacyState(migrationParams());
 
         expect(result.changes).toEqual([]);

@@ -69,12 +69,22 @@ type LegacySource = {
   filePath: string;
 };
 
-type LegacyMemoryHostEventSource = {
-  workspaceDir: string;
-  filePath: string;
-  relativePath: string;
-  root: Awaited<ReturnType<typeof root>>;
-};
+type LegacyMemoryHostEventSource =
+  | {
+      kind: "ready";
+      workspaceDir: string;
+      filePath: string;
+      relativePath: string;
+      root: Awaited<ReturnType<typeof root>>;
+    }
+  | {
+      kind: "rejected";
+      workspaceDir: string;
+      filePath: string;
+      reason: string;
+    };
+
+type ReadyLegacyMemoryHostEventSource = Extract<LegacyMemoryHostEventSource, { kind: "ready" }>;
 
 type LegacyMemoryHostEvent = Record<string, unknown> & {
   type:
@@ -1237,11 +1247,17 @@ async function migrateSource(source: LegacySource): Promise<number> {
 async function collectLegacyMemoryHostEventSources(
   config: unknown,
   env: NodeJS.ProcessEnv,
-  warnings?: string[],
 ): Promise<LegacyMemoryHostEventSource[]> {
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
   for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+    let canonicalWorkspaceDir = path.resolve(workspaceDir);
+    let filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
+    // Advisory existence only gates detection. Rooted operations below remain
+    // authoritative for every read and mutation.
+    if (!(await legacyStateFileExists(filePath))) {
+      continue;
+    }
     try {
       const workspaceRoot = await root(workspaceDir, {
         hardlinks: "reject",
@@ -1250,11 +1266,12 @@ async function collectLegacyMemoryHostEventSources(
         mkdir: false,
         symlinks: "reject",
       });
-      const canonicalWorkspaceDir = workspaceRoot.rootReal;
+      canonicalWorkspaceDir = workspaceRoot.rootReal;
       if (seenWorkspaces.has(canonicalWorkspaceDir)) {
         continue;
       }
-      const filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
+      seenWorkspaces.add(canonicalWorkspaceDir);
+      filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
       const relativePath = path.relative(canonicalWorkspaceDir, filePath);
       const stat = await workspaceRoot.stat(relativePath);
       if (!stat.isFile) {
@@ -1262,8 +1279,8 @@ async function collectLegacyMemoryHostEventSources(
       }
       // Doctor normalizes root aliases once, then every descendant operation
       // stays pinned to the physical workspace and rejects parent symlinks.
-      seenWorkspaces.add(canonicalWorkspaceDir);
       sources.push({
+        kind: "ready",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
         relativePath,
@@ -1274,16 +1291,22 @@ async function collectLegacyMemoryHostEventSources(
       if (code === "ENOENT" || code === "ENOTDIR" || code === "not-found") {
         continue;
       }
-      warnings?.push(
-        `Skipped unsafe Memory Core host event source for ${workspaceDir}: ${String(error)}`,
-      );
+      if (!seenWorkspaces.has(canonicalWorkspaceDir)) {
+        seenWorkspaces.add(canonicalWorkspaceDir);
+      }
+      sources.push({
+        kind: "rejected",
+        workspaceDir: canonicalWorkspaceDir,
+        filePath,
+        reason: String(error),
+      });
     }
   }
   return sources;
 }
 
 async function firstFreeMemoryHostEventArchivePath(
-  source: LegacyMemoryHostEventSource,
+  source: ReadyLegacyMemoryHostEventSource,
 ): Promise<string> {
   for (let index = 2; ; index += 1) {
     const candidate = `${source.relativePath}.migrated.${index}`;
@@ -1294,7 +1317,7 @@ async function firstFreeMemoryHostEventArchivePath(
 }
 
 async function archiveLegacyMemoryHostEventSource(params: {
-  source: LegacyMemoryHostEventSource;
+  source: ReadyLegacyMemoryHostEventSource;
   changes: string[];
   warnings: string[];
 }): Promise<void> {
@@ -1320,7 +1343,7 @@ async function archiveLegacyMemoryHostEventSource(params: {
 }
 
 async function migrateLegacyMemoryHostEventSource(params: {
-  source: LegacyMemoryHostEventSource;
+  source: ReadyLegacyMemoryHostEventSource;
   context: PluginDoctorStateMigrationContext;
   changes: string[];
   warnings: string[];
@@ -1457,20 +1480,23 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return null;
       }
       return {
-        preview: sources.map(
-          (source) =>
-            `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`,
+        preview: sources.map((source) =>
+          source.kind === "ready"
+            ? `- Memory Core host events: ${source.filePath} -> SQLite plugin state (${MEMORY_HOST_EVENTS_NAMESPACE})`
+            : `- Memory Core host events: ${source.filePath} requires safe-path repair (${source.reason})`,
         ),
       };
     },
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const source of await collectLegacyMemoryHostEventSources(
-        params.config,
-        params.env,
-        warnings,
-      )) {
+      for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {
+        if (source.kind === "rejected") {
+          warnings.push(
+            `Skipped unsafe Memory Core host event source for ${source.workspaceDir}: ${source.reason}`,
+          );
+          continue;
+        }
         await migrateLegacyMemoryHostEventSource({
           source,
           context: params.context,
