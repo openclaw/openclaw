@@ -937,14 +937,15 @@ describe("ReefInboxConnection reconnect lifecycle", () => {
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(1));
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
 
-    sockets[0]!.emit("close");
+    sockets[0]!.emit("message", { data: "{" });
     await vi.waitFor(() => expect(webSocketFactory).toHaveBeenCalledTimes(2));
+    expect(sockets[0]!.closeCalls).toBe(1);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount + 1);
 
     abort.abort();
     await running;
 
-    expect(sockets[0]!.closeCalls).toBe(0);
+    expect(sockets[0]!.closeCalls).toBe(1);
     expect(sockets[1]!.closeCalls).toBe(1);
     expect(getEventListeners(abort.signal, "abort")).toHaveLength(initialListenerCount);
   });
