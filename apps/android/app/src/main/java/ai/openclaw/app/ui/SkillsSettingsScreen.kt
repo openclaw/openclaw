@@ -9,6 +9,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.isClawHubSkillInstalled
 import ai.openclaw.app.isClawHubSkillOperationActive
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -893,6 +894,6 @@ private fun skillBadge(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "S" }

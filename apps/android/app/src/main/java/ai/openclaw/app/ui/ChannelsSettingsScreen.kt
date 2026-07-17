@@ -4,6 +4,7 @@ import ai.openclaw.app.GatewayChannelSummary
 import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
@@ -156,7 +157,7 @@ private fun channelBadge(label: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "C" }
 

@@ -9,6 +9,7 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -340,7 +341,7 @@ private fun nodeBadge(value: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "N" }
 

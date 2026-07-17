@@ -15,6 +15,8 @@ internal fun String.firstGraphemeOrNull(): String? {
   return if (end == BreakIterator.DONE) null else substring(0, end)
 }
 
+internal fun String.uppercaseFirstGraphemeOrNull(): String? = firstGraphemeOrNull()?.uppercase()
+
 internal fun String.takeUtf16Safe(maxChars: Int): String {
   if (length <= maxChars) return this
   // Keep the code-unit cap without leaving a high surrogate at its boundary.

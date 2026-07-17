@@ -43,6 +43,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
@@ -2451,7 +2452,7 @@ private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {
   ClawDetailRow(
     title = provider.displayName,
     subtitle = usageProviderSubtitle(provider),
-    leading = { ClawTextBadge(text = provider.displayName.firstOrNull()?.uppercase() ?: "U") },
+    leading = { ClawTextBadge(text = provider.displayName.uppercaseFirstGraphemeOrNull() ?: "U") },
     trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else "OK", status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
   )
 }
@@ -2680,7 +2681,7 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "A" }
 }
@@ -2937,7 +2938,7 @@ private fun notificationAppBadge(label: String): String {
       .asSequence()
       .filter { it.isNotBlank() }
       .take(2)
-      .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+      .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
       .joinToString("")
   return initials.ifBlank { "A" }
 }

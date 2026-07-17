@@ -7189,7 +7189,7 @@ class NodeRuntime private constructor(
         .split(' ', '-', '_')
         .filter { it.isNotBlank() }
         .take(2)
-        .mapNotNull { token -> token.firstOrNull()?.uppercaseChar()?.toString() }
+        .mapNotNull { token -> token.uppercaseFirstGraphemeOrNull() }
         .joinToString("")
     return if (initials.isNotEmpty()) initials else "OC"
   }
