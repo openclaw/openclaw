@@ -22,7 +22,7 @@ const outputFile =
   process.env.OPENCLAW_A2UI_BUNDLE_OUT ??
   path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
-const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 1_000;
+const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 5_000;
 const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
