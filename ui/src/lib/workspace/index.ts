@@ -8,6 +8,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { buildSessionUsageDateParams } from "../sessions/usage.ts";
+import { reconcilePendingApprovalNames } from "./approval-state.ts";
 import { resolveActiveSlug } from "./tab-selection.ts";
 export {
   customWidgetName,
@@ -275,17 +276,6 @@ function normalizeWorkspace(payload: unknown): WorkspaceDocument {
   };
 }
 
-function reconcilePendingApprovalNames(
-  state: WorkspaceUiState,
-  workspace: WorkspaceDocument,
-): void {
-  for (const name of state.pendingApprovalNames) {
-    if (workspace.widgetsRegistry[name]?.status !== "pending") {
-      state.pendingApprovalNames.delete(name);
-    }
-  }
-}
-
 function applyActiveWorkspaceSlug(
   state: WorkspaceUiState,
   workspace: WorkspaceDocument,
@@ -380,7 +370,7 @@ export async function loadWorkspace(
         const retainedIntentIsCurrent =
           retainedIntent?.activeSlugRevision === state.activeSlugRevision;
         state.workspace = workspace;
-        reconcilePendingApprovalNames(state, workspace);
+        reconcilePendingApprovalNames(state.pendingApprovalNames, workspace);
         state.activeSlug = resolveActiveSlug(
           workspace,
           retainedIntentIsCurrent ? retainedIntent.slug : state.activeSlug,
@@ -412,7 +402,7 @@ export async function loadWorkspace(
         ? intent.slug
         : state.activeSlug;
     state.workspace = workspace;
-    reconcilePendingApprovalNames(state, workspace);
+    reconcilePendingApprovalNames(state.pendingApprovalNames, workspace);
     applyActiveWorkspaceSlug(state, workspace, requestedSlug);
     if (workspaceLoadIntents.get(state) === intent) {
       workspaceLoadIntents.delete(state);
