@@ -48,7 +48,17 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
 
 class SecretsPlanFileNotFoundError extends Error {}
 
-const SECRETS_APPLY_PLAN_MAX_BYTES = 16 * 1024 * 1024;
+const SECRETS_PLAN_MAX_BYTES = 16 * 1024 * 1024;
+
+function serializePlanFile(plan: SecretsApplyPlan, pathname: string): string {
+  const raw = `${JSON.stringify(plan, null, 2)}\n`;
+  if (Buffer.byteLength(raw, "utf8") > SECRETS_PLAN_MAX_BYTES) {
+    throw new RangeError(
+      `Secrets plan exceeds ${SECRETS_PLAN_MAX_BYTES} bytes and cannot be written: ${pathname}`,
+    );
+  }
+  return raw;
+}
 
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
@@ -72,14 +82,12 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
     if (!stat.isFile()) {
       throw new Error(`Secrets plan path is not a regular file: ${pathname}`);
     }
-    if (stat.size > SECRETS_APPLY_PLAN_MAX_BYTES) {
+    if (stat.size > SECRETS_PLAN_MAX_BYTES) {
       throw new RangeError(
-        `Secrets plan file exceeds ${SECRETS_APPLY_PLAN_MAX_BYTES} bytes: ${pathname}`,
+        `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
       );
     }
-    raw = (await readFileDescriptorBounded(file.fd, SECRETS_APPLY_PLAN_MAX_BYTES)).toString(
-      "utf8",
-    );
+    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
   } finally {
     await file.close();
   }
@@ -216,7 +224,7 @@ export function registerSecretsCli(program: Command): void {
       "Allow exec SecretRef preflight checks (may execute provider commands)",
       false,
     )
-    .option("--plan-out <path>", "Write generated plan JSON to a file")
+    .option("--plan-out <path>", "Write generated plan JSON to a file (max 16 MiB)")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
@@ -229,7 +237,7 @@ export function registerSecretsCli(program: Command): void {
         });
         if (opts.planOut) {
           const { writeFileSync } = await fsModuleLoader.load();
-          writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
         }
 
         let shouldApply = Boolean(opts.apply || opts.yes);

@@ -105,6 +105,29 @@ function createConfigureInteractiveResult(options?: {
   };
 }
 
+function createConfigureInteractiveResultWithPlanBytes(bytes: number) {
+  const configured = createConfigureInteractiveResult({
+    targets: [
+      {
+        type: "models.providers.apiKey",
+        path: "models.providers.openai.apiKey",
+        pathSegments: ["models", "providers", "openai", "apiKey"],
+        ref: {
+          source: "file",
+          provider: "default",
+          id: "",
+        },
+        providerId: "openai",
+      },
+    ],
+  });
+  const target = configured.plan.targets[0] as { ref: { id: string } };
+  const emptyBytes = Buffer.byteLength(`${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+  target.ref.id = "x".repeat(bytes - emptyBytes);
+  expect(Buffer.byteLength(`${JSON.stringify(configured.plan, null, 2)}\n`, "utf8")).toBe(bytes);
+  return configured;
+}
+
 function createSecretsApplyResult(options?: {
   mode?: "dry-run" | "write";
   changed?: boolean;
@@ -355,6 +378,54 @@ describe("secrets CLI", () => {
       agentId: "ops",
       allowExecInPreflight: false,
     });
+  });
+
+  it("writes generated secrets plan files at the apply limit", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-configure-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResultWithPlanBytes(16 * 1024 * 1024),
+    );
+    confirm.mockResolvedValue(false);
+
+    try {
+      await createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
+        from: "user",
+      });
+
+      expect((await fs.stat(planPath)).size).toBe(16 * 1024 * 1024);
+      expect(runtimeLogs).toContain(`Plan written to ${planPath}`);
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(planPath, { force: true });
+    }
+  });
+
+  it("rejects generated secrets plan files that exceed the apply limit", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-configure-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResultWithPlanBytes(16 * 1024 * 1024 + 1),
+    );
+
+    try {
+      await expect(
+        createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain("Secrets plan exceeds 16777216 bytes");
+      await expect(fs.access(planPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(planPath, { force: true });
+    }
   });
 
   it("rejects oversized secrets plan files before parsing", async () => {
