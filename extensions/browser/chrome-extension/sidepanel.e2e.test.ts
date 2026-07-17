@@ -146,6 +146,7 @@ async function createRelayHarness(): Promise<RelayHarness> {
   const port = await listen(server);
   const wss = new WebSocketServer({
     noServer: true,
+    maxPayload: 1_000_000,
     handleProtocols: (protocols) => protocols.values().next().value ?? false,
   });
   const hellos: Array<Record<string, unknown>> = [];
