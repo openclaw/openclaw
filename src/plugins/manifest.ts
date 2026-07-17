@@ -4,10 +4,7 @@ import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -24,6 +21,7 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -1787,11 +1785,11 @@ export function loadPluginManifest(
   if (!isRecord(raw)) {
     return cacheResult({ ok: false, error: "plugin manifest must be an object", manifestPath });
   }
-  const id = normalizeOptionalLowercaseString(raw.id) ?? "";
+  const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
-  if (CORE_RESERVED_PLUGIN_IDS.has(id)) {
+  if (CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id))) {
     return cacheResult({
       ok: false,
       error: `plugin manifest id "${id}" is reserved by OpenClaw core`,

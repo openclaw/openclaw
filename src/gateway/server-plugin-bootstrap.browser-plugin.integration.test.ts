@@ -14,8 +14,8 @@ import {
 import { listSecretProviderIntegrationPresets } from "../secrets/provider-integrations.js";
 import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
 
-const SURFACE_PLUGIN_ENTRY = (id: string) => `module.exports = {
-  id: ${JSON.stringify(id)},
+const SURFACE_PLUGIN_ENTRY = (declaredId: string, id: string) => `module.exports = {
+  id: ${JSON.stringify(declaredId)},
   register(api) {
     api.registerTool({
       name: ${JSON.stringify(`${id}-tool`)},
@@ -47,15 +47,22 @@ const SURFACE_PLUGIN_ENTRY = (id: string) => `module.exports = {
   },
 };`;
 
+const DECLARED_FIXTURE_IDS: Readonly<Record<string, string>> = {
+  "denied-fixture": "Denied-Fixture",
+  "allowed-fixture": "Allowed-Fixture",
+};
+
 function createGatewaySurfacePluginFixture(): { rootDir: string; cleanup: () => void } {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-plugin-surfaces-"));
-  for (const id of ["denied-fixture", "allowed-fixture"]) {
-    const pluginDir = path.join(rootDir, id);
+  for (const [id, declaredId] of Object.entries(DECLARED_FIXTURE_IDS)) {
+    // The directory is named after the declared id so discovery cannot deny the plugin by a
+    // lowercase directory name before policy compares the manifest id.
+    const pluginDir = path.join(rootDir, declaredId);
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify({
-        id: id === "denied-fixture" ? "Denied-Fixture" : "Allowed-Fixture",
+        id: declaredId,
         enabledByDefault: true,
         channels: [`${id}-channel`],
         contracts: { tools: [`${id}-tool`] },
@@ -71,7 +78,11 @@ function createGatewaySurfacePluginFixture(): { rootDir: string; cleanup: () => 
       }),
       "utf8",
     );
-    fs.writeFileSync(path.join(pluginDir, "index.js"), SURFACE_PLUGIN_ENTRY(id), "utf8");
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      SURFACE_PLUGIN_ENTRY(declaredId, id),
+      "utf8",
+    );
     fs.writeFileSync(path.join(pluginDir, "secret-provider.js"), "process.stdout.write('{}');\n");
   }
   return {
@@ -133,14 +144,15 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
     ).toBe(true);
   });
 
-  it("keeps a denied mixed-case plugin out of every Gateway runtime surface", () => {
+  it("denies a mixed-case plugin every Gateway runtime surface while an allowed one still loads", () => {
     const fixture = createGatewaySurfacePluginFixture();
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", fixture.rootDir);
     resetPluginState();
     try {
+      // No allowlist: an allowlist scopes discovery by a lowercased id and would drop the denied
+      // plugin before policy compares its manifest id, masking the denylist behavior under test.
       const cfg = {
         plugins: {
-          allow: ["allowed-fixture"],
           deny: ["denied-fixture"],
         },
       } as OpenClawConfig;
@@ -155,18 +167,24 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
         log: createTestLog(),
         coreGatewayHandlers: {},
         baseMethods: [],
-        pluginIds: ["denied-fixture", "allowed-fixture"],
+        pluginIds: Object.values(DECLARED_FIXTURE_IDS),
         pluginLookUpTable,
         logDiagnostics: false,
       });
 
-      const denied = loaded.pluginRegistry.plugins.find((plugin) => plugin.id === "denied-fixture");
+      const denied = loaded.pluginRegistry.plugins.find((plugin) => plugin.id === "Denied-Fixture");
       const allowed = loaded.pluginRegistry.plugins.find(
-        (plugin) => plugin.id === "allowed-fixture",
+        (plugin) => plugin.id === "Allowed-Fixture",
       );
-      expect(denied).toBeUndefined();
+      expect(denied).toMatchObject({
+        id: "Denied-Fixture",
+        enabled: false,
+        activated: false,
+        status: "disabled",
+        activationReason: "blocked by denylist",
+      });
       expect(allowed).toMatchObject({
-        id: "allowed-fixture",
+        id: "Allowed-Fixture",
         enabled: true,
         status: "loaded",
       });
@@ -184,12 +202,12 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
         }).map((preset) => preset.pluginId),
       };
       expect(runtimeInspection).toEqual({
-        imported: ["allowed-fixture"],
-        hooks: ["allowed-fixture", "allowed-fixture"],
-        tools: ["allowed-fixture"],
-        channels: ["allowed-fixture"],
-        services: ["allowed-fixture"],
-        secretIntegrations: ["allowed-fixture"],
+        imported: ["Allowed-Fixture"],
+        hooks: ["Allowed-Fixture", "Allowed-Fixture"],
+        tools: ["Allowed-Fixture"],
+        channels: ["Allowed-Fixture"],
+        services: ["Allowed-Fixture"],
+        secretIntegrations: ["Allowed-Fixture"],
       });
     } finally {
       fixture.cleanup();
