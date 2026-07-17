@@ -94,6 +94,7 @@ describe("dispatchSmsInboundEvent", () => {
       cfg: {},
       account: createAccount(),
       channelRuntime: runtime,
+      receivedAt: 1_700_000_000_000,
       msg: {
         from: "+15551234567",
         to: "+15557654321",
@@ -140,6 +141,7 @@ describe("dispatchSmsInboundEvent", () => {
         allowFrom: ["+15551234567"],
       }),
       channelRuntime: runtime,
+      receivedAt: 1_700_000_000_123,
       turnAdoptionLifecycle,
       msg: {
         from: "+15551234567",
@@ -159,6 +161,7 @@ describe("dispatchSmsInboundEvent", () => {
       messageSid: "SM-inbound",
       accountSid: "AC123",
     });
+    expect(ingested.timestamp).toBe(1_700_000_000_123);
     const turn = await runParams.adapter.resolveTurn(ingested);
 
     expect(resolveAgentRoute).toHaveBeenCalledWith(

@@ -89,6 +89,7 @@ export async function dispatchSmsInboundEvent(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
   channelRuntime: SmsChannelRuntime;
+  receivedAt: number;
   turnAdoptionLifecycle?: NonNullable<
     Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
   >;
@@ -136,7 +137,7 @@ export async function dispatchSmsInboundEvent(params: {
     adapter: {
       ingest: (msg) => ({
         id: msg.messageSid,
-        timestamp: Date.now(),
+        timestamp: params.receivedAt,
         rawText: msg.body,
         textForAgent: msg.body,
         textForCommands: msg.body,

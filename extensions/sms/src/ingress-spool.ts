@@ -7,7 +7,11 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import { getSmsRuntime } from "./runtime.js";
-import { buildTwilioInboundMessage, resolveTwilioMessageSid } from "./twilio.js";
+import {
+  buildTwilioInboundMessage,
+  resolveTwilioInboundSender,
+  resolveTwilioMessageSid,
+} from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const SMS_INGRESS_PAYLOAD_VERSION = 1;
@@ -52,7 +56,11 @@ export function createSmsIngressSpool(params: {
   queue?: ChannelIngressQueue<SmsIngressPayload>;
   abortSignal?: AbortSignal;
   log?: { info?: (message: string) => void; warn?: (message: string) => void };
-  deliver?: (message: SmsInboundMessage, lifecycle: SmsIngressLifecycle) => Promise<void>;
+  deliver?: (
+    message: SmsInboundMessage,
+    lifecycle: SmsIngressLifecycle,
+    receivedAt: number,
+  ) => Promise<void>;
 }) {
   const queue =
     params.queue ??
@@ -61,12 +69,13 @@ export function createSmsIngressSpool(params: {
     });
   const deliver =
     params.deliver ??
-    (async (message: SmsInboundMessage, lifecycle: SmsIngressLifecycle) => {
+    (async (message: SmsInboundMessage, lifecycle: SmsIngressLifecycle, receivedAt: number) => {
       await dispatchSmsInboundEvent({
         cfg: params.cfg,
         account: params.account,
         channelRuntime: params.channelRuntime,
         msg: message,
+        receivedAt,
         turnAdoptionLifecycle: lifecycle,
         log: params.log,
       });
@@ -83,15 +92,18 @@ export function createSmsIngressSpool(params: {
       await deliver(
         parseSmsIngressPayload(event.payload, params.account),
         bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+        event.receivedAt,
       );
     },
   });
   return {
     enqueue: async (form: Record<string, string>) => {
+      const receivedAt = Date.now();
       const eventId = resolveTwilioMessageSid(form);
       if (!eventId) {
         throw new Error("SMS webhook is missing MessageSid.");
       }
+      const sender = resolveTwilioInboundSender(form);
       await queue.prune({
         completedTtlMs: SMS_COMPLETED_TTL_MS,
         completedMaxEntries: SMS_COMPLETED_MAX_ENTRIES,
@@ -102,8 +114,8 @@ export function createSmsIngressSpool(params: {
         eventId,
         { version: SMS_INGRESS_PAYLOAD_VERSION, form },
         {
-          receivedAt: Date.now(),
-          laneKey: form.From?.trim() ? `sender:${form.From.trim()}` : `event:${eventId}`,
+          receivedAt,
+          laneKey: sender ? `sender:${sender}` : `event:${eventId}`,
         },
       );
       return { kind: result.kind, duplicate: result.duplicate };

@@ -234,10 +234,14 @@ function parseTwilioInboundFrom(raw: string): string | null {
   return phoneNumber;
 }
 
+export function resolveTwilioInboundSender(form: Record<string, string>): string {
+  return parseTwilioInboundFrom(firstTrimmedString(form.From)) ?? "";
+}
+
 export function buildTwilioInboundMessage(form: Record<string, string>): SmsInboundMessage | null {
   // Signature verification owns the untouched form. Canonicalize only after
   // that boundary so Twilio channel prefixes never change its signed input.
-  const from = parseTwilioInboundFrom(firstTrimmedString(form.From));
+  const from = resolveTwilioInboundSender(form);
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
   const accountSid = firstTrimmedString(form.AccountSid);

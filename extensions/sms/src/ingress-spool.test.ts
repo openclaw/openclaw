@@ -154,7 +154,62 @@ describe("createSmsIngressSpool", () => {
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({ messageSid: "SM-alias" }),
       expect.any(Object),
+      expect.any(Number),
     );
+  });
+
+  it("uses the canonical sender as the durable lane", async () => {
+    const stateDir = await createStateDir();
+    const queue = createQueue(stateDir);
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue,
+      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
+    });
+    disposers.push(spool.dispose);
+
+    await spool.enqueue({ ...form("SM-canonical-lane"), From: "RcS:+1 (555) 123-4567" });
+
+    expect(await queue.listPending()).toEqual([
+      expect.objectContaining({ laneKey: "sender:+15551234567" }),
+    ]);
+  });
+
+  it("replays with the original webhook receipt timestamp", async () => {
+    const stateDir = await createStateDir();
+    const receivedAt = 1_700_000_000_456;
+    const now = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(receivedAt)
+      .mockReturnValue(receivedAt + 60_000);
+    const first = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver: vi.fn<SmsIngressDeliver>(async () => undefined),
+    });
+    disposers.push(first.dispose);
+    await first.enqueue(form("SM-received-at"));
+    first.dispose();
+    now.mockRestore();
+
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const recovered = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(recovered.dispose);
+    await drainSpool(recovered);
+
+    expect(deliver).toHaveBeenCalledWith(expect.any(Object), expect.any(Object), receivedAt);
   });
 
   it("preserves the old handler-reload replay guard scenario with a tombstone", async () => {
