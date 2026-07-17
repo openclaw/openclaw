@@ -1,13 +1,15 @@
 // Msteams tests cover durable card-action admission, replay, retry, and dedupe.
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createMSTeamsCardActionIngress } from "./card-action-ingress.js";
-import type { MSTeamsApp } from "./sdk.js";
 import type { MSTeamsActivity } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 type MSTeamsCardActionIngressPayload = {
   version: 1;
@@ -16,18 +18,13 @@ type MSTeamsCardActionIngressPayload = {
 };
 
 const disposers: Array<() => void> = [];
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    for (const dispose of disposers.splice(0).toReversed()) {
-      dispose();
-    }
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const stateDirs: string[] = [];
 
-function createStateDir(): string {
-  return tempDirs.make("openclaw-msteams-card-action-");
+async function createStateDir(): Promise<string> {
+  const created = await mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-card-action-"));
+  const resolved = await realpath(created);
+  stateDirs.push(resolved);
+  return resolved;
 }
 
 function createQueue(stateDir: string) {
@@ -82,9 +79,19 @@ async function drain(ingress: ReturnType<typeof createMSTeamsCardActionIngress>)
   await ingress.waitForIdle();
 }
 
+afterEach(async () => {
+  for (const dispose of disposers.splice(0).toReversed()) {
+    dispose();
+  }
+  closeOpenClawStateDatabaseForTest();
+  for (const stateDir of stateDirs.splice(0).toReversed()) {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 describe("createMSTeamsCardActionIngress", () => {
   it("commits a pending SQLite row before enqueue resolves", async () => {
-    const stateDir = createStateDir();
+    const stateDir = await createStateDir();
     const queue = createQueue(stateDir);
     const { app } = createApp();
     const ingress = createMSTeamsCardActionIngress({
@@ -107,7 +114,7 @@ describe("createMSTeamsCardActionIngress", () => {
   });
 
   it("recovers after restart and targets the original Teams thread proactively", async () => {
-    const stateDir = createStateDir();
+    const stateDir = await createStateDir();
     const firstApp = createApp();
     const first = createMSTeamsCardActionIngress({
       app: firstApp.app,
@@ -131,9 +138,7 @@ describe("createMSTeamsCardActionIngress", () => {
     await drain(recovered);
 
     expect(dispatch).toHaveBeenCalledOnce();
-    expect(secondApp.activities).toHaveBeenCalledWith(
-      "19:conversation;messageid=thread-root",
-    );
+    expect(secondApp.activities).toHaveBeenCalledWith("19:conversation;messageid=thread-root");
     expect(secondApp.create).toHaveBeenCalledWith(
       expect.objectContaining({
         conversation: expect.objectContaining({ id: "19:conversation;messageid=thread-root" }),
@@ -143,7 +148,7 @@ describe("createMSTeamsCardActionIngress", () => {
   });
 
   it("retries a transient dispatch failure without a restart", async () => {
-    const stateDir = createStateDir();
+    const stateDir = await createStateDir();
     const { app } = createApp();
     let now = 1_000;
     const dispatch = vi
@@ -168,7 +173,7 @@ describe("createMSTeamsCardActionIngress", () => {
   });
 
   it("does not retry an error after the reply lane durably adopts the turn", async () => {
-    const stateDir = createStateDir();
+    const stateDir = await createStateDir();
     const { app } = createApp();
     const dispatch = vi.fn(async (_context, lifecycle) => {
       await lifecycle.onAdopted();
@@ -190,7 +195,7 @@ describe("createMSTeamsCardActionIngress", () => {
   });
 
   it("claim-fences duplicate delivery across concurrent drain instances", async () => {
-    const stateDir = createStateDir();
+    const stateDir = await createStateDir();
     const { app } = createApp();
     const dispatch = vi.fn(async () => {});
     const first = createMSTeamsCardActionIngress({

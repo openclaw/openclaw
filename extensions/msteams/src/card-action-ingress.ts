@@ -9,18 +9,15 @@ import { DEFAULT_ACCOUNT_ID } from "../runtime-api.js";
 import type { MSTeamsSdkCloudOptions } from "./cloud.js";
 import { buildStoredConversationReference } from "./conversation-reference.js";
 import { formatUnknownError } from "./errors.js";
-import {
-  extractMSTeamsConversationMessageId,
-  normalizeMSTeamsConversationId,
-} from "./inbound.js";
+import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
   deleteMSTeamsActivityWithReference,
   sendMSTeamsActivityWithReference,
   updateMSTeamsActivityWithReference,
 } from "./sdk-proactive.js";
-import type { MSTeamsApp } from "./sdk.js";
 import type { MSTeamsActivity, MSTeamsTurnContext } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
 const CARD_ACTION_INGRESS_VERSION = 1;
 const CARD_ACTION_COMPLETED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -125,12 +122,7 @@ function createReplayContext(params: {
       )) as { id?: string } | void;
     },
     deleteActivity: async (activityId) => {
-      await deleteMSTeamsActivityWithReference(
-        app,
-        reference,
-        activityId,
-        proactiveOptions,
-      );
+      await deleteMSTeamsActivityWithReference(app, reference, activityId, proactiveOptions);
     },
     getTeamDetails: (teamId) => app.api.teams.getById(teamId),
   };
@@ -147,7 +139,12 @@ export function createMSTeamsCardActionIngress(params: {
   serviceUrlBoundary?: MSTeamsSdkCloudOptions;
   onLog?: (message: string) => void;
   now?: () => number;
-  retryPolicy?: { maxAttempts?: number; deadLetterMinAgeMs?: number; baseMs?: number; maxMs?: number };
+  retryPolicy?: {
+    maxAttempts?: number;
+    deadLetterMinAgeMs?: number;
+    baseMs?: number;
+    maxMs?: number;
+  };
 }) {
   const queue =
     params.queue ??

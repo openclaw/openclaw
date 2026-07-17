@@ -1061,9 +1061,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     },
   });
 
-  const buildDebounceEntry = async (
-    context: MSTeamsTurnContext,
-  ): Promise<MSTeamsDebounceEntry> => {
+  const buildDebounceEntry = async (context: MSTeamsTurnContext): Promise<MSTeamsDebounceEntry> => {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -1093,9 +1091,35 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     };
   };
 
-  const handleTeamsMessage = async (context: MSTeamsTurnContext) => {
-    await inboundDebouncer.enqueue(await buildDebounceEntry(context));
-  };
+  async function handleTeamsMessage(context: MSTeamsTurnContext) {
+    const activity = context.activity;
+    const attachments = Array.isArray(activity.attachments)
+      ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
+      : [];
+    const rawText = activity.text?.trim() ?? "";
+    const htmlText = extractTextFromHtmlAttachments(attachments);
+    const valueText =
+      rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
+    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+    const wasMentioned = wasMSTeamsBotMentioned(activity);
+    const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+    const replyToId = activity.replyToId ?? undefined;
+    const implicitMentionKinds: Array<"reply_to_bot"> =
+      conversationId &&
+      replyToId &&
+      (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+        ? ["reply_to_bot"]
+        : [];
+
+    await inboundDebouncer.enqueue({
+      context,
+      rawText,
+      text,
+      attachments,
+      wasMentioned,
+      implicitMentionKinds,
+    });
+  }
 
   return Object.assign(handleTeamsMessage, {
     // Durable replays surface pre-adoption failures to the queue and bypass

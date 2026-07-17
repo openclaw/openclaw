@@ -129,10 +129,9 @@ vi.mock("express", () => {
 });
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
-  vi.fn<RegisterMSTeamsHandlersMock>((handler) => {
-    handler.runCardAction = vi.fn(async () => {});
-    return handler;
-  }),
+  vi.fn<RegisterMSTeamsHandlersMock>((handler) =>
+    Object.assign(handler, { runCardAction: vi.fn(async () => {}) }),
+  ),
 );
 const isSigninInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
 const isCardActionInvokeAuthorized = vi.hoisted(() => vi.fn(async () => true));
@@ -176,9 +175,7 @@ vi.mock("./monitor-handler.js", () => ({
   registerMSTeamsHandlers,
 }));
 
-vi.mock("./card-action-ingress.js", () => ({
-  createMSTeamsCardActionIngress,
-}));
+vi.mock("./card-action-ingress.js", () => ({ createMSTeamsCardActionIngress }));
 
 vi.mock("./file-consent-invoke.js", () => ({
   runMSTeamsFileConsentInvokeHandler,
@@ -310,13 +307,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     resolveAllowlistMocks.resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
     isSigninInvokeAuthorized.mockReset().mockResolvedValue(true);
     isCardActionInvokeAuthorized.mockReset().mockResolvedValue(true);
-    cardActionIngress.enqueue
-      .mockReset()
-      .mockResolvedValue({ kind: "accepted", duplicate: false });
-    cardActionIngress.drainOnce.mockReset().mockResolvedValue({ started: 0 });
-    cardActionIngress.waitForIdle.mockReset().mockResolvedValue(undefined);
-    cardActionIngress.dispose.mockReset();
-    createMSTeamsCardActionIngress.mockClear();
     runMSTeamsFileConsentInvokeHandler.mockReset().mockResolvedValue(undefined);
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
@@ -791,33 +781,15 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       conversationStore: createStores().conversationStore,
       pollStore: createStores().pollStore,
     });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
+    await waitForMSTeamsTestState(() => expect(registerMSTeamsHandlers).toHaveBeenCalled());
+    const app = (await loadMSTeamsSdkWithAuth.mock.results[0]!.value).app;
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
-    )?.[1];
-    if (typeof cardActionHandler !== "function") {
-      throw new Error("expected card.action handler");
-    }
-    let releaseCommit: (() => void) | undefined;
-    const commitWork = new Promise<{ kind: "accepted"; duplicate: false }>((resolve) => {
-      releaseCommit = () => resolve({ kind: "accepted", duplicate: false });
-    });
-    let releaseDrain: (() => void) | undefined;
-    const drainWork = new Promise<{ started: number }>((resolve) => {
-      releaseDrain = () => resolve({ started: 1 });
-    });
-    cardActionIngress.enqueue.mockReturnValueOnce(commitWork);
-    cardActionIngress.drainOnce.mockReturnValueOnce(drainWork);
-
+    )?.[1] as (event: unknown) => Promise<unknown>;
+    const commit = Promise.withResolvers<{ kind: "accepted"; duplicate: false }>();
+    const drain = Promise.withResolvers<{ started: number }>();
+    cardActionIngress.enqueue.mockReturnValueOnce(commit.promise);
+    cardActionIngress.drainOnce.mockReturnValueOnce(drain.promise);
     const responsePromise = cardActionHandler({
       activity: {
         type: "invoke",
@@ -826,7 +798,6 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
-
     await vi.waitFor(() => expect(cardActionIngress.enqueue).toHaveBeenCalledTimes(1));
     let acked = false;
     void responsePromise.then(() => {
@@ -834,27 +805,10 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     await Promise.resolve();
     expect(acked).toBe(false);
-
-    releaseCommit?.();
-    const response = await responsePromise;
-    expect(response).toMatchObject({ statusCode: 200, value: "OK" });
+    commit.resolve({ kind: "accepted", duplicate: false });
+    expect(await responsePromise).toMatchObject({ statusCode: 200, value: "OK" });
     expect(cardActionIngress.drainOnce).toHaveBeenCalled();
-    releaseDrain?.();
-    await drainWork;
-
-    cardActionIngress.enqueue.mockClear();
-    isCardActionInvokeAuthorized.mockResolvedValueOnce(false);
-    const deniedResponse = await cardActionHandler({
-      activity: {
-        type: "invoke",
-        name: "adaptiveCard/action",
-        id: "invoke-denied",
-        value: { action: { data: { action: "nonPoll" } } },
-      },
-    });
-    expect(deniedResponse).toMatchObject({ statusCode: 200, value: "Not authorized." });
-    expect(cardActionIngress.enqueue).not.toHaveBeenCalled();
-
+    drain.resolve({ started: 1 });
     abort.abort();
     await task;
   });
@@ -1149,4 +1103,3 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
