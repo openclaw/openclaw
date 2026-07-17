@@ -19,7 +19,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
-import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
+import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
