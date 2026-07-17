@@ -111,6 +111,83 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("reactivates a yielded tracked run before registering a plugin subagent follow-up", async () => {
+    mocks.getLatestSubagentRunByChildSessionKey.mockReset();
+    mocks.replaceSubagentRunAfterSteer.mockReset();
+    const childSessionKey = "agent:work:subagent:yielded-plugin-followup";
+    const yieldedRun = {
+      runId: "run-yielded",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "original required task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      startedAt: 2,
+      endedAt: 3,
+      pauseReason: "sessions_yield" as const,
+      expectsCompletionMessage: true,
+    };
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+    };
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = cfg;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "yielded-plugin-session", updatedAt: Date.now() },
+      canonicalKey: childSessionKey,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store = {
+        [childSessionKey]: {
+          sessionId: "yielded-plugin-session",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(yieldedRun);
+    mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { durationMs: 100 },
+    });
+    const baseClient = requireValue(backendGatewayClient(), "expected backend client");
+    const pluginClient: AgentHandlerArgs["client"] = {
+      connect: baseClient.connect,
+      internal: {
+        ...baseClient.internal,
+        agentRunTracking: "plugin_subagent",
+        pluginRuntimeOwnerId: "memory-core",
+      },
+    };
+
+    await invokeAgent(
+      {
+        message: "delegated result",
+        sessionKey: childSessionKey,
+        idempotencyKey: "run-followup",
+      },
+      { reqId: "run-followup", client: pluginClient },
+    );
+    await waitForAgentCommandCall();
+
+    expect(mocks.getLatestSubagentRunByChildSessionKey).toHaveBeenCalledTimes(1);
+    expect(mocks.getLatestSubagentRunByChildSessionKey).toHaveBeenCalledWith(childSessionKey);
+    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledTimes(1);
+    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
+      previousRunId: "run-yielded",
+      nextRunId: "run-followup",
+      fallback: yieldedRun,
+      runTimeoutSeconds: 0,
+      task: "delegated result",
+    });
+  });
+
   it("tracks plugin SDK subagent agent runs through the subagent registry only", async () => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
