@@ -102,6 +102,7 @@ async function fetchLinkContent(params: {
   });
   try {
     if (!response.ok) {
+      await response.body?.cancel();
       throw new Error(`Link fetch failed with HTTP ${response.status}`);
     }
     const buffer = await readResponseWithLimit(response, CLI_OUTPUT_MAX_BUFFER);

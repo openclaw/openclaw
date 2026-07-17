@@ -199,4 +199,26 @@ describe("runLinkUnderstanding", () => {
       }),
     );
   });
+
+  it("cancels the response body on non-OK status before throwing", async () => {
+    const cancelSpy = vi.spyOn(ReadableStream.prototype, "cancel").mockResolvedValue(undefined);
+    try {
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: new Response("not found", { status: 404 }),
+        finalUrl: "https://example.com/404",
+        release,
+      });
+
+      await runLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: ctx("see https://example.com/404"),
+      });
+
+      expect(cancelSpy).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      cancelSpy.mockRestore();
+    }
+  });
 });
