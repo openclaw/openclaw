@@ -1,5 +1,5 @@
 // Derives the case-insensitive key used to match plugin ids against config policy lists.
-import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 /**
  * Canonicalizes a plugin id for comparison against `plugins.allow`, `plugins.deny`, and
