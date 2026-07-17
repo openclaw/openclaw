@@ -168,6 +168,18 @@ public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     }
 }
 
+public struct OpenClawChatSessionWorktree: Codable, Sendable, Hashable {
+    public let id: String?
+    public let branch: String?
+    public let repoRoot: String?
+
+    public init(id: String? = nil, branch: String? = nil, repoRoot: String? = nil) {
+        self.id = id
+        self.branch = branch
+        self.repoRoot = repoRoot
+    }
+}
+
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
     public var id: String {
         self.key
@@ -189,8 +201,17 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var space: String?
     public var updatedAt: Double?
     public var lastReadAt: Double?
+    public var lastInteractionAt: Double?
     public var lastActivityAt: Double?
     public var sessionId: String?
+
+    public var parentSessionKey: String?
+    public var spawnedBy: String?
+    public var childSessions: [String]?
+    public var status: String?
+    public var hasActiveRun: Bool?
+    public var hasActiveSubagentRun: Bool?
+    public var worktree: OpenClawChatSessionWorktree?
 
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
@@ -241,7 +262,15 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         archivedAt: Double? = nil,
         unread: Bool? = nil,
         lastReadAt: Double? = nil,
-        lastActivityAt: Double? = nil)
+        lastInteractionAt: Double? = nil,
+        lastActivityAt: Double? = nil,
+        parentSessionKey: String? = nil,
+        spawnedBy: String? = nil,
+        childSessions: [String]? = nil,
+        status: String? = nil,
+        hasActiveRun: Bool? = nil,
+        hasActiveSubagentRun: Bool? = nil,
+        worktree: OpenClawChatSessionWorktree? = nil)
     {
         self.key = key
         self.kind = kind
@@ -259,8 +288,16 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.space = space
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
+        self.lastInteractionAt = lastInteractionAt
         self.lastActivityAt = lastActivityAt
         self.sessionId = sessionId
+        self.parentSessionKey = parentSessionKey
+        self.spawnedBy = spawnedBy
+        self.childSessions = childSessions
+        self.status = status
+        self.hasActiveRun = hasActiveRun
+        self.hasActiveSubagentRun = hasActiveSubagentRun
+        self.worktree = worktree
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel

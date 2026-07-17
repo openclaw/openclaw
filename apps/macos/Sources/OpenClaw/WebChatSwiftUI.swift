@@ -59,7 +59,7 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     typealias SessionTarget = OpenClawChatSessionTarget
 
-    private let outboxGatewayID: String?
+    let outboxGatewayID: String?
     private let routingIdentity: RoutingIdentity
 
     init(outboxGatewayID: String? = nil, defaultGlobalAgentID: String? = nil) {
