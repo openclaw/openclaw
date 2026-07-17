@@ -409,26 +409,16 @@ function toolsForSurface(params: {
   }).tools as AgentTool[];
 }
 
-function isBenchReasoningModel(provider: ProviderId, modelId: string): boolean {
-  if (provider === "openai") {
-    return modelId.startsWith("gpt-5");
-  }
-  if (provider === "anthropic") {
-    return /(?:^|-)claude-sonnet-5(?:$|[^a-z0-9])/i.test(modelId);
-  }
-  // Gemini 2.5/3 require explicit thinking controls to avoid provider defaults.
-  return /(?:^|\/)gemini-(?:2\.5|3(?:\.\d+)?)-/i.test(modelId);
-}
-
-function createBenchModel(provider: ProviderId, modelId: string): Model {
+function createBenchModel(provider: ProviderId): Model {
   const meta = PROVIDERS[provider];
+  const modelId = meta.defaultModel;
   return {
     id: modelId,
     name: modelId,
     api: meta.api,
     provider,
     baseUrl: meta.baseUrl,
-    reasoning: isBenchReasoningModel(provider, modelId),
+    reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 400_000,
@@ -500,7 +490,7 @@ async function runOne(params: {
   const agent = new Agent({
     sessionId: `bench-${scope}`,
     initialState: {
-      model: createBenchModel(params.provider, params.model),
+      model: createBenchModel(params.provider),
       systemPrompt: SYSTEM_PROMPT,
       tools,
       thinkingLevel: "off",
@@ -668,16 +658,10 @@ type BenchArgs = {
   providers: ProviderId[];
   surfaces: Surface[];
   taskIds: string[];
-  models: Record<ProviderId, string>;
 };
 
 export function parseBenchArgs(argv: readonly string[]): BenchArgs {
-  const knownNames = new Set([
-    "providers",
-    "surfaces",
-    "tasks",
-    ...PROVIDER_IDS.map((provider) => `model-${provider}`),
-  ]);
+  const knownNames = new Set(["providers", "surfaces", "tasks"]);
   for (const arg of argv) {
     const separator = arg.indexOf("=");
     const name = separator > 2 && arg.startsWith("--") ? arg.slice(2, separator) : "";
@@ -704,16 +688,7 @@ export function parseBenchArgs(argv: readonly string[]): BenchArgs {
     fallback: allTaskIds,
     allowed: allTaskIds,
   });
-  const models = Object.fromEntries(
-    PROVIDER_IDS.map((provider) => {
-      const model = readArg(argv, `model-${provider}`) ?? PROVIDERS[provider].defaultModel;
-      if (!model.trim()) {
-        throw new Error(`--model-${provider} must be non-empty`);
-      }
-      return [provider, model];
-    }),
-  ) as Record<ProviderId, string>;
-  return { providers, surfaces, taskIds, models };
+  return { providers, surfaces, taskIds };
 }
 
 function readProviderApiKey(provider: ProviderId): string | undefined {
@@ -727,7 +702,7 @@ function readProviderApiKey(provider: ProviderId): string | undefined {
 }
 
 async function main(argv: readonly string[] = process.argv.slice(2)) {
-  const { providers, surfaces, taskIds, models } = parseBenchArgs(argv);
+  const { providers, surfaces, taskIds } = parseBenchArgs(argv);
   const tasks = TASKS.filter((task) => taskIds.includes(task.id));
   const results: RunMetrics[] = [];
   let keyedProviders = 0;
@@ -749,7 +724,7 @@ async function main(argv: readonly string[] = process.argv.slice(2)) {
       continue;
     }
     keyedProviders += 1;
-    const model = models[provider];
+    const model = meta.defaultModel;
     for (const surface of surfaces) {
       for (const task of tasks) {
         const label = `${provider}/${model} ${surface} ${task.id}`;

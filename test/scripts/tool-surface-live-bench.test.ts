@@ -3,19 +3,17 @@ import { describe, expect, it } from "vitest";
 import { parseBenchArgs } from "../../scripts/repro/tool-surface-live-bench.ts";
 
 describe("tool surface live bench repro", () => {
-  it("parses provider, surface, task, and model selections", () => {
+  it("parses provider, surface, and task selections", () => {
     expect(
       parseBenchArgs([
         "--providers=openai,google",
         "--surfaces=direct,code-mode",
         "--tasks=recovery",
-        "--model-openai=gpt-test",
       ]),
     ).toMatchObject({
       providers: ["openai", "google"],
       surfaces: ["direct", "code-mode"],
       taskIds: ["recovery"],
-      models: { openai: "gpt-test" },
     });
   });
 
@@ -25,6 +23,9 @@ describe("tool surface live bench repro", () => {
     );
     expect(() => parseBenchArgs(["--surface=direct"])).toThrow(
       "unknown argument: --surface=direct",
+    );
+    expect(() => parseBenchArgs(["--model-openai=gpt-test"])).toThrow(
+      "unknown argument: --model-openai=gpt-test",
     );
   });
 });
