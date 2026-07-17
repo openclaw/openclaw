@@ -15,12 +15,19 @@ import {
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
 
+// DNS CLI commands invoke system tools (resolvectl, systemd-resolve, sudo tee)
+// that may stall waiting on dbus or tty input. Bound every spawn with a deadline
+// so a stalled system tool does not block the CLI indefinitely.
+const DNS_CLI_SPAWN_TIMEOUT_MS = 30_000;
+
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
 
 function run(cmd: string, args: string[], opts?: RunOpts): string {
   const res = spawnSync(cmd, args, {
     encoding: "utf-8",
     stdio: opts?.inherit ? "inherit" : "pipe",
+    timeout: DNS_CLI_SPAWN_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
@@ -51,6 +58,8 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
     input: content,
     encoding: "utf-8",
     stdio: ["pipe", "ignore", "inherit"],
+    timeout: DNS_CLI_SPAWN_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   if (res.error) {
     throw res.error;
