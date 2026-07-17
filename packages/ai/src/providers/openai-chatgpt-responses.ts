@@ -1104,6 +1104,8 @@ async function connectWebSocket(
   });
 }
 
+type WebSocketReleaseOptions = { keep?: boolean; closeCode?: number; closeReason?: string };
+
 async function acquireWebSocket(
   url: string,
   headers: Headers,
@@ -1112,18 +1114,14 @@ async function acquireWebSocket(
 ): Promise<{
   socket: WebSocketLike;
   entry?: CachedWebSocketConnection;
-  release: (options?: { keep?: boolean }) => void;
+  release: (options?: WebSocketReleaseOptions) => void;
 }> {
   if (!sessionId) {
     const socket = await connectWebSocket(url, headers, signal);
     return {
       socket,
-      release: ({ keep } = {}) => {
-        if (keep === false) {
-          closeWebSocketSilently(socket);
-          return;
-        }
-        closeWebSocketSilently(socket);
+      release: ({ closeCode, closeReason } = {}) => {
+        closeWebSocketSilently(socket, closeCode, closeReason);
       },
     };
   }
@@ -1142,9 +1140,9 @@ async function acquireWebSocket(
       return {
         socket: cached.socket,
         entry: cached,
-        release: ({ keep } = {}) => {
+        release: ({ keep, closeCode, closeReason } = {}) => {
           if (!keep || !isWebSocketReusable(cached.socket)) {
-            closeWebSocketSilently(cached.socket);
+            closeWebSocketSilently(cached.socket, closeCode, closeReason);
             websocketSessionCache.delete(sessionId);
             return;
           }
@@ -1157,8 +1155,8 @@ async function acquireWebSocket(
       const socket = await connectWebSocket(url, headers, signal);
       return {
         socket,
-        release: () => {
-          closeWebSocketSilently(socket);
+        release: ({ closeCode, closeReason } = {}) => {
+          closeWebSocketSilently(socket, closeCode, closeReason);
         },
       };
     }
@@ -1174,9 +1172,9 @@ async function acquireWebSocket(
   return {
     socket,
     entry,
-    release: ({ keep } = {}) => {
+    release: ({ keep, closeCode, closeReason } = {}) => {
       if (!keep || !isWebSocketReusable(entry.socket)) {
-        closeWebSocketSilently(entry.socket);
+        closeWebSocketSilently(entry.socket, closeCode, closeReason);
         if (entry.idleTimer) {
           clearTimeout(entry.idleTimer);
         }
@@ -1243,7 +1241,19 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
     return new TextDecoder().decode(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   }
   if (data && typeof data === "object" && "arrayBuffer" in data) {
-    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
+    const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer>; size?: unknown };
+    if (
+      typeof blobLike.size === "number" &&
+      blobLike.size > OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES
+    ) {
+      throw new WebSocketCloseError(
+        `WebSocket message too big: ${blobLike.size} bytes (limit: ${OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES} bytes)`,
+        {
+          code: WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE,
+          reason: "message too big",
+        },
+      );
+    }
     const arrayBuffer = await blobLike.arrayBuffer();
     return new TextDecoder().decode(new Uint8Array(arrayBuffer));
   }
@@ -1253,6 +1263,7 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
 async function* parseWebSocket(
   socket: WebSocketLike,
   signal?: AbortSignal,
+  onCloseError?: (error: WebSocketCloseError) => void,
 ): AsyncGenerator<Record<string, unknown>> {
   const queue: Record<string, unknown>[] = [];
   let pending: (() => void) | null = null;
@@ -1293,6 +1304,9 @@ async function* parseWebSocket(
         queue.push(parsed);
         wake();
       } catch (cause) {
+        if (cause instanceof WebSocketCloseError) {
+          onCloseError?.(cause);
+        }
         failed = new CodexProtocolError(
           `Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`,
           {
@@ -1463,6 +1477,7 @@ async function processWebSocketStream(
     options?.signal,
   );
   let keepConnection = true;
+  let closeError: WebSocketCloseError | undefined;
   const useCachedContext =
     options?.transport === "websocket-cached" || options?.transport === "auto";
   // ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
@@ -1477,7 +1492,11 @@ async function processWebSocketStream(
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
     await processResponsesStream(
       startWebSocketOutputOnFirstEvent(
-        mapCodexEvents(parseWebSocket(socket, options?.signal)),
+        mapCodexEvents(
+          parseWebSocket(socket, options?.signal, (error) => {
+            closeError = error;
+          }),
+        ),
         output,
         stream,
         onStart,
@@ -1520,7 +1539,11 @@ async function processWebSocketStream(
     keepConnection = false;
     throw error;
   } finally {
-    release({ keep: keepConnection });
+    release({
+      keep: keepConnection,
+      closeCode: closeError?.code,
+      closeReason: closeError?.reason,
+    });
   }
 }
 
