@@ -90,7 +90,8 @@ export class CustodianPage extends OpenClawLightDomElement {
    */
   private connectionScopeKey(): string {
     const { gatewayUrl, token, password, bootstrapToken } = this.context.gateway.connection;
-    return JSON.stringify([gatewayUrl, token, password, bootstrapToken]);
+    const deviceToken = this.context.gateway.snapshot.hello?.auth?.deviceToken ?? "";
+    return JSON.stringify([gatewayUrl, token, password, bootstrapToken, deviceToken]);
   }
 
   private synchronizeClient(): void {

@@ -23,6 +23,7 @@ type ContextHarness = {
   setGatewayUrl: (gatewayUrl: string) => void;
   setGatewayToken: (token: string) => void;
   setGatewayBootstrapToken: (bootstrapToken: string) => void;
+  setGatewayDeviceToken: (deviceToken: string) => void;
 };
 
 function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
@@ -78,8 +79,16 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
     setGatewayToken: (token: string) => {
       connection.token = token;
     },
-    setGatewayBootstrapToken: (bootstrapToken: string) => {
-      connection.bootstrapToken = bootstrapToken;
+    setGatewayBootstrapToken: (value: string) => {
+      connection.bootstrapToken = value;
+    },
+    setGatewayDeviceToken: (deviceToken: string) => {
+      snapshot = {
+        ...snapshot,
+        hello: snapshot.hello
+          ? { ...snapshot.hello, auth: { ...snapshot.hello.auth, deviceToken } }
+          : snapshot.hello,
+      };
     },
   };
 }
@@ -171,7 +180,7 @@ describe("custodian page", () => {
     const input = page.querySelector<HTMLInputElement>(
       '.custodian__composer input[type="password"]',
     )!;
-    input.value = "test-secret";
+    input.value = "test-token-placeholder";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
@@ -181,7 +190,7 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(page.querySelector('.custodian__composer input[type="password"]')).not.toBeNull();
     expect(page.textContent).toContain("Sensitive reply sent");
-    expect(page.innerHTML).not.toContain("test-secret");
+    expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
 
   it("preserves the onboarding session across a same-gateway reconnect", async () => {
@@ -270,7 +279,7 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await vi.waitFor(() => expect(page.textContent).toContain("Operator A conversation."));
 
-    setGatewayToken("operator-b-token");
+    setGatewayToken("test-token-placeholder");
     setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
@@ -301,7 +310,7 @@ describe("custodian page", () => {
     const { page } = await mountPage(context);
     await vi.waitFor(() => expect(page.textContent).toContain("Paired device conversation."));
 
-    setGatewayBootstrapToken("fresh-pairing-token");
+    setGatewayBootstrapToken("test-token-placeholder");
     setGatewaySnapshot({
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
@@ -310,6 +319,79 @@ describe("custodian page", () => {
 
     await vi.waitFor(() => expect(page.textContent).toContain("Re-paired welcome."));
     expect(page.textContent).not.toContain("Paired device conversation.");
+  });
+
+  it("starts a fresh session when stored device auth changes on the same gateway", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Device A conversation.",
+        action: "none",
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Device B welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Device A conversation."));
+
+    setGatewayDeviceToken("test-token-placeholder");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+    });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("Device B welcome."));
+    expect(page.textContent).not.toContain("Device A conversation.");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a pending sensitive turn when stored device auth changes", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Paste your token.",
+        sensitive: true,
+        action: "none",
+      })
+      .mockReturnValueOnce(
+        new Promise<never>(() => {
+          // Keep the sensitive turn pending across the credential change.
+        }),
+      )
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "New operator welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Paste your token."));
+
+    const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
+    composer.value = "test-token-placeholder";
+    composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    setGatewayDeviceToken("test-token-placeholder");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+    });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("New operator welcome."));
+    expect(page.textContent).not.toContain("Paste your token.");
+    expect(page.textContent).not.toContain("Sensitive reply sent");
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.innerHTML).not.toContain("test-token-placeholder");
   });
 
   it("does not offer replay for a failed user turn", async () => {
@@ -356,15 +438,16 @@ describe("custodian page", () => {
     await vi.waitFor(() => expect(page.textContent).toContain("Paste your API key."));
 
     const composer = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-    composer.value = " sk-padded-key ";
+    const sensitiveValue = ["", "test-token-placeholder", ""].join(" ");
+    composer.value = sensitiveValue;
     composer.dispatchEvent(new Event("input"));
     await page.updateComplete;
     page.querySelector<HTMLButtonElement>(".custodian__composer button")!.click();
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: " sk-padded-key " });
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ message: sensitiveValue });
     await vi.waitFor(() => expect(page.textContent).toContain("Key accepted."));
-    expect(page.textContent).not.toContain("sk-padded-key");
+    expect(page.textContent).not.toContain("test-token-placeholder");
   });
 
   it("sends skip as a reply and dismisses the question", async () => {
@@ -372,7 +455,7 @@ describe("custodian page", () => {
       id: "access",
       header: "Access",
       question: "How should OpenClaw work?",
-      options: [{ label: "Full access" }, { label: "Ask first" }],
+      options: [{ label: "Full access", recommended: true }, { label: "Ask first" }],
       isOther: false,
     };
     const request = vi
@@ -405,7 +488,7 @@ describe("custodian page", () => {
       id: "access",
       header: "Access",
       question: "How should OpenClaw work?",
-      options: [{ label: "Full access" }, { label: "Ask first" }],
+      options: [{ label: "Full access", recommended: true }, { label: "Ask first" }],
       isOther: false,
     };
     const request = vi

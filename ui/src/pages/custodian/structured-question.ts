@@ -63,7 +63,7 @@ function parseQuestion(value: unknown): CustodianStructuredQuestion | null {
   if (new Set(options.map((option) => option.label.toLocaleLowerCase())).size !== options.length) {
     return null;
   }
-  if (options.filter((option) => option.recommended).length > 1) {
+  if (options.filter((option) => option.recommended).length !== 1) {
     return null;
   }
   return {

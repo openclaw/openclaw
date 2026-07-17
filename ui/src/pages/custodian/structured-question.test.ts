@@ -48,5 +48,16 @@ describe("custodian structured question marker", () => {
       options: ["one", "two"],
     });
     expect(parseCustodianReply(invalid)).toEqual({ text: invalid, question: null });
+
+    const noRecommendation = markedQuestion({
+      id: "no-recommendation",
+      header: "Choices",
+      question: "Pick one",
+      options: [{ label: "One" }, { label: "Two" }],
+    });
+    expect(parseCustodianReply(noRecommendation)).toEqual({
+      text: noRecommendation,
+      question: null,
+    });
   });
 });

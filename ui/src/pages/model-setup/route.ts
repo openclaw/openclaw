@@ -46,6 +46,9 @@ export const page = definePage({
   id: "model-setup",
   path: "/settings/model-setup",
   aliases: ["/model-setup"],
+  // Query-only first-run changes need distinct matches so the completion
+  // action cannot retain a cached destination from the previous visit.
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: async (context: ApplicationContext, { location }) =>
     loadModelSetupRouteData(context, location),
   component: () =>
