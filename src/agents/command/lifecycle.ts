@@ -75,6 +75,19 @@ export function createAgentCommandLifecycle(params: {
       : undefined) ??
     (runResult.meta.error ? "Agent run failed" : undefined);
 
+  // Terminal consumers use yielded/liveness metadata to distinguish a paused
+  // continuation from a completed run; keep success and error events aligned.
+  const terminalLifecycleFields = (runResult: AgentAttemptResult) => ({
+    ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
+    ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
+    ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
+    ...(typeof runResult.meta.providerStarted === "boolean"
+      ? { providerStarted: runResult.meta.providerStarted }
+      : {}),
+    ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
+    ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+  });
+
   return {
     emitFinishing(runResult: AgentAttemptResult) {
       if (
@@ -119,7 +132,7 @@ export function createAgentCommandLifecycle(params: {
           startedAt: params.startedAt,
           endedAt: Date.now(),
           aborted: runResult.meta.aborted ?? false,
-          stopReason,
+          ...terminalLifecycleFields(runResult),
           ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
         },
       });
@@ -142,17 +155,10 @@ export function createAgentCommandLifecycle(params: {
           startedAt: params.startedAt,
           endedAt: Date.now(),
           error,
-          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
-          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
-          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
-          ...(typeof runResult.meta.providerStarted === "boolean"
-            ? { providerStarted: runResult.meta.providerStarted }
-            : {}),
+          ...terminalLifecycleFields(runResult),
           ...(typeof runResult.meta.aborted === "boolean"
             ? { aborted: runResult.meta.aborted }
             : {}),
-          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
-          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
           ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
         },
       });

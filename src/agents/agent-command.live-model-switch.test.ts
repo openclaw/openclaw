@@ -1218,6 +1218,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("preserves yielded terminal metadata on the deferred lifecycle end", async () => {
+    setupSingleAttemptFallback();
+    const result = makeSuccessResult("openai", "gpt-5.4");
+    state.runAgentAttemptMock.mockResolvedValue({
+      ...result,
+      meta: {
+        ...result.meta,
+        yielded: true,
+        livenessState: "paused",
+        replayInvalid: true,
+      },
+    });
+
+    await runBasicAgentCommand();
+
+    const lifecycleEnd = state.emitAgentEventMock.mock.calls
+      .map((call: unknown[]) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .find((event) => event.stream === "lifecycle" && event.data?.phase === "end");
+    expect(lifecycleEnd?.data).toMatchObject({
+      phase: "end",
+      stopReason: "end_turn",
+      aborted: false,
+      yielded: true,
+      livenessState: "paused",
+      replayInvalid: true,
+    });
+  });
+
   it("forwards the auth profile bound to the configured default model", async () => {
     state.runtimeConfigMock = {
       agents: {

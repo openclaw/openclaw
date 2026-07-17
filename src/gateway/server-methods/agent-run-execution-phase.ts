@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -20,6 +21,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -40,6 +42,7 @@ import {
 } from "./agent-run-dispatch.js";
 import { createAgentRunModelSelectionHandler } from "./agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "./agent-session-reset.js";
+import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -98,6 +101,7 @@ export function startAgentRunExecution(params: {
     releaseGatewayRootContinuation?.();
     releaseGatewayRootContinuation = undefined;
   };
+  let dispatchTaskTrackingMode = prepared.dispatchTaskTrackingMode;
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
@@ -127,7 +131,42 @@ export function startAgentRunExecution(params: {
         return;
       }
 
-      if (!params.isOneShotModelRun && params.resolvedSessionKey) {
+      if (prepared.taskTrackingMode === "plugin_subagent" && params.resolvedSessionKey) {
+        try {
+          // Preserve the paused run's requester and completion route before a new row can hide it.
+          const pluginSubagentReactivated = await reactivateCompletedSubagentSession({
+            sessionKey: params.resolvedSessionKey,
+            runId: params.runId,
+            task: params.message,
+          });
+          if (!pluginSubagentReactivated) {
+            await registerPluginSubagentRunFromGateway({
+              cfg: params.cfg,
+              runId: params.runId,
+              childSessionKey: params.resolvedSessionKey,
+              task: params.request.message.trim(),
+              requesterOrigin: normalizeDeliveryContext({
+                channel: params.delivery.resolvedChannel,
+                to: params.delivery.resolvedTo,
+                accountId: params.delivery.resolvedAccountId,
+                threadId: prepared.resolvedThreadId,
+              }),
+              pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+            });
+          }
+        } catch (err) {
+          params.context.logGateway.warn(
+            `failed to register plugin subagent run ${params.runId}; falling back to cli task tracking: ${formatForLog(err)}`,
+          );
+          dispatchTaskTrackingMode = "cli";
+        }
+      }
+
+      if (
+        !params.isOneShotModelRun &&
+        params.resolvedSessionKey &&
+        prepared.taskTrackingMode !== "plugin_subagent"
+      ) {
         await reactivateCompletedSubagentSession({
           sessionKey: params.resolvedSessionKey,
           runId: params.runId,
@@ -397,7 +436,7 @@ export function startAgentRunExecution(params: {
           : undefined,
         respond: params.respond,
         context: params.context,
-        taskTrackingMode: prepared.dispatchTaskTrackingMode,
+        taskTrackingMode: dispatchTaskTrackingMode,
       });
       dispatched = true;
     } catch (err) {
