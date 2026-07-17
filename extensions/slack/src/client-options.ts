@@ -18,6 +18,8 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
 };
 
 const SLACK_LOOKUP_TIMEOUT_MS = 30_000;
+const SLACK_WEB_TIMEOUT_MS = 30_000;
+const SLACK_WRITE_TIMEOUT_MS = 60_000;
 
 const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
@@ -69,6 +71,7 @@ export function resolveSlackWebClientOptions(options: WebClientOptions = {}): We
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved);
   resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
+  resolved.timeout ??= SLACK_WEB_TIMEOUT_MS;
   return resolved;
 }
 
@@ -76,6 +79,7 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  resolved.timeout ??= SLACK_WRITE_TIMEOUT_MS;
   return resolved;
 }
 
