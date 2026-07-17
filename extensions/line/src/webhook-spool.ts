@@ -20,12 +20,12 @@ const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
 
-export type LineWebhookDeadLetterReason =
+type LineWebhookDeadLetterReason =
   | "delivery-side-effects-committed"
   | "invalid-event"
   | "retry-limit-exceeded";
 
-export type LineWebhookDeliveryOutcome =
+type LineWebhookDeliveryOutcome =
   | { kind: "completed"; eventId: string }
   | { kind: "retry-scheduled"; eventId: string; attempt: number; error: string }
   | {
@@ -82,7 +82,7 @@ export class LineWebhookTerminalDeliveryError extends Error {
   }
 }
 
-export type LineWebhookSpool = {
+type LineWebhookSpool = {
   accept: (body: webhook.CallbackRequest) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;

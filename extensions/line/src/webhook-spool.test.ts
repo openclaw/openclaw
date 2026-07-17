@@ -12,11 +12,11 @@ import {
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
-import {
-  createLineWebhookSpool,
-  type LineWebhookDeliveryOutcome,
-  LineWebhookTerminalDeliveryError,
-} from "./webhook-spool.js";
+import { createLineWebhookSpool, LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
+
+type LineWebhookDeliveryOutcome = Parameters<
+  NonNullable<Parameters<typeof createLineWebhookSpool>[0]["onOutcome"]>
+>[0];
 
 type SpoolPayload = {
   version: number;
