@@ -14,6 +14,11 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
+import {
+  ClawMcpInstallError,
+  installClawMcpServers,
+  type PersistedClawMcpServerRef,
+} from "./mcp.js";
 import { ClawPackageInstallError, installClawPackages } from "./packages.js";
 import {
   persistClawInstallRecord,
@@ -70,6 +75,7 @@ type ClawAddResult = {
   configCommitted: boolean;
   workspaceFiles: PersistedClawWorkspaceFile[];
   packages: PersistedClawPackageRef[];
+  mcpServers: PersistedClawMcpServerRef[];
   cronJobs: PersistedClawCronRef[];
   installRecord?: PersistedClawInstall;
   error?: {
@@ -82,7 +88,9 @@ type ClawAddResult = {
 function hasUnsupportedMutationActions(plan: ClawAddPlan): boolean {
   return plan.actions.some(
     (action) =>
-      !["agent", "workspace", "workspaceFile", "package", "cronJob"].includes(action.kind),
+      !["agent", "workspace", "workspaceFile", "package", "mcpServer", "cronJob"].includes(
+        action.kind,
+      ),
   );
 }
 
@@ -120,6 +128,7 @@ function partialResult(params: {
   configCommitted: boolean;
   workspaceFiles?: PersistedClawWorkspaceFile[];
   packages?: PersistedClawPackageRef[];
+  mcpServers?: PersistedClawMcpServerRef[];
   cronJobs?: PersistedClawCronRef[];
   error: ClawAddResult["error"];
   nowMs?: number;
@@ -137,6 +146,7 @@ function partialResult(params: {
     configCommitted: params.configCommitted,
     workspaceFiles: params.workspaceFiles ?? [],
     packages: params.packages ?? [],
+    mcpServers: params.mcpServers ?? [],
     cronJobs: params.cronJobs ?? [],
     installRecord: {
       ...params.installRecord,
@@ -157,7 +167,7 @@ export async function applyClawAddPlan(
   if (hasUnsupportedMutationActions(plan)) {
     throw new ClawAddMutationError(
       "unsupported_components",
-      "This build can add agent settings, workspace files, packages, and cron jobs; declared MCP servers require a later lifecycle slice.",
+      "This build cannot add one or more declared Claw component kinds.",
     );
   }
   if (options.consentPlanIntegrity !== plan.planIntegrity) {

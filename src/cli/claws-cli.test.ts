@@ -73,6 +73,7 @@ vi.mock("../claws/export.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
+const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
 
 const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
 
@@ -274,6 +275,28 @@ describe("claws cli", () => {
       summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("redacts credential-bearing remote MCP URLs in add previews", async () => {
+    const manifestPath = await writeManifest({
+      schemaVersion: 1,
+      agent: { id: "demo-agent", name: "Demo Agent" },
+      mcpServers: {
+        remote: {
+          url: "https://example.com/mcp?token=abc123&mode=ok",
+          transport: "streamable-http",
+        },
+      },
+    });
+    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
+
+    await runClawsAddCommand(manifestPath, { dryRun: true, workspace }, mocks.runtime);
+
+    const output = mocks.logs.join("\n");
+    expect(output).toContain("MCP remote:");
+    expect(output).toContain("example.com");
+    expect(output).not.toContain("abc123");
+    expect(output).toContain("token=***");
   });
 
   it("blocks adding into an existing agent instead of merging", async () => {

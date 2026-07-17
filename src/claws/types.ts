@@ -106,7 +106,7 @@ type ClawRemoteMcpServer = ClawMcpServerCommon & {
   auth?: "oauth";
 };
 
-type ClawMcpServer = ClawStdioMcpServer | ClawRemoteMcpServer;
+export type ClawMcpServer = ClawStdioMcpServer | ClawRemoteMcpServer;
 
 export type ClawCronJob = {
   id: string;

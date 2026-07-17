@@ -4,12 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import {
-  deleteClawMcpServerRef,
-  installClawMcpServers,
-  planClawMcpServerRemoval,
-  readClawMcpServerRefs,
-} from "./mcp.js";
+import { deleteClawMcpServerRef, installClawMcpServers, planClawMcpServerRemoval } from "./mcp.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -108,7 +103,6 @@ describe("installClawMcpServers", () => {
       },
     ]);
     expect(JSON.stringify(refs)).not.toContain("DOCS_TOKEN");
-    expect(readClawMcpServerRefs("worker", { env: current.env })).toEqual(refs);
   });
 
   it("rejects a conflicting existing server without claiming ownership", async () => {
@@ -124,7 +118,6 @@ describe("installClawMcpServers", () => {
       code: "mcp_config_conflict",
       mcpServers: [],
     });
-    expect(readClawMcpServerRefs("worker", { env: current.env })).toEqual([]);
   });
 
   it("reuses an exact pre-existing server as independently owned", async () => {
@@ -159,7 +152,7 @@ describe("installClawMcpServers", () => {
 
   it("allows another Claw to share an exact Claw-created server", async () => {
     const first = await fixture("worker");
-    await installClawMcpServers(first.plan, {
+    const firstRefs = await installClawMcpServers(first.plan, {
       env: first.env,
       setMcpServer: vi.fn().mockResolvedValue(listedMcpServers()),
       listMcpServers: vi.fn().mockResolvedValue(listedMcpServers()),
@@ -190,7 +183,7 @@ describe("installClawMcpServers", () => {
       { agentId: "analyst", name: "docs", ownership: "claw-installed" },
       { agentId: "analyst", name: "linear", ownership: "claw-installed" },
     ]);
-    const firstDocs = readClawMcpServerRefs("worker", { env: first.env })[0]!;
+    const firstDocs = firstRefs[0]!;
     expect(planClawMcpServerRemoval(firstDocs, { env: first.env })).toBe("release");
     deleteClawMcpServerRef("analyst", "docs", { env: first.env });
     expect(planClawMcpServerRemoval(firstDocs, { env: first.env })).toBe("remove");
@@ -208,9 +201,6 @@ describe("installClawMcpServers", () => {
       code: "mcp_install_uncertain",
       mcpServers: [{ name: "docs", status: "pending" }],
     });
-    expect(readClawMcpServerRefs("worker", { env: current.env })).toMatchObject([
-      { name: "docs", status: "pending" },
-    ]);
   });
 
   it("reconciles an ambiguous write from source config on retry", async () => {

@@ -387,8 +387,7 @@ export async function buildClawAddPlan(params: {
   }
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
-  for (const name of Object.keys(params.manifest.mcpServers)) {
-    const server = params.manifest.mcpServers[name];
+  for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
     const existingServer = context.existingMcpServers?.[name];
     const exactExisting =
       existingServer !== undefined &&

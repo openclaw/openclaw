@@ -25,13 +25,6 @@ import {
   type PersistedClawCronRef,
 } from "./cron.js";
 import {
-  deleteClawMcpServerRef,
-  digestClawMcpServer,
-  planClawMcpServerRemoval,
-  reconcileClawMcpServerRefs,
-  type PersistedClawMcpServerRef,
-} from "./mcp.js";
-import {
   clawRemoveQuietRuntime,
   deletionEffects,
   readAllClawWorkspaceFiles,
@@ -40,6 +33,13 @@ import {
   synthesizeOrphanInstall,
   type RemovedWorkspaceFile,
 } from "./lifecycle-delete-support.js";
+import {
+  deleteClawMcpServerRef,
+  digestClawMcpServer,
+  planClawMcpServerRemoval,
+  reconcileClawMcpServerRefs,
+  type PersistedClawMcpServerRef,
+} from "./mcp.js";
 import {
   applyClawPackageRemovals,
   inspectClawPackage,
@@ -62,14 +62,14 @@ export const CLAW_REMOVE_PLAN_SCHEMA_VERSION = "openclaw.clawRemovePlan.v1" as c
 export const CLAW_REMOVE_RESULT_SCHEMA_VERSION = "openclaw.clawRemoveResult.v1" as const;
 const MAX_FILE_BYTES = 1024 * 1024;
 
-export type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
+type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
   state: "unchanged" | "modified" | "missing" | "unsafe";
   message?: string;
 };
-export type ClawMcpServerStatus = PersistedClawMcpServerRef & {
+type ClawMcpServerStatus = PersistedClawMcpServerRef & {
   state: "present" | "modified" | "missing" | "pending" | "failed";
 };
-export type ClawStatusRecord = {
+type ClawStatusRecord = {
   install: PersistedClawInstall;
   orphaned?: boolean;
   agentState: "present" | "modified" | "missing";
@@ -78,7 +78,7 @@ export type ClawStatusRecord = {
   mcpServers: ClawMcpServerStatus[];
   cronJobs: PersistedClawCronRef[];
 };
-export type ClawStatusResult = {
+type ClawStatusResult = {
   schemaVersion: typeof CLAW_STATUS_SCHEMA_VERSION;
   stability: typeof CLAW_OUTPUT_STABILITY;
   target?: string;
@@ -99,7 +99,7 @@ export type ClawStatusResult = {
     unresolvedCronRefs: number;
   };
 };
-export type ClawRemovePlanAction = {
+type ClawRemovePlanAction = {
   kind:
     | "agent"
     | "configBinding"
@@ -119,7 +119,7 @@ export type ClawRemovePlanAction = {
   reason?: string;
   details?: Record<string, unknown>;
 };
-export type ClawRemovePlan = {
+type ClawRemovePlan = {
   schemaVersion: typeof CLAW_REMOVE_PLAN_SCHEMA_VERSION;
   stability: typeof CLAW_OUTPUT_STABILITY;
   dryRun: true;
@@ -130,18 +130,18 @@ export type ClawRemovePlan = {
   actions: ClawRemovePlanAction[];
   blockers: Array<{ code: string; message: string }>;
 };
-export type RemovedCronJob = {
+type RemovedCronJob = {
   manifestId: string;
   schedulerJobId?: string;
   action: "removed" | "error";
   message?: string;
 };
-export type RemovedMcpServer = {
+type RemovedMcpServer = {
   name: string;
   action: "removed" | "missing" | "released" | "error";
   message?: string;
 };
-export type ClawRemoveResult = {
+type ClawRemoveResult = {
   schemaVersion: typeof CLAW_REMOVE_RESULT_SCHEMA_VERSION;
   stability: typeof CLAW_OUTPUT_STABILITY;
   dryRun: false;
@@ -872,3 +872,5 @@ export async function applyClawRemovePlan(
         }),
   };
 }
+
+/* oxlint-disable max-lines -- Stacked Claw lifecycle/remove composition keeps status, plan, and apply together until the RFC surface settles. */

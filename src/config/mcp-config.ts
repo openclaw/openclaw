@@ -327,9 +327,11 @@ export async function unsetConfiguredMcpServer(params: {
       removed: false,
     };
   }
+  const loadedServer = loaded.mcpServers[name];
   if (
     params.expectedServer &&
-    stableStringify(canonicalizeConfiguredMcpServer(loaded.mcpServers[name])) !==
+    loadedServer &&
+    stableStringify(canonicalizeConfiguredMcpServer(loadedServer)) !==
       stableStringify(canonicalizeConfiguredMcpServer(params.expectedServer))
   ) {
     return {
