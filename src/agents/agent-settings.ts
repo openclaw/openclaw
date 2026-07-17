@@ -13,6 +13,7 @@ type AgentSettingsManagerLike = {
   getCompactionKeepRecentTokens: () => number;
   applyOverrides: (overrides: {
     compaction: {
+      enabled?: boolean;
       reserveTokens?: number;
       keepRecentTokens?: number;
     };
@@ -88,7 +89,14 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   }
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
+  const overrides: { enabled?: boolean; reserveTokens?: number; keepRecentTokens?: number } = {};
+  // Only an explicit `false` is propagated: `true` is already the default, and a
+  // runtime override of `true` would outrank applyAgentAutoCompactionGuard's later
+  // setCompactionEnabled(false) in the settings merge, re-enabling auto-compaction
+  // in the overflow-prone cases the guard exists to protect.
+  if (compactionCfg?.enabled === false) {
+    overrides.enabled = false;
+  }
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }

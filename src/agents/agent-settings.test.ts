@@ -160,6 +160,32 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
     expect(settingsManager.applyOverrides).not.toHaveBeenCalled();
   });
 
+  it("propagates compaction.enabled=false from config so auto-compaction can be disabled", () => {
+    const settingsManager = SettingsManager.inMemory();
+
+    applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: { agents: { defaults: { compaction: { enabled: false } } } },
+    });
+
+    expect(settingsManager.getCompactionEnabled()).toBe(false);
+  });
+
+  it("does not propagate compaction.enabled=true, keeping the auto-compaction guard authoritative", () => {
+    const settingsManager = SettingsManager.inMemory();
+
+    applyAgentCompactionSettingsFromConfig({
+      settingsManager,
+      cfg: { agents: { defaults: { compaction: { enabled: true } } } },
+    });
+    applyAgentAutoCompactionGuard({
+      settingsManager,
+      silentOverflowProneProvider: true,
+    });
+
+    expect(settingsManager.getCompactionEnabled()).toBe(false);
+  });
+
   it("caps the effective reserve so small-context models do not compact at token one", () => {
     // Embedded runner default reserveTokens is 16 384. With a 16 384 context window
     // both the default reserve and floor exceed the safe maximum of 8 384.

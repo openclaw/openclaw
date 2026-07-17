@@ -120,6 +120,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.cliBackends": "Optional CLI backends for text-only fallback (claude-cli, etc.).",
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+  "agents.defaults.compaction.enabled":
+    "Enables automatic compaction when the session context nears token limits (default: true). Set false to disable auto-compaction entirely; long sessions then risk hard context-overflow failures instead of summarized continuity. An explicit true does not override the built-in auto-compaction safety guard, which still disables embedded auto-compaction for overflow-prone providers or when a context engine owns compaction.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
   "agents.defaults.compaction.provider":

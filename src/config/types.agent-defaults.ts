@@ -519,6 +519,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Enable automatic compaction when context nears token limits (default: true). Set false to disable auto-compaction. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Embedded OpenClaw reserve target before floor and context-window caps. */
