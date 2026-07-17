@@ -40,6 +40,15 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
+function buildTelegramTextToolProgressLine(text: string): ChannelProgressDraftLine {
+  return {
+    kind: "item",
+    label: "",
+    text,
+    prefix: false,
+  };
+}
+
 export function createTelegramProgressController(params: {
   accountId: string;
   chatId: TelegramMessageContext["chatId"];
@@ -73,6 +82,7 @@ export function createTelegramProgressController(params: {
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
+    updateOnLineChange: true,
     update: async (streamText, options) => {
       draftEverRendered = true;
       await params.draft.prepareAnswerLaneForToolProgress();
@@ -113,7 +123,10 @@ export function createTelegramProgressController(params: {
     if (!canPushToolProgress()) {
       return false;
     }
-    return await compositor.pushToolProgress(line, options);
+    return await compositor.pushToolProgress(
+      typeof line === "string" ? buildTelegramTextToolProgressLine(line) : line,
+      options,
+    );
   };
   const pushReasoningProgress = async (payload: {
     text?: string;
@@ -257,7 +270,7 @@ export function createTelegramProgressController(params: {
   };
   const handlePlanUpdate = async (payload: CallbackPayload<"onPlanUpdate">) => {
     if (payload.phase === "update" && canPushToolProgress()) {
-      await compositor.pushPlanProgress(payload.planSteps, {
+      await compositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
       });
     }

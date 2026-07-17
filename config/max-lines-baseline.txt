@@ -134,7 +134,6 @@ extensions/google-meet/index.ts
 extensions/google-meet/src/cli.test.ts
 extensions/google-meet/src/cli.ts
 extensions/google-meet/src/meet.ts
-extensions/google-meet/src/realtime-node.ts
 extensions/google-meet/src/realtime.ts
 extensions/google-meet/src/runtime.ts
 extensions/google-meet/src/transports/chrome.ts
@@ -322,7 +321,6 @@ extensions/telegram/src/send.test.ts
 extensions/telegram/src/send.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
-extensions/telegram/src/webhook.ts
 extensions/tlon/src/monitor/index.ts
 extensions/voice-call/index.test.ts
 extensions/voice-call/index.ts
@@ -496,7 +494,6 @@ src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/native-hook-relay.ts
 src/agents/harness/selection.test.ts
 src/agents/harness/selection.ts
-src/agents/live-cache-regression-runner.ts
 src/agents/main-session-restart-recovery.test.ts
 src/agents/main-session-restart-recovery.ts
 src/agents/model-auth-availability.ts
@@ -512,13 +509,13 @@ src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openai-completions-transport.ts
 src/agents/openai-responses-transport.ts
-src/agents/openai-transport-stream.base.test-utils.ts
-src/agents/openai-transport-stream.deepseek-and-shaping.test-utils.ts
-src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test-utils.ts
-src/agents/openai-transport-stream.reasoning-and-cache.test-utils.ts
-src/agents/openai-transport-stream.replay-and-tools.test-utils.ts
-src/agents/openai-transport-stream.streaming.test-utils.ts
-src/agents/openai-transport-stream.usage-and-calls.test-utils.ts
+src/agents/openai-transport-stream.base.test.ts
+src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
+src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
+src/agents/openai-transport-stream.reasoning-and-cache.test.ts
+src/agents/openai-transport-stream.replay-and-tools.test.ts
+src/agents/openai-transport-stream.streaming.test.ts
+src/agents/openai-transport-stream.usage-and-calls.test.ts
 src/agents/openclaw-tools.media-factory-plan.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
@@ -791,7 +788,6 @@ src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/schtasks.ts
 src/daemon/systemd.test.ts
 src/daemon/systemd.ts
-src/docker-setup.e2e.test.ts
 src/fleet/backup.runtime.ts
 src/fleet/containers.runtime.ts
 src/fleet/service.runtime.ts
@@ -895,7 +891,6 @@ src/gateway/session-compaction-checkpoints.ts
 src/gateway/session-create-service.ts
 src/gateway/session-message-events.test.ts
 src/gateway/session-reset-service.ts
-src/gateway/session-transcript-readers.ts
 src/gateway/session-utils.fs.test.ts
 src/gateway/session-utils.fs.ts
 src/gateway/session-utils.subagent.test.ts
@@ -950,7 +945,6 @@ src/infra/outbound/message-action-runner.ts
 src/infra/outbound/outbound-send-service.test.ts
 src/infra/outbound/targets.test.ts
 src/infra/package-update-steps.ts
-src/infra/push-apns.ts
 src/infra/restart-stale-pids.test.ts
 src/infra/restart.ts
 src/infra/run-node.test.ts
@@ -1055,7 +1049,6 @@ src/plugins/tools.optional.test.ts
 src/plugins/tools.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
-src/plugins/update.ts
 src/proxy-capture/store.sqlite.ts
 src/routing/resolve-route.test.ts
 src/routing/resolve-route.ts

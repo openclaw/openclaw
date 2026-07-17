@@ -39,7 +39,6 @@ export {
 export type {
   DurableInboundReplyDeliveryOptions,
   DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
 } from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
@@ -191,11 +190,14 @@ export const recordDroppedChannelInboundHistory = recordDroppedChannelTurnHistor
 function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
-  const onTurnAdopted = params.onTurnAdopted ?? params.replyOptions?.onTurnAdopted;
+  const turnAdoptionLifecycle =
+    params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   if (!params.replyPipeline) {
     return {
       dispatcherOptions: params.dispatcherOptions,
-      replyOptions: onTurnAdopted ? { ...params.replyOptions, onTurnAdopted } : params.replyOptions,
+      replyOptions: turnAdoptionLifecycle
+        ? { ...params.replyOptions, turnAdoptionLifecycle }
+        : params.replyOptions,
     };
   }
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -213,7 +215,7 @@ function resolveAssembledReplyPipeline(
     replyOptions: {
       onModelSelected,
       ...params.replyOptions,
-      ...(onTurnAdopted ? { onTurnAdopted } : {}),
+      ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     },
   };
 }
@@ -710,7 +712,7 @@ async function runChannelTurn<
   const admission = resolved.admission ?? preflightAdmission ?? ({ kind: "dispatch" } as const);
   let result: ChannelTurnResult<TDispatchResult>;
   try {
-    // Prepared runDispatch was assembled earlier and ignores late options (including onTurnAdopted).
+    // Prepared runDispatch was assembled earlier and ignores late options.
     const dispatchResult = await dispatchResolvedChannelTurn(
       "runDispatch" in resolved
         ? {
@@ -730,7 +732,9 @@ async function runChannelTurn<
             admission,
             log: params.log,
             messageId: input.id,
-            ...(params.onTurnAdopted ? { onTurnAdopted: params.onTurnAdopted } : {}),
+            ...(params.turnAdoptionLifecycle
+              ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+              : {}),
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;

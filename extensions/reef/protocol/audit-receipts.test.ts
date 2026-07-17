@@ -143,6 +143,15 @@ describe("receipts", () => {
     await expect(
       confirmDelivery({ ...accepted, bodyHash: "e".repeat(64) }, identity.signing.publicKey, audit),
     ).rejects.toThrow("invalid delivery receipt");
+    await expect(
+      confirmDelivery(accepted, identity.signing.publicKey, audit, {
+        id: accepted.id,
+        bodyHash: "e".repeat(64),
+      }),
+    ).rejects.toThrow("invalid delivery receipt");
+    await expect(
+      confirmDelivery(accepted, identity.signing.publicKey, audit, { status: "rejected" }),
+    ).rejects.toThrow("invalid delivery receipt");
   });
 
   it("rejects unbounded and non-exact receipts before signature verification", () => {

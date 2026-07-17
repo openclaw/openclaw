@@ -304,6 +304,11 @@ upgrade when those commands first appear. The Gateway invokes them through the
 normal plugin node policy and isolates failures by host.
 
 Paired-node rows appear as a **Codex** group in the normal sessions sidebar.
+Within each host, rows group by project folder by default; a working directory
+under `.claude/worktrees/<name>` folds into its origin repository, and project
+groups collapse like other sidebar sections. Use the folder icon in the catalog
+header to flatten or restore the project groups. The same grouping applies to
+the Claude sessions catalog.
 By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.

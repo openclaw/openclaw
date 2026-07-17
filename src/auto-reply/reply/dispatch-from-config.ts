@@ -22,6 +22,8 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -100,6 +102,7 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
@@ -172,6 +175,8 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
+import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -179,6 +184,12 @@ import {
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import {
+  buildChannelSourceTurnId,
+  readChannelSourceTurnId,
+  setChannelSourceTurnId,
+  shouldMintChannelSourceTurnId,
+} from "./source-turn-id.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -693,7 +704,12 @@ async function dispatchReplyFromConfigInner(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean;
+      kind?: ReplyDispatchKind;
+      responsePrefixContext?: ResponsePrefixContext;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -727,6 +743,7 @@ async function dispatchReplyFromConfigInner(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      responsePrefixContext: options?.responsePrefixContext,
     });
   };
 
@@ -974,6 +991,32 @@ async function dispatchReplyFromConfigInner(
     explicitCommandTurnCtx ||
     (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
 
+  const durableSourceTurnId =
+    readChannelSourceTurnId(ctx) ??
+    (shouldMintChannelSourceTurnId(ctx.Provider ?? ctx.Surface)
+      ? buildChannelSourceTurnId({
+          provider: resolveOriginMessageProvider({
+            originatingChannel: replyRoute.channel,
+            provider: ctx.Provider ?? ctx.Surface,
+          }),
+          accountId: replyRoute.accountId,
+          conversationId: replyRoute.to,
+          messageId:
+            normalizeOptionalString(ctx.MessageSidFull) ?? normalizeOptionalString(ctx.MessageSid),
+        })
+      : undefined);
+  // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
+  setChannelSourceTurnId(ctx, durableSourceTurnId);
+  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
+    // Process-local inbound dedupe cannot see provider redelivery after restart.
+    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
+    recordProcessed("skipped", { reason: "duplicate" });
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  }
+
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     recordProcessed("skipped", { reason: "duplicate" });
@@ -1059,7 +1102,17 @@ async function dispatchReplyFromConfigInner(
     }
   };
   markProcessing();
-
+  if (await capturePendingConversationTurnReply({ cfg, ctx })) {
+    emitMessageReceivedHooks();
+    commitInboundDedupeIfClaimed();
+    recordProcessed("completed", { reason: "conversation-turn-reply" });
+    markIdle("message_completed");
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+      observedReplyDelivery: true,
+    });
+  }
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -1077,10 +1130,24 @@ async function dispatchReplyFromConfigInner(
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (!suppressDelivery) {
+        const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
+        const modelSelection = {
+          ...selectedModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
+        };
+        const responsePrefixContext = {
+          identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
+          provider: selectedModel.provider,
+          model: extractShortModelName(selectedModel.model),
+          modelFull: `${selectedModel.provider}/${selectedModel.model}`,
+          thinkingLevel: modelSelection.thinkLevel ?? "off",
+        };
         const payload = {
           text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
-        const result = await routeReplyToOriginating(payload);
+        // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
+        // their prefix, so seed that live context only when no cross-channel route is used.
+        const result = await routeReplyToOriginating(payload, { responsePrefixContext });
         if (result) {
           queuedFinal = result.ok;
           if (isRoutedReplyDelivered(result)) {
@@ -1093,6 +1160,7 @@ async function dispatchReplyFromConfigInner(
           }
         } else {
           markInboundDedupeReplayUnsafe();
+          params.replyOptions?.onModelSelected?.(modelSelection);
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
@@ -2281,16 +2349,13 @@ async function dispatchReplyFromConfigInner(
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    // External resolvers call this SDK callback directly and may
-                    // send only the shipped string form; normalize once so
-                    // channel forwards and fallback notices see both fields.
-                    const planSteps =
-                      normalizeAgentPlanSteps(payload.planSteps) ??
-                      normalizeAgentPlanSteps(payload.steps);
+                    const steps = normalizeAgentPlanSteps(payload.steps);
                     const normalized = {
-                      ...payload,
-                      steps: planSteps?.map((entry) => entry.step) ?? payload.steps,
-                      planSteps,
+                      phase: payload.phase,
+                      title: payload.title,
+                      explanation: payload.explanation,
+                      steps,
+                      source: payload.source,
                     };
                     markProgress();
                     await waitForPendingDirectBlockReplyDelivery(
@@ -2316,7 +2381,7 @@ async function dispatchReplyFromConfigInner(
                     }
                     await sendPlanUpdate({
                       explanation: normalized.explanation,
-                      steps: planSteps,
+                      steps,
                     });
                   },
                   onApprovalEvent: async (payload) => {

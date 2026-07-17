@@ -66,6 +66,13 @@ export type StatusSummary = {
   };
   channelSummary: string[];
   queuedSystemEvents: string[];
+  degradedSecretOwners?: Array<{
+    ownerKind: "account" | "capability" | "gateway" | "provider" | "route";
+    ownerId: string;
+    state: "unavailable";
+    paths: string[];
+    reason: string;
+  }>;
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
   taskAuditRetainedLost?: RetainedLostTaskAuditSummary;

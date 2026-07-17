@@ -681,6 +681,7 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
+    expect(runtimeErrors.join("\n")).toContain("--params must be valid JSON.");
   });
 
   it("validates gateway call timeout before opening a transport", async () => {

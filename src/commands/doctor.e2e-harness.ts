@@ -284,8 +284,20 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/commitments/commitments.json",
       hasLegacy: false,
     },
+    acpReplayLedger: {
+      sourcePath: "/tmp/state/acp/event-ledger.json",
+      hasLegacy: false,
+    },
     managedOutgoingImages: {
       sourceDir: "/tmp/state/media/outgoing/records",
+      hasLegacy: false,
+    },
+    apns: {
+      sourcePath: "/tmp/state/push/apns-registrations.json",
+      hasLegacy: false,
+    },
+    workspace: {
+      sources: [],
       hasLegacy: false,
     },
     webPush: {
@@ -311,11 +323,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       knownChannelIds: [],
       defaultAccountIds: {},
       accountIds: {},
-      hasLegacy: false,
-    },
-    execApprovals: {
-      sourcePath: "/tmp/state/exec-approvals.legacy.json",
-      targetPath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
     },
     channelPlans: {

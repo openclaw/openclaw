@@ -49,6 +49,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -60,6 +61,7 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
@@ -144,6 +146,70 @@ describe("renderPlugins", () => {
     expect(
       container.querySelector('[data-plugin-id="broken"] [role="alert"]')?.textContent,
     ).toContain("manifest invalid");
+  });
+
+  it("keeps plugin fallback monograms on complete grapheme clusters", () => {
+    const cases = [
+      { id: "emoji-tools", name: "😀 Tools", expected: "😀T" },
+      { id: "mixed-emoji", name: "A😀", expected: "A😀" },
+      { id: "heart-tools", name: "❤️ Tools", expected: "❤️T" },
+      { id: "flag-tools", name: "🇺🇸 Tools", expected: "🇺🇸T" },
+      { id: "developer-tools", name: "👩‍💻 Tools", expected: "👩‍💻T" },
+      { id: "developer-name", name: "👩‍💻Dev", expected: "👩‍💻D" },
+      { id: "combining-mark", name: "é Tools", expected: "ÉT" },
+    ];
+    const plugins = cases.map(({ id, name }) => createPlugin({ id, name, origin: "global" }));
+    const container = mount(createProps({ result: createResult(plugins) }));
+
+    for (const { id, expected } of cases) {
+      expect(
+        container.querySelector(`[data-plugin-id="${id}"] .plugins-tile--fallback > span`)
+          ?.textContent,
+      ).toBe(expected);
+    }
+  });
+
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
+  });
+
+  it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
+
+    try {
+      const { pluginMonogram } = await import("./presentation.ts");
+      expect(pluginMonogram("😀 Tools")).toBe("😀T");
+      expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
+    }
   });
 
   it("filters the installed inventory by state", () => {

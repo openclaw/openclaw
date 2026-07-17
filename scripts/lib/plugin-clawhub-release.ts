@@ -1,6 +1,7 @@
 // Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { readBoundedResponseText } from "./bounded-response.ts";
@@ -229,7 +230,7 @@ async function buildClawHubQueryError(
     body = "";
   }
   if (body.length > CLAWHUB_ERROR_BODY_MAX_CHARS) {
-    body = `${body.slice(0, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;
+    body = `${truncateUtf16Safe(body, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;
   }
   const diagnosticHeaders = ["retry-after", "x-request-id", "x-vercel-id", "cf-ray"]
     .map((name) => {

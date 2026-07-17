@@ -1,3 +1,4 @@
+import { implicitMentionKindWhen } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost plugin module implements monitor behavior.
 import {
   buildChannelProgressDraftLineForEntry,
@@ -42,10 +43,13 @@ import {
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
+import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   authorizeMattermostCommandInvocation,
   formatMattermostDirectMessageDropLog,
+  mapMattermostChannelTypeToChatType,
   normalizeMattermostAllowEntry,
+  resolveMattermostTrustedChatKind,
   resolveMattermostMonitorInboundAccess,
 } from "./monitor-auth.js";
 import {
@@ -62,11 +66,6 @@ import {
   deliverMattermostReplyWithDraftPreview,
   type MattermostDraftPreviewState,
 } from "./monitor-draft-delivery.js";
-import {
-  evaluateMattermostMentionGate,
-  mapMattermostChannelTypeToChatType,
-  resolveMattermostTrustedChatKind,
-} from "./monitor-gating.js";
 import {
   formatInboundFromLabel,
   normalizeMention,
@@ -1211,25 +1210,40 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 threadRootId: effectiveReplyToId,
               })
             : false;
-        const mentionDecision = evaluateMattermostMentionGate({
-          kind,
+        const shouldRequireMention =
+          kind !== "direct" &&
+          core.channel.groups.resolveRequireMention({
+            cfg,
+            channel: "mattermost",
+            accountId: account.accountId,
+            groupId: channelId,
+            requireMentionOverride: account.requireMention,
+          });
+        const implicitMentionKinds = implicitMentionKindWhen(
+          "bot_thread_participant",
+          threadAlreadyEngaged,
+        );
+        const mentionDecision = resolveMattermostInboundMentionDecision({
           cfg,
           accountId: account.accountId,
-          channelId,
-          threadRootId,
-          requireMentionOverride: account.requireMention,
-          resolveRequireMention: core.channel.groups.resolveRequireMention,
-          wasMentioned,
-          threadAlreadyEngaged,
-          isControlCommand,
+          kind,
+          requireMention: shouldRequireMention || oncharEnabled,
+          canDetectMention: canDetectMention || oncharEnabled,
+          wasMentioned: wasMentioned || oncharTriggered,
+          implicitMentionKinds,
+          allowTextCommands,
+          hasControlCommand: isControlCommand,
           commandAuthorized,
-          oncharEnabled,
-          oncharTriggered,
-          canDetectMention,
         });
-        const { shouldRequireMention, shouldBypassMention } = mentionDecision;
+        const { shouldBypassMention } = mentionDecision;
 
-        if (mentionDecision.dropReason === "onchar-not-triggered") {
+        if (
+          mentionDecision.shouldSkip &&
+          oncharEnabled &&
+          !oncharTriggered &&
+          !wasMentioned &&
+          !shouldBypassMention
+        ) {
           logVerboseMessage(
             `mattermost: drop group message (onchar not triggered channel=${channelId} sender=${senderId})`,
           );
@@ -1237,7 +1251,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
 
-        if (mentionDecision.dropReason === "missing-mention") {
+        if (mentionDecision.shouldSkip) {
           logVerboseMessage(
             `mattermost: drop group message (missing mention channel=${channelId} sender=${senderId} requireMention=${shouldRequireMention} bypass=${shouldBypassMention} canDetectMention=${canDetectMention})`,
           );

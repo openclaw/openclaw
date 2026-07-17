@@ -38,7 +38,6 @@ scenario:
     kind: flow
     channel: matrix
     summary: Spawn a bound Matrix child session and require native thread relation evidence on completion.
-    driver: live
     config:
       conversationId: main
       childMarker: QA-MATRIX-SUBAGENT-THREAD-OK
@@ -48,9 +47,6 @@ flow:
   steps:
     - name: delivers the child result in the spawned Matrix thread
       actions:
-        - assert:
-            expr: transport.id === 'matrix'
-            message: subagent thread spawn requires the live Matrix adapter
         - resetTransport: true
         - sendInbound:
             conversation:
