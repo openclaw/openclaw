@@ -314,16 +314,20 @@ function resolveInboundConversation(canonical: CanonicalInboundMessageHookContex
   parentConversationId?: string;
 } {
   const channelId = normalizeChannelId(canonical.channelId);
-  const pluginResolved = channelId
-    ? getChannelPlugin(channelId)?.messaging?.resolveInboundConversation?.({
-        from: canonical.from,
-        to: canonical.to ?? canonical.originatingTo,
-        conversationId: canonical.conversationId,
-        threadId: canonical.threadId,
-        threadParentId: canonical.threadParentId,
-        isGroup: canonical.isGroup,
-      })
-    : null;
+  const resolver = channelId
+    ? getChannelPlugin(channelId)?.messaging?.resolveInboundConversation
+    : undefined;
+  const pluginResolved = resolver?.({
+    from: canonical.from,
+    to: canonical.to ?? canonical.originatingTo,
+    conversationId: canonical.conversationId,
+    threadId: canonical.threadId,
+    threadParentId: canonical.threadParentId,
+    isGroup: canonical.isGroup,
+  });
+  if (pluginResolved === null) {
+    return {};
+  }
   if (pluginResolved) {
     return {
       conversationId: normalizeOptionalString(pluginResolved.conversationId),
