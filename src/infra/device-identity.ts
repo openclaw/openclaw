@@ -269,7 +269,10 @@ export function loadDeviceIdentityIfPresent(
       return null;
     }
     return normalized.identity;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn("Failed to load device identity:", err);
+    }
     return null;
   }
 }
