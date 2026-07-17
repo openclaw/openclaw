@@ -13,12 +13,12 @@ import {
 } from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
-export type ShellConfig = {
+type ShellConfig = {
   shell: string;
   args: string[];
 } & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
 
-export type ShellCommandInvocation =
+type ShellCommandInvocation =
   | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
   | { argv: [string, ...string[]]; input: string; stdin: "pipe" };
 
