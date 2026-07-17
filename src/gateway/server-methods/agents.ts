@@ -24,6 +24,14 @@ import {
 import { mergeIdentityMarkdownContent } from "../../agents/identity-file.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import {
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../../agents/workspace-state-store.js";
+import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
@@ -34,8 +42,6 @@ import {
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
 } from "../../agents/workspace.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
@@ -313,19 +319,21 @@ function respondAgentConfigPreconditionError(
   );
 }
 
-async function moveToTrashBestEffort(pathname: string): Promise<void> {
+async function moveToTrashBestEffort(pathname: string): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     await movePathToTrash(pathname);
+    return true;
   } catch {
     // Best-effort: path may already be gone or trash unavailable.
+    return false;
   }
 }
 
@@ -412,14 +420,14 @@ function buildAgentConfigUpdate(params: {
   agentId: string;
   safeName?: string;
   workspaceDir?: string;
-  model?: string;
+  model?: string | null;
   identity?: IdentityConfig;
 }): Parameters<typeof updateAgentConfigEntry>[0] {
   return {
     agentId: params.agentId,
     ...(params.safeName ? { name: params.safeName } : {}),
     ...(params.workspaceDir ? { workspace: params.workspaceDir } : {}),
-    ...(params.model ? { model: params.model } : {}),
+    ...(params.model !== undefined ? { model: params.model } : {}),
     ...(params.identity ? { identity: params.identity } : {}),
   };
 }
@@ -617,7 +625,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         ? resolveUserPath(params.workspace.trim())
         : undefined;
 
-    const model = resolveOptionalStringParam(params.model);
+    const model = params.model === null ? null : resolveOptionalStringParam(params.model);
 
     const safeName =
       typeof params.name === "string" && params.name.trim()
@@ -743,14 +751,15 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const deleteWorkspace = workspaceSharedWith.length === 0;
       const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
       if (deleteWorkspace) {
-        pathsToTrash.unshift(deleteResult.workspaceDir);
-        for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-          deleteResult.workspaceDir,
-        ).entries()) {
-          if (
-            await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })
-          ) {
-            pathsToTrash.push(attestationPath);
+        const legacyPlan = prepareLegacyWorkspaceStateReset(deleteResult.workspaceDir);
+        const statePlan = prepareWorkspaceStateDeletion(deleteResult.workspaceDir);
+        const workspaceRemoved = await moveToTrashBestEffort(deleteResult.workspaceDir);
+        if (workspaceRemoved) {
+          try {
+            await removeLegacyWorkspaceStateForReset(legacyPlan);
+            deleteWorkspaceState(statePlan);
+          } catch {
+            // Best-effort cleanup. A later explicit reset can remove stale rows.
           }
         }
       }

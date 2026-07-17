@@ -9,14 +9,38 @@ import UniformTypeIdentifiers
 /// window experience.
 @MainActor
 public struct OpenClawChatWindowShell: View {
+    public static let assistantTraceDefaultsKey = "openclaw.webchat.showAssistantTrace"
+
     @State private var viewModel: OpenClawChatViewModel
     @State private var sessionQuery = ""
     @State private var isConfirmingClearHistory = false
+    @State private var isPresentingSessions = false
     private let userAccent: Color?
+    private let showsAssistantTrace: Bool
+    private let emptyAssistantIntro: String?
+    private let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt]
+    private let talkControl: OpenClawChatTalkControl?
+    private let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    private let speech: OpenClawChatSpeechController?
 
-    public init(viewModel: OpenClawChatViewModel, userAccent: Color? = nil) {
+    public init(
+        viewModel: OpenClawChatViewModel,
+        userAccent: Color? = nil,
+        showsAssistantTrace: Bool = false,
+        emptyAssistantIntro: String? = nil,
+        emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [],
+        talkControl: OpenClawChatTalkControl? = nil,
+        voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
+        speech: OpenClawChatSpeechController? = nil)
+    {
         _viewModel = State(initialValue: viewModel)
         self.userAccent = userAccent
+        self.showsAssistantTrace = showsAssistantTrace
+        self.emptyAssistantIntro = emptyAssistantIntro
+        self.emptyAssistantPrompts = emptyAssistantPrompts
+        self.talkControl = talkControl
+        self.voiceNoteControl = voiceNoteControl
+        self.speech = speech
     }
 
     public var body: some View {
@@ -30,7 +54,13 @@ public struct OpenClawChatWindowShell: View {
                 viewModel: self.viewModel,
                 drawsBackground: false,
                 userAccent: self.userAccent,
-                composerChrome: .clean)
+                showsAssistantTrace: self.showsAssistantTrace,
+                composerChrome: .clean,
+                emptyAssistantIntro: self.emptyAssistantIntro,
+                emptyAssistantPrompts: self.emptyAssistantPrompts,
+                talkControl: self.talkControl,
+                voiceNoteControl: self.voiceNoteControl,
+                speech: self.speech)
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
@@ -54,7 +84,10 @@ public struct OpenClawChatWindowShell: View {
                 self.activeSessionTitle))
                 .font(OpenClawChatTypography.body)
         }
-        .onChange(of: self.viewModel.pendingRunCount) { previous, current in
+        .sheet(isPresented: self.$isPresentingSessions) {
+                ChatSessionsSheet(viewModel: self.viewModel)
+            }
+            .onChange(of: self.viewModel.pendingRunCount) { previous, current in
                 // Run completion changes timestamps/token totals; pull them once
                 // per run instead of polling.
                 if previous > 0, current == 0 {
@@ -93,6 +126,14 @@ public struct OpenClawChatWindowShell: View {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(self.viewModel.messages.isEmpty)
+
+            Button {
+                self.isPresentingSessions = true
+            } label: {
+                Text("Sessions")
+                    .font(OpenClawChatTypography.body)
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -223,6 +264,13 @@ public struct OpenClawChatWindowShell: View {
             }
             .keyboardShortcut("r", modifiers: [.command])
 
+            Button {
+                self.isPresentingSessions = true
+            } label: {
+                chatWindowActionLabel("Sessions…", systemImage: "rectangle.stack")
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+
             Divider()
 
             Button {
@@ -238,6 +286,18 @@ public struct OpenClawChatWindowShell: View {
             }
             .keyboardShortcut("e", modifiers: [.command, .shift])
             .disabled(self.viewModel.messages.isEmpty)
+
+            Toggle(isOn: Binding(
+                get: { self.showsAssistantTrace },
+                set: {
+                    UserDefaults.standard.set(
+                        $0,
+                        forKey: Self.assistantTraceDefaultsKey)
+                })) {
+                    chatWindowActionLabel(
+                        "Show reasoning & tool activity",
+                        systemImage: "brain.head.profile")
+                }
 
             Divider()
 

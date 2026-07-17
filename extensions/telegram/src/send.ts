@@ -19,7 +19,7 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
-import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,6 +33,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
 import {
+  markdownToTelegramChunks,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -719,7 +720,7 @@ function createTelegramRequestWithDiag(params: {
   strictShouldRetry?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  const request = createTelegramRetryRunner({
+  const request = createChannelApiRetryRunner({
     retry: params.retry,
     configRetry: params.account.config.retry,
     verbose: params.verbose,
@@ -1094,8 +1095,16 @@ async function sendMessageTelegramWithContext(
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
+    if (textMode === "markdown") {
+      // Chunk Markdown before rendering so HTML expansion cannot introduce a
+      // second mid-word split. Caller-authored HTML keeps its safe splitter below.
+      return markdownToTelegramChunks(rawText, 4000, { tableMode }).map((chunk) => ({
+        htmlText: chunk.html,
+        plainText: telegramHtmlToPlainTextFallback(chunk.html),
+      }));
+    }
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
+    const fallbackText = telegramHtmlToPlainTextFallback(htmlText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);

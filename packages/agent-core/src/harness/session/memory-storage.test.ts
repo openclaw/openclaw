@@ -62,6 +62,44 @@ describe("InMemorySessionStorage", () => {
     });
   });
 
+  it("returns a selected branch in root-to-leaf order", async () => {
+    const activeLeaf: SessionTreeEntry = {
+      type: "custom",
+      id: "active-leaf",
+      parentId: "child",
+      timestamp: "2026-01-01T00:00:02.000Z",
+      customType: "active",
+    };
+    const sideLeaf: SessionTreeEntry = {
+      type: "custom",
+      id: "side-leaf",
+      parentId: "root",
+      timestamp: "2026-01-01T00:00:03.000Z",
+      customType: "side",
+    };
+    const storage = new InMemorySessionStorage({
+      entries: [rootEntry, childEntry, activeLeaf, sideLeaf],
+    });
+
+    expect((await storage.getPathToRoot(activeLeaf.id)).map((entry) => entry.id)).toEqual([
+      "root",
+      "child",
+      "active-leaf",
+    ]);
+    expect((await storage.getPathToRoot(sideLeaf.id)).map((entry) => entry.id)).toEqual([
+      "root",
+      "side-leaf",
+    ]);
+  });
+
+  it("normalizes session names to one line", async () => {
+    const session = new Session(new InMemorySessionStorage());
+
+    await session.appendSessionName("  first\nsecond\r\nthird  ");
+
+    expect(await session.getSessionName()).toBe("first second third");
+  });
+
   it("traverses descendants of leaf markers through the selected target", async () => {
     const leafEntry: SessionTreeEntry = {
       type: "leaf",

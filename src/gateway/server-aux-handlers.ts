@@ -537,6 +537,7 @@ export function createGatewayAuxHandlers(params: {
         loadPluginApprovalHandlers,
       ),
       "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
+      "approval.history": createLazyHandler("approval.history", loadApprovalHandlers),
       "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),

@@ -54,6 +54,55 @@ const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
 const buildPluginBindingResolvedTextMock: UnknownMock =
   runtimeMocks.buildPluginBindingResolvedTextMock;
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  const runMockedTurn = async (plan: Parameters<typeof actual.dispatchChannelInboundTurn>[0]) => {
+    const { cfg, route, delivery, ...prepared } = plan;
+    return await actual.runPreparedInboundReply({
+      ...prepared,
+      routeSessionKey: route.sessionKey,
+      storePath: String(resolveStorePathMock(cfg.session?.store, { agentId: route.agentId })),
+      recordInboundSession: async (...args: unknown[]) => {
+        await recordInboundSessionMock(...args);
+      },
+      runDispatch: async () =>
+        await dispatchReplyMock({
+          ctx: plan.ctxPayload,
+          cfg,
+          dispatcherOptions: {
+            ...plan.dispatcherOptions,
+            deliver: delivery.deliver,
+            onError: delivery.onError,
+            responsePrefixContextProvider: vi.fn(() => ({})),
+          },
+          toolsAllow: plan.toolsAllow,
+          replyOptions: {
+            ...plan.replyOptions,
+            onModelSelected: vi.fn(),
+          },
+          replyResolver: plan.replyResolver,
+        }),
+    });
+  };
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const resolved = await params.adapter.resolveTurn(
+        input,
+        { kind: "interaction", canStartAgentTurn: true },
+        {},
+      );
+      return await runMockedTurn(
+        resolved as Parameters<typeof actual.dispatchChannelInboundTurn>[0],
+      );
+    },
+  };
+});
+
 async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   provider: string;
   accountId: string;

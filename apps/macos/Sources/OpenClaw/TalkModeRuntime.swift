@@ -396,12 +396,12 @@ extension TalkModeRuntime {
                 idempotencyKey: runId,
                 attachments: [])
             guard self.isCurrent(gen) else { return }
-            let normalizedStatus = Self.normalizedChatSendStatus(response.status)
+            let normalizedStatus = ChatSendStatus.normalized(response.status)
             self.logger.info(
                 "talk chat.send ok runId=\(response.runId, privacy: .public) " +
                     "status=\(normalizedStatus, privacy: .public) " +
                     "session=\(sessionKey, privacy: .public)")
-            if Self.isTerminalChatSendFailure(response.status) {
+            if ChatSendStatus.acceptance(of: response.status) == .terminalFailure {
                 self.logger.warning(
                     "talk chat.send terminal ack runId=\(response.runId, privacy: .public) " +
                         "status=\(normalizedStatus, privacy: .public)")
@@ -410,7 +410,7 @@ extension TalkModeRuntime {
             }
 
             var assistantText: String?
-            if Self.isTerminalChatSendSuccess(response.status) {
+            if ChatSendStatus.acceptance(of: response.status) == .terminalSuccess {
                 self.logger.info(
                     "talk chat.send terminal ok runId=\(response.runId, privacy: .public); " +
                         "using history fallback")
@@ -522,19 +522,6 @@ extension TalkModeRuntime {
             group.cancelAll()
             return result
         }
-    }
-
-    private static func normalizedChatSendStatus(_ status: String) -> String {
-        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
-        self.normalizedChatSendStatus(status) == "ok"
-    }
-
-    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
-        let normalized = self.normalizedChatSendStatus(status)
-        return normalized == "timeout" || normalized == "error"
     }
 
     private static func matchesSessionKey(_ incoming: String, _ current: String) -> Bool {

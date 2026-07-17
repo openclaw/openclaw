@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { constants } from "node:os";
-import { basename, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants, tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SIGNAL_GRACE_MS = 5000;
@@ -20,7 +21,22 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
+const invocationCwd = process.cwd();
+// The supervisor must not retain a cwd inside a worktree the operation may
+// delete; only the child keeps the caller's original cwd.
+process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
+const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
+const lockScriptSnapshot = join(lockSnapshotDir, "operation-lock.sh");
+// merge-run can delete this revision's script directory before lock release.
+writeFileSync(lockScriptSnapshot, readFileSync(lockScript));
+process.once("exit", () => {
+  try {
+    rmSync(lockSnapshotDir, { force: true, recursive: true });
+  } catch {
+    // Best-effort cleanup must not change the operation result.
+  }
+});
 const locks = new Map();
 let notificationBuffer = "";
 let discardingOversizedNotificationLine = false;
@@ -138,7 +154,7 @@ for (const signal of FORWARDED_SIGNALS) {
 }
 
 const child = spawn(script, args, {
-  cwd: process.cwd(),
+  cwd: invocationCwd,
   detached: true,
   env: {
     ...process.env,
@@ -320,7 +336,7 @@ function releaseLock({ lockRef, ownerOid }) {
         "release_pr_operation_lock",
       ].join("\n"),
       "operation-lock-release",
-      lockScript,
+      lockScriptSnapshot,
       repoRoot,
       lockRef,
       ownerOid,

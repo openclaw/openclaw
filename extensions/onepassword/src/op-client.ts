@@ -2,7 +2,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
@@ -190,13 +192,12 @@ export class OpClient {
   }
 
   private async readToken(): Promise<string> {
-    let contents: string;
+    let contents: string | undefined;
     try {
-      const [raw, stat] = await Promise.all([
-        fs.readFile(this.tokenFile, "utf8"),
-        fs.stat(this.tokenFile),
-      ]);
-      contents = raw.trim();
+      contents = tryReadSecretFileSync(this.tokenFile, "1Password service account token", {
+        rejectHardlinks: false,
+      });
+      const stat = await fs.stat(this.tokenFile);
       if (
         !this.permissionWarningEmitted &&
         process.platform !== "win32" &&
@@ -206,13 +207,11 @@ export class OpClient {
         this.warn("1Password service account token file permissions are broader than 0600");
       }
     } catch (error) {
-      throw new OnePasswordError(
-        "TOKEN_MISSING",
-        "1Password service account token file is missing",
-        {
-          cause: error,
-        },
-      );
+      const message =
+        error instanceof Error && extractErrorCode(error) === "too-large"
+          ? error.message
+          : "1Password service account token file is missing";
+      throw new OnePasswordError("TOKEN_MISSING", message, { cause: error });
     }
     if (!contents) {
       throw new OnePasswordError("TOKEN_MISSING", "1Password service account token file is empty");
@@ -242,6 +241,12 @@ export class OpClient {
         env: {
           OP_SERVICE_ACCOUNT_TOKEN: token,
           HOME: this.home,
+          // Force the pure service-account path. Without both overrides, op
+          // 2.35 on macOS still reads the 1Password desktop app's settings and
+          // can block on a per-PID App Data Protection dialog until a human
+          // answers, hanging the broker for timeoutMs on Mac gateway hosts.
+          OP_LOAD_DESKTOP_APP_SETTINGS: "false",
+          OP_BIOMETRIC_UNLOCK_ENABLED: "false",
         },
         timeoutMs: this.timeoutMs,
         maxBufferBytes: MAX_STDOUT_BYTES,

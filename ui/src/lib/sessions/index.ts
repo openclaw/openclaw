@@ -66,6 +66,7 @@ type SessionGroupMutationResult = "completed" | "stale";
 
 export type SessionListOptions = {
   agentId?: string;
+  spawnedBy?: string;
   activeMinutes?: number;
   search?: string;
   offset?: number;
@@ -312,9 +313,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
     params.activeMinutes = activeMinutes;
   }
   const agentId = options.agentId?.trim();
+  const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
   if (agentId) {
     params.agentId = agentId;
+  }
+  if (spawnedBy) {
+    params.spawnedBy = spawnedBy;
   }
   if (search) {
     params.search = search;

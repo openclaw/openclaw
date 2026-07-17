@@ -2099,6 +2099,25 @@ describe("launchd install", () => {
     expect(inspectPortUsage).toHaveBeenCalledWith(19007);
   });
 
+  it("uses the final repeated LaunchAgent port flag for restart stale cleanup", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: [...defaultProgramArguments, "--port", "18789", "--port=19008"],
+      environment: {},
+    });
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19008);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19008);
+  });
+
   it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({

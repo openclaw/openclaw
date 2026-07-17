@@ -7,6 +7,10 @@ import {
   validateTtsSpeakParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  assertSecretOwnerAvailable,
+  SecretSurfaceUnavailableError,
+} from "../../secrets/runtime-degraded-state.js";
+import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
@@ -189,6 +193,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      assertSecretOwnerAvailable("capability", "tts");
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
@@ -207,7 +212,23 @@ export const ttsHandlers: GatewayRequestHandlers = {
         fileExtension: result.fileExtension,
       });
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          formatForLog(err),
+          err instanceof SecretSurfaceUnavailableError
+            ? {
+                details: {
+                  reason: err.code,
+                  ownerKind: err.ownerKind,
+                  ownerId: err.ownerId,
+                },
+              }
+            : undefined,
+        ),
+      );
     }
   },
   "tts.setProvider": async ({ params, respond, context }) => {

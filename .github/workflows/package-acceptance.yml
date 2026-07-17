@@ -447,6 +447,7 @@ jobs:
         with:
           ref: ${{ inputs.workflow_ref }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Setup Node environment

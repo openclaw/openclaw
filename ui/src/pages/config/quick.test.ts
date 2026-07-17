@@ -707,6 +707,81 @@ describe("renderQuickSettings", () => {
     ).toBe("/avatar/main");
   });
 
+  it("falls back to the built-in logo when the assistant avatar request fails", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "assets/avatars/nova-portrait.png",
+          assistantAvatarUrl: "/openclaw/avatar/main",
+          assistantAvatarStatus: "local",
+          basePath: "/openclaw",
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(
+      ".config-identity--assistant .config-identity__avatar",
+    );
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/avatar/main");
+
+    avatar?.dispatchEvent(new Event("error"));
+
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/apple-touch-icon.png");
+    expect(avatar?.classList.contains("config-identity__avatar--fallback")).toBe(true);
+
+    avatar?.dispatchEvent(new Event("error"));
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/apple-touch-icon.png");
+  });
+
+  it("clears the fallback class after a rerendered assistant avatar loads", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: "/avatar/main",
+          assistantAvatarStatus: "local",
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(
+      ".config-identity--assistant .config-identity__avatar",
+    );
+    avatar?.dispatchEvent(new Event("error"));
+    expect(avatar?.classList.contains("config-identity__avatar--fallback")).toBe(true);
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "/avatar/recovered",
+          assistantAvatarUrl: "/avatar/recovered",
+          assistantAvatarStatus: "local",
+        }),
+      ),
+      container,
+    );
+
+    const recoveredAvatar = container.querySelector<HTMLImageElement>(
+      ".config-identity--assistant .config-identity__avatar",
+    );
+    expect(recoveredAvatar).toBe(avatar);
+    expect(recoveredAvatar?.getAttribute("src")).toBe("/avatar/recovered");
+    expect(recoveredAvatar?.classList.contains("config-identity__avatar--fallback")).toBe(true);
+
+    recoveredAvatar?.dispatchEvent(new Event("load"));
+
+    expect(recoveredAvatar?.classList.contains("config-identity__avatar--fallback")).toBe(false);
+  });
+
   it("shows the configured avatar source when the assistant falls back to the logo", () => {
     const container = document.createElement("div");
 

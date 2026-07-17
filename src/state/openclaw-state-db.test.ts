@@ -526,8 +526,10 @@ function runConcurrentSchemaProbe(params: {
     const rootDir = ${JSON.stringify(params.rootDir)};
     const mode = ${JSON.stringify(params.mode)};
     const workerSource = ${JSON.stringify(workerSource)};
-    const workerCount = 8;
-    const roundCount = 3;
+    // The barriers deterministically overlap both openers. Two contenders prove
+    // serialization without repeating the same child-process stress.
+    const workerCount = 2;
+    const roundCount = 1;
     const databasePaths = [];
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -730,11 +732,51 @@ describe("openclaw state database", () => {
         )
         .all(),
     ).toEqual([]);
+    expect(
+      database.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
     expect(() =>
       database.db
         .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
         .run("not-an-integer"),
     ).toThrow();
+  });
+
+  it("doctor migrates existing APNs tombstone tables to STRICT without losing rows", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE apns_registration_tombstones RENAME TO apns_registration_tombstones_strict;
+      CREATE TABLE apns_registration_tombstones (
+        node_id TEXT NOT NULL PRIMARY KEY,
+        deleted_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO apns_registration_tombstones VALUES ('ios-node-1', 42);
+      DROP TABLE apns_registration_tombstones_strict;
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state tables to SQLite STRICT typing (1)"],
+      warnings: [],
+    });
+    const migrated = openOpenClawStateDatabase(options);
+    expect(
+      migrated.db
+        .prepare("SELECT strict FROM pragma_table_list WHERE name = 'apns_registration_tombstones'")
+        .get(),
+    ).toEqual({ strict: 1 });
+    expect(migrated.db.prepare("SELECT * FROM apns_registration_tombstones").get()).toEqual({
+      node_id: "ios-node-1",
+      deleted_at_ms: 42,
+    });
   });
 
   it("doctor migrates version 2 tables to STRICT without losing rows", () => {
@@ -2059,6 +2101,37 @@ describe("openclaw state database", () => {
     expect(migratedSql.sql).toContain("'system-agent'");
   });
 
+  it("does not recursively recommend doctor when operator approval repair refuses a shape", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const customizedDb = new DatabaseSync(databasePath);
+    const currentSql = (
+      customizedDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    customizedDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    customizedDb.exec(
+      currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin', 'custom-thing'"),
+    );
+    customizedDb.exec("DROP TABLE operator_approvals_current");
+    customizedDb.close();
+
+    const result = repairOpenClawStateDatabaseSchema(options);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("automatic repair refused the unrecognized schema shape"),
+    ]);
+    expect(result.warnings[0]).not.toContain("run openclaw doctor --fix");
+  });
+
   it("adds managed-image typed columns before creating canonical indexes", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2128,7 +2201,7 @@ describe("openclaw state database", () => {
     );
     const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(3);
+    expect(databasePaths).toHaveLength(1);
     for (const [round, databasePath] of databasePaths.entries()) {
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {
@@ -2162,7 +2235,7 @@ describe("openclaw state database", () => {
     );
     const { DatabaseSync } = requireNodeSqlite();
 
-    expect(databasePaths).toHaveLength(3);
+    expect(databasePaths).toHaveLength(1);
     for (const databasePath of databasePaths) {
       const db = new DatabaseSync(databasePath, { readOnly: true });
       try {

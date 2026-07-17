@@ -367,7 +367,10 @@ const PACKAGE_ARTIFACT_BUILD_STEPS = [
   {
     label: "Building OpenClaw package artifacts",
     command: "node",
-    args: ["scripts/build-all.mjs", "ciArtifacts"],
+    // The full profile keeps canonical declaration emission; ciArtifacts is a
+    // PR-CI-only profile whose step env forces dts off and would clobber the
+    // OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 this packaging path requires.
+    args: ["scripts/build-all.mjs", "full"],
   },
 ];
 
