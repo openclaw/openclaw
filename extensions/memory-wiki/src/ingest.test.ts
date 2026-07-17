@@ -1,7 +1,8 @@
 // Memory Wiki tests cover ingest plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { describe, expect, it, vi } from "vitest";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -91,23 +92,38 @@ hello from source
     });
     await lockEntered.promise;
 
-    const ingest = ingestMemoryWikiSource({
-      config,
-      inputPath,
-      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
-    });
-    // Give an unserialized ingest enough real turns to reach its page write.
-    await new Promise((done) => {
-      setTimeout(done, 50);
-    });
-    await expect(fs.access(pagePath)).rejects.toThrow();
+    const ingestQueued = deferred();
+    const originalEnqueue = KeyedAsyncQueue.prototype.enqueue;
+    const enqueueSpy = vi
+      .spyOn(KeyedAsyncQueue.prototype, "enqueue")
+      .mockImplementation(function (key, task, hooks) {
+        ingestQueued.resolve();
+        return originalEnqueue.call(this, key, task, hooks);
+      });
+    let ingest: ReturnType<typeof ingestMemoryWikiSource> | undefined;
+    try {
+      ingest = ingestMemoryWikiSource({
+        config,
+        inputPath,
+        nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+      });
+      // On fixed code this observes ingest joining the held queue before any
+      // filesystem work. On unfixed code it observes nested compile only after
+      // the source page was already written, so the assertion fails.
+      await ingestQueued.promise;
+      await expect(fs.access(pagePath)).rejects.toThrow();
 
-    releaseLock.resolve();
-    // Completion also proves the nested compile re-enters the held vault
-    // lock reentrantly instead of deadlocking.
-    const result = await ingest;
-    await holder;
-    expect(result.created).toBe(true);
-    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("hello from source");
+      releaseLock.resolve();
+      // Completion also proves the nested compile re-enters the held vault
+      // lock reentrantly instead of deadlocking.
+      const result = await ingest;
+      await holder;
+      expect(result.created).toBe(true);
+      await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("hello from source");
+    } finally {
+      releaseLock.resolve();
+      enqueueSpy.mockRestore();
+      await Promise.allSettled([holder, ...(ingest ? [ingest] : [])]);
+    }
   });
 });
