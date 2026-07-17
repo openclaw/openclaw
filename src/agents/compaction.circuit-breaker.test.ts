@@ -56,14 +56,14 @@ describe("compaction staged fallback circuit breaker", () => {
     agentSessionMocks.generateSummary.mockReset();
   });
 
-  it("stops the fallback storm before later splits and merge", async () => {
+  it("stops the fallback storm and rejects the incomplete compaction", async () => {
     agentSessionMocks.generateSummary.mockRejectedValue(new Error("fetch failed"));
 
-    const result = await summarize();
+    await expect(summarize()).rejects.toThrow(
+      "Compaction staged summarization stopped after repeated generic fallbacks",
+    );
 
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
-    expect(result.kind).toBe("generic-fallback");
-    expect(result.text.match(/Summary unavailable due to size limits\./g)).toHaveLength(1);
   });
 
   it("resets after a successful split, completes the merge, and remains degraded", async () => {

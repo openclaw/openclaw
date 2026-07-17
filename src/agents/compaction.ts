@@ -46,6 +46,8 @@ type CompactionSummaryResult =
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const MAX_CONSECUTIVE_GENERIC_FALLBACKS = 2;
+const CIRCUIT_OPEN_ERROR =
+  "Compaction staged summarization stopped after repeated generic fallbacks";
 const MERGE_SUMMARIES_INSTRUCTIONS = [
   "Merge these partial summaries into a single cohesive summary.",
   "",
@@ -430,10 +432,9 @@ export async function summarizeInStages(params: {
         consecutiveGenericFallbacks,
         totalSplits: plan.chunks.length,
       });
-      return {
-        kind: "generic-fallback",
-        text: partialSummaries.join("\n\n"),
-      };
+      // The remaining chunks were never attempted. Abort the whole compaction
+      // so the caller keeps the source transcript instead of committing a gap.
+      throw new Error(CIRCUIT_OPEN_ERROR);
     }
     partialSummaries.push(result.text);
   }
