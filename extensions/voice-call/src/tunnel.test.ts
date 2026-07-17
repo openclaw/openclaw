@@ -12,10 +12,13 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   killedWith: NodeJS.Signals | null = null;
+  closeOnKill = true;
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killedWith = signal;
-    queueMicrotask(() => this.emit("close", null));
+    if (this.closeOnKill) {
+      queueMicrotask(() => this.emit("close", null));
+    }
     return true;
   }
 
@@ -168,6 +171,25 @@ describe("voice-call tunnels", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
+  });
+
+  it("bounds ngrok stop even when forced termination never emits close", async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = nextProcess();
+      proc.closeOnKill = false;
+      const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+      emitNgrokUrl(proc, "https://stuck.ngrok.io");
+      const tunnel = await result;
+
+      const stop = tunnel.stop();
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      await expect(stop).resolves.toBeUndefined();
+      expect(proc.killedWith).toBe("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("parses complete ngrok log lines before bounding the incomplete tail", async () => {

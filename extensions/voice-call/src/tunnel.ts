@@ -13,6 +13,8 @@ const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
 const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
+const NGROK_STOP_GRACE_MS = 2_000;
+const NGROK_FORCE_KILL_WAIT_MS = 1_000;
 
 function listenForChildStreamErrors(
   proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
@@ -146,21 +148,28 @@ async function startNgrokTunnel(config: {
               }
               await new Promise<void>((res) => {
                 let finished = false;
+                let forceKillWaitTimer: ReturnType<typeof setTimeout> | undefined;
                 const finish = () => {
                   if (finished) {
                     return;
                   }
                   finished = true;
-                  clearTimeout(fallback);
+                  if (forceKillTimer) {
+                    clearTimeout(forceKillTimer);
+                  }
+                  if (forceKillWaitTimer) {
+                    clearTimeout(forceKillWaitTimer);
+                  }
                   proc.off("close", finish);
                   res();
                 };
-                if (closed) {
-                  res();
-                  return;
-                }
                 proc.once("close", finish);
-                const fallback = setTimeout(finish, 2000);
+                const forceKillTimer = setTimeout(() => {
+                  if (!closed) {
+                    proc.kill("SIGKILL");
+                  }
+                  forceKillWaitTimer = setTimeout(finish, NGROK_FORCE_KILL_WAIT_MS);
+                }, NGROK_STOP_GRACE_MS);
                 proc.kill("SIGTERM");
                 if (closed) {
                   finish();
