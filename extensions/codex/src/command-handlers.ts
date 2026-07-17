@@ -1,6 +1,7 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -39,6 +40,11 @@ import {
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
+import {
+  codexDiagnosticsFeedbackState,
+  type CodexDiagnosticsTarget,
+  type PendingCodexDiagnosticsConfirmation,
+} from "./command-diagnostics-state.js";
 import {
   buildHelp,
   formatAccount,
@@ -90,7 +96,7 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-export type CodexCommandDeps = {
+type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
   codexControlRequest: CodexControlRequestFn;
   listCodexAppServerModels: typeof listAllCodexAppServerModels;
@@ -195,23 +201,6 @@ type ParsedDiagnosticsArgs =
   | { action: "cancel"; token: string }
   | { action: "usage" };
 
-type CodexDiagnosticsTarget = {
-  threadId: string;
-  identity: CodexAppServerBindingIdentity;
-  agentDir: string;
-  connectionScope?: "supervision";
-  appServerRuntimeFingerprint?: string;
-  pendingSupervisionBranch?: CodexAppServerThreadBinding["pendingSupervisionBranch"];
-  authProfileId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-};
-
 type CodexDiagnosticsCandidate = Omit<
   CodexDiagnosticsTarget,
   | "threadId"
@@ -220,22 +209,6 @@ type CodexDiagnosticsCandidate = Omit<
   | "pendingSupervisionBranch"
   | "authProfileId"
 >;
-
-type PendingCodexDiagnosticsConfirmation = {
-  token: string;
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  createdAt: number;
-};
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
@@ -265,17 +238,12 @@ const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   "stop",
 ]);
 
-const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
-const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
-const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
-const pendingCodexDiagnosticsConfirmationTokensByScope = new Map<string, string[]>();
-
-export function resetCodexDiagnosticsFeedbackStateForTests(): void {
-  lastCodexDiagnosticsUploadByThread.clear();
-  lastCodexDiagnosticsUploadByScope.clear();
-  pendingCodexDiagnosticsConfirmations.clear();
-  pendingCodexDiagnosticsConfirmationTokensByScope.clear();
-}
+const {
+  lastUploadByThread: lastCodexDiagnosticsUploadByThread,
+  lastUploadByScope: lastCodexDiagnosticsUploadByScope,
+  pendingConfirmations: pendingCodexDiagnosticsConfirmations,
+  pendingTokensByScope: pendingCodexDiagnosticsConfirmationTokensByScope,
+} = codexDiagnosticsFeedbackState;
 
 /**
  * No-arg `/codex` picker. Codex owns the command tree; channels render the
@@ -2337,7 +2305,7 @@ function splitArgs(value: string | undefined): string[] {
 function parseBindArgs(args: string[]): ParsedBindArgs {
   const parsed: ParsedBindArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex bind argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2389,7 +2357,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
   const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
   const filter: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex sessions argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2429,7 +2397,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
 function parseResumeArgs(args: string[]): ParsedResumeArgs {
   const parsed: ParsedResumeArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex resume argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2591,3 +2559,4 @@ function normalizeComputerUseStringOverrides(
   }
   return normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

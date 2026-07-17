@@ -1,19 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
-import type {
-  ForkSessionEntryFromParentParams,
-  ForkSessionEntryFromParentResult,
-} from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
-  setRealtimeVoiceAgentConsultDepsForTest,
-  consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
-} from "./agent-consult-runtime.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
+} from "./agent-consult-tool.js";
+
+type ForkSessionEntryFromParent =
+  typeof import("../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
+type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0];
+type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
+
+const sessionForkMocks = vi.hoisted(() => ({
+  defaultForkSessionEntryFromParent: undefined as ForkSessionEntryFromParent | undefined,
+  forkSessionEntryFromParent: vi.fn(),
+}));
+
+vi.mock("../auto-reply/reply/session-fork.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auto-reply/reply/session-fork.js")>();
+  sessionForkMocks.defaultForkSessionEntryFromParent = actual.forkSessionEntryFromParent;
+  sessionForkMocks.forkSessionEntryFromParent.mockImplementation(actual.forkSessionEntryFromParent);
+  return {
+    ...actual,
+    forkSessionEntryFromParent: sessionForkMocks.forkSessionEntryFromParent,
+  };
+});
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<
@@ -141,7 +156,14 @@ function createDeferred() {
 
 describe("realtime voice agent consult runtime", () => {
   afterEach(() => {
-    setRealtimeVoiceAgentConsultDepsForTest(null);
+    sessionForkMocks.forkSessionEntryFromParent.mockReset();
+    const defaultForkSessionEntryFromParent = sessionForkMocks.defaultForkSessionEntryFromParent;
+    if (!defaultForkSessionEntryFromParent) {
+      throw new Error("Expected the realtime voice session fork implementation");
+    }
+    sessionForkMocks.forkSessionEntryFromParent.mockImplementation(
+      defaultForkSessionEntryFromParent,
+    );
   });
 
   it("exposes the shared consult tool based on policy", () => {
@@ -289,8 +311,7 @@ describe("realtime voice agent consult runtime", () => {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
     };
-    const forkSessionEntryFromParent = vi.fn();
-    setRealtimeVoiceAgentConsultDepsForTest({ forkSessionEntryFromParent });
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
 
     await expect(
       consultRealtimeVoiceAgent({
@@ -426,7 +447,8 @@ describe("realtime voice agent consult runtime", () => {
       maxTokens: 100_000,
       parentTokens: 100,
     }));
-    const forkSessionEntryFromParent = vi.fn(
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
+    forkSessionEntryFromParent.mockImplementation(
       async (
         params: ForkSessionEntryFromParentParams,
       ): Promise<ForkSessionEntryFromParentResult> => {
@@ -465,9 +487,6 @@ describe("realtime voice agent consult runtime", () => {
         };
       },
     );
-    setRealtimeVoiceAgentConsultDepsForTest({
-      forkSessionEntryFromParent,
-    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -523,7 +542,8 @@ describe("realtime voice agent consult runtime", () => {
   it("falls back to a fresh isolated consult session when requester context is too large", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
     const warn = vi.fn();
-    const forkSessionEntryFromParent = vi.fn(
+    const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
+    forkSessionEntryFromParent.mockImplementation(
       async (
         params: ForkSessionEntryFromParentParams,
       ): Promise<ForkSessionEntryFromParentResult> => ({
@@ -544,10 +564,6 @@ describe("realtime voice agent consult runtime", () => {
         },
       }),
     );
-    setRealtimeVoiceAgentConsultDepsForTest({
-      forkSessionEntryFromParent,
-      randomUUID: () => "00000000-0000-4000-8000-000000000000",
-    });
 
     await consultRealtimeVoiceAgent({
       cfg: {} as never,
@@ -571,11 +587,11 @@ describe("realtime voice agent consult runtime", () => {
     );
     expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expect(call.sessionId).toBe("00000000-0000-4000-8000-000000000000");
+    expectNonEmptyString(call.sessionId);
     expect(call.sessionFile).toBeUndefined();
     expect(call.sessionTarget).toMatchObject({
       agentId: "main",
-      sessionId: "00000000-0000-4000-8000-000000000000",
+      sessionId: call.sessionId,
       sessionKey: "agent:main:subagent:google-meet:meet-1",
       storePath: "/tmp/sessions.json",
     });

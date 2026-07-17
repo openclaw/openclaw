@@ -1,5 +1,3 @@
-// Gateway method registry aggregator wires core and plugin RPC descriptors to
-// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -29,43 +27,14 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
+import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
+import { SKILLS_GATEWAY_METHOD_NAMES } from "./server-methods/skills-method-names.js";
 import type {
   GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
-
-function lazyHandlerModule<T>(
-  loadModule: () => Promise<T>,
-  selectHandlers: (module: T) => GatewayRequestHandlers,
-): () => Promise<GatewayRequestHandlers> {
-  let handlersPromise: Promise<GatewayRequestHandlers> | null = null;
-  // Gateway starts advertise the method table before most handler modules are needed; cache the
-  // first import promise so concurrent calls to the same method family share one load.
-  return () => (handlersPromise ??= loadModule().then(selectHandlers));
-}
-
-function createLazyCoreHandlers(params: {
-  methods: readonly string[];
-  loadHandlers: () => Promise<GatewayRequestHandlers>;
-}): GatewayRequestHandlers {
-  return Object.fromEntries(
-    params.methods.map((method) => [
-      method,
-      async (opts: GatewayRequestHandlerOptions) => {
-        const handlers = await params.loadHandlers();
-        const handler = handlers[method];
-        if (!handler) {
-          // Descriptor drift should fail loudly: advertised core methods must exist in the
-          // loaded family module once the lazy boundary resolves.
-          throw new Error(`lazy gateway handler not found: ${method}`);
-        }
-        await handler(opts);
-      },
-    ]),
-  );
-}
 
 const loadAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/agent.js"),
@@ -163,6 +132,10 @@ const loadTerminalHandlers = lazyHandlerModule(
   () => import("./server-methods/terminal.js"),
   (module) => module.terminalHandlers,
 );
+const loadUiCommandHandlers = lazyHandlerModule(
+  () => import("./server-methods/ui-command.js"),
+  (module) => module.uiCommandHandlers,
+);
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
   (module) => module.modelsAuthStatusHandlers,
@@ -170,6 +143,10 @@ const loadModelsAuthStatusHandlers = lazyHandlerModule(
 const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
+);
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
 );
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
@@ -190,6 +167,10 @@ const loadPluginHostHookHandlers = lazyHandlerModule(
 const loadPluginsHandlers = lazyHandlerModule(
   () => import("./server-methods/plugins.js"),
   (module) => module.pluginsHandlers,
+);
+const loadMigrationsHandlers = lazyHandlerModule(
+  () => import("./server-methods/migrations.js"),
+  (module) => module.migrationsHandlers,
 );
 const loadPushHandlers = lazyHandlerModule(
   () => import("./server-methods/push.js"),
@@ -218,6 +199,10 @@ const loadSessionsDiffHandlers = lazyHandlerModule(
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
+);
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
 );
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
@@ -251,6 +236,10 @@ const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
 );
+const loadMcpAppHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app.js"),
+  (module) => module.mcpAppHandlers,
+);
 const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
   (module) => module.ttsHandlers,
@@ -275,9 +264,9 @@ const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
 );
-const loadCrestodianHandlers = lazyHandlerModule(
-  () => import("./server-methods/crestodian.js"),
-  (module) => module.crestodianHandlers,
+const loadSystemAgentHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-agent.js"),
+  (module) => module.systemAgentHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -355,8 +344,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "terminal.attach",
       "terminal.list",
       "terminal.text",
+      "terminal.upload",
     ],
     loadHandlers: loadTerminalHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["ui.command"],
+    loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -484,6 +478,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadModelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],
     loadHandlers: loadModelsAuthStatusHandlers,
   }),
@@ -523,13 +521,14 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "crestodian.chat",
-      "crestodian.setup.detect",
-      "crestodian.setup.verify",
-      "crestodian.setup.activate",
-      "crestodian.setup.auth.start",
+      "openclaw.chat",
+      "openclaw.approval.list",
+      "openclaw.setup.detect",
+      "openclaw.setup.verify",
+      "openclaw.setup.activate",
+      "openclaw.setup.auth.start",
     ],
-    loadHandlers: loadCrestodianHandlers,
+    loadHandlers: loadSystemAgentHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -540,6 +539,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",
@@ -584,6 +584,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "mcp.app.view",
+      "mcp.app.callTool",
+      "mcp.app.listTools",
+      "mcp.app.listResources",
+      "mcp.app.listResourceTemplates",
+      "mcp.app.readResource",
+    ],
+    loadHandlers: loadMcpAppHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "tts.status",
       "tts.enable",
       "tts.disable",
@@ -597,37 +608,22 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTtsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: [
-      "skills.upload.begin",
-      "skills.upload.chunk",
-      "skills.upload.commit",
-      "skills.status",
-      "skills.bins",
-      "skills.search",
-      "skills.detail",
-      "skills.securityVerdicts",
-      "skills.skillCard",
-      "skills.install",
-      "skills.update",
-      "skills.curator.status",
-      "skills.curator.pin",
-      "skills.curator.unpin",
-      "skills.curator.restore",
-      "skills.proposals.list",
-      "skills.proposals.inspect",
-      "skills.proposals.create",
-      "skills.proposals.update",
-      "skills.proposals.revise",
-      "skills.proposals.requestRevision",
-      "skills.proposals.apply",
-      "skills.proposals.reject",
-      "skills.proposals.quarantine",
-    ],
+    methods: SKILLS_GATEWAY_METHOD_NAMES,
     loadHandlers: loadSkillsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "sessions.list",
+      "sessions.search",
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
@@ -654,6 +650,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.put",
       "sessions.groups.rename",
       "sessions.groups.delete",
+      "sessions.dispatch",
+      "sessions.reclaim",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -674,9 +672,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.list",
-      "node.pair.approve",
-      "node.pair.reject",
+      ...NODE_PAIR_GATEWAY_METHODS,
       "node.pair.remove",
       "node.rename",
       "node.list",
@@ -687,6 +683,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],
@@ -753,12 +750,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get"],
+    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["sessions.diff"],
     loadHandlers: loadSessionsDiffHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["migrations.memory.plan", "migrations.memory.apply"],
+    loadHandlers: loadMigrationsHandlers,
   }),
 };
 
@@ -950,3 +951,4 @@ export async function handleGatewayRequest(
     rootWorkAdmission.release();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

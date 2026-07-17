@@ -64,6 +64,7 @@ import { stageQaMockAuthProfiles } from "./providers/shared/mock-auth.js";
 import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { buildQaGatewayConfig, type QaThinkingLevel } from "./qa-gateway-config.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
 import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 export type { QaCliBackendAuthMode } from "./providers/env.js";
@@ -71,6 +72,10 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+const QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
+// Loaded Docker runners can take several seconds to reap a force-killed process group.
+const QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS = 10_000;
+const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -399,6 +404,31 @@ export function buildQaRuntimeEnv(params: {
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
 }
 
+function buildQaForcedRuntimeEnvPatch(params: {
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  providerBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  if (!params.forcedRuntime) {
+    return undefined;
+  }
+  const patch: NodeJS.ProcessEnv = {
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+  };
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return patch;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!providerBaseUrl) {
+    throw new Error("forced Codex mock QA requires the managed mock provider URL");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  return patch;
+}
+
 function isRetryableGatewayCallError(details: string): boolean {
   return (
     details.includes("handshake timeout") ||
@@ -564,6 +594,7 @@ export const testing = {
   formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
+  resolveQaGatewayChildStopTimeouts,
   stopQaGatewayChildProcessTree,
 };
 
@@ -659,6 +690,16 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
   return !isQaGatewayChildProcessTreeAlive(child);
 }
 
+function resolveQaGatewayChildStopTimeouts(opts?: {
+  gracefulTimeoutMs?: number;
+  forceTimeoutMs?: number;
+}) {
+  return {
+    gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
+  };
+}
+
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
   opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
@@ -666,12 +707,13 @@ async function stopQaGatewayChildProcessTree(
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
+  const timeouts = resolveQaGatewayChildStopTimeouts(opts);
   signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, opts?.gracefulTimeoutMs ?? 5_000)) {
+  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
     return;
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
-  const stopped = await waitForQaGatewayChildExit(child, opts?.forceTimeoutMs ?? 2_000);
+  const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
   if (!stopped) {
     throw new Error("qa gateway process tree remained alive after forced shutdown");
   }
@@ -872,6 +914,7 @@ export async function startQaGatewayChild(params: {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -960,6 +1003,7 @@ export async function startQaGatewayChild(params: {
       liveProviderConfigs,
       fastMode: params.fastMode,
       thinkingDefault: params.thinkingDefault,
+      forcedRuntime: params.forcedRuntime,
       controlUiEnabled: params.controlUiEnabled,
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
@@ -1086,7 +1130,6 @@ export async function startQaGatewayChild(params: {
               identity,
               opts: {
                 gracefulTimeoutMs: 1_500,
-                forceTimeoutMs: 1_500,
               },
             });
           } catch (cleanupError) {
@@ -1106,7 +1149,6 @@ export async function startQaGatewayChild(params: {
           try {
             await stopQaGatewayChildProcessTree(spawnedChild, {
               gracefulTimeoutMs: 1_500,
-              forceTimeoutMs: 1_500,
             });
           } catch (cleanupError) {
             cleanupErrors.push(cleanupError);
@@ -1172,7 +1214,14 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
-          runtimeEnvPatch: params.runtimeEnvPatch,
+          runtimeEnvPatch: {
+            ...params.runtimeEnvPatch,
+            ...buildQaForcedRuntimeEnvPatch({
+              forcedRuntime: params.forcedRuntime,
+              providerMode,
+              providerBaseUrl: params.providerBaseUrl,
+            }),
+          },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
@@ -1571,4 +1620,4 @@ export async function startQaGatewayChild(params: {
     throw new Error(message, { cause: error });
   }
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

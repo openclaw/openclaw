@@ -1,7 +1,16 @@
 /** Resolves the exact root and entry selected by the plugin runtime loader. */
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+
+type ResolvedPluginRuntimeArtifact = { source: string; rootDir: string };
+type PluginRuntimeArtifactEntryKind = "runtime" | "setup";
+
+// Pin one physical path per plugin id and logical entry for this runtime lifecycle.
+// Registry surfaces may disagree on artifact preference, but hooks and tools must
+// share one evaluated module instance so register() runs once.
+const resolvedPluginRuntimeArtifacts = new Map<string, ResolvedPluginRuntimeArtifact>();
 
 function safeRealpathOrResolve(value: string): string {
   try {
@@ -9,6 +18,10 @@ function safeRealpathOrResolve(value: string): string {
   } catch {
     return path.resolve(value);
   }
+}
+
+export function clearPluginRuntimeArtifactResolutionMemo(): void {
+  resolvedPluginRuntimeArtifacts.clear();
 }
 
 /** Canonical packaged runtime replaces staging-only dist-runtime artifacts. */
@@ -96,11 +109,12 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
   return null;
 }
 
-export function resolvePreferredBuiltRuntimeArtifact(params: {
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
   const rootDir = safeRealpathOrResolve(params.rootDir);
   const source = safeRealpathOrResolve(params.source);
@@ -112,6 +126,9 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
     if (artifactSource) {
       return { source: artifactSource, rootDir };
     }
+    return { source, rootDir };
+  }
+  if (params.packageManifest?.build?.bundledDist === false) {
     return { source, rootDir };
   }
   const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
@@ -151,14 +168,27 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
 
 /** Applies both loader selection phases in their runtime order. */
 export function resolvePluginRuntimeArtifact(params: {
+  pluginId: string;
+  entryKind: PluginRuntimeArtifactEntryKind;
   source: string;
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
-  const preferred = resolvePreferredBuiltRuntimeArtifact(params);
-  return {
+  const rootDir = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.rootDir));
+  const source = resolveCanonicalDistRuntimeSource(safeRealpathOrResolve(params.source));
+  const memoKey = JSON.stringify([params.pluginId, rootDir, params.entryKind]);
+  const cached = resolvedPluginRuntimeArtifacts.get(memoKey);
+  if (cached) {
+    return { ...cached };
+  }
+
+  const preferred = resolvePreferredBuiltRuntimeArtifact({ ...params, source, rootDir });
+  const resolved = {
     source: resolveCanonicalDistRuntimeSource(preferred.source),
     rootDir: resolveCanonicalDistRuntimeSource(preferred.rootDir),
   };
+  resolvedPluginRuntimeArtifacts.set(memoKey, resolved);
+  return { ...resolved };
 }

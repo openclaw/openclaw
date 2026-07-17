@@ -2,9 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type ApprovalHistoryResult,
   validateApprovalGetResult,
+  validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -17,6 +20,7 @@ import {
   resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -24,7 +28,12 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { getOperatorApproval, insertOperatorApproval } from "../operator-approval-store.js";
+import { getOperatorApprovalDetailed, insertOperatorApproval } from "../operator-approval-store.js";
+
+function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
+  const result = getOperatorApprovalDetailed(params);
+  return result.outcome === "found" ? result.record : null;
+}
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -36,7 +45,9 @@ const managersForCleanup: Array<{
 }> = [];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-"));
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
+  );
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
@@ -56,8 +67,14 @@ function createManagers(databaseOptions: OpenClawStateDatabaseOptions) {
       resolveAllowedDecisions: resolvePluginApprovalRequestAllowedDecisions,
       resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
     }),
+    systemAgent: new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      approvalKind: "system-agent",
+      persistence,
+      resolveAllowedDecisions: (request) => request.allowedDecisions,
+      resolveAudienceSessionKeys: (source) => [source, "agent:main:parent"],
+    }),
   };
-  managersForCleanup.push(managers.exec, managers.plugin);
+  managersForCleanup.push(managers.exec, managers.plugin, managers.systemAgent);
   return managers;
 }
 
@@ -158,6 +175,28 @@ function registerPlugin(
   return { record, decision };
 }
 
+function registerSystemAgent(
+  manager: ExecApprovalManager<SystemAgentApprovalRequestPayload>,
+  id: string,
+) {
+  const record = manager.create(
+    {
+      title: "OpenClaw change",
+      description: "Set gateway.port to 19001",
+      command: "Set gateway.port to 19001",
+      proposalHash: "a".repeat(64),
+      allowedDecisions: ["allow-once", "deny"],
+      agentId: "main",
+      sessionKey: "agent:main:child",
+      sessionId: "delegation-1",
+    },
+    600_000,
+    id,
+  );
+  const decision = manager.register(record, 600_000);
+  return { record, decision };
+}
+
 function createClient(params: {
   scopes?: string[];
   deviceId?: string;
@@ -179,6 +218,10 @@ function createContext(controlUiBasePath?: string) {
   return {
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
+    approvalEvents: {
+      publishRequested: vi.fn(() => 0),
+      publishResolved: vi.fn(),
+    },
     getApprovalClientConnIds: vi.fn(() => new Set(["approval-client"])),
     getRuntimeConfig: () => ({ gateway: { controlUi: { basePath: controlUiBasePath } } }),
     logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -187,14 +230,17 @@ function createContext(controlUiBasePath?: string) {
 
 async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.resolve";
+  method: "approval.get" | "approval.history" | "approval.resolve";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];
 }) {
   const respond = vi.fn();
   const context = params.context ?? createContext();
-  await params.handlers[params.method]({
+  await expectDefined(
+    params.handlers[params.method],
+    "params.handlers[params.method] test invariant",
+  )({
     req: { id: "req-1", type: "req", method: params.method, params: params.body },
     params: params.body,
     client: params.client,
@@ -228,6 +274,97 @@ describe("unified approval handlers", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
+  });
+
+  it("resolves a system-agent proposal only through unified operator approval", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerSystemAgent(managers.systemAgent, "system-agent:proposal-1");
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      systemAgentApprovalManager: managers.systemAgent,
+      databaseOptions,
+    });
+    const context = createContext();
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "system-agent", decision: "allow-once" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: {
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "system-agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
+    expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+  });
+
+  it("returns mapped terminal history with attribution and a next cursor", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const first = registerExec(managers.exec, { id: "history:first" });
+    const second = registerPlugin(managers.plugin, { id: "history:second" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    for (const [id, kind] of [
+      [first.record.id, "exec"],
+      [second.record.id, "plugin"],
+    ] as const) {
+      const response = await invoke({
+        handlers,
+        method: "approval.resolve",
+        body: { id, kind, decision: "deny" },
+        client: createClient({ deviceId: "reviewer" }),
+      });
+      expect(response.ok).toBe(true);
+    }
+
+    const firstPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+      context: createContext("/operator/"),
+    });
+    expect(firstPage.ok).toBe(true);
+    expect(validateApprovalHistoryResult(firstPage.result)).toBe(true);
+    const firstResult = firstPage.result as ApprovalHistoryResult;
+    expect(firstResult.items).toHaveLength(1);
+    expect(firstResult.items[0]).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      source: { agentId: "main", sessionKey: "agent:main:child" },
+      resolver: { kind: "device", id: "reviewer" },
+    });
+    expect(firstResult.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { cursor: firstResult.nextCursor, limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(secondPage.ok).toBe(true);
+    expect((secondPage.result as ApprovalHistoryResult).items).toHaveLength(1);
+    expect((secondPage.result as ApprovalHistoryResult).nextCursor).toBeUndefined();
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
@@ -412,16 +549,33 @@ describe("unified approval handlers", () => {
       ok: false,
       error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
     });
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
+
+    const underscopedInternal = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body,
+      client: createClient({ internal: true, scopes: ["operator.read"] }),
+    });
+    expect(underscopedInternal).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
 
     const trusted = await invoke({
       handlers,
       method: "approval.resolve",
       body,
-      client: createClient({ internal: true, scopes: ["operator.approvals"] }),
+      client: createClient({ internal: true }),
     });
     expect(trusted.result).toMatchObject({
       applied: true,
-      approval: { status: "denied", decision: "deny" },
+      approval: { status: "denied", decision: "deny", reason: "user" },
+    });
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+      kind: "runtime",
+      id: "approval-test",
     });
     await expect(pending.decision).resolves.toBe("deny");
   });
@@ -625,6 +779,39 @@ describe("unified approval handlers", () => {
     });
   });
 
+  it("settles the canonical live waiter when a transport-ref lookup finds corrupt state", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "corrupt-through-transport-ref" });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    if (!durable) {
+      throw new Error("expected durable approval");
+    }
+    corruptDurableApprovalPresentation(databaseOptions, pending.record.id);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable.resolutionRef, kind: "exec", decision: "allow-once" },
+      client: createClient({ deviceId: "telegram" }),
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toMatchObject({
+      status: "denied",
+      terminalReason: "storage-corrupt",
+    });
+  });
+
   it("repairs durable pending state after a transient local storage failure", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-reconcile-"));
     tempDirs.push(stateDir);
@@ -705,6 +892,7 @@ describe("unified approval handlers", () => {
     });
     const context = createContext();
     const handlePluginApprovalResolved = vi.fn(async () => {});
+    const handlePluginIosPushResolved = vi.fn(async () => {});
     const forwarder = {
       handleRequested: vi.fn(async () => false),
       handleResolved: vi.fn(async () => {}),
@@ -716,6 +904,7 @@ describe("unified approval handlers", () => {
       execApprovalManager: managers.exec,
       pluginApprovalManager: managers.plugin,
       forwarder,
+      pluginIosPushDelivery: { handleResolved: handlePluginIosPushResolved },
       databaseOptions,
     });
 
@@ -753,14 +942,27 @@ describe("unified approval handlers", () => {
       new Set(["approval-client"]),
       { dropIfSlow: true },
     );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "plugin",
+      expect.objectContaining({
+        id: pending.record.id,
+        decision: "deny",
+        resolvedBy: "Approval Test",
+      }),
+    );
     expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
       kind: "device",
       id: "phone-device",
     });
     expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledTimes(1);
+    expect(handlePluginIosPushResolved).toHaveBeenCalledWith(
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { id: string },
@@ -768,6 +970,7 @@ describe("unified approval handlers", () => {
           record?: { id: string };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("plugin");
     expect(
       recipientOptions?.filter?.(createClient({ deviceId: "unrelated" }), recipientOptions.record),
     ).toBe(false);
@@ -789,6 +992,166 @@ describe("unified approval handlers", () => {
       status: "denied",
       decision: "deny",
     });
+  });
+
+  it("returns durable exec truth and continues follow-ups after publication failures", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "exec-publication-failures" });
+    const context = createContext();
+    const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
+    broadcastToConnIds.mockImplementation(() => {
+      throw new Error("broadcast unavailable");
+    });
+    const handleResolved = vi.fn(async () => {
+      throw new Error("forwarder unavailable");
+    });
+    const handleIosResolved = vi.fn(async () => {});
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved,
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved: vi.fn(async () => {}),
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      iosPushDelivery: { handleResolved: handleIosResolved },
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny", reason: "user" },
+    });
+    expect(validateApprovalResolveResult(response.result)).toBe(true);
+    await expect(pending.decision).resolves.toBe("deny");
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
+      status: "denied",
+      decision: "deny",
+    });
+    expect(handleResolved).toHaveBeenCalledTimes(1);
+    expect(handleIosResolved).toHaveBeenCalledTimes(1);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("exec approvals: unified resolve broadcast failed"),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("exec approvals: unified resolve forwarder failed"),
+    );
+    expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
+      "exec",
+      expect.objectContaining({ id: pending.record.id, decision: "deny" }),
+    );
+  });
+
+  it("responds with committed truth before a slow resolution forwarder finishes", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "exec-slow-resolution-forwarder" });
+    let releaseForwarder!: () => void;
+    const forwarderPending = new Promise<void>((resolve) => {
+      releaseForwarder = resolve;
+    });
+    const handleResolved = vi.fn(() => forwarderPending);
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved,
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved: vi.fn(async () => {}),
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      databaseOptions,
+    });
+    const respond = vi.fn();
+    const handler = expectDefined(
+      handlers["approval.resolve"],
+      'handlers["approval.resolve"] test invariant',
+    )({
+      req: {
+        id: "req-slow-forwarder",
+        type: "req",
+        method: "approval.resolve",
+        params: { id: pending.record.id, kind: "exec", decision: "deny" },
+      },
+      params: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context: createContext(),
+      isWebchatConnect: () => false,
+      respond,
+    });
+    let handlerFinished = false;
+    const handlerCompletion = Promise.resolve(handler).then(() => {
+      handlerFinished = true;
+    });
+
+    try {
+      await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(1), { timeout: 500 });
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        applied: true,
+        approval: { status: "denied", decision: "deny" },
+      });
+      await vi.waitFor(() => expect(handleResolved).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(handlerFinished).toBe(true), { timeout: 500 });
+    } finally {
+      releaseForwarder();
+    }
+    await handlerCompletion;
+  });
+
+  it("continues plugin forwarding when the resolved-event broadcast fails", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerPlugin(managers.plugin, { id: "plugin-publication-failure" });
+    const context = createContext();
+    const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
+    broadcastToConnIds.mockImplementation(() => {
+      throw new Error("broadcast unavailable");
+    });
+    const handlePluginApprovalResolved = vi.fn(async () => {});
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved: vi.fn(async () => {}),
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved,
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "plugin", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("plugin approvals: unified resolve broadcast failed"),
+    );
   });
 
   it("uses the live requester connection when filtering legacy resolved events", async () => {
@@ -822,6 +1185,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { requestedByConnId?: string | null },
@@ -829,6 +1193,7 @@ describe("unified approval handlers", () => {
           record?: { requestedByConnId?: string | null };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("exec");
     expect(recipientOptions?.record?.requestedByConnId).toBe("requester-connection");
     expect(
       recipientOptions?.filter?.(
@@ -891,6 +1256,77 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves an overlong canonical id through its fixed-size transport reference", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: `approval/${"\u{1F4F1}".repeat(40)}/transport-limit`,
+      reviewerDeviceIds: ["telegram"],
+    });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    expect(durable?.resolutionRef).toHaveLength(43);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable?.resolutionRef, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "telegram" }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    expect(validateApprovalResolveResult(response.result)).toBe(true);
+    await expect(pending.decision).resolves.toBe("deny");
+  });
+
+  it("resolves through the durable transport ref exactly like the canonical id", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    // No explicit reviewer binding: any authorized reviewer device may resolve,
+    // and the opaque transport ref must behave exactly like the canonical id.
+    const pending = registerExec(managers.exec, {
+      id: "ref-parity-approval",
+      requester: { connId: "conn-owner", deviceId: null, clientId: null },
+      reviewerDeviceIds: [],
+    });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    expect(durable?.resolutionRef).toHaveLength(43);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const winner = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable?.resolutionRef, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer-surface" }),
+    });
+    expect(winner.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+
+    const replayByCanonicalId = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "another-surface" }),
+    });
+    expect(replayByCanonicalId.result).toMatchObject({
+      applied: false,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+  });
   it.each([
     { status: "allowed", decision: "allow-once", terminalDecision: "allow-once" },
     { status: "denied", decision: "deny", terminalDecision: "deny" },
@@ -1051,3 +1487,4 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

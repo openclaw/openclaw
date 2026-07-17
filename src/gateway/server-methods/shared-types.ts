@@ -1,3 +1,4 @@
+import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
 import type {
@@ -14,7 +15,10 @@ import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
 } from "../../infra/plugin-approvals.js";
+import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
+import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -24,7 +28,10 @@ import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
-import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type {
+  ChannelRuntimeSnapshot,
+  StartChannelOptions,
+} from "../server-channel-runtime.types.js";
 import type {
   BufferedAgentEvent,
   ChatAbortMarker,
@@ -32,11 +39,19 @@ import type {
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
+import type {
+  GatewayApprovalEventPublisher,
+  GatewayRecoveryRuntime,
+} from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
-import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
+import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerPlacementDispatchContract,
+} from "../worker-environments/service-contract.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -59,6 +74,11 @@ export type GatewayClient = {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
+    /** Host-owned exact media set for a scoped automatic recovery delivery. */
+    internalDeliveryMediaUrls?: string[];
+    internalDeliverySuppressText?: boolean;
+    /** Plugin-owned tools authorized for this internal subagent run. */
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
   };
 };
 
@@ -70,18 +90,25 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
-/** Minimal hosted Crestodian contract retained by the gateway request router. */
-type GatewayCrestodianSession = {
+/** Minimal hosted OpenClaw contract retained by the gateway request router. */
+type GatewaySystemAgentSession = {
   engine: {
     handle: (message: string) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
     }>;
+    getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
+    resolveOperatorApproval: (
+      decision: "allow-once" | "allow-always" | "deny" | null,
+      proposalHash: string,
+    ) => Promise<unknown>;
     dispose: () => Promise<void>;
   };
   welcome: string;
   lastUsedAt: number;
+  delegationKey?: string;
+  pendingApproval?: { id: string; proposalHash: string };
 };
 
 /** Runtime services and mutable gateway state available to request handlers. */
@@ -90,11 +117,26 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  getMcpAppSandboxPort?: () => number | undefined;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
+  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  pluginApprovalIosPushDelivery?: {
+    handleRequested?: (
+      request: PluginApprovalRequest,
+      opts?: {
+        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+      },
+    ) => Promise<boolean>;
+    handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
+  };
+  listSessionPendingApprovals?: (
+    sessionKey: string,
+    client: GatewayClient | null,
+  ) => SessionApprovalReplay;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   loadGatewayModelCatalogSnapshot: (params?: {
     readOnly?: boolean;
@@ -116,8 +158,13 @@ export type GatewayRequestContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
+  isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  /** Instance-local native approval subscribers; never derived from a network client. */
+  approvalEvents?: GatewayApprovalEventPublisher;
+  recoveryRuntime?: GatewayRecoveryRuntime;
   getApprovalClientConnIds?: <TPayload>(params?: {
+    approvalKind?: "exec" | "plugin" | "system-agent";
     excludeConnId?: string;
     filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
     record?: ExecApprovalRecord<TPayload>;
@@ -133,6 +180,10 @@ export type GatewayRequestContext = {
   nodeRegistry: NodeRegistry;
   /** Durable cloud-worker lifecycle; absent from lightweight in-process contexts. */
   workerEnvironmentService?: WorkerEnvironmentServiceContract;
+  /** Durable per-session worker placement; absent when cloud workers are disabled. */
+  workerSessionPlacementService?: WorkerSessionPlacementReader;
+  /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
+  workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   // Operator terminal session store. Absent in local/in-process contexts where
   // no PTY surface is served.
   terminalSessions?: TerminalSessionManager;
@@ -156,14 +207,18 @@ export type GatewayRequestContext = {
   ) => ChatRunEntry | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
-  subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  subscribeSessionMessageEvents: (
+    connId: string,
+    sessionKey: string,
+    opts?: { includeApprovals?: boolean },
+  ) => (() => void) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   wizardSessions: Map<string, WizardSession>;
-  crestodianSessions: Map<string, GatewayCrestodianSession>;
+  systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
@@ -172,7 +227,7 @@ export type GatewayRequestContext = {
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
-    opts?: import("../server-channels.js").StartChannelOptions,
+    opts?: StartChannelOptions,
   ) => Promise<void>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
@@ -188,6 +243,7 @@ export type GatewayRequestContext = {
     runtime: import("../../runtime.js").RuntimeEnv,
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  channelWizardRunner: import("./wizard.js").ChannelSetupWizardRunner;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   broadcastVoiceWakeRoutingChanged: (
     config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,

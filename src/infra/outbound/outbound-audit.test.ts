@@ -1,9 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onTrustedMessageAuditEvent,
-  resetMessageAuditEventsForTest,
-  type TrustedMessageAuditEvent,
-} from "../../audit/message-audit-events.js";
+import { describe, expect, it, vi } from "vitest";
+import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
+import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
@@ -11,9 +8,6 @@ import {
 } from "./outbound-audit.js";
 
 describe("outbound audit projection", () => {
-  beforeEach(() => resetMessageAuditEventsForTest());
-  afterEach(() => resetMessageAuditEventsForTest());
-
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
     const events: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
@@ -216,6 +210,33 @@ describe("outbound audit projection", () => {
       status: "succeeded",
       outcome: "sent",
       resultCount: 6,
+    });
+  });
+
+  it("normalizes a routed target used as the fallback conversation identifier", () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    try {
+      emitOutboundAuditTerminals({
+        context: {
+          channel: "discord",
+          to: "discord:channel:123456789",
+          payloads: [{ text: "sent" }],
+        },
+        terminals: uniformOutboundAuditTerminals(1, {
+          outcome: "sent",
+          results: [{ channel: "discord", messageId: "message-1" }],
+        }),
+        startedAt: Date.now(),
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      conversationId: "123456789",
+      targetId: "discord:channel:123456789",
     });
   });
 

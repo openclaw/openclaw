@@ -1,4 +1,5 @@
 // Ollama tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -7,6 +8,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { OLLAMA_DEFAULT_API_KEY } from "./src/discovery-shared.js";
 
 const promptAndConfigureOllamaMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -281,6 +283,177 @@ describe("ollama plugin", () => {
       },
     });
     expect(result.defaultModel).toBeUndefined();
+  });
+
+  it("discovers and prepares an installed tool-capable model without pulling it", async () => {
+    const provider = registerProvider();
+    const guided = provider.auth[0].appGuidedSetup;
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "embed-only", name: "embed-only", compat: { supportsTools: false } },
+        { id: "unknown-tools", name: "unknown-tools" },
+        { id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } },
+      ],
+    });
+
+    await expect(guided?.detect({ config: {}, env: {} })).resolves.toEqual({
+      modelRef: "ollama/qwen-tool",
+      detail: "qwen-tool at http://127.0.0.1:11434",
+    });
+    const prepared = await guided?.prepare({
+      config: {},
+      env: {},
+      modelRef: "ollama/qwen-tool",
+    });
+    expect(prepared).toMatchObject({
+      profiles: [],
+      defaultModel: "ollama/qwen-tool",
+      configPatch: {
+        models: {
+          mode: "merge",
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              api: "ollama",
+              models: [
+                expect.objectContaining({ id: "embed-only" }),
+                expect.objectContaining({ id: "unknown-tools" }),
+                expect.objectContaining({ id: "qwen-tool" }),
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(prepared?.configPatch?.models?.providers?.ollama?.apiKey).toBe(OLLAMA_DEFAULT_API_KEY);
+    await expect(
+      guided?.prepare({ config: {}, env: {}, modelRef: "ollama/unknown-tools" }),
+    ).resolves.toBeNull();
+    expect(ensureOllamaModelPulledMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers the strongest tool-calling family among installed models", async () => {
+    const provider = registerProvider();
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        { id: "llama3.3:70b", name: "llama3.3:70b", compat: { supportsTools: true } },
+        { id: "qwen3.5:4b", name: "qwen3.5:4b", compat: { supportsTools: true } },
+        {
+          id: "nomic-embed-text",
+          name: "nomic-embed-text",
+          compat: { supportsTools: true },
+        },
+      ],
+    });
+
+    await expect(provider.auth[0].appGuidedSetup?.detect({ config: {}, env: {} })).resolves.toEqual(
+      {
+        modelRef: "ollama/qwen3.5:4b",
+        detail: "qwen3.5:4b at http://127.0.0.1:11434",
+      },
+    );
+  });
+
+  it("uses configured Ollama access while discovering installed models", async () => {
+    const provider = registerProvider();
+    const configuredValue = "configured-access";
+    const providerAccess = { apiKey: configuredValue };
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "https://ollama.example.com",
+      api: "ollama",
+      models: [{ id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } }],
+    });
+
+    await provider.auth[0].appGuidedSetup?.detect({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              ...providerAccess,
+              baseUrl: "https://ollama.example.com",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith(
+      "https://ollama.example.com",
+      expect.objectContaining(providerAccess),
+    );
+  });
+
+  it("keeps environment-backed Ollama access for the completion proposal", async () => {
+    const provider = registerProvider();
+    const configuredValue = "environment-access";
+    const providerAccess = { apiKey: configuredValue };
+    const environment = { OLLAMA_API_KEY: configuredValue };
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "https://ollama.example.com",
+      api: "ollama",
+      models: [{ id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } }],
+    });
+
+    const prepared = await provider.auth[0].appGuidedSetup?.prepare({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://ollama.example.com",
+              api: "ollama",
+              models: [],
+            },
+          },
+        },
+      },
+      env: environment,
+      modelRef: "ollama/qwen-tool",
+    });
+
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith(
+      "https://ollama.example.com",
+      expect.objectContaining(providerAccess),
+    );
+    expect(prepared?.configPatch?.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
+  });
+
+  it("does not send the ambient Ollama cloud key to automatic localhost discovery", async () => {
+    const provider = registerProvider();
+    const configuredValue = "cloud-access";
+    const environment = { OLLAMA_API_KEY: configuredValue };
+    buildOllamaProviderMock.mockResolvedValue({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [{ id: "qwen-tool", name: "qwen-tool", compat: { supportsTools: true } }],
+    });
+
+    await provider.auth[0].appGuidedSetup?.detect({ config: {}, env: environment });
+
+    const options = buildOllamaProviderMock.mock.calls.at(-1)?.[1] as
+      | { apiKey?: string; quiet?: boolean }
+      | undefined;
+    expect(options?.apiKey).toBeUndefined();
+  });
+
+  it("honors the Ollama discovery opt-out during app-guided detection", async () => {
+    const provider = registerProvider();
+
+    await expect(
+      provider.auth[0].appGuidedSetup?.detect({
+        config: {
+          plugins: { entries: { ollama: { config: { discovery: { enabled: false } } } } },
+        },
+        env: {},
+      }),
+    ).resolves.toBeNull();
+    expect(buildOllamaProviderMock).not.toHaveBeenCalled();
   });
 
   it("pulls the model the user actually selected", async () => {
@@ -1860,7 +2033,7 @@ describe("ollama plugin", () => {
     );
 
     expect(mediaProviders).toHaveLength(1);
-    const [ollamaMedia] = mediaProviders;
+    const ollamaMedia = expectDefined(mediaProviders[0], "Ollama media provider");
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
     expect(ollamaMedia.describeImage).toBe(describeImageWithModel);
@@ -1872,3 +2045,4 @@ describe("ollama plugin", () => {
     expect(ollamaMedia.autoPriority).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

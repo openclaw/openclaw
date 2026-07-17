@@ -110,6 +110,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // auth failure decision, so cooldown tuning needs a snapshot refresh but not
   // a gateway restart.
   { prefix: "auth.cooldowns", kind: "hot" },
+  // Worktree cleanup limits are read from the runtime config at each gc pass
+  // (hourly sweep and worktrees.gc), so a Settings stepper edit needs only a
+  // snapshot refresh; a restart here would drop live sessions per click.
+  { prefix: "worktrees", kind: "hot" },
   {
     prefix: "agents.list",
     kind: "hot",
@@ -117,6 +121,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
+  // The dedicated Apps listener and origin are created once during Gateway
+  // startup; disposing MCP runtimes cannot move or create that HTTP server.
+  { prefix: "mcp.apps", kind: "restart" },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
   { prefix: "plugins.load", kind: "restart" },
   { prefix: "plugins.installs", kind: "restart" },

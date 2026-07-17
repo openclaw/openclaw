@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -36,28 +37,6 @@ export const getGatewayConfigModule = createLazyRuntimeModule(
 
 export async function getSessionsHandlers() {
   return (await import("../server-methods/sessions.js")).sessionsHandlers;
-}
-
-export function createLinearSessionTranscript(sessionId: string, contents: string[]): string {
-  const records: Array<Record<string, unknown>> = [
-    {
-      type: "session",
-      version: 3,
-      id: sessionId,
-      timestamp: "2026-06-19T12:00:00.000Z",
-      cwd: "/tmp",
-    },
-  ];
-  for (const [index, content] of contents.entries()) {
-    records.push({
-      type: "message",
-      id: `${sessionId}-entry-${index}`,
-      parentId: index === 0 ? null : `${sessionId}-entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`,
-      message: { role: "user", content, timestamp: index + 1 },
-    });
-  }
-  return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
 }
 
 type TestTranscriptMessage = Record<string, unknown> & {
@@ -689,7 +668,10 @@ export async function directSessionReq<TPayload = unknown>(
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessions handlers entry at method",
+  )({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {

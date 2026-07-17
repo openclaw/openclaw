@@ -112,10 +112,18 @@ export type RunCliAgentParams = {
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   cliSessionBindingFacts?: CliSessionBindingFacts;
-  streamParams?: import("../command/types.js").AgentStreamParams;
+  streamParams?: import("../command/shared-types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
+  /** Consume the backend fork argument on this resume invocation only. */
+  forkCliSessionOnResume?: boolean;
+  /** Atomically claim the persisted one-shot marker after the CLI queue admits this turn. */
+  claimCliSessionFork?: () => Promise<boolean>;
+  /** Re-arm a claimed marker when the CLI turn fails before producing a successor session. */
+  restoreCliSessionFork?: () => Promise<void>;
+  /** Persist the successor ID as soon as the CLI reports the forked session. */
+  persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
   authProfileId?: string;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: {
@@ -208,7 +216,7 @@ export type RunCliAgentParams = {
 };
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
-export type CliPreparedBackend = {
+type CliPreparedBackend = {
   backend: CliBackendConfig;
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;

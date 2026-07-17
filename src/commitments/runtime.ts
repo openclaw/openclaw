@@ -1,11 +1,9 @@
 // Runs commitment extraction, scheduling, and follow-up lifecycle work.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCommitmentTimezone, resolveCommitmentsConfig } from "./config.js";
 import {
@@ -93,12 +91,12 @@ function scheduleDrainSoon(debounceMs: number): void {
 }
 
 /** Installs runtime hooks for extraction tests or alternate batch extraction. */
-export function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
+function configureCommitmentExtractionRuntime(next: CommitmentExtractionRuntime): void {
   runtime = next;
 }
 
 /** Clears queued work, timers, and injected hooks for isolated tests. */
-export function resetCommitmentExtractionRuntimeForTests(): void {
+function resetCommitmentExtractionRuntimeForTests(): void {
   if (timer) {
     clearTimer(timer);
   }
@@ -211,16 +209,6 @@ function openTerminalFailureCooldown(
   });
 }
 
-function resolveExtractionSessionFile(agentId: string, runId: string): string {
-  return path.join(
-    resolveStateDir(),
-    "commitments",
-    "extractor-sessions",
-    agentId,
-    `${runId}.jsonl`,
-  );
-}
-
 function joinPayloadText(result: EmbeddedAgentPayloadResult): string {
   return (
     result.payloads
@@ -260,7 +248,6 @@ async function defaultExtractBatch(params: {
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
     agentId: first.agentId,
     trigger: "manual",
-    sessionFile: resolveExtractionSessionFile(first.agentId, runId),
     workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
     config: cfg,
     provider: modelRef.provider,
@@ -312,7 +299,7 @@ function takeAgentBatch(
 }
 
 /** Drains queued extraction work in batches and returns processed item count. */
-export async function drainCommitmentExtractionQueue(): Promise<number> {
+async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
     return 0;
   }
@@ -369,4 +356,16 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
   } finally {
     draining = false;
   }
+}
+
+if (
+  process.env.VITEST ||
+  process.env.NODE_ENV === "test" ||
+  process.env.OPENCLAW_COMMITMENTS_SAFETY_E2E === "1"
+) {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.commitmentRuntimeTestApi")] = {
+    configureCommitmentExtractionRuntime,
+    drainCommitmentExtractionQueue,
+    resetCommitmentExtractionRuntimeForTests,
+  };
 }

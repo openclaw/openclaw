@@ -1241,6 +1241,22 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("allows loaded runners time to reap force-killed gateway process groups", () => {
+    expect(testing.resolveQaGatewayChildStopTimeouts()).toEqual({
+      gracefulTimeoutMs: 5_000,
+      forceTimeoutMs: 10_000,
+    });
+    expect(
+      testing.resolveQaGatewayChildStopTimeouts({
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 2,
+      }),
+    ).toEqual({
+      gracefulTimeoutMs: 1,
+      forceTimeoutMs: 2,
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "fails closed when forced gateway process-group shutdown times out",
     async () => {
@@ -1723,6 +1739,15 @@ describe("qa bundled plugin dir", () => {
       ].join("\n"),
       "utf8",
     );
+    await mkdir(path.join(repoRoot, "extensions", "qa-channel"), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, "extensions", "qa-channel", "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "qa-channel",
+        toolMetadata: { qa_read: { replaySafe: true } },
+      }),
+      "utf8",
+    );
     await writeFile(path.join(repoRoot, "dist", "shared-chunk-abc123.js"), "export {};\n", "utf8");
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-target-"));
     cleanups.push(async () => {
@@ -1760,6 +1785,9 @@ describe("qa bundled plugin dir", () => {
       `${pathToFileURL(path.join(bundledPluginsDir, "qa-channel", "index.js")).href}?t=${Date.now()}`
     )) as { accountId: string };
     expect(qaChannel.accountId).toBe("qa");
+    await expect(
+      readFile(path.join(bundledPluginsDir, "qa-channel", "openclaw.plugin.json"), "utf8"),
+    ).resolves.toContain('"replaySafe":true');
     expect((await lstat(path.join(bundledPluginsDir, "qa-channel"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "memory-core"))).isDirectory()).toBe(true);
     expect((await lstat(path.join(bundledPluginsDir, "image-generation-core"))).isDirectory()).toBe(
@@ -2253,3 +2281,4 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBe("2026.4.9");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

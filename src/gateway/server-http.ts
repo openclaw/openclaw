@@ -26,7 +26,10 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+import {
+  isControlUiApprovalDocumentPath,
+  isControlUiPluginManagerRequest,
+} from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
@@ -328,7 +331,7 @@ type GatewayHttpRequestStage = {
   continueOnError?: boolean;
 };
 
-export async function runGatewayHttpRequestStages(
+async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
@@ -394,26 +397,25 @@ function buildPluginRequestStages(params: {
         // Bypass paths come only from activated channel plugins' gateway-auth
         // artifacts (bundled or installed); all other protected plugin routes must
         // produce an AuthorizedGatewayHttpRequest before runtime scopes are derived.
-        const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
-        const requestAuth = await authorizeGatewayHttpRequestOrReply({
+        const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
+        const { resolvePluginRouteRuntimeOperatorScopes } =
+          await getPluginRouteRuntimeScopesModule();
+        const authResult = await authorizePluginGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
           auth: params.resolvedAuth,
           trustedProxies: params.trustedProxies,
           allowRealIpFallback: params.allowRealIpFallback,
           rateLimiter: params.rateLimiter,
+          requestPath: params.requestPath,
+          resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
         });
-        if (!requestAuth) {
+        if (!authResult) {
           return true;
         }
         pluginGatewayAuthSatisfied = true;
-        pluginGatewayRequestAuth = requestAuth;
-        const { resolvePluginRouteRuntimeOperatorScopes } =
-          await getPluginRouteRuntimeScopesModule();
-        pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
-          params.req,
-          requestAuth,
-        );
+        pluginGatewayRequestAuth = authResult.requestAuth;
+        pluginRequestOperatorScopes = authResult.operatorScopes;
         return false;
       },
     },
@@ -544,6 +546,19 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
       const resolvedAuthValue = getResolvedAuth();
+      const handleControlUiRequest = async () =>
+        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+          basePath: controlUiBasePath,
+          config: configSnapshot,
+          terminalEnabled:
+            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          root: controlUiRoot,
+          auth: resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        });
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "gateway-probes",
@@ -675,6 +690,32 @@ export function createGatewayHttpServer(opts: {
         });
       }
       if (
+        isControlUiApprovalDocumentPath({
+          basePath: controlUiBasePath,
+          pathname: scopedRequestPath,
+        })
+      ) {
+        requestStages.push({
+          name: "control-ui-approval-document",
+          run: async () => {
+            if (!controlUiEnabled) {
+              res.statusCode = 404;
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.end("Not Found");
+              return true;
+            }
+            const handled = await handleControlUiRequest();
+            if (handled) {
+              return true;
+            }
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+            return true;
+          },
+        });
+      }
+      if (
         handlePluginRequest &&
         pluginPathContext &&
         resolvePluginNodeCapabilityRoute?.(pluginPathContext)
@@ -800,19 +841,7 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "control-ui-http",
-          run: async () =>
-            (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
-              basePath: controlUiBasePath,
-              config: configSnapshot,
-              terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
-              agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
-              root: controlUiRoot,
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+          run: handleControlUiRequest,
         });
       }
 
@@ -1068,3 +1097,4 @@ export function attachWorkerGatewayUpgradeHandler(params: {
     }
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,10 +12,13 @@ import {
   validateCommandsListParams,
   validateConnectParams,
   validateModelsListParams,
+  validateModelsProbeParams,
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
+  validateNodePresenceActivityPayload,
   validateNodePresenceAlivePayload,
+  validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -182,6 +185,15 @@ describe("lazy protocol validators", () => {
       }),
     ).toBe(true);
     expect(
+      validateChatHistoryParams({
+        sessionKey: "global",
+        agentId: "work",
+        limit: 11,
+        messageId: "matching-message",
+        sessionId: "matching-session",
+      }),
+    ).toBe(true);
+    expect(
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
@@ -227,6 +239,37 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsUsageParams({ mode: "specific", utcOffset: "UTC+2" })).toBe(true);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: "" })).toBe(false);
     expect(validateSessionsUsageParams({ mode: "specific", timeZone: 2 })).toBe(false);
+  });
+
+  it("validates bounded session transcript search params", () => {
+    expect(validateSessionsSearchParams({ query: "deployment failure" })).toBe(true);
+    expect(
+      validateSessionsSearchParams({
+        agentId: "work",
+        sessionKeys: ["agent:work:main", "agent:work:other"],
+        query: "deployment failure",
+        limit: 25,
+      }),
+    ).toBe(true);
+    expect(validateSessionsSearchParams({ agentId: "", query: "deployment failure" })).toBe(false);
+    expect(
+      validateSessionsSearchParams({
+        sessionKey: "agent:work:main",
+        query: "deployment failure",
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", sessionKeys: [] })).toBe(
+      false,
+    );
+    expect(
+      validateSessionsSearchParams({
+        query: "deployment failure",
+        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
+      }),
+    ).toBe(false);
+    expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "" })).toBe(false);
+    expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {
@@ -806,6 +849,19 @@ describe("validateWakeParams", () => {
 });
 
 describe("validateChatEvent", () => {
+  it("accepts an explicitly yielded final turn", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-yielded",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "final",
+        stopReason: "end_turn",
+        yielded: true,
+      }),
+    ).toBe(true);
+  });
+
   it("accepts v4 chat delta text and replacement markers", () => {
     expect(
       validateChatEvent({
@@ -896,6 +952,19 @@ describe("validateChatSendParams", () => {
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
+
+  it("accepts one-turn queue mode overrides", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    for (const queueMode of ["steer", "followup", "collect", "interrupt"] as const) {
+      expect(validateChatSendParams({ ...base, queueMode })).toBe(true);
+    }
+    expect(validateChatSendParams({ ...base, queueMode: "invalid" })).toBe(false);
+  });
 });
 
 describe("validateModelsListParams", () => {
@@ -909,6 +978,21 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateModelsProbeParams", () => {
+  it("accepts one provider with optional profile and timeout", () => {
+    expect(validateModelsProbeParams({ provider: "openai" })).toBe(true);
+    expect(
+      validateModelsProbeParams({ provider: "OpenAI", profileId: "work", timeoutMs: 20_000 }),
+    ).toBe(true);
+  });
+
+  it("rejects missing providers, invalid timeouts, and extra fields", () => {
+    expect(validateModelsProbeParams({})).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", timeoutMs: 0 })).toBe(false);
+    expect(validateModelsProbeParams({ provider: "openai", extra: true })).toBe(false);
   });
 });
 
@@ -955,6 +1039,21 @@ describe("validateNodePresenceAlivePayload", () => {
         arbitrary: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateNodePresenceActivityPayload", () => {
+  it("accepts bounded input idle time", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
+      true,
+    );
+  });
+
+  it("rejects negative, unbounded, and extra fields", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
   });
 });
 

@@ -1,11 +1,13 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
-import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
@@ -13,6 +15,9 @@ let capturedPayload: RestartSentinelPayload | undefined;
 let restartSentinelWriteError: Error | null = null;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
+type UpdateInstallSurface = Awaited<
+  ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
+>;
 const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
   kind: "git",
   mode: "git",
@@ -250,7 +255,10 @@ async function invokeUpdateRun(
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
-  await updateHandlers["update.run"]({
+  await expectDefined(
+    updateHandlers["update.run"],
+    'updateHandlers["update.run"] test invariant',
+  )({
     params,
     respond: onRespond as never,
     context: { getRuntimeConfig: () => runtimeConfig },
@@ -819,6 +827,25 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.reason).toBe("restart-unavailable");
     expect(payload?.result?.mode).toBe("npm");
   });
+
+  it("delegates update.run without mutating or restarting under external supervision", async () => {
+    mockGlobalInstallSurface();
+
+    const payload = await withProcessEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.restart).toBeNull();
+    expect(payload?.result).toMatchObject({
+      status: "skipped",
+      mode: "npm",
+      reason: "external-supervisor-update-required",
+    });
+  });
 });
 
 describe("update.run post-core plugin finalize", () => {
@@ -952,7 +979,10 @@ describe("update.status", () => {
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
-    await updateHandlers["update.status"]({
+    await expectDefined(
+      updateHandlers["update.status"],
+      'updateHandlers["update.status"] test invariant',
+    )({
       params: {},
       respond,
     } as never);
@@ -982,7 +1012,10 @@ describe("update.status", () => {
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
-    await updateHandlers["update.status"]({
+    await expectDefined(
+      updateHandlers["update.status"],
+      'updateHandlers["update.status"] test invariant',
+    )({
       params: {},
       respond,
       context: { logGateway: { warn } },

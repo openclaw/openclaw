@@ -7,15 +7,14 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../../packages/terminal-core/src/prompt-style.js";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -129,15 +128,7 @@ const password = async (params: Parameters<typeof clackPassword>[0]) =>
     }),
   );
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  guardCancel(
-    await clackSelect({
-      ...params,
-      message: stylePromptMessage(params.message),
-      options: params.options.map((opt) =>
-        opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-      ),
-    }),
-  );
+  guardCancel(await clackSelect(styleSelectParams(params)));
 
 async function readPipedStdin(): Promise<string> {
   process.stdin.setEncoding("utf8");
@@ -999,7 +990,7 @@ export function resolveLoginProfiles(params: {
   }
 
   const [profile] = params.result.profiles;
-  return [{ ...profile, profileId: requestedProfileId }];
+  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
@@ -1131,3 +1122,4 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     prompter: createClackPrompter(),
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -78,13 +78,12 @@ function serializeArgs(args: unknown): string | null {
     return null;
   }
 }
-
 /**
  * Only calls where a purpose summary beats the deterministic label qualify:
  * shell commands and arg-heavy generic/MCP tools. File reads/edits/writes
  * already render precise labels.
  */
-export function resolveToolTitleRequest(
+function resolveToolTitleRequest(
   name: string,
   args: unknown,
 ): { key: string; input: string } | null {
@@ -132,6 +131,17 @@ export function configureToolTitleFetcher(params: {
   agentId?: string | null;
   onTitlesChanged: (() => void) | null;
 }): void {
+  if (!params.client) {
+    titlesDisabledByGateway = false;
+    titlesByKey.clear();
+    pendingKeys.clear();
+    failedKeys.clear();
+    queue = new Map();
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  }
   if (params.client !== activeClient) {
     titlesDisabledByGateway = false;
   }
@@ -206,7 +216,8 @@ async function flushTitleQueue(): Promise<void> {
     const titles = result?.titles ?? {};
     let changed = false;
     for (const item of batch) {
-      const title = typeof titles[item.key] === "string" ? titles[item.key].trim() : "";
+      const rawTitle = titles[item.key];
+      const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
       if (title) {
         titlesByKey.set(item.key, title);
         changed = true;
@@ -243,20 +254,4 @@ async function flushTitleQueue(): Promise<void> {
       }, REQUEST_DEBOUNCE_MS);
     }
   }
-}
-
-export function resetToolTitlesForTest(): void {
-  titlesDisabledByGateway = false;
-  titlesByKey.clear();
-  pendingKeys.clear();
-  failedKeys.clear();
-  queue = new Map();
-  if (flushTimer) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-  }
-}
-
-export function setToolTitleForTest(key: string, title: string): void {
-  titlesByKey.set(key, title);
 }

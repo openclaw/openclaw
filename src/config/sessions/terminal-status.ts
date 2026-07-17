@@ -16,5 +16,14 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     endedAt: undefined,
     runtimeMs: undefined,
     abortedLastRun: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRunId: undefined,
+    restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
   };
 }

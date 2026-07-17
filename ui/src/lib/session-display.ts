@@ -95,6 +95,7 @@ type SessionKeyInfo = {
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
+  derivedTitle?: string;
 } & SessionWorktreeDisplayRow;
 
 function capitalize(s: string): string {
@@ -129,6 +130,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
+    if (!channel || !identifier) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
   }
@@ -137,6 +141,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
+    if (!channel) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
@@ -159,8 +166,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // drop the agent:<id>: routing boilerplate and shorten opaque id runs so the
   // slug reads as a name instead of a raw key.
   const agentKeyMatch = key.match(/^agent:[^:]+:(?:explicit:)?(.+)$/);
-  if (agentKeyMatch) {
-    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyMatch[1]) };
+  const agentKeyName = agentKeyMatch?.[1];
+  if (agentKeyName) {
+    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyName) };
   }
 
   // Unknown: return key as-is.
@@ -170,6 +178,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const derivedTitle = normalizeOptionalString(row?.derivedTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -190,6 +199,9 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
   if (workSubtitle && row?.worktree) {
     return applyTypedPrefix(workSubtitle);
+  }
+  if (derivedTitle && derivedTitle !== key) {
+    return applyTypedPrefix(derivedTitle);
   }
   return fallbackName;
 }

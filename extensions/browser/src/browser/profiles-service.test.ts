@@ -1,6 +1,7 @@
 // Browser tests cover profiles service plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -177,6 +178,46 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(false);
     expect(state.resolved.profiles.work?.cdpPort).toBe(18801);
     expect(writeConfigFile).toHaveBeenCalled();
+  });
+
+  it("round-trips prototype-like profile names as own entries", async () => {
+    for (const profileName of ["constructor", "prototype"] as const) {
+      writeConfigFile.mockClear();
+      const resolved = resolveBrowserConfig({});
+      const { ctx, state } = createCtx(resolved);
+      vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.createProfile({ name: profileName });
+
+      expect(result.profile).toBe(profileName);
+      expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(true);
+      const createdProfiles = writtenBrowserConfig().profiles as Record<
+        string,
+        { cdpPort?: number; color: string }
+      >;
+      expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
+
+      writeConfigFile.mockClear();
+      const createdProfile = expectDefined(createdProfiles[profileName], "created browser profile");
+      vi.mocked(getRuntimeConfig).mockReturnValue({
+        browser: {
+          defaultProfile: "openclaw",
+          profiles: { [profileName]: createdProfile },
+        },
+      });
+      await service.deleteProfile(profileName);
+
+      const deletedProfiles = writtenBrowserConfig().profiles as Record<
+        string,
+        { cdpPort?: number; color: string }
+      >;
+      expect(Object.hasOwn(deletedProfiles, profileName)).toBe(false);
+      expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(false);
+      expect(resolveProfile(resolveBrowserConfig({ profiles: deletedProfiles }), profileName)).toBe(
+        null,
+      );
+    }
   });
 
   it("persists an existing managed profile as the browser default", async () => {

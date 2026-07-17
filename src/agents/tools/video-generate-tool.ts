@@ -227,7 +227,7 @@ function createVideoGenerateToolSchema(params: { includeAudioReferences: boolean
   return Type.Object(properties);
 }
 
-export function resolveVideoGenerationModelConfigForTool(params: {
+function resolveVideoGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
@@ -241,6 +241,12 @@ export function resolveVideoGenerationModelConfigForTool(params: {
     modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.videoGenerateToolTestApi")] = {
+    resolveVideoGenerationModelConfigForTool,
+  };
 }
 
 function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
@@ -974,7 +980,7 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      'Create videos. Session chats: background task; do not call video_generate again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. "status" checks active task. Duration may round to provider-supported value.',
+      "Create video. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -1316,3 +1322,4 @@ export function createVideoGenerateTool(options?: {
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

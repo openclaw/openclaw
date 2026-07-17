@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Runs synchronous extra security audit checks.
 import {
   normalizeOptionalLowercaseString,
@@ -30,7 +31,7 @@ import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
  * These functions analyze config-based security properties without I/O.
  */
 
-export type SecurityAuditFinding = {
+type SecurityAuditFinding = {
   checkId: string;
   severity: "info" | "warn" | "critical";
   title: string;
@@ -38,11 +39,11 @@ export type SecurityAuditFinding = {
   remediation?: string;
 };
 
-export type HooksHardeningAuditOptions = {
+type HooksHardeningAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
-export type GatewayHttpNoAuthAuditOptions = {
+type GatewayHttpNoAuthAuditOptions = {
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
 
@@ -309,17 +310,21 @@ function editDistance(a: string, b: string): number {
   const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
 
   for (let i = 1; i <= a.length; i++) {
-    let prev = dp[0];
+    let prev = expectDefined(dp[0], "dp entry at 0");
     dp[0] = i;
     for (let j = 1; j <= b.length; j++) {
       const temp = dp[j];
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
-      prev = temp;
+      dp[j] = Math.min(
+        expectDefined(dp[j], "dp entry at j") + 1,
+        expectDefined(dp[j - 1], "dp entry at j 1") + 1,
+        prev + cost,
+      );
+      prev = expectDefined(temp, "audit extra.sync temp");
     }
   }
 
-  return dp[b.length];
+  return expectDefined(dp[b.length], "dp entry at b.length");
 }
 
 function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
@@ -1038,7 +1043,7 @@ export function collectNodeDangerousAllowCommandFindings(
     title: "Dangerous node commands explicitly enabled",
     detail:
       `gateway.nodes.allowCommands includes: ${dangerousAllowed.join(", ")}. ` +
-      "These commands can trigger high-impact device actions or read node files (desktop input/camera/screen/contacts/calendar/reminders/SMS/file).",
+      "These commands can trigger high-impact device actions or read sensitive data (desktop input/camera/screen/contacts/calendar/reminders/health/SMS/file).",
     remediation:
       "Remove these entries from gateway.nodes.allowCommands (recommended). " +
       "If you keep them, treat gateway auth as full operator access and keep gateway exposure local/tailnet-only.",
@@ -1247,10 +1252,11 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
       signals.map((signal) => `- ${signal}`).join("\n") +
       `\n${impactLine}\n${riskyContextsDetail}\n` +
-      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway.",
+      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
     remediation:
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
 
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

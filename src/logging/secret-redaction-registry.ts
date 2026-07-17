@@ -10,7 +10,7 @@ function escapeRegExp(value: string): string {
 }
 
 function rebuildProbe(): void {
-  firstChars = new Set([...registeredValues.keys()].map((value) => value[0]));
+  firstChars = new Set([...registeredValues.keys()].map((value) => value.charAt(0)));
   compiledMatcher = undefined;
 }
 
@@ -87,8 +87,13 @@ export function redactRegisteredSecretValues(
   return text.replace(compiledMatcher, (value) => mask(value));
 }
 
-/** Test-only reset for process-global redaction state. */
-export function resetSecretRedactionRegistryForTest(): void {
+function resetSecretRedactionRegistryForTest(): void {
   registeredValues.clear();
   rebuildProbe();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.secretRedactionRegistryTestApi")
+  ] = { resetSecretRedactionRegistryForTest };
 }

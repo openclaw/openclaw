@@ -5,7 +5,6 @@ export type ChangedLane =
   | "extensions"
   | "extensionTests"
   | "scripts"
-  | "strictRatchet"
   | "testRoot"
   | "apps"
   | "docs"
@@ -28,7 +27,6 @@ export type DetectChangedLanesOptions = {
   packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
 };
 
-export function normalizeChangedPath(inputPath: unknown): string;
 export function createEmptyChangedLanes(): ChangedLanes;
 export function isChangedLaneTestPath(changedPath: string): boolean;
 export function detectChangedLanes(
@@ -55,4 +53,3 @@ export function isPackageScriptOnlyChange(before: string, after: string): boolea
 
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS: string[];
 export const RELEASE_METADATA_PATHS: Set<string>;
-export const STRICT_RATCHET_PACKAGE_DIRS: string[];

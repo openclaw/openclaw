@@ -18,9 +18,9 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
 
-export type UninstallActions = {
+type UninstallActions = {
   entry: boolean;
   install: boolean;
   allowlist: boolean;
@@ -56,9 +56,7 @@ const UNINSTALL_ACTION_ORDER = [
   "directory",
 ] as const satisfies ReadonlyArray<keyof UninstallActions>;
 
-export function createEmptyUninstallActions(
-  overrides: Partial<UninstallActions> = {},
-): UninstallActions {
+function createEmptyUninstallActions(overrides: Partial<UninstallActions> = {}): UninstallActions {
   return {
     entry: false,
     install: false,
@@ -93,16 +91,6 @@ export function formatUninstallSlotResetPreview(slotKey: "memory" | "contextEngi
   return `${UNINSTALL_ACTION_LABELS[actionKey]} (will reset to "${defaultSlotIdForKey(slotKey)}")`;
 }
 
-export type UninstallPluginResult =
-  | {
-      ok: true;
-      config: OpenClawConfig;
-      pluginId: string;
-      actions: UninstallActions;
-      warnings: string[];
-    }
-  | { ok: false; error: string };
-
 export type PluginUninstallDirectoryRemoval = {
   target: string;
   cleanup?:
@@ -117,7 +105,7 @@ export type PluginUninstallDirectoryRemoval = {
       };
 };
 
-export type PluginUninstallPlanResult =
+type PluginUninstallPlanResult =
   | {
       ok: true;
       config: OpenClawConfig;
@@ -127,7 +115,7 @@ export type PluginUninstallPlanResult =
     }
   | { ok: false; error: string };
 
-export function resolveUninstallDirectoryTarget(params: {
+function resolveUninstallDirectoryTarget(params: {
   pluginId: string;
   hasInstall: boolean;
   installRecord?: PluginInstallRecord;
@@ -449,19 +437,12 @@ export function removePluginFromConfig(
   // Reset slots if this plugin was selected.
   let slots = pluginsConfig.slots;
   if (slots?.memory === pluginId) {
-    slots = {
-      ...slots,
-      memory: defaultSlotIdForKey("memory"),
-    };
     actions.memorySlot = true;
   }
   if (slots?.contextEngine === pluginId) {
-    slots = {
-      ...slots,
-      contextEngine: defaultSlotIdForKey("contextEngine"),
-    };
     actions.contextEngineSlot = true;
   }
+  slots = resetPluginSlotsToDefaults(slots, pluginId);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
   }
@@ -523,7 +504,7 @@ export function removePluginFromConfig(
   return { config, actions };
 }
 
-export type UninstallPluginParams = {
+type UninstallPluginParams = {
   config: OpenClawConfig;
   pluginId: string;
   channelIds?: string[];
@@ -757,24 +738,4 @@ export async function applyPluginUninstallDirectoryRemoval(
       ],
     };
   }
-}
-
-export async function uninstallPlugin(
-  params: UninstallPluginParams,
-): Promise<UninstallPluginResult> {
-  const plan = planPluginUninstall(params);
-  if (!plan.ok) {
-    return plan;
-  }
-  const directory = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-  return {
-    ok: true,
-    config: plan.config,
-    pluginId: plan.pluginId,
-    actions: {
-      ...plan.actions,
-      directory: directory.directoryRemoved,
-    },
-    warnings: directory.warnings,
-  };
 }

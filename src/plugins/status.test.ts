@@ -1,6 +1,8 @@
 // Covers plugin status reporting from config, discovery, and registry state.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginMemoryEmbeddingProviderRegistration } from "./registry-types.js";
+import type { PluginMemoryEmbeddingProviderRegistration } from "./registry.test-fixtures.js";
 import {
   createCompatibilityNotice,
   createCustomHook,
@@ -11,7 +13,7 @@ import {
   HOOK_ONLY_MESSAGE,
   LEGACY_BEFORE_AGENT_START_MESSAGE,
   REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
-} from "./status.test-helpers.js";
+} from "./status.test-fixtures.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
@@ -767,7 +769,10 @@ describe("plugin status reports", () => {
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
     expect(inspect.map((entry) => entry.shape)).toEqual(["hook-only", "hybrid-capability"]);
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
-    expectCapabilityKinds(inspect[1], ["text-inference", "web-search"]);
+    expectCapabilityKinds(expectDefined(inspect[1], "inspect[1] test invariant"), [
+      "text-inference",
+      "web-search",
+    ]);
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {
@@ -907,7 +912,7 @@ describe("plugin status reports", () => {
         createPluginRecord({
           id: "file-backed-session-plugin",
           name: "File-backed Session Plugin",
-          error: "The requested module does not provide an export named 'loadSessionStore'",
+          error: "The requested module does not provide an export named 'saveSessionStore'",
           status: "error",
         }),
       ],

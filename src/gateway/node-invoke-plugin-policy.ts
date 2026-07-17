@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -18,6 +19,7 @@ import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
+  isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -115,8 +117,10 @@ function createApprovalRuntime(params: {
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      // Internal policy requests have no RPC response channel. Registration
-      // failures must reject so an unreviewable request cannot reach the node.
+      // Register directly: persistence and presentation-validation failures
+      // must throw so the plugin policy fails closed before any request
+      // routing. The RPC storage-unavailable respond path does not apply to
+      // this runtime-internal caller.
       const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = buildRequestedApprovalEvent(record);
       await handlePendingApprovalRequest({
@@ -131,19 +135,71 @@ function createApprovalRuntime(params: {
         twoPhase: false,
         approvalKind: "plugin",
         deliverRequest: () => {
+          const deliveryTasks: Array<Promise<boolean>> = [];
           const forward = params.context.forwardPluginApprovalRequest;
-          if (!forward) {
+          if (forward) {
+            deliveryTasks.push(
+              forward(requestEvent).catch((err: unknown) => {
+                params.context.logGateway?.error?.(
+                  `plugin approvals: forward node policy request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          const iosPushDelivery = params.context.pluginApprovalIosPushDelivery;
+          if (iosPushDelivery?.handleRequested) {
+            deliveryTasks.push(
+              iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err: unknown) => {
+                  params.context.logGateway?.error?.(
+                    `plugin approvals: iOS push node policy request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
+            );
+          }
+          if (deliveryTasks.length === 0) {
             return false;
           }
-          return forward(requestEvent).catch((err: unknown) => {
-            params.context.logGateway?.error?.(
-              `plugin approvals: forward node policy request failed: ${String(err)}`,
-            );
-            return false;
-          });
+          return (async () => {
+            let delivered = false;
+            for (const task of deliveryTasks) {
+              delivered = (await task) || delivered;
+            }
+            return delivered;
+          })();
         },
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
-      return { id: record.id, decision: await decisionPromise };
+      const decision = await decisionPromise;
+      // This return hands execution authority to the plugin policy. Claim a
+      // one-shot decision here so observation or retry cannot replay it.
+      if (
+        decision === "allow-once" &&
+        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+      ) {
+        return { id: record.id, decision: null };
+      }
+      return { id: record.id, decision };
     },
   };
 }

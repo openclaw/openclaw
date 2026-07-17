@@ -4,7 +4,12 @@ import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.notifyNativeLocaleChanged
+import ai.openclaw.app.wear.GoogleWearMessageSender
+import ai.openclaw.app.wear.WearProxyBridge
 import android.app.Application
+import android.content.res.Configuration
 import android.os.StrictMode
 import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +32,14 @@ class NodeApp : Application() {
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+
+  internal val wearProxyBridge: WearProxyBridge by lazy {
+    WearProxyBridge(
+      scope = runtimeScope,
+      sender = GoogleWearMessageSender(this),
+      handleRequest = { request -> ensureBackgroundRuntime().handleWearProxyRequest(request) },
+    )
+  }
 
   /**
    * Returns the single NodeRuntime for this process, creating it on first use.
@@ -102,6 +115,7 @@ class NodeApp : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    NativeStringResources.install(this)
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
         StrictMode.ThreadPolicy
@@ -118,5 +132,13 @@ class NodeApp : Application() {
           .build(),
       )
     }
+  }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    // The process runtime survives Activity recreation, so retained text and
+    // serialized Home Canvas state need an explicit locale refresh signal.
+    NativeStringResources.setConfigurationLocales(newConfig)
+    notifyNativeLocaleChanged()
   }
 }

@@ -15,6 +15,9 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
+  consumeCliSessionForkInStore,
+  persistCliSessionForkSuccessorInStore,
+  restoreCliSessionForkInStore,
   recordCliCompactionInStore,
   updateSessionStoreAfterAgentRun,
 } from "./session-store.js";
@@ -122,6 +125,81 @@ afterEach(() => {
 });
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("clears the durable replay-safe recovery guard after the recovery run terminates", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:restart-recovery";
+      const sessionId = "restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBeUndefined();
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools,
+      ).toBeUndefined();
+    });
+  });
+
+  it("keeps the durable replay-safe recovery guard when the recovery run is aborted", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:aborted-restart-recovery";
+      const sessionId = "aborted-restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: true,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools).toBe(
+        true,
+      );
+    });
+  });
+
   it("preserves a concurrent rename and unpin during final accounting", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-management-race";
@@ -412,6 +490,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(272_000);
       expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(272_000);
+    });
+  });
+
+  it("persists the prepared claude-cli context budget", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-claude-cli-configured-context";
+      const sessionId = "test-claude-cli-configured-context-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          contextTokens: 1_048_576,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-opus-4-7",
+        result: {
+          meta: {
+            durationMs: 1,
+            executionTrace: { runner: "cli" },
+            agentMeta: {
+              sessionId,
+              provider: "claude-cli",
+              model: "claude-opus-4-7",
+              contextTokens: 100_000,
+            },
+          },
+        } as EmbeddedAgentRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.contextTokens).toBe(100_000);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.contextTokens).toBe(100_000);
     });
   });
 
@@ -2556,6 +2683,131 @@ describe("recordCliCompactionInStore", () => {
   });
 });
 
+describe("consumeCliSessionForkInStore", () => {
+  it("clears the one-shot marker while preserving the bound source id", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { ...entry, label: "concurrent update" },
+      );
+      const consumed = await consumeCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+      expect(consumed?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-source-session",
+        forceReuse: true,
+      });
+      expect(consumed?.label).toBe("concurrent update");
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
+      ).toEqual({ sessionId: "claude-source-session", forceReuse: true });
+      await expect(
+        consumeCliSessionForkInStore({
+          provider: "claude-cli",
+          sessionKey,
+          sessionStore,
+          storePath,
+          expectedCliSessionId: "claude-source-session",
+        }),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("re-arms a claimed marker after a failed turn", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-source-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+
+      const restored = await restoreCliSessionForkInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+      });
+
+      expect(restored?.cliSessionBindings?.["claude-cli"]?.forkNextResume).toBe(true);
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"]
+          ?.forkNextResume,
+      ).toBe(true);
+    });
+  });
+
+  it("persists the fork successor before turn finalization", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+      const entry: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-source-session",
+            forceReuse: true,
+            authProfileId: "claude:work",
+            authEpoch: "epoch-1",
+            authEpochVersion: 3,
+          },
+        },
+      };
+      const sessionStore = { [sessionKey]: entry };
+      await seedSessionStore(storePath, sessionStore);
+
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+        successorCliSessionId: "claude-fork-session",
+      });
+
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings?.["claude-cli"],
+      ).toEqual({
+        sessionId: "claude-fork-session",
+        forceReuse: true,
+        authProfileId: "claude:work",
+        authEpoch: "epoch-1",
+        authEpochVersion: 3,
+      });
+    });
+  });
+});
+
 describe("clearCliSessionInStore", () => {
   it("persists cleared Claude CLI bindings through session-store merge", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -2712,3 +2964,4 @@ describe("clearCliSessionInStore", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

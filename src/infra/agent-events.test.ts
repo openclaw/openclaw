@@ -7,6 +7,7 @@ import {
   clearAgentRunContext,
   emitAgentAuditEvent,
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   listAgentRunsForSession,
@@ -15,8 +16,8 @@ import {
   registerAgentRunContext,
   releaseAgentRunContext,
   resetAgentEventsForTest,
-  resetAgentRunContextForTest,
   rotateAgentEventLifecycleGeneration,
+  runOncePerAgentRun,
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
@@ -191,6 +192,76 @@ describe("agent-events sequencing", () => {
     expect(getAgentRunContext("shared-run")).toBeUndefined();
   });
 
+  test("reserves exclusive run ids for owner-only delivery and cleanup", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claimId = claimAgentRunContext(
+      "exclusive-run",
+      { sessionKey: "worker" },
+      { exclusive: true, trackOwner: true },
+    )!;
+    expect(
+      claimAgentRunContext("exclusive-run", { sessionKey: "local" }, { trackOwner: true }),
+    ).toBeUndefined();
+    const seen: unknown[] = [];
+    const stop = onAgentEvent(({ data }) => seen.push(data.text));
+    const event = (text: string) => ({
+      runId: "exclusive-run",
+      stream: "assistant" as const,
+      data: { text },
+    });
+
+    emitAgentEvent(event("local"));
+    emitAgentEventForOwner(event("worker"), claimId);
+
+    clearAgentRunContext("exclusive-run", lifecycleGeneration);
+
+    expect(getAgentRunContext("exclusive-run")?.sessionKey).toBe("worker");
+    releaseAgentRunContext("exclusive-run", claimId);
+    expect(getAgentRunContext("exclusive-run")).toBeUndefined();
+    emitAgentEventForOwner(event("late"), claimId);
+    stop();
+    expect(seen).toEqual(["worker"]);
+  });
+
+  test("explicitly adopts only an unowned same-generation context", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("adopted-run", {
+      agentId: "main",
+      isControlUiVisible: false,
+      lifecycleGeneration,
+      sessionId: "session-adopted",
+      sessionKey: "agent:main:adopted",
+    });
+
+    const claimId = claimAgentRunContext(
+      "adopted-run",
+      {
+        agentId: "main",
+        isControlUiVisible: false,
+        lifecycleGeneration,
+        sessionId: "session-adopted",
+        sessionKey: "agent:main:adopted",
+      },
+      {
+        adoptExistingUnowned: true,
+        exclusive: true,
+        ownsContext: true,
+        trackOwner: true,
+      },
+    );
+    expect(claimId).toBeDefined();
+    expect(
+      claimAgentRunContext(
+        "adopted-run",
+        { lifecycleGeneration, sessionKey: "agent:main:adopted" },
+        { adoptExistingUnowned: true, exclusive: true, trackOwner: true },
+      ),
+    ).toBeUndefined();
+
+    releaseAgentRunContext("adopted-run", claimId);
+    expect(getAgentRunContext("adopted-run")).toBeUndefined();
+  });
+
   test("full event reset clears tracked ownership", () => {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     claimAgentRunContext(
@@ -282,6 +353,35 @@ describe("agent-events sequencing", () => {
     );
 
     expect(captured).toBe(preRestartGeneration);
+  });
+
+  test("shares one run operation across nested fallback scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "claimed");
+
+    const results = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => [
+      await runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+        runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      ),
+    ]);
+
+    expect(results).toEqual(["claimed", "claimed"]);
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not share run operations across admitted execution scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "declined");
+
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+
+    expect(operation).toHaveBeenCalledTimes(2);
   });
 
   test("lists only runs owned by the current lifecycle", () => {
@@ -470,7 +570,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
       sessionKey: "session-quietchat",
       isControlUiVisible: false,
@@ -492,7 +591,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("preserves sessionKey for lifecycle events hidden from Control UI", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle", {
       sessionKey: "session-quietchat",
       isControlUiVisible: false,
@@ -514,7 +612,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("falls back to registered sessionKey for hidden lifecycle events", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden-lifecycle-context", {
       sessionKey: "session-quietchat-context",
       isControlUiVisible: false,
@@ -555,7 +652,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("merges later run context updates into existing runs", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
       isControlUiVisible: true,
@@ -575,7 +671,6 @@ describe("agent-events sequencing", () => {
   });
 
   test("falls back to registered sessionKey when event sessionKey is blank", () => {
-    resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
     let receivedSessionKey: string | undefined;

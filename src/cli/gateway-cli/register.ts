@@ -25,6 +25,7 @@ import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 
 const configModuleLoader = createLazyImportLoader(
@@ -127,7 +128,10 @@ async function loadSettledCostUsageSummary(
     if (remainingBeforeCallMs <= 0) {
       throw createUsageCostSettleTimeoutError(lastSummary);
     }
-    const callOpts = { ...rpcOpts, timeout: String(remainingBeforeCallMs) };
+    const callOpts = {
+      ...rpcOpts,
+      timeout: String(Math.min(DEFAULT_GATEWAY_RPC_TIMEOUT_MS, remainingBeforeCallMs)),
+    };
     const summary = (await callGatewayCli("usage.cost", callOpts, params)) as CostUsageSummary;
     lastSummary = summary;
     const status = summary.cacheStatus?.status;
@@ -139,8 +143,8 @@ async function loadSettledCostUsageSummary(
     if (remainingMs <= 0) {
       throw createUsageCostSettleTimeoutError(summary);
     }
-    // The existing RPC timeout is the whole command budget. Giving each retry a
-    // fresh timeout would let a short bounded audit keep running for minutes.
+    // The usage-cost timeout is the whole command budget. Each transport call
+    // remains capped separately so one unresponsive RPC cannot consume it all.
     await sleep(Math.min(pollMs, remainingMs));
     pollMs = Math.min(pollMs * 2, USAGE_COST_SETTLE_MAX_POLL_MS);
   }
@@ -252,6 +256,7 @@ async function renderCostUsageSummaryAsync(
   days: number,
   rich: boolean,
 ): Promise<string[]> {
+  const { formatMissingCostEntries } = await import("../../infra/session-cost-usage-totals.js");
   const { formatTokenCount, formatUsd } = await loadUsageFormatModule();
   const totalCost = formatUsd(summary.totals.totalCost) ?? "$0.00";
   const totalTokens = formatTokenCount(summary.totals.totalTokens) ?? "0";
@@ -262,7 +267,7 @@ async function renderCostUsageSummaryAsync(
 
   if (summary.totals.missingCostEntries > 0) {
     lines.push(
-      `${colorize(rich, theme.muted, "Missing entries:")} ${summary.totals.missingCostEntries}`,
+      `${colorize(rich, theme.muted, "Missing cost:")} ${formatMissingCostEntries(summary.totals)}`,
     );
   }
 
@@ -569,6 +574,7 @@ export function registerGatewayCli(program: Command) {
   addGatewayServiceCommands(gateway, {
     statusDescription: "Show gateway service status + probe connectivity/capability",
   });
+  addGatewayRestartHandoffCommands(gateway);
 
   gatewayCallOpts(
     gateway
@@ -922,3 +928,4 @@ export function registerGatewayCli(program: Command) {
       }, "gateway discover failed");
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

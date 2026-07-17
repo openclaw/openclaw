@@ -23,7 +23,7 @@ export type FleetCellRecord = {
   dataDir: string;
 };
 
-export type ReserveFleetCellParams = Omit<FleetCellRecord, "hostPort"> & {
+type ReserveFleetCellParams = Omit<FleetCellRecord, "hostPort"> & {
   requestedPort?: number;
 };
 
@@ -34,13 +34,21 @@ type FleetRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "fleet_cells" | "
 const FLEET_OPERATION_LEASE_SCOPE = "fleet-cell-operation";
 const FLEET_OPERATION_LEASE_TTL_MS = 5 * 60_000;
 
-export type FleetCellOperationLease = {
+type FleetCellOperationLease = {
   heartbeat: (nowMs?: number) => void;
   release: () => void;
   owner: string;
 };
 
-export type FleetCellOperationName = "create" | "start" | "stop" | "restart" | "upgrade" | "rm";
+export type FleetCellOperationName =
+  | "create"
+  | "start"
+  | "stop"
+  | "restart"
+  | "upgrade"
+  | "backup"
+  | "restore"
+  | "rm";
 
 function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<FleetRegistryDatabase>(db);

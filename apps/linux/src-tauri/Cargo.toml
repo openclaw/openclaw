@@ -1,0 +1,35 @@
+[package]
+name = "openclaw-desktop-linux"
+version = "0.1.0"
+description = "OpenClaw desktop companion for Linux"
+edition = "2021"
+rust-version = "1.77.2"
+
+[[bin]]
+name = "openclaw-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+base64 = "0.22.1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+mdns-sd = { version = "0.20", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tauri = { version = "2.11.5", features = ["image-png", "tray-icon"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-global-shortcut = "2.3.2"
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-window-state = "2.4.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cairo-rs = { version = "0.18.5", features = ["png"] }
+libc = "0.2.186"
+webkit2gtk = "2.0.2"

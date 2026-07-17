@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
@@ -146,7 +147,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 // Fields like authProfileId, elevatedLevel, ownerNumbers, and config are
 // intentionally excluded because they are session-level or not consulted in
 // per-message authorization checks.
-export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
+function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
     JSON.stringify(run.channelContext ?? null),
@@ -156,6 +157,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",
+    run.execOverrides?.nodeCwd ?? "",
     run.bashElevated?.enabled === true,
     run.bashElevated?.allowed === true,
     run.bashElevated?.defaultLevel ?? "",
@@ -296,7 +298,7 @@ type FollowupRuntimeMetadata = Pick<
   | "queueAbortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
-  | "onFollowupAdmissionWaitChange"
+  | "onReplyAdmissionWaitChange"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -530,7 +532,7 @@ function collectRuntimeMetadata(
   const deliveryCorrelations = items.flatMap((item) => item.deliveryCorrelations ?? []);
   const admissionWaitCallbacks = new Set(
     items.flatMap((item) =>
-      item.onFollowupAdmissionWaitChange ? [item.onFollowupAdmissionWaitChange] : [],
+      item.onReplyAdmissionWaitChange ? [item.onReplyAdmissionWaitChange] : [],
     ),
   );
   return {
@@ -541,7 +543,7 @@ function collectRuntimeMetadata(
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
     queuedLifecycle: items.length === 1 ? items[0]?.queuedLifecycle : undefined,
-    onFollowupAdmissionWaitChange:
+    onReplyAdmissionWaitChange:
       admissionWaitCallbacks.size > 0
         ? (waiting) => {
             for (const callback of admissionWaitCallbacks) {
@@ -624,7 +626,10 @@ function consumeQueueSummaryDelivery(
         (entry) => entry.sources.includes(source) || entry.sourceRefs.has(source),
       );
       if (elisionIndex >= 0) {
-        const entry = queue.summaryElisions[elisionIndex];
+        const entry = expectDefined(
+          queue.summaryElisions[elisionIndex],
+          "summary elisions entry at elision index",
+        );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
         entry.sources.splice(elidedSourceIndex, 1);
         entry.count = entry.sources.length;
@@ -659,7 +664,7 @@ function releaseQueueSummaryDeliveryForRetry(
 function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
   let dropped = 0;
   for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
-    const source = queue.summarySources[index];
+    const source = expectDefined(queue.summarySources[index], "summary sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -775,7 +780,7 @@ async function dropAbortedFollowups(
 ): Promise<number> {
   let dropped = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+    const item = expectDefined(items[index], "items entry at index");
     if (isFollowupRunAborted(item)) {
       await runFollowup(item);
       completeFollowupRunLifecycle(item);
@@ -880,7 +885,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingChatType: source.originatingChatType,
     abortSignal: source.abortSignal,
     queuedLifecycle: source.queuedLifecycle,
-    onFollowupAdmissionWaitChange: source.onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: source.onReplyAdmissionWaitChange,
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
@@ -940,8 +945,7 @@ async function runSyntheticOverflowSummary(params: {
     run: params.source.run,
     enqueuedAt: Date.now(),
     abortSignal: params.abortSignal,
-    onFollowupAdmissionWaitChange: collectRuntimeMetadata(params.sources)
-      .onFollowupAdmissionWaitChange,
+    onReplyAdmissionWaitChange: collectRuntimeMetadata(params.sources).onReplyAdmissionWaitChange,
     ...(params.onAdmitted
       ? {
           queuedLifecycle: {
@@ -979,7 +983,7 @@ async function drainElidedOverflowSummary(params: {
         )
       : [];
   for (let index = entry.sources.length - 1; index >= 0; index -= 1) {
-    const source = entry.sources[index];
+    const source = expectDefined(entry.sources[index], "sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -1361,3 +1365,4 @@ export function scheduleFollowupDrain(
     defaultRuntime.error?.(`followup queue drain admission failed for ${key}: ${String(err)}`);
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

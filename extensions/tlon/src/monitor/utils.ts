@@ -1,9 +1,16 @@
-// Tlon helper module supports utils behavior.
 import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Tlon helper module supports utils behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeShip } from "../targets.js";
 
 export interface ParsedCite {
@@ -59,7 +66,9 @@ export function formatModelName(modelString?: string | null): string {
   if (!modelString) {
     return "AI";
   }
-  const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
+  const modelName = modelString.includes("/")
+    ? expectDefined(modelString.split("/").at(1), "provider/model second segment")
+    : modelString;
   const modelMappings: Record<string, string> = {
     "claude-opus-4-5": "Claude Opus 4.5",
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
@@ -71,8 +80,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) {
-    return modelMappings[modelName];
+  const mappedName = modelMappings[modelName];
+  if (mappedName !== undefined) {
+    return mappedName;
   }
   return modelName
     .replace(/-/g, " ")
@@ -170,6 +180,37 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
     groupPolicy: "open",
     allowFrom: normalizedOwner ? [normalizedOwner] : [],
     command: {},
+  });
+}
+
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
   });
 }
 

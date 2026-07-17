@@ -24,10 +24,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import {
-  parseOpenClawChannelsLoginShellCommand,
-  rejectUnsafeExecControlShellCommand,
-} from "../infra/exec-control-command-guard.js";
+import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -1439,6 +1436,7 @@ export function createExecTool(
       host,
       workdir: params.workdir,
       defaultCwd: defaults?.cwd,
+      nodeCwd: defaults?.nodeCwd,
       sandbox: defaults?.sandbox,
     });
     return markResolvedExecWorkdirPrepared(params, {
@@ -1757,6 +1755,7 @@ export function createExecTool(
               host,
               workdir: params.workdir,
               defaultCwd: defaults?.cwd,
+              nodeCwd: defaults?.nodeCwd,
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
@@ -2131,10 +2130,4 @@ export function createExecTool(
 
 /** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();
-
-/** Test-only seams for parser/preflight helpers. */
-export const testing = {
-  parseOpenClawChannelsLoginShellCommand,
-  validateScriptFileForShellBleed,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

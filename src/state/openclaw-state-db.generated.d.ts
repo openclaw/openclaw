@@ -68,12 +68,18 @@ export interface AndroidNotificationRecentPackages {
   updated_at_ms: number;
 }
 
+export interface ApnsRegistrationTombstones {
+  deleted_at_ms: number;
+  node_id: string;
+}
+
 export interface ApnsRegistrations {
   distribution: string | null;
   environment: string;
   installation_id: string | null;
   node_id: string;
   relay_handle: string | null;
+  relay_origin: string | null;
   send_grant: string | null;
   token: string | null;
   token_debug_suffix: string | null;
@@ -375,31 +381,6 @@ export interface CronJobs {
   wake_mode: string;
 }
 
-export interface CronRunLogs {
-  created_at: number;
-  delivered: number | null;
-  delivery_error: string | null;
-  delivery_status: string | null;
-  diagnostics_summary: string | null;
-  duration_ms: number | null;
-  entry_json: string;
-  error: string | null;
-  job_id: string;
-  model: string | null;
-  next_run_at_ms: number | null;
-  provider: string | null;
-  run_at_ms: number | null;
-  run_id: string | null;
-  seq: number;
-  session_id: string | null;
-  session_key: string | null;
-  status: string | null;
-  store_key: string;
-  summary: string | null;
-  total_tokens: number | null;
-  ts: number;
-}
-
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -657,14 +638,17 @@ export interface MacosPortGuardianRecords {
 }
 
 export interface ManagedOutgoingImageRecords {
+  agent_id: string | null;
   alt: string;
   attachment_id: string;
+  cleanup_pending: Generated<number>;
   created_at: string;
   message_id: string | null;
   original_content_type: string;
   original_filename: string | null;
   original_height: number | null;
   original_media_id: string;
+  original_media_root: string;
   original_media_subdir: string;
   original_size_bytes: number | null;
   original_width: number | null;
@@ -737,6 +721,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
   gateway_tls: number | null;
@@ -776,6 +761,7 @@ export interface OperatorApprovals {
   requested_by_client_id: string | null;
   requested_by_device_id: string | null;
   requested_by_device_token_auth: Generated<number>;
+  resolution_ref: string;
   resolved_at_ms: number | null;
   resolver_id: string | null;
   resolver_kind: string | null;
@@ -876,6 +862,20 @@ export interface SessionStateHeads {
   updated_at: number;
 }
 
+export interface SessionUpstreamLinks {
+  agent_id: string;
+  catalog_id: string;
+  created_at: number;
+  host_id: string;
+  last_marker_json: string | null;
+  last_scanned_at: number | null;
+  session_key: string;
+  thread_id: string;
+  updated_at: number;
+  upstream_kind: string;
+  upstream_ref_json: string | null;
+}
+
 export interface SessionWatchCursors {
   last_seen_sequence: Generated<number>;
   material_sequence: Generated<number>;
@@ -902,6 +902,13 @@ export interface SkillLifecycle {
   skill_name: string;
   state: string;
   state_changed_at_ms: number;
+}
+
+export interface SkillUploadChunks {
+  byte_offset: number;
+  chunk_blob: Uint8Array;
+  size_bytes: number;
+  upload_id: string;
 }
 
 export interface SkillUploads {
@@ -979,6 +986,13 @@ export interface SubagentRuns {
   requester_display_key: string;
   requester_origin_json: string | null;
   requester_session_key: string;
+  requester_settle_wake_attempt_count: number | null;
+  requester_settle_wake_batch_run_ids_json: string | null;
+  requester_settle_wake_last_error: string | null;
+  requester_settle_wake_next_attempt_at: number | null;
+  requester_settle_wake_replay_count: number | null;
+  requester_settle_wake_retire_after: number | null;
+  requester_settle_wake_status: string | null;
   run_id: string;
   run_timeout_seconds: number | null;
   session_started_at: number | null;
@@ -1003,6 +1017,7 @@ export interface TaskRuns {
   cleanup_after: number | null;
   created_at: number;
   delivery_status: string;
+  detail_json: string | null;
   ended_at: number | null;
   error: string | null;
   label: string | null;
@@ -1135,6 +1150,107 @@ export interface WorkerEnvironments {
   updated_at_ms: number;
 }
 
+export interface WorkerInferenceTurns {
+  created_at_ms: number;
+  environment_id: string;
+  request_hash: string;
+  run_epoch: number;
+  run_id: string;
+  session_id: string;
+  state: string;
+  terminal_json: string | null;
+  turn_id: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerSessionPlacements {
+  active_owner_epoch: number | null;
+  agent_id: string;
+  created_at_ms: number;
+  environment_id: string | null;
+  last_live_event_ack_cursor: number | null;
+  last_transcript_ack_cursor: number | null;
+  recovery_error: string | null;
+  remote_workspace_dir: string | null;
+  session_id: string;
+  session_key: string;
+  state: string;
+  state_changed_at_ms: number;
+  transition_generation: Generated<number>;
+  turn_claim_generation: number | null;
+  turn_claim_id: string | null;
+  turn_claim_owner: string | null;
+  turn_claim_owner_epoch: number | null;
+  turn_claim_run_id: string | null;
+  updated_at_ms: number;
+  worker_bundle_hash: string | null;
+  workspace_base_manifest_ref: string | null;
+}
+
+export interface WorkerTranscriptCommitHeads {
+  environment_id: string;
+  next_seq: number;
+  run_epoch: number;
+  session_id: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerTranscriptCommits {
+  created_at_ms: number;
+  request_hash: string;
+  result_json: string | null;
+  run_epoch: number;
+  seq: number;
+  session_id: string;
+  state: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerWorkspacePendingResults {
+  claim_id: string;
+  created_at_ms: number;
+  environment_id: string;
+  gateway_instance_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  recovery_requested_at_ms: number | null;
+  run_id: string;
+  session_id: string;
+  workspace_accepted_at_ms: number | null;
+}
+
+export interface WorkerWorkspaceReconciliations {
+  base_manifest_ref: string;
+  base_pack: Uint8Array;
+  created_at_ms: number;
+  current_manifest_ref: string;
+  environment_id: string;
+  owner_epoch: number;
+  placement_generation: number;
+  plan_json: string;
+  session_id: string;
+}
+
+export interface WorkspaceAttestations {
+  attested_at_ms: number;
+  updated_at_ms: number;
+  workspace_key: string;
+}
+
+export interface WorkspaceGeneratedBootstrapHashes {
+  filename: string;
+  sha256: string;
+  workspace_key: string;
+}
+
+export interface WorkspacePathAliases {
+  alias_key: string;
+  alias_path: string;
+  updated_at_ms: number;
+  workspace_key: string;
+  workspace_path: string;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1142,6 +1258,13 @@ export interface WorkspaceSetupState {
   version: number;
   workspace_key: string;
   workspace_path: string;
+}
+
+export interface WorktreeProvisionedFileChunks {
+  chunk_index: number;
+  data: Uint8Array;
+  path: string;
+  worktree_id: string;
 }
 
 export interface Worktrees {
@@ -1153,6 +1276,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  provisioned_paths_json: string | null;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;
@@ -1166,6 +1290,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
+  apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
   audit_identity_keys: AuditIdentityKeys;
@@ -1184,7 +1309,6 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
-  cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;
@@ -1220,9 +1344,11 @@ export interface DB {
   session_groups: SessionGroups;
   session_state_events: SessionStateEvents;
   session_state_heads: SessionStateHeads;
+  session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
+  skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
   state_leases: StateLeases;
@@ -1238,6 +1364,16 @@ export interface DB {
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
+  worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placements: WorkerSessionPlacements;
+  worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
+  worker_transcript_commits: WorkerTranscriptCommits;
+  worker_workspace_pending_results: WorkerWorkspacePendingResults;
+  worker_workspace_reconciliations: WorkerWorkspaceReconciliations;
+  workspace_attestations: WorkspaceAttestations;
+  workspace_generated_bootstrap_hashes: WorkspaceGeneratedBootstrapHashes;
+  workspace_path_aliases: WorkspacePathAliases;
   workspace_setup_state: WorkspaceSetupState;
+  worktree_provisioned_file_chunks: WorktreeProvisionedFileChunks;
   worktrees: Worktrees;
 }

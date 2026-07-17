@@ -40,9 +40,8 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter });
     } catch (error) {
-      log.warn(
-        `dropped node skill with invalid frontmatter: ${nodeId}/${skill.name}: ${String(error)}`,
-      );
+      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;
@@ -158,7 +157,8 @@ function remoteSkillLocation(nodeId: string, name: string): string {
 
 function locatorNote(node: RemoteSkillNode, skillName: string): string {
   const label = node.displayName?.trim() || node.nodeId;
-  return `Node-hosted on ${label} (${node.nodeId}): files and bins live on that node under skills/${skillName}/ in its OpenClaw state dir. Run every command via exec host=node node=${node.nodeId}; relative paths resolve on the node.`;
+  const cwd = remoteSkillLocation(node.nodeId, skillName).slice(0, -"/SKILL.md".length);
+  return `Node-hosted on ${label} (${node.nodeId}). Read this SKILL.md with the normal read tool at its exact node:// location; do not use file_fetch, which only accepts approved absolute node paths. If read is unavailable, use exec host=node node=${node.nodeId} with workdir=${cwd} to run cat SKILL.md. Run referenced files and bins with the same exec target and workdir; the node host resolves that locator to the node-local skill directory.`;
 }
 
 export function mergeRemoteNodeSkillEntries(
@@ -215,6 +215,7 @@ export function mergeRemoteNodeSkillEntries(
         name: exposedName,
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
+        readContent: skill.content,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
         promptVersion: computeSkillPromptVersion(skill.content),
@@ -244,6 +245,12 @@ export function mergeRemoteNodeSkillEntries(
   );
 }
 
-export function resetRemoteNodeSkillsForTests(): void {
+function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.remoteNodeSkillsTestApi")] = {
+    resetRemoteNodeSkillsForTests,
+  };
 }

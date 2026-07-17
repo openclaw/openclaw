@@ -11,19 +11,18 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import {
-  decorativeEmoji,
-  supportsDecorativeEmoji,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-  resolveWorkspaceAttestationPaths,
-  shouldRemoveWorkspaceAttestation,
-} from "../agents/workspace.js";
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -46,7 +45,7 @@ import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
 export { detectBinary };
@@ -169,23 +168,9 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner. */
-export function printWizardHeader(runtime: RuntimeEnv) {
-  const bannerWidth = 54;
-  const icon = decorativeEmoji("🦞");
-  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-  const pad = Math.max(0, bannerWidth - visibleWidth(title));
-  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    titleLine,
-    " ",
-  ].join("\n");
-  runtime.log(header);
+/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
 }
 
 /** Records wizard provenance metadata on config writes. */
@@ -265,27 +250,15 @@ export async function ensureWorkspaceAndSessions(
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
-/** Returns package manager choices offered by onboarding. */
-export function resolveNodeManagerOptions(): Array<{
-  value: NodeManagerChoice;
-  label: string;
-}> {
-  return [
-    { value: "npm", label: "npm" },
-    { value: "pnpm", label: "pnpm" },
-    { value: "bun", label: "bun" },
-  ];
-}
-
 /** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
   if (!pathname) {
-    return;
+    return false;
   }
   try {
-    await fs.access(pathname);
-  } catch {
-    return;
+    await fs.lstat(pathname);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
   try {
     const targetPath = path.resolve(pathname);
@@ -294,8 +267,10 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
       allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
     });
     runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
+    return true;
   } catch {
     runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
+    return false;
   }
 }
 
@@ -327,13 +302,15 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
-    await moveToTrash(workspaceDir, runtime);
-    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
-      workspaceDir,
-    ).entries()) {
-      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
-        await moveToTrash(attestationPath, runtime);
+    const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
+    const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
+    const workspaceRemoved = await moveToTrash(workspaceDir, runtime);
+    if (workspaceRemoved) {
+      const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+      for (const warning of legacyCleanup.warnings) {
+        runtime.log(warning);
       }
+      deleteWorkspaceState(statePlan);
     }
   }
 }

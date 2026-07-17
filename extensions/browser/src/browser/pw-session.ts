@@ -4,6 +4,7 @@
  * Manages CDP-backed Playwright connections, page lookup, observed dialogs,
  * console/network/page state, role refs, and safe navigation handling.
  */
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isFutureDateTimestampMs,
   parseFiniteNumber,
@@ -15,6 +16,7 @@ import type {
   BrowserContext,
   ConsoleMessage,
   Dialog,
+  Frame,
   Page,
   Request,
   Response,
@@ -53,7 +55,7 @@ import {
   type BrowserDownloadCaptureOptions,
   type PlaywrightDownload,
 } from "./pw-download-capture.js";
-import { BROWSER_REF_MARKER_ATTRIBUTE, withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 
 const { chromium } = playwrightCore;
 
@@ -108,7 +110,7 @@ type BrowserObservedState = {
 };
 
 /** Raised when an action is blocked by an observed modal dialog. */
-export class BrowserObservedDialogBlockedError extends Error {
+class BrowserObservedDialogBlockedError extends Error {
   readonly browserState: BrowserObservedState;
 
   constructor(browserState: BrowserObservedState) {
@@ -183,13 +185,22 @@ type PageState = {
   roleRefs?: Record<string, { role: string; name?: string; nth?: number; domMarker?: boolean }>;
   roleRefsMode?: "role" | "aria";
   roleRefsFrameSelector?: string;
+  roleRefsFrame?: Frame;
+  /** Target-cache entry owned by the current role refs. */
+  roleRefsTargetKey?: string;
+  /** Cache generation restored or stored by this Page. */
+  roleRefsTargetGeneration?: number;
+  /** Main-frame navigation observed before this Page could be bound to its target. */
+  roleRefsInvalidBeforeGeneration?: number;
+  /** Any frame changed before target binding; invalidates only page-wide aria refs. */
+  roleRefsAriaInvalidBeforeGeneration?: number;
 };
 
 type RoleRefs = NonNullable<PageState["roleRefs"]>;
 type RoleRefsCacheEntry = {
   refs: RoleRefs;
-  frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
+  generation: number;
 };
 
 type ContextState = {
@@ -205,6 +216,7 @@ const observedPages = new WeakSet<Page>();
 // for the same CDP target across requests.
 const roleRefsByTarget = new Map<string, RoleRefsCacheEntry>();
 const MAX_ROLE_REFS_CACHE = 50;
+let roleRefsCacheGeneration = 0;
 
 const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
@@ -232,13 +244,6 @@ const closedConnections = new WeakSet<ConnectedBrowser>();
 const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
-let cdpConnectRetryDelayMsForTests: number | undefined;
-
-/** Override CDP reconnect retry delay in tests. */
-export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
-  cdpConnectRetryDelayMsForTests = delayMs;
-}
-
 function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
   const parsed = parseFiniteNumber(timeoutMs);
   return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
@@ -249,7 +254,7 @@ function normalizeCdpUrl(raw: string) {
 }
 
 function resolveCdpConnectRetryDelayMs(attempt: number): number {
-  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
+  return 250 + attempt * 250;
 }
 
 export function isDownloadStartingNavigationError(err: unknown, expectedUrl?: string): boolean {
@@ -522,6 +527,33 @@ function roleRefsKey(cdpUrl: string, targetId: string) {
   return targetKey(cdpUrl, targetId);
 }
 
+function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
+  const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
+  if (!normalizedTargetId) {
+    return;
+  }
+  const state = ensurePageState(page);
+  const key = roleRefsKey(cdpUrl, normalizedTargetId);
+  const invalidBeforeGeneration = state.roleRefsInvalidBeforeGeneration;
+  const ariaInvalidBeforeGeneration = state.roleRefsAriaInvalidBeforeGeneration;
+  const cached = roleRefsByTarget.get(key);
+  if (
+    cached &&
+    ((invalidBeforeGeneration !== undefined && cached.generation <= invalidBeforeGeneration) ||
+      (ariaInvalidBeforeGeneration !== undefined &&
+        cached.mode === "aria" &&
+        cached.generation <= ariaInvalidBeforeGeneration))
+  ) {
+    roleRefsByTarget.delete(key);
+  }
+  state.roleRefsInvalidBeforeGeneration = undefined;
+  state.roleRefsAriaInvalidBeforeGeneration = undefined;
+  state.roleRefsTargetKey = key;
+  if (!state.roleRefs) {
+    state.roleRefsTargetGeneration = roleRefsByTarget.get(key)?.generation;
+  }
+}
+
 function isBlockedTarget(cdpUrl: string, targetId?: string): boolean {
   const normalizedTargetId = normalizeOptionalString(targetId) ?? "";
   if (!normalizedTargetId) {
@@ -782,7 +814,7 @@ function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
 }
 
 /** Raised when a page target has been quarantined after policy denial. */
-export class BlockedBrowserTargetError extends Error {
+class BlockedBrowserTargetError extends Error {
   constructor() {
     super("Browser target is unavailable after SSRF policy blocked its navigation.");
     this.name = "BlockedBrowserTargetError";
@@ -790,21 +822,29 @@ export class BlockedBrowserTargetError extends Error {
 }
 
 /** Cache role refs for a target id after a snapshot. */
-export function rememberRoleRefsForTarget(opts: {
+function rememberRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId: string;
   refs: RoleRefs;
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
-}): void {
+}): number | undefined {
   const targetId = normalizeOptionalString(opts.targetId) ?? "";
   if (!targetId) {
-    return;
+    return undefined;
   }
-  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+  const key = roleRefsKey(opts.cdpUrl, targetId);
+  // A selector cannot preserve frame identity across replacement Page objects.
+  // Frame-scoped refs remain local and require a fresh snapshot after reconnect.
+  if (opts.frameSelector) {
+    roleRefsByTarget.delete(key);
+    return undefined;
+  }
+  const generation = ++roleRefsCacheGeneration;
+  roleRefsByTarget.set(key, {
     refs: opts.refs,
-    ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
     ...(opts.mode ? { mode: opts.mode } : {}),
+    generation,
   });
   while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
     const first = roleRefsByTarget.keys().next();
@@ -813,6 +853,7 @@ export function rememberRoleRefsForTarget(opts: {
     }
     roleRefsByTarget.delete(first.value);
   }
+  return generation;
 }
 
 /** Store role refs on the page and target cache. */
@@ -822,23 +863,58 @@ export function storeRoleRefsForTarget(opts: {
   targetId?: string;
   refs: RoleRefs;
   frameSelector?: string;
+  frame?: Frame;
   mode: NonNullable<PageState["roleRefsMode"]>;
 }): void {
+  if (opts.frameSelector && !opts.frame) {
+    throw new Error("Frame-scoped role refs require their resolved frame.");
+  }
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
   state.roleRefsFrameSelector = opts.frameSelector;
+  state.roleRefsFrame = opts.frame;
   state.roleRefsMode = opts.mode;
   const targetId = normalizeOptionalString(opts.targetId);
   if (!targetId) {
+    state.roleRefsTargetKey = undefined;
+    state.roleRefsTargetGeneration = undefined;
     return;
   }
-  rememberRoleRefsForTarget({
+  bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
+  state.roleRefsTargetGeneration = rememberRoleRefsForTarget({
     cdpUrl: opts.cdpUrl,
     targetId,
     refs: opts.refs,
     frameSelector: opts.frameSelector,
     mode: opts.mode,
   });
+}
+
+function clearRoleRefs(state: PageState): void {
+  if (state.roleRefsTargetKey) {
+    const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
+    // A delayed event from an obsolete Page must not erase refs that a newer
+    // wrapper stored for the same target after this Page's generation.
+    if (cached?.generation === state.roleRefsTargetGeneration) {
+      roleRefsByTarget.delete(state.roleRefsTargetKey);
+    }
+  }
+  state.roleRefs = undefined;
+  state.roleRefsMode = undefined;
+  state.roleRefsFrameSelector = undefined;
+  state.roleRefsFrame = undefined;
+  state.roleRefsTargetKey = undefined;
+  state.roleRefsTargetGeneration = undefined;
+}
+
+function currentTargetRoleRefsMode(
+  state: PageState,
+): NonNullable<PageState["roleRefsMode"]> | undefined {
+  if (!state.roleRefsTargetKey) {
+    return undefined;
+  }
+  const cached = roleRefsByTarget.get(state.roleRefsTargetKey);
+  return cached && cached.generation === state.roleRefsTargetGeneration ? cached.mode : undefined;
 }
 
 /** Restore cached role refs onto a newly resolved page. */
@@ -851,7 +927,9 @@ export function restoreRoleRefsForTarget(opts: {
   if (!targetId) {
     return;
   }
-  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
+  const cacheKey = roleRefsKey(opts.cdpUrl, targetId);
+  bindRoleRefsTarget(opts.page, opts.cdpUrl, targetId);
+  const cached = roleRefsByTarget.get(cacheKey);
   if (!cached) {
     return;
   }
@@ -859,8 +937,9 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) {
     return;
   }
+  state.roleRefsTargetKey = cacheKey;
+  state.roleRefsTargetGeneration = cached.generation;
   state.roleRefs = cached.refs;
-  state.roleRefsFrameSelector = cached.frameSelector;
   state.roleRefsMode = cached.mode;
 }
 
@@ -982,6 +1061,45 @@ export function ensurePageState(page: Page): PageState {
         finish();
       }
     });
+    page.on("framenavigated", (frame) => {
+      // Clear role refs on main-frame navigation so stale refs from the
+      // previous page are never used to locate elements on the new page.
+      // Unscoped refs survive subframe navigation. Frame-scoped refs are
+      // invalid only when their exact Frame replaces its document.
+      const isMainFrame = frame === page.mainFrame();
+      const targetWasBound = state.roleRefsTargetKey !== undefined;
+      if (!targetWasBound) {
+        // Target discovery is asynchronous. Remember an early navigation so
+        // binding removes only cache generations that already existed. Refs a
+        // newer Page stores after this event must survive the delayed lookup.
+        if (isMainFrame) {
+          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
+        } else {
+          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
+        }
+      }
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
+      if (isMainFrame || pageWideAriaRefs || frame === state.roleRefsFrame) {
+        // Replacement Page objects restore from this target cache, so local
+        // clearing alone could resurrect refs from the previous document.
+        clearRoleRefs(state);
+      }
+    });
+    page.on("framedetached", (frame) => {
+      if (!state.roleRefsTargetKey) {
+        if (frame === page.mainFrame()) {
+          state.roleRefsInvalidBeforeGeneration = roleRefsCacheGeneration;
+        } else {
+          state.roleRefsAriaInvalidBeforeGeneration = roleRefsCacheGeneration;
+        }
+      }
+      const pageWideAriaRefs =
+        state.roleRefsMode === "aria" || currentTargetRoleRefsMode(state) === "aria";
+      if (pageWideAriaRefs || frame === state.roleRefsFrame) {
+        clearRoleRefs(state);
+      }
+    });
     page.on("close", () => {
       clearArmedDialogResponse(state);
       for (const controller of state.dialogAbortControllers) {
@@ -1028,7 +1146,7 @@ function resolvePendingDialogForResponse(params: {
     throw new Error(`Dialog "${dialogId}" is not pending.`);
   }
   if (params.state.pendingDialogs.length === 1) {
-    return params.state.pendingDialogs[0];
+    return expectDefined(params.state.pendingDialogs.at(0), "single pending browser dialog");
   }
   if (params.state.pendingDialogs.length > 1) {
     throw new Error("Multiple dialogs are pending; pass dialogId.");
@@ -1055,24 +1173,6 @@ export async function respondToObservedDialogOnPage(opts: {
     accept: opts.accept,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
     closedBy: opts.closedBy ?? "agent",
-  });
-}
-
-/** Resolve a page and respond to one of its observed dialogs. */
-export async function respondToObservedDialogViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  dialogId?: string;
-  accept: boolean;
-  promptText?: string;
-  ssrfPolicy?: SsrFPolicy;
-}): Promise<BrowserObservedDialogRecord> {
-  const page = await getPageForTargetId(opts);
-  return await respondToObservedDialogOnPage({
-    page,
-    accept: opts.accept,
-    ...(opts.dialogId !== undefined ? { dialogId: opts.dialogId } : {}),
-    ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   });
 }
 
@@ -1307,6 +1407,7 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       blockedCount += 1;
       continue;
     }
+    ensurePageState(page);
     const targetId = await pageTargetId(page).catch(() => null);
     // Fail closed when we cannot resolve a target id while this session has
     // quarantined targets; otherwise a blocked tab can become selectable.
@@ -1322,6 +1423,7 @@ async function partitionAccessiblePages(opts: { cdpUrl: string; pages: Page[] })
       blockedCount += 1;
       continue;
     }
+    bindRoleRefsTarget(page, opts.cdpUrl, targetId);
     accessible.push({ page, targetId });
   }
   return { accessible, blockedCount };
@@ -1362,13 +1464,15 @@ async function getPageForTargetIdOnce(opts: {
     }
     throw new Error("No pages available in the connected browser.");
   }
-  const first = accessible[0].page;
+  const first = expectDefined(accessible.at(0), "non-empty accessible browser pages");
   if (!opts.targetId) {
-    return first;
+    bindRoleRefsTarget(first.page, opts.cdpUrl, first.targetId);
+    return first.page;
   }
-  const found = accessible.find((entry) => entry.targetId === opts.targetId)?.page;
+  const found = accessible.find((entry) => entry.targetId === opts.targetId);
   if (found) {
-    return found;
+    bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    return found.page;
   }
   throw new BrowserTabNotFoundError();
 }
@@ -1391,10 +1495,10 @@ export async function getPageForTargetId(opts: {
   }
 }
 
-export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
 /** Classify requests that can navigate the selected page or one of its frames. */
-export function classifyBrowserDocumentNavigationRequest(
+function classifyBrowserDocumentNavigationRequest(
   page: Page,
   request: Request,
 ): BrowserDocumentNavigationRequestKind | null {
@@ -1863,9 +1967,7 @@ export function refLocator(page: Page, ref: string) {
   if (/^e\d+$/.test(normalized)) {
     const state = pageStates.get(page);
     if (state?.roleRefsMode === "aria") {
-      const scope = state.roleRefsFrameSelector
-        ? page.frameLocator(state.roleRefsFrameSelector)
-        : page;
+      const scope = state.roleRefsFrame ?? page;
       return scope.locator(`aria-ref=${normalized}`);
     }
     const info = state?.roleRefs?.[normalized];
@@ -1874,9 +1976,7 @@ export function refLocator(page: Page, ref: string) {
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
       );
     }
-    const scope = state?.roleRefsFrameSelector
-      ? page.frameLocator(state.roleRefsFrameSelector)
-      : page;
+    const scope = state?.roleRefsFrame ?? page;
     const locAny = scope as unknown as {
       getByRole: (
         role: never,
@@ -1897,9 +1997,7 @@ export function refLocator(page: Page, ref: string) {
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
       );
     }
-    const scope = state.roleRefsFrameSelector
-      ? page.frameLocator(state.roleRefsFrameSelector)
-      : page;
+    const scope = state.roleRefsFrame ?? page;
     if (info.domMarker) {
       return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
     }
@@ -2331,22 +2429,7 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  try {
-    await page.bringToFront();
-  } catch (err) {
-    try {
-      await withPageScopedCdpClient({
-        cdpUrl: opts.cdpUrl,
-        page,
-        targetId: opts.targetId,
-        fn: async (send) => {
-          await send("Page.bringToFront");
-        },
-      });
-    } catch {
-      throw err;
-    }
-  }
+  await page.bringToFront();
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
@@ -2362,3 +2445,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

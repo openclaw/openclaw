@@ -85,6 +85,22 @@ export type SubagentCompletionDeliveryState = {
     | "waiting_for_requester_turn";
 };
 
+/** Durable outbox state for the top-level requester settle wake. */
+export type RequesterSettleWakeState = {
+  status: "pending" | "dispatching";
+  /** Number of delivery attempts already admitted. */
+  attemptCount: number;
+  /** Ambiguous transport replays made with the current idempotency key. */
+  replayCount?: number;
+  /** Persisted retry deadline; restore waits until this instant. */
+  nextAttemptAt?: number;
+  /** Frozen wave membership once the first delivery attempt is admitted. */
+  batchRunIds?: string[];
+  lastError?: string | null;
+  /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
+  retireAfterSettle?: boolean;
+};
+
 type SubagentKillReconciliationState = {
   /** Actual cancellation time; a yielded run may have an older execution end. */
   killedAt: number;
@@ -144,6 +160,8 @@ export type SubagentRunRecord = {
   deleteCleanupDispatchedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
+  /** Durable top-level requester wake obligation, replayed after restart. */
+  requesterSettleWake?: RequesterSettleWakeState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

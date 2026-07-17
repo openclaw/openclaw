@@ -21,12 +21,13 @@ const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   1257: "windows-1257",
   1258: "windows-1258",
 };
+const WINDOWS_ENCODING_PROBE_TIMEOUT_MS = 5_000;
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
-export function parseWindowsCodePage(raw: string): number | null {
+function parseWindowsCodePage(raw: string): number | null {
   if (!raw) {
     return null;
   }
@@ -53,7 +54,9 @@ export function resolveWindowsConsoleEncoding(): string | null {
     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
     });
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
     const codePage = parseWindowsCodePage(raw);
@@ -66,7 +69,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
 }
 
 /** Resolves and caches the Windows system encoding used by legacy text files. */
-function resolveWindowsSystemEncoding(): string | null {
+export function resolveWindowsSystemEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
   }
@@ -80,7 +83,9 @@ function resolveWindowsSystemEncoding(): string | null {
       {
         windowsHide: true,
         encoding: "utf8",
+        killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],
+        timeout: WINDOWS_ENCODING_PROBE_TIMEOUT_MS,
       },
     );
     const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -212,13 +217,11 @@ export function createWindowsOutputDecoder(params?: {
 function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
-  while (
-    index >= 0 &&
-    buffer[index] !== undefined &&
-    buffer[index] >= 0x80 &&
-    buffer[index] <= 0xbf &&
-    continuationBytes < 3
-  ) {
+  while (index >= 0 && continuationBytes < 3) {
+    const byte = buffer.at(index);
+    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+      break;
+    }
     continuationBytes += 1;
     index -= 1;
   }
@@ -226,7 +229,10 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer[index];
+  const leadByte = buffer.at(index);
+  if (leadByte === undefined) {
+    return Buffer.alloc(0);
+  }
   const sequenceLength = getUtf8SequenceLength(leadByte);
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);

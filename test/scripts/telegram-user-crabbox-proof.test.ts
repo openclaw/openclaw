@@ -75,7 +75,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (predicate()) {
       return;
     }
-    await delay(25);
+    await delay(5);
   }
   throw new Error("condition was not met before timeout");
 }
@@ -612,9 +612,16 @@ setInterval(() => {}, 1000);
       stdio: "ignore",
     });
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-      expect(isProcessAlive(descendantPid)).toBe(true);
+      await waitFor(() => {
+        if (!fs.existsSync(descendantPidPath)) {
+          return false;
+        }
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
+      });
+      expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
       if (!runner.pid) {
         throw new Error("runner did not start");
@@ -854,7 +861,7 @@ fs.writeFileSync(${JSON.stringify(recorderExitPath)}, "exited");
             startDelayMs: 0,
             target: "linux",
           }),
-          delay(500).then(() => {
+          delay(500, undefined, { ref: false }).then(() => {
             throw new Error("recordProbeVideo hung after the recorder had already exited");
           }),
         ]),
