@@ -3687,6 +3687,11 @@ export const en: TranslationMap = {
       resume: "Resume goal",
       clear: "Clear goal",
     },
+    questions: {
+      title: "Codex needs input",
+      other: "Type another answer",
+      submit: "Submit answer",
+    },
     messages: {
       activity: "Activity",
       deleteMessage: "Delete message",
