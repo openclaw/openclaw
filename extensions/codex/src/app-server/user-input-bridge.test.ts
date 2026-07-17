@@ -235,6 +235,10 @@ describe("Codex app-server user input bridge", () => {
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     expect(vi.mocked(params.onBlockReply!).mock.calls[0]?.[0].presentation).toBeUndefined();
+    expect(params.onAgentEvent).toHaveBeenCalledWith({
+      stream: "question",
+      data: expect.not.objectContaining({ actionToken: expect.anything() }),
+    });
     expect(bridge.handleQueuedMessage("private")).toBe(true);
     await response;
   });

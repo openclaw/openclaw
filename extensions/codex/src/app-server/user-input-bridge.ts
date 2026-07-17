@@ -112,11 +112,13 @@ export function createCodexUserInputBridge(params: {
           resolve,
           cleanup,
         };
-        const actionRegistration = registerCodexUserInputActions((answer) => {
-          const response = buildUserInputActionResponse(requestParams.questions, answer);
-          return response ? resolvePendingIfCurrent(current, response) : false;
-        });
-        disposeAction = actionRegistration.dispose;
+        const actionRegistration = requestParams.questions.some((question) => question.isSecret)
+          ? undefined
+          : registerCodexUserInputActions((answer) => {
+              const response = buildUserInputActionResponse(requestParams.questions, answer);
+              return response ? resolvePendingIfCurrent(current, response) : false;
+            });
+        disposeAction = actionRegistration?.dispose ?? disposeAction;
         pending = current;
         params.signal?.addEventListener("abort", abortListener, { once: true });
         if (params.signal?.aborted) {
@@ -128,12 +130,12 @@ export function createCodexUserInputBridge(params: {
           "requested",
           requestParams.itemId,
           requestParams.questions,
-          actionRegistration.token,
+          actionRegistration?.token,
         );
         void deliverUserInputPrompt(
           params.paramsForRun,
           requestParams.questions,
-          actionRegistration.token,
+          actionRegistration?.token,
         ).catch((error: unknown) => {
           embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
         });
@@ -248,12 +250,12 @@ function readOption(value: JsonValue): AgentHarnessUserInputOption | undefined {
 async function deliverUserInputPrompt(
   params: EmbeddedRunAttemptParams,
   questions: AgentHarnessUserInputQuestion[],
-  actionToken: string,
+  actionToken?: string,
 ): Promise<void> {
   await deliverAgentHarnessUserInputPrompt(params, questions, {
     formatText: formatCodexDisplayText,
     intro: "Codex needs input:",
-    presentation: buildCodexUserInputPresentation(questions, actionToken),
+    presentation: actionToken ? buildCodexUserInputPresentation(questions, actionToken) : undefined,
   });
 }
 
