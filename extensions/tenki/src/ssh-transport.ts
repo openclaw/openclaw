@@ -159,7 +159,7 @@ export async function waitForSshAuth(params: {
   });
   for (let attempt = 0; ; attempt++) {
     const code = await new Promise<number>((resolve) => {
-      const child = spawn(argv[0], [...argv.slice(1), "-o", "BatchMode=yes"], {
+      const child = spawn("ssh", [...argv.slice(1), "-o", "BatchMode=yes"], {
         stdio: ["ignore", "ignore", "ignore"],
       });
       child.on("error", () => resolve(-1));
