@@ -6,6 +6,7 @@ Skills own workflows; root owns hard policy and routing.
 ## Start
 
 - Repo: `https://github.com/openclaw/openclaw`
+- Product: OpenClaw = personal AI assistant on your own devices. Gateway = control plane, assistant = product; channels (WhatsApp/Telegram/Slack/Discord/...) are transports; plugins extend channels, providers, skills.
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
 - Existing-solutions preflight: before proposing or building a custom system, feature, workflow, tool, integration, or automation, do a lightweight check for open-source projects, maintained libraries, existing OpenClaw plugins, or free platforms that already solve it well enough. Prefer those when adequate. Build custom only when existing options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom. Avoid paid-service recommendations unless the user explicitly approves spend. Keep this to a brief preflight gate, not a broad research assignment.
@@ -44,7 +45,7 @@ Skills own workflows; root owns hard policy and routing.
 
 - Core TS: `src/`, `ui/`, `packages/`; plugins: `extensions/`; SDK: `src/plugin-sdk/*`; channels: `src/channels/*`; loader: `src/plugins/*`; protocol: `packages/gateway-protocol/*`; docs/apps: `docs/`, `apps/`.
 - Installers: sibling `../openclaw.ai`.
-- Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,agents}/`, `packages/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
+- Scoped guides: `extensions/`, `src/{plugin-sdk,channels,plugins,gateway,agents,infra,tui}/`, `apps/{android,ios}/`, `test/helpers*/`, `docs/`, `ui/`, `scripts/`.
 
 ## Docs
 
@@ -54,6 +55,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Architecture
 
+- Big-picture system narrative before these policy rules: `docs/concepts/architecture.md` (gateway/protocol/clients), `docs/agent-runtime-architecture.md` (agent runtime layout), `docs/plugins/architecture.md` (plugin capability model).
 - Core stays plugin-agnostic. No bundled ids/defaults/policy in core when manifest/registry/capability contracts work.
 - Plugins cross into core only via `openclaw/plugin-sdk/*`, manifest metadata, injected runtime helpers, documented barrels (`api.ts`, `runtime-api.ts`).
 - Plugin prod code: no core `src/**`, `src/plugin-sdk-internal/**`, other plugin `src/**`, or relative outside package.

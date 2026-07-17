@@ -21,6 +21,17 @@ places to rediscover the same ownership rules.
 This refactor makes ownership first-class. The goal is not a new ACP product
 surface; it is a safer internal contract for the existing ACP and ACPX behavior.
 
+## Status
+
+Phases 1-3 shipped (`extensions/acpx/src/process-lease.ts`, `process-reaper.ts`;
+landed across CHANGELOG-tracked PRs #91034, #82459, #83487). Phase 4 is
+generically shipped for subagent/background-task sessions
+(`src/plugin-sdk/session-visibility.ts`'s `ownerSessionKey`/`spawnedBy` rows)
+but not yet wired for ACP/ACPX records — `ownerSessionKey` has no references
+under `src/acp/` or `extensions/acpx/`. Phase 5 is open:
+`session-visibility.ts` still falls back to `listSpawnedSessionKeys` "until
+every caller can pass a normalized session row."
+
 ## Goals
 
 - Cleanup never signals a process unless current live evidence matches an
