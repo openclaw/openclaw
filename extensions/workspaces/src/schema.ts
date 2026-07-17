@@ -30,14 +30,13 @@ export type WorkspaceWidget = {
   bindings?: Record<string, WorkspaceBinding>;
   props?: JsonValue;
 };
-export type WorkspaceTabLayout = "grid" | "full";
 export type WorkspaceTab = {
   slug: string;
   title: string;
   icon?: string;
   hidden: boolean;
   /** Default grid, or a single app-like widget without grid chrome. */
-  layout?: WorkspaceTabLayout;
+  layout?: "grid" | "full";
   createdBy: WorkspaceActor;
   widgets: WorkspaceWidget[];
 };
