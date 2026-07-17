@@ -107,12 +107,29 @@ function setupDeps(params: {
   runSystemAgentChat?: GuidedOnboardingDeps["runSystemAgentChat"];
   persistRiskAcknowledgement?: GuidedOnboardingDeps["persistRiskAcknowledgement"];
   runSetupMemoryImportStep?: GuidedOnboardingDeps["runSetupMemoryImportStep"];
+  applySetup?: GuidedOnboardingDeps["applySetup"];
 }) {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
   return {
     createPrompter: () => params.prompter,
+    persistAccessMode: vi.fn(async () => undefined),
+    applySetup:
+      params.applySetup ??
+      vi.fn(async () => ({
+        configPath: "/tmp/openclaw.json",
+        configHashBefore: null,
+        configHashAfter: null,
+        lines: [],
+      })),
+    launchHatchTui: vi.fn(async () => undefined),
+    listManualOptions: vi.fn(async () => ({
+      manualProviders: [],
+      authOptions: [],
+      workspace: "/tmp/openclaw-workspace",
+      setupComplete: false,
+    })),
     detect: params.detect ?? vi.fn(async () => detection()),
     activate:
       params.activate ??
@@ -177,10 +194,13 @@ describe("runGuidedOnboarding", () => {
       }),
     );
     expect(text).not.toHaveBeenCalled();
-    expect(select).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
+    );
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
+      deps.launchHatchTui.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -222,7 +242,7 @@ describe("runGuidedOnboarding", () => {
     expect(appliedIndex).toBeGreaterThanOrEqual(0);
     expect(memoryIndex).toBeGreaterThan(appliedIndex);
     expect(runSetupMemoryImportStep.mock.invocationCallOrder[0]).toBeLessThan(
-      deps.runSystemAgentChat.mock.invocationCallOrder[0]!,
+      deps.launchHatchTui.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -275,7 +295,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/configured" }),
     );
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/configured", runtime, true);
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/configured");
   });
 
   it("uses the default workspace as context when none is configured", async () => {
@@ -290,7 +310,7 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/openclaw-workspace" }),
     );
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/openclaw-workspace", runtime, true);
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");
   });
 
   it("live-tests an unverified CLI before automatic setup", async () => {
@@ -327,7 +347,6 @@ describe("runGuidedOnboarding", () => {
       surface: "cli",
       runtime,
     });
-    expect(select).not.toHaveBeenCalled();
   });
 
   it("suppresses activation subsystem output and restores it when activation throws", async () => {
@@ -409,7 +428,7 @@ describe("runGuidedOnboarding", () => {
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("kept unchanged");
     expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
-    expect(deps.runSystemAgentChat).toHaveBeenCalledOnce();
+    expect(deps.launchHatchTui).toHaveBeenCalledOnce();
   });
 
   it("falls through after an auth failure and surfaces both outcomes", async () => {
@@ -447,7 +466,9 @@ describe("runGuidedOnboarding", () => {
     expect(activate.mock.calls.map(([call]) => call.surface)).toEqual(["cli", "cli"]);
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("Claude Code");
-    expect(notes).toContain("Authentication failed");
+    // Auto-ladder failures collect into one quiet summary instead of loud notes.
+    expect(notes).not.toContain("Authentication failed");
+    expect(notes).toContain("1 detected option(s) didn't respond");
     expect(notes).toContain("Gateway: running");
   });
 
@@ -484,7 +505,10 @@ describe("runGuidedOnboarding", () => {
         ],
       }),
     );
-    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", expect.anything(), true);
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    const retryNotes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(retryNotes).toContain("These didn't work just now:");
+    expect(retryNotes).toContain("rate-limiting");
   });
 
   it("accepts and verifies a manual provider key without displaying it", async () => {
@@ -587,7 +611,6 @@ describe("runGuidedOnboarding", () => {
       prompter,
     });
     expect(text).not.toHaveBeenCalled();
-    expect(select).not.toHaveBeenCalled();
   });
 
   it("lets the grouped provider picker skip without opening AI chat", async () => {
@@ -610,6 +633,7 @@ describe("runGuidedOnboarding", () => {
     );
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Add AI later"),
       "Next steps",
@@ -641,9 +665,10 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(select).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledTimes(1);
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(prompter.note).toHaveBeenCalledWith(
       "Ollama — Run open models locally\n  https://ollama.com/download",
@@ -692,10 +717,11 @@ describe("runGuidedOnboarding", () => {
 
     expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(runSystemAgentChat).toHaveBeenCalledOnce();
+    expect(runSystemAgentChat).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledOnce();
   });
 
-  it("opens OpenClaw chat with the explicit workspace after activation", async () => {
+  it("applies setup and hatches with the explicit workspace after activation", async () => {
     const text = vi.fn(async () => "unexpected");
     const prompter = createWizardPrompter({ text });
     const runSystemAgentChat = vi.fn(async () => {});
@@ -708,7 +734,13 @@ describe("runGuidedOnboarding", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
     expect(text).not.toHaveBeenCalled();
-    expect(runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    expect(deps.applySetup).toHaveBeenCalledWith({
+      workspace: "/tmp/work",
+      surface: "cli",
+      runtime,
+    });
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(runSystemAgentChat).not.toHaveBeenCalled();
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -748,6 +780,160 @@ describe("runGuidedOnboarding", () => {
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
+  });
+
+  it("routes guarded mode straight to manual config without any scanning", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+    const prompter = createWizardPrompter(undefined, { selectValues: ["guarded", "manual"] });
+    const deps = {
+      ...setupDeps({ prompter }),
+      listManualOptions: vi.fn(async () => ({
+        manualProviders: [{ id: "openai-api-key", label: "OpenAI" }],
+        authOptions: [],
+        workspace: "/tmp/openclaw-workspace",
+        setupComplete: false,
+      })),
+    };
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(deps.detect).not.toHaveBeenCalled();
+    expect(deps.listManualOptions).toHaveBeenCalledOnce();
+    expect(deps.persistAccessMode).toHaveBeenCalledWith("guarded");
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+  });
+
+  it("scans in guarded mode only after the look-around consent", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["guarded", "look"] });
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(deps.detect).toHaveBeenCalledOnce();
+    expect(deps.listManualOptions).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("skips persisting an unchanged access mode", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {
+        wizard: { accessMode: "full", securityAcknowledgedAt: "2026-01-01T00:00:00.000Z" },
+      },
+    });
+    const prompter = createWizardPrompter(undefined, { selectValues: ["full"] });
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(deps.persistAccessMode).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("keeps the working route when other options are explored and skipped", async () => {
+    promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+    const prompter = createWizardPrompter(undefined, { selectValues: ["full", "other"] });
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(notes).toContain("Keeping the working AI you already have.");
+    expect(notes).not.toContain("Add AI later");
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+  });
+
+  it("quips about detected coding agents", async () => {
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
+        }),
+      ),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("good taste"),
+      expect.anything(),
+    );
+  });
+
+  it("never re-applies setup or bounces the gateway on a configured install", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {
+        gateway: { mode: "local" },
+        wizard: { securityAcknowledgedAt: "2026-01-01T00:00:00.000Z" },
+      },
+    });
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({ prompter });
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
+
+    expect(deps.applySetup).not.toHaveBeenCalled();
+    // Configured reruns hatch the persisted default workspace, not the probe context.
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/openclaw-workspace");
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("already set up"),
+      expect.anything(),
+    );
+  });
+
+  it("treats a model-only authored config as configured (no auto-apply)", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      issues: [],
+      config: {
+        agents: { defaults: { workspace: "/tmp/authored" } },
+        wizard: { securityAcknowledgedAt: "2026-01-01T00:00:00.000Z" },
+      },
+    });
+    const prompter = createWizardPrompter();
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [existingModelCandidate()],
+          configuredModel: "acme/workspace-model",
+          setupComplete: true,
+        }),
+      ),
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
+
+    expect(deps.applySetup).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/authored");
+  });
+
+  it("falls back to the OpenClaw chat when applying setup fails", async () => {
+    const prompter = createWizardPrompter();
+    const applySetup = vi.fn(async () => {
+      throw new Error("config write raced");
+    }) as unknown as GuidedOnboardingDeps["applySetup"];
+    const deps = setupDeps({ prompter, applySetup });
+    const runtime = makeRuntime();
+
+    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
+
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(deps.runSystemAgentChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
+    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(notes).toContain("config write raced");
   });
 
   it("converges remote inference before remote OpenClaw without mutating local config", async () => {

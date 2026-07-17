@@ -2143,7 +2143,6 @@ class ChatPane extends OpenClawLightDomElement {
     });
     return renderChatPaneHeader({
       paneId: this.paneId,
-      active: this.active,
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       title: this.paneTitle,

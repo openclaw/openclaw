@@ -134,10 +134,6 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
-.chat-pane__header--active {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 /* The title hugs its text so the workspace chip sits right after it (the
    header's shared 8px gap provides the spacing); it may shrink with ellipsis
    when space runs out, and the action row pushes itself to the right edge. */
@@ -204,6 +200,13 @@ openclaw-chat-pane {
 .chat-pane__workspace-chip svg {
   width: 14px;
   height: 14px;
+  /* Lucide outline icons: without this the paths render browser-default
+     black fill, which reads as a solid dark blob on the chip. */
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-pane__workspace-menu {

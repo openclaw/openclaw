@@ -46,6 +46,7 @@ export {
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
@@ -396,6 +397,51 @@ function createSyncKeyedStoreForPluginId<T>(
       pluginStateClear({ pluginId, namespace, ...(env ? { env } : {}) });
     },
   };
+}
+
+/**
+ * Migration-only write path that preserves a legacy entry's original creation
+ * timestamp. Cap eviction removes the oldest `created_at` first, so imported
+ * rows must keep their real age instead of being stamped with the import time
+ * (which would let later live writes evict fresher pre-existing rows first).
+ * Not part of the plugin-facing store API.
+ */
+export function registerMigratedPluginStateEntry(params: {
+  pluginId: string;
+  namespace: string;
+  maxEntries: number;
+  overflowPolicy?: PluginStateOverflowPolicy;
+  defaultTtlMs?: number;
+  key: string;
+  value: unknown;
+  ttlMs?: number;
+  createdAtMs: number;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  if (!Number.isFinite(params.createdAtMs) || params.createdAtMs < 0) {
+    throw invalidInput("plugin state migration createdAtMs must be a non-negative finite number");
+  }
+  const namespace = validateNamespace(params.namespace, "register");
+  const maxEntries = validateMaxEntries(params.maxEntries);
+  const overflowPolicy = validateOverflowPolicy(params.overflowPolicy);
+  const defaultTtlMs = validateOptionalTtlMs(params.defaultTtlMs);
+  const prepared = prepareRegisterParams(
+    params.key,
+    params.value,
+    defaultTtlMs,
+    params.ttlMs != null ? { ttlMs: params.ttlMs } : undefined,
+  );
+  pluginStateRegister({
+    pluginId: params.pluginId,
+    namespace,
+    key: prepared.key,
+    valueJson: prepared.valueJson,
+    maxEntries,
+    overflowPolicy,
+    createdAtMs: Math.floor(params.createdAtMs),
+    ...(params.env ? { env: params.env } : {}),
+    ...(prepared.ttlMs != null ? { ttlMs: prepared.ttlMs } : {}),
+  });
 }
 
 /** Opens an async plugin-state namespace for a non-core plugin id. */

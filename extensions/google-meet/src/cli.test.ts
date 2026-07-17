@@ -6,7 +6,6 @@ import { Command } from "commander";
 import JSZip from "jszip";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerGoogleMeetCli, testing } from "./cli.js";
 import { resolveGoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
@@ -25,8 +24,6 @@ const fetchGuardMocks = vi.hoisted(() => ({
     }),
   ),
 }));
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -721,7 +718,7 @@ describe("google-meet CLI", () => {
   it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
     stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
     const stdout = captureStdout();
-    const tempDir = tempDirs.make("openclaw-google-meet-export-csv-");
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
 
     try {
       await setupCli({}).parseAsync(
@@ -744,6 +741,7 @@ describe("google-meet CLI", () => {
       );
     } finally {
       stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
