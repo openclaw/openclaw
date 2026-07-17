@@ -194,24 +194,33 @@ internal class WearGatewayRepository(
   }
 
   suspend fun startRealtimeTalk(
+    sessionKey: String,
+    attemptId: String,
     language: String?,
     phoneNodeId: String,
   ): WearRealtimeTalkSnapshot {
     val response =
       requester.request(
         WearRpcMethod.TalkStart,
-        buildJsonObject { language?.let { put("language", it) } },
+        buildJsonObject {
+          put("sessionKey", sessionKey)
+          put("attemptId", attemptId)
+          language?.let { put("language", it) }
+        },
         phoneNodeId,
         requirePreferredNode = true,
       )
     return WearRealtimeTalkCodec.decode(response.payload)
   }
 
-  suspend fun stopRealtimeTalk(phoneNodeId: String): WearRealtimeTalkSnapshot {
+  suspend fun stopRealtimeTalk(
+    phoneNodeId: String,
+    attemptId: String,
+  ): WearRealtimeTalkSnapshot {
     val response =
       requester.request(
         WearRpcMethod.TalkStop,
-        buildJsonObject {},
+        buildJsonObject { put("attemptId", attemptId) },
         phoneNodeId,
         requirePreferredNode = true,
       )

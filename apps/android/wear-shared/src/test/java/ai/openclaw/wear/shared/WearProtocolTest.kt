@@ -15,6 +15,19 @@ import org.junit.Test
 
 class WearProtocolTest {
   @Test
+  fun realtimeTalkSnapshotCarriesAttemptCorrelation() {
+    val snapshot =
+      WearRealtimeTalkSnapshot(
+        attemptId = "attempt-7",
+        active = true,
+        listening = true,
+        status = WearRealtimeTalkStatus.LISTENING,
+      )
+
+    assertEquals(snapshot, WearRealtimeTalkCodec.decode(WearRealtimeTalkCodec.encode(snapshot)))
+  }
+
+  @Test
   fun roundTripsEveryEnvelopeKind() {
     val messages =
       listOf(
@@ -72,6 +85,7 @@ class WearProtocolTest {
         WearEventType.Chat to "chat",
         WearEventType.Connection to "connection",
         WearEventType.Resync to "resync",
+        WearEventType.Talk to "talk",
       )
     eventNames.forEach { (event, wireName) ->
       val message = WearMessage.Event(sequence = 1, event = event)

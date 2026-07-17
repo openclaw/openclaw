@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -40,6 +41,7 @@ internal class WearRealtimeTalkClient(
 ) {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val channelClient = Wearable.getChannelClient(context.applicationContext)
+  private val lifecycleLock = Mutex()
   private val channelLock = Mutex()
   private val audioLock = Any()
   private val audioFocus = WearAudioFocusController(context) { scope.launch { clearOutput(resumeCapture = true) } }
@@ -51,6 +53,8 @@ internal class WearRealtimeTalkClient(
   val channelFailed: StateFlow<Boolean> = _channelFailed
 
   @Volatile private var activeNodeId: String? = null
+
+  @Volatile private var activeAttemptId: String? = null
 
   @Volatile private var audioRecord: AudioRecord? = null
   private var channel: ChannelClient.Channel? = null
@@ -68,37 +72,54 @@ internal class WearRealtimeTalkClient(
     val output: OutputStream,
   )
 
-  suspend fun start(): WearRealtimeTalkSnapshot {
-    _channelFailed.value = false
-    val phone = repository.status()
-    val nodeId = phone.phoneNodeId
-    try {
-      openChannel(nodeId)
-      val language =
-        Locale
-          .getDefault()
-          .language
-          .lowercase(Locale.ROOT)
-          .takeIf { value -> value.length == ISO_639_1_LANGUAGE_LENGTH }
-      val snapshot = repository.startRealtimeTalk(language, nodeId)
-      activeNodeId = nodeId
-      startReader(nodeId)
-      startCapture(nodeId)
-      return snapshot
-    } catch (err: Throwable) {
-      closeLocal()
-      throw err
+  suspend fun start(
+    session: WearSession,
+    attemptId: String,
+  ): WearRealtimeTalkSnapshot =
+    lifecycleLock.withLock {
+      _channelFailed.value = false
+      val nodeId = session.phoneNodeId
+      var channelOpened = false
+      try {
+        openChannel(nodeId)
+        channelOpened = true
+        val language =
+          Locale
+            .getDefault()
+            .language
+            .lowercase(Locale.ROOT)
+            .takeIf { value -> value.length == ISO_639_1_LANGUAGE_LENGTH }
+        val snapshot = repository.startRealtimeTalk(session.key, attemptId, language, nodeId)
+        activeNodeId = nodeId
+        activeAttemptId = attemptId
+        startReader(nodeId)
+        startCapture(nodeId)
+        snapshot
+      } catch (err: Throwable) {
+        closeLocal()
+        if (channelOpened) {
+          // Finish ambiguous-start cleanup before another attempt can acquire
+          // the lifecycle lock and create a replacement relay for this Watch.
+          withContext(NonCancellable) { runCatching { repository.stopRealtimeTalk(nodeId, attemptId) } }
+        }
+        throw err
+      }
     }
-  }
 
-  suspend fun stop(): WearRealtimeTalkSnapshot {
-    val nodeId = activeNodeId
-    return try {
-      if (nodeId == null) WearRealtimeTalkSnapshot() else repository.stopRealtimeTalk(nodeId)
-    } finally {
-      closeLocal()
+  suspend fun stop(): WearRealtimeTalkSnapshot =
+    lifecycleLock.withLock {
+      val nodeId = activeNodeId
+      val attemptId = activeAttemptId
+      try {
+        if (nodeId == null || attemptId == null) {
+          WearRealtimeTalkSnapshot()
+        } else {
+          repository.stopRealtimeTalk(nodeId, attemptId)
+        }
+      } finally {
+        closeLocal()
+      }
     }
-  }
 
   fun shutdown() {
     closeLocal()
@@ -315,13 +336,15 @@ internal class WearRealtimeTalkClient(
   }
 
   private fun handleChannelFailure(nodeId: String) {
+    val attemptId = activeAttemptId ?: return
     _channelFailed.value = true
     closeLocal()
-    scope.launch { runCatching { repository.stopRealtimeTalk(nodeId) } }
+    scope.launch { runCatching { repository.stopRealtimeTalk(nodeId, attemptId) } }
   }
 
   private fun closeLocal() {
     activeNodeId = null
+    activeAttemptId = null
     synchronized(audioLock) {
       pauseCaptureLocked()
       clearOutputLocked(resumeCapture = false)

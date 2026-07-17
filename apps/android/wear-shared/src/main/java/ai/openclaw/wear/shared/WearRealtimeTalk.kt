@@ -11,6 +11,7 @@ import java.io.OutputStream
 
 @Serializable
 data class WearRealtimeTalkSnapshot(
+  val attemptId: String? = null,
   val active: Boolean = false,
   val listening: Boolean = false,
   val speaking: Boolean = false,

@@ -1086,6 +1086,7 @@ class NodeRuntime private constructor(
         }
       },
       onDisconnected = { message ->
+        if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
@@ -1098,6 +1099,7 @@ class NodeRuntime private constructor(
         wearProxyBridge()?.publishConnection(connected = false, status = message)
       },
       onConnectFailure = { error, pauseReconnect ->
+        if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
         val problem = gatewayConnectionProblem(error, pauseReconnect)
         updateStatus {
           operatorConnected = false
@@ -1118,11 +1120,11 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
-      startRealtimeTalk = { nodeId, language ->
-        if (startWearRealtimeTalk(nodeId, language)) wearRealtimeTalkSnapshot.value else null
+      startRealtimeTalk = { nodeId, sessionKey, attemptId, language ->
+        if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language)) wearRealtimeTalkSnapshot.value else null
       },
-      stopRealtimeTalk = { nodeId ->
-        if (stopWearRealtimeTalk(nodeId)) wearRealtimeTalkSnapshot.value else null
+      stopRealtimeTalk = { nodeId, attemptId ->
+        if (stopWearRealtimeTalk(nodeId, attemptId)) wearRealtimeTalkSnapshot.value else null
       },
     )
   }
@@ -1608,7 +1610,6 @@ class NodeRuntime private constructor(
       WearRealtimeTalkController(
         scope = scope,
         isConnected = { gatewayConnectionDisplay.value.isConnected },
-        mainSessionKey = { resolveMainSessionKey() },
         requestGateway = { method, paramsJson, timeoutMs ->
           val gatewayId = connectedEndpoint?.stableId ?: error("Gateway not connected")
           operatorSession.requestForEndpoint(gatewayId, method, paramsJson, timeoutMs)
@@ -1626,6 +1627,9 @@ class NodeRuntime private constructor(
         onSnapshot = { snapshot ->
           wearProxyBridge()?.publishTalk(WearRealtimeTalkCodec.encode(snapshot))
         },
+        onForceCloseWatchChannel = { nodeId ->
+          scope.launch { (appContext as? NodeApp)?.wearRealtimeChannels?.close(nodeId) }
+        },
       )
     }
 
@@ -1637,19 +1641,22 @@ class NodeRuntime private constructor(
 
   internal suspend fun startWearRealtimeTalk(
     nodeId: String,
+    sessionKey: String,
+    attemptId: String,
     language: String?,
   ): Boolean {
     if (talkModeEnabled.value || micEnabled.value || micCooldown.value) return false
     val resolvedLanguage = talkMode.resolveRealtimeLanguageHint(language)
-    return wearRealtimeTalkController.start(nodeId, resolvedLanguage)
+    return wearRealtimeTalkController.start(nodeId, sessionKey, attemptId, resolvedLanguage)
   }
 
-  internal suspend fun stopWearRealtimeTalk(nodeId: String? = null): Boolean {
-    val stopped = wearRealtimeTalkController.stop(nodeId)
-    if (stopped && nodeId != null) {
-      (appContext as? NodeApp)?.wearRealtimeChannels?.close(nodeId)
-    }
-    return stopped
+  internal suspend fun stopWearRealtimeTalk(
+    nodeId: String? = null,
+    attemptId: String? = null,
+  ): Boolean {
+    // The watch closes its channel after receiving the stop response. Closing
+    // here races the response and makes a normal stop look like link failure.
+    return wearRealtimeTalkController.stop(nodeId, attemptId)
   }
 
   internal fun appendWearRealtimeAudio(

@@ -28,8 +28,9 @@ internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
-  private val startRealtimeTalk: suspend (nodeId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
-  private val stopRealtimeTalk: suspend (nodeId: String) -> WearRealtimeTalkSnapshot? = { null },
+  private val startRealtimeTalk:
+    suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _, _, _ -> null },
+  private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
 ) {
   suspend fun handle(
     request: WearMessage.Request,
@@ -62,7 +63,9 @@ internal class WearProxyController(
     params: JsonObject,
   ): JsonElement {
     if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
-    params.requireOnly("language")
+    params.requireOnly("sessionKey", "attemptId", "language")
+    val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
     val language =
       params
         .optionalStringParam("language", 2)
@@ -70,7 +73,7 @@ internal class WearProxyController(
         ?.takeIf { value -> value.length == 2 && value.all { it in 'a'..'z' } }
         ?: if ("language" in params) throw WearProxyInvalidRequest("Invalid language") else null
     val snapshot =
-      startRealtimeTalk(sourceNodeId, language)
+      startRealtimeTalk(sourceNodeId, sessionKey, attemptId, language)
         ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
@@ -80,9 +83,10 @@ internal class WearProxyController(
     params: JsonObject,
   ): JsonElement {
     if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
-    params.requireOnly()
+    params.requireOnly("attemptId")
+    val attemptId = params.stringParam("attemptId", MAX_ATTEMPT_ID_CHARS)
     val snapshot =
-      stopRealtimeTalk(sourceNodeId)
+      stopRealtimeTalk(sourceNodeId, attemptId)
         ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk belongs to another Watch")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
@@ -186,6 +190,7 @@ internal class WearProxyController(
     const val MAX_HISTORY_CHARS = 2_000
     const val MAX_HISTORY_OFFSET = 100_000
     const val MAX_SESSION_KEY_CHARS = 512
+    const val MAX_ATTEMPT_ID_CHARS = 128
     const val MAX_MESSAGE_CHARS = 4_000
     const val MAX_IDEMPOTENCY_KEY_CHARS = 128
     const val MAX_RUN_ID_CHARS = 128

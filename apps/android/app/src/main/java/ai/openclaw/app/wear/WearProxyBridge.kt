@@ -79,14 +79,6 @@ internal class WearProxyBridge(
   private val monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
   private val handleRequest: suspend (String, WearMessage.Request) -> WearMessage.Response,
 ) {
-  internal constructor(
-    scope: CoroutineScope,
-    sender: WearMessageSender,
-    peerResolver: WearPeerResolver = WearPeerResolver { emptySet() },
-    monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
-    handleRequest: suspend (WearMessage.Request) -> WearMessage.Response,
-  ) : this(scope, sender, peerResolver, monotonicMillis, { _, request -> handleRequest(request) })
-
   private val peerLock = Any()
   private val peers = LinkedHashMap<String, Long>()
   private val missingPeers = LinkedHashSet<String>()
