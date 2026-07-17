@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleDiscordSubagentProgress,
   recoverDiscordSubagentProgress,
-  resetDiscordSubagentProgressForTest,
 } from "./subagent-progress.js";
 
 const sendMocks = vi.hoisted(() => ({
@@ -19,6 +18,8 @@ const sendMocks = vi.hoisted(() => ({
     channelId: "123",
   })),
 }));
+
+const resetDiscordSubagentProgressForTest = handleDiscordSubagentProgress.resetForTest;
 
 vi.mock("./send.reactions.js", () => ({
   reactMessageDiscord: sendMocks.react,

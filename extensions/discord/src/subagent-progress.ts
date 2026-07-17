@@ -644,10 +644,7 @@ async function handleEnded(
   });
 }
 
-export async function handleDiscordSubagentProgress(
-  api: ProgressApi,
-  event: SubagentProgressEvent,
-) {
+async function handleDiscordSubagentProgressImpl(api: ProgressApi, event: SubagentProgressEvent) {
   if (event.phase === "started") {
     await handleStarted(api, event);
     return;
@@ -713,7 +710,7 @@ export async function recoverDiscordSubagentProgress(api: ProgressApi) {
   }
 }
 
-export function resetDiscordSubagentProgressForTest() {
+function resetDiscordSubagentProgressForTest() {
   for (const tracker of trackers.values()) {
     stopTyping(tracker);
   }
@@ -733,3 +730,7 @@ export function resetDiscordSubagentProgressForTest() {
   startupRecoveryRetries.clear();
   resetDiscordSubagentProgressStateForTest();
 }
+
+export const handleDiscordSubagentProgress = Object.assign(handleDiscordSubagentProgressImpl, {
+  resetForTest: resetDiscordSubagentProgressForTest,
+});

@@ -749,7 +749,7 @@ export type PluginHookSubagentContext = {
 
 type PluginHookSubagentTargetKind = "subagent" | "acp";
 
-export type PluginHookSubagentRequester = {
+type PluginHookSubagentRequester = {
   channel?: string;
   accountId?: string;
   to?: string;

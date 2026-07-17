@@ -31,8 +31,8 @@ type PersistedProgressRunBase = {
   runningEmoji?: string;
 };
 
-export type PersistedActiveProgressRun = PersistedProgressRunBase & { status: "active" };
-export type PersistedCleanupProgressRun = PersistedProgressRunBase & {
+type PersistedActiveProgressRun = PersistedProgressRunBase & { status: "active" };
+type PersistedCleanupProgressRun = PersistedProgressRunBase & {
   status: "cleanup";
   outcome: SubagentProgressOutcome;
 };
@@ -57,7 +57,7 @@ export type ProgressTracker = {
   typingExpiresAt: number;
 };
 
-export type ProgressRunLookupResult =
+type ProgressRunLookupResult =
   | { status: "found"; value: PersistedProgressRun }
   | { status: "missing" }
   | { status: "error" };
