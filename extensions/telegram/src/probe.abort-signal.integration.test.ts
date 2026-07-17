@@ -1,7 +1,6 @@
-// Real-socket proof that the startup probe retry loop stops when the owning
-// abortSignal fires. Production Telegram transport talks to a local stub that
-// resets the first connection, then aborts before the retry delay elapses.
-import { createServer, type Server } from "node:http";
+// Real-socket proof that the startup probe stops when the owning abortSignal
+// fires during either an active request or retry backoff.
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
@@ -11,6 +10,7 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
   let apiRoot: string;
   let requestCount = 0;
   let connectionCount = 0;
+  let stallMode: "all" | "webhook" | null = null;
   const liveSockets = new Set<Socket>();
 
   beforeAll(async () => {
@@ -28,8 +28,19 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
       vi.stubEnv(name, "");
     }
 
-    server = createServer((_req, res) => {
+    server = createServer((req, res) => {
       requestCount += 1;
+      if (
+        stallMode === "all" ||
+        (stallMode === "webhook" && req.url?.endsWith("/getWebhookInfo"))
+      ) {
+        return;
+      }
+      if (stallMode === "webhook") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true, result: { id: 1, is_bot: true } }));
+        return;
+      }
       // Abruptly terminate the first request so the probe enters its retry
       // backoff. The abort controller fires while sleepWithAbort is waiting,
       // which must prevent a second connection attempt.
@@ -83,5 +94,65 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
     expect(result.ok).toBe(false);
     expect(requestCount).toBe(previousRequestCount + 1);
     expect(connectionCount).toBe(previousConnectionCount + 1);
+  });
+
+  it("aborts a stalled in-flight getMe request", async () => {
+    const abortController = new AbortController();
+    const previousRequestCount = requestCount;
+    const previousConnectionCount = connectionCount;
+    let markRequestStarted: (() => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      markRequestStarted = resolve;
+    });
+    server.once("request", () => markRequestStarted?.());
+    stallMode = "all";
+
+    const startedAt = Date.now();
+    const probePromise = probeTelegram("abort-active-request-token", 10_000, {
+      apiRoot,
+      includeWebhookInfo: false,
+      abortSignal: abortController.signal,
+      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
+    });
+    await requestStarted;
+    abortController.abort();
+    const result = await probePromise;
+    stallMode = null;
+
+    expect(result.ok).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(requestCount).toBe(previousRequestCount + 1);
+    expect(connectionCount).toBe(previousConnectionCount + 1);
+  });
+
+  it("does not report success when aborting a stalled webhook-info request", async () => {
+    const abortController = new AbortController();
+    const previousRequestCount = requestCount;
+    const webhookRequestStarted = new Promise<void>((resolve) => {
+      const onRequest = (req: IncomingMessage) => {
+        if (!req.url?.endsWith("/getWebhookInfo")) {
+          return;
+        }
+        server.off("request", onRequest);
+        resolve();
+      };
+      server.on("request", onRequest);
+    });
+    stallMode = "webhook";
+
+    const startedAt = Date.now();
+    const probePromise = probeTelegram("abort-webhook-request-token", 10_000, {
+      apiRoot,
+      abortSignal: abortController.signal,
+      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
+    });
+    await webhookRequestStarted;
+    abortController.abort();
+    const result = await probePromise;
+    stallMode = null;
+
+    expect(result.ok).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(requestCount).toBe(previousRequestCount + 2);
   });
 });

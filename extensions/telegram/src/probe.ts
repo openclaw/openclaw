@@ -143,6 +143,7 @@ export async function probeTelegram(
   const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
   const deadlineMs = started + timeoutBudgetMs;
   const options = resolveProbeOptions(proxyOrOptions);
+  const abortSignal = options?.abortSignal;
   const includeWebhookInfo = options?.includeWebhookInfo !== false;
   const transport = resolveProbeTransport(token, options);
   const fetcher = transport.fetch;
@@ -165,20 +166,20 @@ export async function probeTelegram(
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
       const remainingBudgetMs = resolveRemainingBudgetMs();
-      if (remainingBudgetMs <= 0 || options?.abortSignal?.aborted) {
+      if (remainingBudgetMs <= 0 || abortSignal?.aborted) {
         break;
       }
       try {
         meRes = await fetchWithTimeout(
           `${base}/getMe`,
-          {},
+          { signal: abortSignal },
           Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
           fetcher,
         );
         break;
       } catch (err) {
         fetchError = err;
-        if (options?.abortSignal?.aborted) {
+        if (abortSignal?.aborted) {
           throw err;
         }
         // On timeout or network error, promote the transport to its IPv4
@@ -193,7 +194,7 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await sleepWithAbort(delayMs, options?.abortSignal);
+            await sleepWithAbort(delayMs, abortSignal);
           }
         }
       }
@@ -252,7 +253,7 @@ export async function probeTelegram(
         if (webhookRemainingBudgetMs > 0) {
           const webhookRes = await fetchWithTimeout(
             `${base}/getWebhookInfo`,
-            {},
+            { signal: abortSignal },
             Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
             fetcher,
           );
@@ -274,7 +275,10 @@ export async function probeTelegram(
             };
           }
         }
-      } catch {
+      } catch (err) {
+        if (abortSignal?.aborted) {
+          throw err;
+        }
         // ignore webhook errors for probe
       }
     }
