@@ -136,6 +136,18 @@ describe("block HTML islands", () => {
     expect(block.cells[1]?.[0]).toMatchObject({ colspan: 2, align: "center" });
   });
 
+  it("ignores malformed raw HTML table spans instead of truncating them", () => {
+    const block = single(
+      '<table><tr><td colspan="2x" rowspan="3y">bad span</td><td>next</td></tr></table>',
+    );
+    expect(block.type).toBe("table");
+    if (block.type !== "table") {
+      return;
+    }
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+  });
+
   it("keeps surrounding markdown on the paragraph path", () => {
     const blocks = blocksFor("**before**\n\n<hr/>\n\nafter");
     expect(blocks.map((block) => block.type)).toEqual(["paragraph", "divider", "paragraph"]);
