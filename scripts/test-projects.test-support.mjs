@@ -527,6 +527,10 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   ],
   [".github/workflows/macos-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [
+    ".github/workflows/mantis-scenario.yml",
+    ["test/scripts/mantis-telegram-desktop-proof-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/mantis-telegram-desktop-proof.yml",
     [
       "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
