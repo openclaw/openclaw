@@ -53,7 +53,11 @@ export function parsePairingString(raw) {
   if ([...parsed.searchParams].length > 0) {
     return null;
   }
-  return { relayUrl: parsed.toString(), token, gatewayUrl };
+  return {
+    relayUrl: parsed.toString(),
+    token,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+  };
 }
 
 /** Build WebSocket subprotocols without putting the relay secret in the request URL. */
