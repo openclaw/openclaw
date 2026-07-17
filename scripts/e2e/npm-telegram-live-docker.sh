@@ -509,8 +509,13 @@ done
 
 if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   echo "Running installed-package onboarding recovery hot path..."
-  hotpath_openai_api_key="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}"
-  OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard \
+  hotpath_placeholder="openclaw-npm-telegram-hotpath"
+  hotpath_model_value="$(printf 'sk-%s' "$hotpath_placeholder")"
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    hotpath_model_value="$OPENAI_API_KEY"
+  fi
+  hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
+  OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command openclaw onboard \
     --non-interactive --accept-risk \
     --mode local \
     --auth-choice openai-api-key \
@@ -523,7 +528,7 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     --skip-health \
     --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
 
-  openclaw_e2e_run_command openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw channels add --channel telegram --token "$hotpath_channel_value" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
   openclaw_e2e_run_command openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
   openclaw_e2e_run_command openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
 fi
