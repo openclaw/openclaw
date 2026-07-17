@@ -345,6 +345,31 @@ runs:
             ;;
         esac
 
+        sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"
+        sticky_fingerprint=""
+        sticky_snapshot_matches="false"
+        if [ "$STICKY_DISK" = "true" ] && [ -f "$sticky_marker" ]; then
+          sticky_fingerprint="$(<"$sticky_marker")"
+        fi
+        if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ] &&
+          [ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]; then
+          sticky_snapshot_matches="true"
+        fi
+        if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" != "true" ] &&
+          [ "$sticky_snapshot_matches" != "true" ]; then
+          # Read-only PR clones cannot refresh a stale snapshot. Installing into
+          # that clone can saturate its ext4 device until short jobs time out.
+          # Detach only the workspace bind; the action still discards its clone.
+          sudo umount "$GITHUB_WORKSPACE/node_modules"
+          rm -rf "$GITHUB_WORKSPACE/node_modules"
+          mkdir -p "$GITHUB_WORKSPACE/node_modules"
+          ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"
+          mkdir -p "$ephemeral_store"
+          export PNPM_CONFIG_STORE_DIR="$ephemeral_store"
+          echo "PNPM_CONFIG_STORE_DIR=$ephemeral_store" >> "$GITHUB_ENV"
+          echo "Sticky dependency snapshot is stale; using runner-local storage for this read-only run"
+        fi
+
         install_args=(
           install
           --prefer-offline
@@ -374,13 +399,7 @@ runs:
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
         fi
-        sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"
-        sticky_fingerprint=""
-        if [ "$STICKY_DISK" = "true" ] && [ -f "$sticky_marker" ]; then
-          sticky_fingerprint="$(<"$sticky_marker")"
-        fi
-        if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ] &&
-          [ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]; then
+        if [ "$sticky_snapshot_matches" = "true" ]; then
           bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"
           echo "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install"
         else

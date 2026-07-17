@@ -2066,6 +2066,12 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
     );
+    expect(installStep.run).toContain('[ "$STICKY_WRITER" != "true" ]');
+    expect(installStep.run).toContain('sudo umount "$GITHUB_WORKSPACE/node_modules"');
+    expect(installStep.run).toContain('ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"');
+    expect(installStep.run).toContain(
+      "Sticky dependency snapshot is stale; using runner-local storage for this read-only run",
+    );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
