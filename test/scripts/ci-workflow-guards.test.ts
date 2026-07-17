@@ -1802,6 +1802,12 @@ describe("ci workflow guards", () => {
     const compileStickyStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Mount Node compile cache sticky disk",
     );
+    const compileWriterStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore and save Node compile cache",
+    );
+    const compileReaderStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore Node compile cache",
+    );
     const compileConfigureStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Configure Node compile cache",
     );
@@ -1811,6 +1817,7 @@ describe("ci workflow guards", () => {
 
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
+      "node-compile-cache-scope": "test",
       "vitest-fs-cache": "true",
       "save-node-compile-cache": "${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}",
       "save-vitest-fs-cache": "${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}",
@@ -1818,6 +1825,7 @@ describe("ci workflow guards", () => {
     expect(action.inputs["vitest-fs-cache"].default).toBe("false");
     expect(action.inputs["save-vitest-fs-cache"].default).toBe("false");
     expect(action.inputs["node-compile-cache"].default).toBe("false");
+    expect(action.inputs["node-compile-cache-scope"].default).toBe("test");
     expect(action.inputs["save-node-compile-cache"].default).toBe("false");
     expect(protectedSeedStep).toMatchObject({
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
@@ -1856,12 +1864,25 @@ describe("ci workflow guards", () => {
       commit:
         "${{ inputs.save-node-compile-cache == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
     });
-    expect(compileStickyStep.with.key).toContain("node-compile-v1-protected-");
+    expect(compileStickyStep.with.key).toContain(
+      "node-compile-v2-${{ inputs.node-compile-cache-scope }}-protected-",
+    );
+    expect(compileWriterStep.with.key).toContain(
+      "node-compile-v2-${{ inputs.node-compile-cache-scope }}-",
+    );
+    expect(compileWriterStep.with.key).toContain("github.run_attempt");
+    expect(compileReaderStep.with["restore-keys"]).toBe(compileWriterStep.with["restore-keys"]);
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE=$cache_root");
     expect(compileConfigureStep.run).toContain("NODE_COMPILE_CACHE_PORTABLE=1");
     expect(buildSetupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
+      "node-compile-cache-scope": "build",
+      "save-node-compile-cache":
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}",
     });
+    expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
+      setupNodeStep.with["node-compile-cache-scope"],
+    );
   });
 
   it("warms protected caches without main-run cancellation and cleans closed PR archives", () => {
@@ -1879,6 +1900,7 @@ describe("ci workflow guards", () => {
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName === "core-unit-fast"');
     expect(warmerSetup.with).toMatchObject({
+      "node-compile-cache-scope": "test",
       "save-node-compile-cache": "true",
       "save-vitest-fs-cache": "true",
       "sticky-disk": "true",

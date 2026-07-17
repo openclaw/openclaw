@@ -961,7 +961,9 @@ jobs:
         with:
           install-bun: "false"
           node-compile-cache: "true"
+          node-compile-cache-scope: "build"
           runtime-cache-sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -1731,6 +1733,7 @@ jobs:
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
+          node-compile-cache-scope: "test"
           # One matrix job commits the shared warm seed. Other jobs restore it
           # read-only, avoiding concurrent sticky-disk or archive writers.
           save-vitest-fs-cache: ${{ matrix.save_vitest_fs_cache && 'true' || 'false' }}

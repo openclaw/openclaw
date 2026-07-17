@@ -47,6 +47,10 @@ inputs:
     description: Whether to persist Node's on-disk V8 compile cache.
     required: false
     default: "false"
+  node-compile-cache-scope:
+    description: Cache namespace for isolating workloads with different writer ownership.
+    required: false
+    default: "test"
   save-node-compile-cache:
     description: Whether this job may save the Node compile cache.
     required: false
@@ -198,7 +202,7 @@ runs:
         # Trusted PRs read the protected dependency bytecode seed but cannot
         # publish feature-branch code into it. Node isolates exact versions and
         # invalidates bytecode when module contents change.
-        key: ${{ github.repository }}-node-compile-v1-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}
+        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-compile-cache
         commit: ${{ inputs.save-node-compile-cache == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
 
@@ -207,18 +211,18 @@ runs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Restore Node compile cache
       if: inputs.node-compile-cache == 'true' && inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true' && inputs.save-node-compile-cache != 'true' && runner.os != 'Windows'
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: /var/tmp/openclaw-node-compile-cache
-        key: ${{ github.repository }}-node-compile-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v1-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v2-${{ inputs.node-compile-cache-scope }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.node-compile-cache == 'true' && runner.os != 'Windows'

@@ -27,6 +27,7 @@ jobs:
         with:
           install-bun: "false"
           node-compile-cache: "true"
+          node-compile-cache-scope: "test"
           runtime-cache-sticky-disk: "true"
           save-node-compile-cache: "true"
           save-vitest-fs-cache: "true"
