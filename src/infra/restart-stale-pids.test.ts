@@ -836,6 +836,45 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     });
 
+    it("continues cleanup and port polling when individual process signals fail", () => {
+      const termDeniedPid = process.pid + 198;
+      const killDeniedPid = process.pid + 199;
+      let lsofCall = 0;
+      mockSpawnSync.mockImplementation((command: unknown) => {
+        if (command !== "lsof") {
+          return createLsofResult();
+        }
+        lsofCall += 1;
+        return lsofCall === 1
+          ? createLsofResult({
+              stdout: lsofOutput([
+                { pid: termDeniedPid, cmd: "openclaw-gateway" },
+                { pid: killDeniedPid, cmd: "openclaw-gateway" },
+              ]),
+            })
+          : createLsofResult({ status: 1 });
+      });
+
+      const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === termDeniedPid && signal === "SIGTERM") {
+          throw Object.assign(new Error("term permission denied"), { code: "EPERM" });
+        }
+        if (pid === killDeniedPid && signal === "SIGKILL") {
+          throw Object.assign(new Error("kill permission denied"), { code: "EACCES" });
+        }
+        return true;
+      });
+
+      expect(cleanStaleGatewayProcessesSync()).toEqual([killDeniedPid]);
+      expect(killSpy).toHaveBeenCalledWith(termDeniedPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, 0);
+      expect(killSpy).toHaveBeenCalledWith(killDeniedPid, "SIGKILL");
+      expectWarningContaining(`failed to send SIGTERM to stale gateway process ${termDeniedPid}`);
+      expectWarningContaining(`failed to send SIGKILL to stale gateway process ${killDeniedPid}`);
+      expect(lsofCall).toBe(2);
+    });
+
     it("does not kill a protected gateway pid after reparenting", () => {
       const protectedPid = process.pid + 4001;
       const stalePid = process.pid + 4002;

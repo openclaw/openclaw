@@ -417,10 +417,7 @@ async function getTwilioVoiceCallCredentialsCheck(params: {
     },
   );
   const tool = tools[0] as {
-    execute: (
-      id: string,
-      params: unknown,
-    ) => Promise<{ details: { checks?: unknown[] } }>;
+    execute: (id: string, params: unknown) => Promise<{ details: { checks?: unknown[] } }>;
   };
 
   const result = await tool.execute("id", { action: "setup_status" });
