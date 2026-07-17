@@ -78,6 +78,14 @@ describe("renderChatComposer controls", () => {
       onAbort,
     });
     expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
+
+    view = renderComposer({
+      canAbort: true,
+      draft: "Replace the current run",
+      followUpMode: "interrupt",
+      onAbort,
+    });
+    expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
   });
 
   it("sends attachment-only drafts instead of starting voice", () => {

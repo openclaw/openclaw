@@ -3,6 +3,8 @@ import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js"
 import { INTERNAL_MESSAGE_CHANNEL } from "../../../../src/utils/message-channel-constants.js";
 import { normalizeChatFollowUpModeOverride, type ChatFollowUpMode } from "../../app/settings.js";
 
+export type ControlUiFollowUpMode = ChatFollowUpMode | Exclude<QueueMode, "steer">;
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -29,12 +31,10 @@ export function resolveControlUiServerQueueMode(
   );
 }
 
-/** The browser only chooses between immediate steering and its durable local queue. */
+/** Explicit browser choice wins; otherwise preserve the Gateway's full queue semantics. */
 export function resolveControlUiFollowUpMode(
   override: unknown,
   serverMode: QueueMode | undefined,
-): ChatFollowUpMode {
-  return (
-    normalizeChatFollowUpModeOverride(override) ?? (serverMode === "steer" ? "steer" : "queue")
-  );
+): ControlUiFollowUpMode {
+  return normalizeChatFollowUpModeOverride(override) ?? serverMode ?? "queue";
 }

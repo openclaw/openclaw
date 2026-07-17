@@ -2080,7 +2080,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("inherits a non-steer server default for active-run follow-ups", async () => {
+  it("preserves a non-steer server default for active-run follow-ups", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2136,27 +2136,23 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const queuedPrompt = "show this only above the composer";
+      const queuedPrompt = "queue this on the server";
       await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
       await page.getByRole("button", { name: "Queue message" }).click();
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
-      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
-      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/server-followup-default.png`,
-          fullPage: true,
-        });
-      }
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: queuedPrompt,
+        queueMode: "followup",
+        sessionKey: "main",
+      });
+      await page.locator(".chat-queue").waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await closeBrowserContext(context);
     }
   });
 
-  it("honors a session queue override ahead of the webchat config default", async () => {
+  it("honors a session interrupt override ahead of the webchat config default", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -2178,7 +2174,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         },
         "sessions.list": chatSessionListResponse([
           {
-            effectiveQueueMode: "followup",
+            effectiveQueueMode: "interrupt",
             key: "main",
             kind: "direct",
             label: "Main",
@@ -2196,12 +2192,16 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      const followUp = "queue this session override";
+      const followUp = "interrupt for this session override";
       await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
-      await page.getByRole("button", { name: "Queue message" }).click();
+      await page.getByRole("button", { name: "Send message" }).click();
 
-      await page.locator(".chat-queue").getByText(followUp).waitFor({ timeout: 10_000 });
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      const sends = await waitForRequests(gateway, "chat.send", 2);
+      expect(requireRecord(sends[1]?.params)).toMatchObject({
+        message: followUp,
+        queueMode: "interrupt",
+        sessionKey: "main",
+      });
     } finally {
       await closeBrowserContext(context);
     }

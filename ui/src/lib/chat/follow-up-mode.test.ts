@@ -24,7 +24,9 @@ describe("Control UI follow-up mode", () => {
   it("inherits the server behavior until the browser has an explicit override", () => {
     expect(resolveControlUiFollowUpMode(undefined, undefined)).toBe("queue");
     expect(resolveControlUiFollowUpMode(undefined, "steer")).toBe("steer");
-    expect(resolveControlUiFollowUpMode(undefined, "followup")).toBe("queue");
+    expect(resolveControlUiFollowUpMode(undefined, "followup")).toBe("followup");
+    expect(resolveControlUiFollowUpMode(undefined, "collect")).toBe("collect");
+    expect(resolveControlUiFollowUpMode(undefined, "interrupt")).toBe("interrupt");
     expect(resolveControlUiFollowUpMode("queue", "steer")).toBe("queue");
     expect(resolveControlUiFollowUpMode("steer", "interrupt")).toBe("steer");
   });
