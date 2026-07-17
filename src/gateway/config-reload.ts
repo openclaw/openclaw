@@ -903,7 +903,7 @@ export function startGatewayConfigReloader(opts: {
   let degradedToPolling = false;
   let watcherUsesPolling = false;
 
-  const createWatcher = () => {
+  const createWatcher = (createOpts?: { reconcileAfterReady?: boolean }) => {
     if (stopped) {
       return;
     }
@@ -916,6 +916,9 @@ export function startGatewayConfigReloader(opts: {
     next.on("add", scheduleExternalRefresh);
     next.on("change", scheduleExternalRefresh);
     next.on("unlink", scheduleExternalRefresh);
+    if (createOpts?.reconcileAfterReady) {
+      next.on("ready", scheduleExternalRefresh);
+    }
     next.on("error", (err) => {
       handleWatcherError(next, err);
     });
@@ -945,7 +948,7 @@ export function startGatewayConfigReloader(opts: {
         );
         watcherRecreateTimer = setTimeout(() => {
           watcherRecreateTimer = null;
-          createWatcher();
+          createWatcher({ reconcileAfterReady: true });
         }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
         return;
       }
@@ -966,7 +969,7 @@ export function startGatewayConfigReloader(opts: {
     );
     watcherRecreateTimer = setTimeout(() => {
       watcherRecreateTimer = null;
-      createWatcher();
+      createWatcher({ reconcileAfterReady: true });
     }, backoff);
   };
 
