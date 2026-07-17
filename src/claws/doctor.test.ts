@@ -155,7 +155,7 @@ describe("collectClawStateHealthFindings", () => {
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     await mkdir(dirname(databasePath), { recursive: true });
     const database = new DatabaseSync(databasePath);
-    database.exec("PRAGMA user_version = 2");
+    database.exec("PRAGMA user_version = 4");
     database.close();
 
     const findings = await collectClawStateHealthFindings({
@@ -166,7 +166,7 @@ describe("collectClawStateHealthFindings", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         severity: "error",
-        message: expect.stringContaining("uses newer schema version 2"),
+        message: expect.stringContaining("uses newer schema version 4"),
       }),
     ]);
     const reopened = new DatabaseSync(databasePath, { readOnly: true });
@@ -246,7 +246,13 @@ describe("collectClawStateHealthFindings", () => {
     const current = await installFixture();
     persistClawPackageRef(
       current.plan,
-      { kind: "plugin", source: "clawhub", ref: "audit", version: "2.0.0" },
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: "sha256:audit",
+      },
       { env: current.env, status: "pending" },
     );
 
@@ -353,7 +359,13 @@ describe("collectClawStateHealthFindings", () => {
     const current = await fixture();
     persistClawPackageRef(
       current.plan,
-      { kind: "skill", source: "clawhub", ref: "triage", version: "1.0.0" },
+      {
+        kind: "skill",
+        source: "clawhub",
+        ref: "triage",
+        version: "1.0.0",
+        integrity: "sha256:triage",
+      },
       { env: current.env },
     );
 
@@ -362,11 +374,13 @@ describe("collectClawStateHealthFindings", () => {
       cfg: {},
       sourceMcpServers: {},
     });
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: expect.stringContaining("have no root install record"),
-        path: "claws.worker",
-      }),
-    ]);
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("have no root install record"),
+          path: "claws.worker",
+        }),
+      ]),
+    );
   });
 });

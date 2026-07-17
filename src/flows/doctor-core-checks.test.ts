@@ -207,7 +207,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       "core/doctor/claws-state",
     );
   });
-  });
 
   it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
     const check = getCheck(
