@@ -36627,14 +36627,6 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 105,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift",
-      "source": "\\(baseName).jpg",
-      "surface": "apple",
-      "id": "native.apple.82c2287cd78da56f"
-    },
-    {
-      "kind": "conditional-branch",
       "line": 43,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Sending.swift",
       "source": "\\(invocation) ",
