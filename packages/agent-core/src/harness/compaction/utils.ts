@@ -114,7 +114,7 @@ function truncateForSummary(text: string, maxChars: number): string {
 }
 
 /** Extract text that compaction both estimates and includes in summary prompts. */
-export function getCompactionContentBlockText(block: {
+function getCompactionContentBlockText(block: {
   type: string;
   content?: unknown;
   text?: string;
