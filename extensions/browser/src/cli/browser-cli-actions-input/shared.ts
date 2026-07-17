@@ -20,6 +20,7 @@ type BrowserActionContext = {
 };
 
 const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
+export const BROWSER_FIELDS_FILE_MAX_BYTES = 1024 * 1024;
 
 /** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
 export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
@@ -85,7 +86,29 @@ export function requireRef(ref: string | undefined) {
 }
 
 async function readFile(path: string): Promise<string> {
-  return await fs.readFile(path, "utf8");
+  const handle = await fs.open(path, "r");
+  try {
+    const buffer = Buffer.alloc(BROWSER_FIELDS_FILE_MAX_BYTES + 1);
+    let totalBytes = 0;
+    while (totalBytes < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        totalBytes,
+        buffer.length - totalBytes,
+        null,
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+    }
+    if (totalBytes > BROWSER_FIELDS_FILE_MAX_BYTES) {
+      throw new Error(`fields file exceeds ${BROWSER_FIELDS_FILE_MAX_BYTES} bytes`);
+    }
+    return buffer.subarray(0, totalBytes).toString("utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Reads and validates JSON form-field descriptors from inline text or a file. */

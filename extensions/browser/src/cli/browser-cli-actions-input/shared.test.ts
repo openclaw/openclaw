@@ -1,6 +1,9 @@
 // Browser tests cover shared plugin behavior.
-import { describe, expect, it } from "vitest";
-import { readFields } from "./shared.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { BROWSER_FIELDS_FILE_MAX_BYTES, readFields } from "./shared.js";
 
 describe("readFields", () => {
   it.each([
@@ -37,5 +40,36 @@ describe("readFields", () => {
 
   it("throws descriptive error on empty fields", async () => {
     await expect(readFields({ fields: "" })).rejects.toThrow("fields are required");
+  });
+
+  it("reads valid fields from a file", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-fields-"));
+    try {
+      const fieldsFile = path.join(dir, "fields.json");
+      await fs.writeFile(fieldsFile, '[{"ref":"9","value":"from file"}]', "utf8");
+
+      await expect(readFields({ fieldsFile })).resolves.toEqual([
+        { ref: "9", type: "text", value: "from file" },
+      ]);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects oversized fields files before parsing", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-fields-"));
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const fieldsFile = path.join(dir, "fields.json");
+      await fs.writeFile(fieldsFile, "x".repeat(BROWSER_FIELDS_FILE_MAX_BYTES + 1), "utf8");
+
+      await expect(readFields({ fieldsFile })).rejects.toThrow(
+        `fields file exceeds ${BROWSER_FIELDS_FILE_MAX_BYTES} bytes`,
+      );
+      expect(parseSpy).not.toHaveBeenCalled();
+    } finally {
+      parseSpy.mockRestore();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
