@@ -46,9 +46,9 @@ export function collectRuntimeConfigAssignments(params: {
   const defaultScopedPasswordConfigured =
     normalizeSecretStringValue(params.context.env[getMatrixScopedEnvVarNames("default").password])
       .length > 0;
-  const defaultAccount = surface.accounts.find(
-    ({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID,
-  );
+  const defaultAccount = surface.hasExplicitAccounts
+    ? surface.accounts.find(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+    : undefined;
   const defaultAccountEnabled = surface.channelEnabled && (defaultAccount?.enabled ?? true);
   const defaultAccountAccessTokenConfigured = hasConfiguredSecretInputValue(
     defaultAccount?.account.accessToken,
