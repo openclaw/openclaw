@@ -1,8 +1,8 @@
 const ISO_ABSOLUTE_RE =
   /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?$/;
 
-/** Checks an ISO-like timestamp's shape and calendar components without changing its timezone. */
-export function isValidIsoAbsolute(raw: string): boolean {
+/** Checks the calendar components of the ISO-like forms accepted by existing callers. */
+export function hasValidIsoCalendarComponents(raw: string): boolean {
   const match = ISO_ABSOLUTE_RE.exec(raw);
   if (!match) {
     return false;

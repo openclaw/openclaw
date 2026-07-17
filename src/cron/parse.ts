@@ -1,6 +1,6 @@
 /** Parses cron schedule timestamps from user-facing absolute time strings. */
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { isValidIsoAbsolute } from "../shared/iso-time.js";
+import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 
 const ISO_TZ_RE = /(Z|[+-]\d{2}:?\d{2})$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,7 +32,7 @@ export function parseAbsoluteTimeMs(input: string): number | null {
     }
     return null;
   }
-  if (!isValidIsoAbsolute(raw)) {
+  if (!hasValidIsoCalendarComponents(raw)) {
     return null;
   }
   const parsed = Date.parse(normalizeUtcIso(raw));

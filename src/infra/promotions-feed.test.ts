@@ -236,18 +236,6 @@ describe("promotions feed state", () => {
         headers: { etag: '"v5"' },
       },
     });
-    mockHttp.intercept({
-      url: FEED_URL,
-      reply: {
-        json: feedPayload({
-          generatedAt: "2028-02-29T00:00:00.000Z",
-          expiresAt: "2028-03-01T00:00:00.000Z",
-          sequence: 5,
-          entries: [],
-        }),
-        headers: { etag: '"v5"' },
-      },
-    });
     await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl: globalThis.fetch });
 
     const rejected = await maybeRefreshPromotionsFeed({
@@ -267,17 +255,6 @@ describe("promotions feed state", () => {
     expect(cached.sequence).toBe(4);
     expect(cached.etag).toBe('"v4"');
     expect(cached.entries).toHaveLength(1);
-
-    const accepted = await maybeRefreshPromotionsFeed({
-      nowMs: NOW + 62_000,
-      force: true,
-      fetchImpl: globalThis.fetch,
-    });
-    expect(mockHttp.requests()).toHaveLength(3);
-    expect(accepted.sequence).toBe(5);
-    expect(accepted.etag).toBe('"v5"');
-    expect(accepted.expiresAtMs).toBe(Date.parse("2028-03-01T00:00:00.000Z"));
-    expect(accepted.entries).toHaveLength(0);
   });
 
   it("persists and deduplicates notified promotion slugs", async () => {

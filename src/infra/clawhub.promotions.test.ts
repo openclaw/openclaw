@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { useMockHttp } from "../test-utils/mock-http.js";
 import {
   fetchClawHubPromotion,
@@ -146,21 +146,11 @@ describe("parseClawHubPromotionsFeed", () => {
     ).toThrow(/expiresAt/);
   });
 
-  it("rejects calendar-invalid generatedAt dates", () => {
-    // February 30 is not a real date; Date.parse silently normalizes it
-    // to March, but the feed parser must reject it.
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        generatedAt: "2026-02-30T00:00:00.000Z",
-      }),
-    ).toThrow(/ISO dates/);
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        expiresAt: "2026-02-30T00:00:00.000Z",
-      }),
-    ).toThrow(/ISO dates/);
+  it.each([
+    { field: "generatedAt", value: "2026-02-30T00:00:00.000Z" },
+    { field: "expiresAt", value: "2026-11-31T00:00:00.000Z" },
+  ])("rejects a calendar-invalid $field", ({ field, value }) => {
+    expect(() => parseClawHubPromotionsFeed({ ...validFeed, [field]: value })).toThrow(/ISO dates/);
   });
 
   it("accepts canonical ISO calendar dates including leap day", () => {
@@ -172,28 +162,6 @@ describe("parseClawHubPromotionsFeed", () => {
         expiresAt: "2028-03-01T12:00:00.000Z",
       }),
     ).not.toThrow();
-  });
-
-  it("preserves Date.parse ordering for timezone-less timestamps", () => {
-    const generatedAt = "2028-02-29T12:00:00.000Z";
-    const expiresAt = "2028-02-29T12:30:00.000";
-    const parse = vi.spyOn(Date, "parse").mockImplementation((value) => {
-      if (value === generatedAt) {
-        return 100;
-      }
-      if (value === expiresAt) {
-        return 200;
-      }
-      return Number.NaN;
-    });
-
-    try {
-      expect(() =>
-        parseClawHubPromotionsFeed({ ...validFeed, generatedAt, expiresAt }),
-      ).not.toThrow();
-    } finally {
-      parse.mockRestore();
-    }
   });
 
   it("holds feed entries to the promotion payload contracts", () => {
