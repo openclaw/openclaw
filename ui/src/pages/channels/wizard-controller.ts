@@ -6,21 +6,29 @@ type WizardGatewayClient = {
 };
 
 // The browser gateway client does not expose per-request timeouts, so race a
-// local ceiling; stale late responses are cleaned up by the generation guard.
+// local ceiling; timed-out or superseded late responses are cleaned up explicitly.
 async function requestWithTimeout<T>(
   client: WizardGatewayClient,
   method: string,
   params: unknown,
+  onLateResult?: (result: T) => void,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const request = client.request<T>(method, params).then((result) => {
+    if (timedOut) {
+      onLateResult?.(result);
+    }
+    return result;
+  });
   try {
     return await Promise.race([
-      client.request<T>(method, params),
+      request,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`wizard request timed out: ${method}`)),
-          WIZARD_STEP_TIMEOUT_MS,
-        );
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`wizard request timed out: ${method}`));
+        }, WIZARD_STEP_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -114,10 +122,23 @@ export class ChannelWizardController {
     this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
-      const result = await requestWithTimeout<WizardNextResult>(client, "wizard.start", {
-        flow: "channels",
-        ...(channel ? { channel } : {}),
-      });
+      const result = await requestWithTimeout<WizardNextResult>(
+        client,
+        "wizard.start",
+        {
+          flow: "channels",
+          ...(channel ? { channel } : {}),
+        },
+        (lateResult) => {
+          // A local timeout cannot stop the gateway request. If it eventually
+          // creates a running session, release it so a retry is not blocked.
+          if (lateResult.sessionId && !lateResult.done) {
+            void client
+              .request("wizard.cancel", { sessionId: lateResult.sessionId })
+              .catch(() => {});
+          }
+        },
+      );
       if (this.generation !== generation) {
         // The modal was closed/superseded mid-start, but the gateway already
         // created a running session; cancel it or later starts get rejected.
