@@ -1,4 +1,5 @@
 // Verifies shell selection, PATH lookup, and platform-specific shell helpers.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import {
   buildShellCommandInvocation,
   detectRuntimeShell,
   getBashShellConfig,
+  getBashShellEnv,
   getShellEnv,
   getShellConfig,
   sanitizeBinaryOutput,
@@ -195,7 +197,7 @@ describe("getBashShellConfig", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["ProgramFiles", "ProgramFiles(x86)", "PATH"]);
+    envSnapshot = captureEnv(["ProgramFiles", "ProgramFiles(x86)", "PATH", "Path"]);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   });
 
@@ -223,6 +225,53 @@ describe("getBashShellConfig", () => {
       args: ["-c"],
       commandTransport: "argv",
     });
+  });
+
+  it("prepends coreutils for a standard Git for Windows install", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-git-bash-env-"));
+    tempDirs.push(programFiles);
+    const gitRoot = path.join(programFiles, "Git");
+    const bashPath = path.join(gitRoot, "bin", "bash.exe");
+    const usrBin = path.join(gitRoot, "usr", "bin");
+    fs.mkdirSync(path.dirname(bashPath), { recursive: true });
+    fs.mkdirSync(path.join(gitRoot, "cmd"), { recursive: true });
+    fs.mkdirSync(usrBin, { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    fs.writeFileSync(path.join(gitRoot, "cmd", "git.exe"), "");
+    process.env.PATH = path.join(programFiles, "OtherBin");
+
+    const env = getBashShellEnv(bashPath);
+
+    expect(env.PATH?.split(path.delimiter)[0]).toBe(usrBin);
+    expect(env.PATH).toContain(process.env.PATH);
+    expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
+  });
+
+  it("recognizes portable Git for Windows installs", () => {
+    const gitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-portable-git-"));
+    tempDirs.push(gitRoot);
+    const bashPath = path.join(gitRoot, "usr", "bin", "bash.exe");
+    const usrBin = path.dirname(bashPath);
+    fs.mkdirSync(usrBin, { recursive: true });
+    fs.mkdirSync(path.join(gitRoot, "cmd"), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    fs.writeFileSync(path.join(gitRoot, "cmd", "git.exe"), "");
+
+    expect(getBashShellEnv(bashPath).PATH?.split(path.delimiter)[0]).toBe(usrBin);
+  });
+
+  it("leaves unrelated MSYS2 installs unchanged", () => {
+    const msysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-msys2-"));
+    tempDirs.push(msysRoot);
+    const bashPath = path.join(msysRoot, "usr", "bin", "bash.exe");
+    fs.mkdirSync(path.dirname(bashPath), { recursive: true });
+    fs.writeFileSync(bashPath, "");
+    process.env.PATH = path.join(msysRoot, "ucrt64", "bin");
+
+    const env = getBashShellEnv(bashPath);
+
+    expect(env.PATH?.split(path.delimiter)[0]).not.toBe(path.dirname(bashPath));
+    expect(env.PATH).toContain(process.env.PATH);
   });
 
   it.each(["System32", "Sysnative"])(
@@ -271,10 +320,11 @@ describe("getShellEnv", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH"]);
+    envSnapshot = captureEnv(["PATH", "Path"]);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     envSnapshot.restore();
   });
 
@@ -284,6 +334,32 @@ describe("getShellEnv", () => {
 
     expect(env.PATH).toContain("/usr/bin");
     expect(env.PATH).toContain(".openclaw");
+  });
+
+  it("collapses case-insensitive PATH duplicates before Windows spawn", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    process.env.PATH = "/selected";
+    process.env.Path = "/discarded";
+
+    const env = getShellEnv();
+
+    expect(Object.keys(env).filter((key) => key.toLowerCase() === "path")).toEqual(["PATH"]);
+    expect(env.PATH).toContain("/selected");
+    expect(env.PATH).not.toContain("/discarded");
+  });
+
+  it.runIf(isWin)("passes one canonical PATH entry to a child process", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => key.toLowerCase() === 'path')))",
+      ],
+      { encoding: "utf8", env: getShellEnv() },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(["PATH"]);
   });
 });
 
