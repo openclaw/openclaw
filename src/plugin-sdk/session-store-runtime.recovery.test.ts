@@ -1,7 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadSessionEntry as loadInternalSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   patchSessionEntry,
@@ -9,17 +8,15 @@ import {
   type SessionEntry,
 } from "./session-store-runtime.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("session-store-runtime recovery boundary", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-session-recovery-"));
+    tempDir = tempDirs.make("openclaw-sdk-session-recovery-");
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("allows public recovery fields to change without an active core transaction", async () => {
