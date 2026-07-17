@@ -301,23 +301,23 @@ describe("Bedrock stop reasons", () => {
 describe("Bedrock bearer token resolution", () => {
   function mockSendAndCaptureToken() {
     let configuredToken: unknown;
-    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
-      function (this: BedrockRuntimeClient) {
-        const tokenCfg = this.config.token;
-        const tokenPromise: Promise<unknown> =
-          typeof tokenCfg === "function" ? tokenCfg() : Promise.resolve(undefined);
-        return tokenPromise.then((token) => {
-          configuredToken = token;
-          return {
-            $metadata: { httpStatusCode: 200 },
-            stream: streamEvents([
-              { messageStart: { role: ConversationRole.ASSISTANT } },
-              { messageStop: { stopReason: "end_turn" } },
-            ]),
-          } as never;
-        });
-      },
-    );
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(function (
+      this: BedrockRuntimeClient,
+    ) {
+      const tokenCfg = this.config.token;
+      const tokenPromise: Promise<unknown> =
+        typeof tokenCfg === "function" ? tokenCfg() : Promise.resolve(undefined);
+      return tokenPromise.then((token) => {
+        configuredToken = token;
+        return {
+          $metadata: { httpStatusCode: 200 },
+          stream: streamEvents([
+            { messageStart: { role: ConversationRole.ASSISTANT } },
+            { messageStop: { stopReason: "end_turn" } },
+          ]),
+        } as never;
+      });
+    } as (...args: unknown[]) => unknown);
     return () => configuredToken;
   }
 
