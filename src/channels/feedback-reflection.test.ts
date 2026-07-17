@@ -22,6 +22,7 @@ describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("runs reflection in the original session and enforces cooldown", async () => {
+    const onLearning = vi.fn(async () => undefined);
     dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({
@@ -42,6 +43,7 @@ describe("channel feedback reflection", () => {
       conversationKind: "group" as const,
       thumbedDownResponse: "Too much detail",
       userComment: "Be concise",
+      onLearning,
     };
 
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({
@@ -58,8 +60,44 @@ describe("channel feedback reflection", () => {
         ctxPayload: expect.objectContaining({ ChatType: "group" }),
       }),
     );
+    expect(onLearning).toHaveBeenCalledWith({
+      learning: "Answer the direct question first.",
+      sessionKey: params.sessionKey,
+      storePath: "/state/main/sessions.json",
+    });
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({ status: "cooldown" });
     expect(dispatchChannelInboundTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a plain-text reflection as internal learning", async () => {
+    const onLearning = vi.fn(async () => undefined);
+    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+      await plan.delivery.deliver({ text: "Answer the direct question first." });
+      return { admission: { kind: "dispatch" }, dispatched: true };
+    });
+
+    await expect(
+      runChannelFeedbackReflection({
+        cfg,
+        channel: "msteams",
+        channelLabel: "Teams",
+        agentId: "main",
+        sessionKey: "agent:main:msteams:feedback-plain",
+        conversationId: "conversation-plain",
+        conversationKind: "direct",
+        onLearning,
+      }),
+    ).resolves.toEqual({
+      status: "complete",
+      followUp: false,
+      userMessage: undefined,
+      responseLength: 33,
+    });
+    expect(onLearning).toHaveBeenCalledWith({
+      learning: "Answer the direct question first.",
+      sessionKey: "agent:main:msteams:feedback-plain",
+      storePath: "/state/main/sessions.json",
+    });
   });
 
   it("records feedback through the canonical transcript accessor", async () => {

@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
+import { storeSessionLearning } from "./feedback-reflection-store.js";
 import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
@@ -81,6 +82,13 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       thumbedDownResponse: params.thumbedDownResponse,
       userComment: params.userComment,
       cooldownMs,
+      onLearning: async (learning) => {
+        try {
+          await storeSessionLearning(learning);
+        } catch (err) {
+          log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
+        }
+      },
       onRecordError: (err) =>
         log.debug?.("reflection session record failed", { error: formatUnknownError(err) }),
       onDispatchError: (err) =>

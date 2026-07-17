@@ -48,6 +48,12 @@ export type ChannelFeedbackReflectionResult =
       responseLength: number;
     };
 
+type ParsedReflectionResponse = {
+  learning: string;
+  followUp: boolean;
+  userMessage?: string;
+};
+
 function buildReflectionPrompt(params: {
   thumbedDownResponse?: string;
   userComment?: string;
@@ -71,12 +77,7 @@ function buildReflectionPrompt(params: {
   return parts.join("\n");
 }
 
-function parseReflectionResponse(
-  text: string,
-): Omit<
-  Extract<ChannelFeedbackReflectionResult, { status: "complete" }>,
-  "status" | "responseLength"
-> | null {
+function parseReflectionResponse(text: string): ParsedReflectionResponse | null {
   const trimmed = text.trim();
   const candidates = [
     trimmed,
@@ -98,7 +99,7 @@ function parseReflectionResponse(
         (typeof value.followUp === "string" &&
           ["true", "yes"].includes(value.followUp.trim().toLowerCase()));
       const userMessage = typeof value.userMessage === "string" ? value.userMessage.trim() : "";
-      return { followUp, userMessage: userMessage || undefined };
+      return { learning, followUp, userMessage: userMessage || undefined };
     } catch {}
   }
   return trimmed ? { learning: trimmed, followUp: false } : null;
@@ -116,6 +117,11 @@ export async function runChannelFeedbackReflection(params: {
   thumbedDownResponse?: string;
   userComment?: string;
   cooldownMs?: number;
+  onLearning?: (learning: {
+    learning: string;
+    sessionKey: string;
+    storePath: string;
+  }) => void | Promise<void>;
   onRecordError?: (error: unknown) => void;
   onDispatchError?: (error: unknown) => void;
 }): Promise<ChannelFeedbackReflectionResult> {
@@ -188,5 +194,16 @@ export async function runChannelFeedbackReflection(params: {
       }
     }
   }
-  return { status: "complete", ...parsed, responseLength: response.trim().length };
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+  await params.onLearning?.({
+    learning: parsed.learning,
+    sessionKey: params.sessionKey,
+    storePath,
+  });
+  return {
+    status: "complete",
+    followUp: parsed.followUp,
+    userMessage: parsed.userMessage,
+    responseLength: response.trim().length,
+  };
 }
