@@ -407,9 +407,16 @@ export async function handleAgentExecutionError(params: {
     defaultRuntime.error(
       `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
-    });
+    const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
+    try {
+      await sleepWithAbort(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
+    } catch (sleepError) {
+      const abortAction = resolveReplyOperationAbortAction(sleepError);
+      if (abortAction) {
+        return abortAction;
+      }
+      throw sleepError;
+    }
     return { kind: "retry" };
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
