@@ -302,18 +302,20 @@ describe("Bedrock bearer token resolution", () => {
   function mockSendAndCaptureToken() {
     let configuredToken: unknown;
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
-      async function (this: BedrockRuntimeClient) {
+      function (this: BedrockRuntimeClient) {
         const tokenCfg = this.config.token;
-        if (typeof tokenCfg === "function") {
-          configuredToken = await tokenCfg();
-        }
-        return {
-          $metadata: { httpStatusCode: 200 },
-          stream: streamEvents([
-            { messageStart: { role: ConversationRole.ASSISTANT } },
-            { messageStop: { stopReason: "end_turn" } },
-          ]),
-        } as never;
+        const tokenPromise: Promise<unknown> =
+          typeof tokenCfg === "function" ? tokenCfg() : Promise.resolve(undefined);
+        return tokenPromise.then((token) => {
+          configuredToken = token;
+          return {
+            $metadata: { httpStatusCode: 200 },
+            stream: streamEvents([
+              { messageStart: { role: ConversationRole.ASSISTANT } },
+              { messageStop: { stopReason: "end_turn" } },
+            ]),
+          } as never;
+        });
       },
     );
     return () => configuredToken;
