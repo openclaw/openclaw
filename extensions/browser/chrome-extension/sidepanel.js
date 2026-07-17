@@ -222,8 +222,7 @@ function connectPanelPort() {
       schedulePortReconnect();
     }
   });
-  // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Chrome runtime Port API.
-  nextPort.postMessage({ type: "panel.refresh" });
+  port?.postMessage({ type: "panel.refresh" });
 }
 
 async function send() {
