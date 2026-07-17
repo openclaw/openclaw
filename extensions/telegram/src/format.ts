@@ -601,10 +601,11 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
 
 function parseTelegramHtmlColspan(attrs: string): number {
   const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.slice(1).find(Boolean);
-  if (!raw || !/^\d+$/u.test(raw)) {
+  const normalized = raw?.trim();
+  if (!normalized || !/^\d+$/u.test(normalized)) {
     return 1;
   }
-  const value = Number.parseInt(raw, 10);
+  const value = Number.parseInt(normalized, 10);
   return Number.isFinite(value) && value > 1 ? Math.min(value, 21) : 1;
 }
 
