@@ -47,7 +47,10 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     signal: createRequestSignal(),
   });
   if (!response.ok) {
-    const payload = await readJsonResponse<{ error?: string }>(response, path).catch(() => ({}));
+    const payload: { error?: string } = await readJsonResponse<{ error?: string }>(
+      response,
+      path,
+    ).catch(() => ({}));
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
   return await readJsonResponse<T>(response, path);
