@@ -3,6 +3,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -39,6 +40,7 @@ export type TelegramProbeOptions = {
   accountId?: string;
   apiRoot?: string;
   includeWebhookInfo?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 const probeTransportCache = new Map<string, TelegramTransport>();
@@ -163,7 +165,7 @@ export async function probeTelegram(
     // Retry loop for initial connection (handles network/DNS startup races)
     for (let i = 0; i < 3; i++) {
       const remainingBudgetMs = resolveRemainingBudgetMs();
-      if (remainingBudgetMs <= 0) {
+      if (remainingBudgetMs <= 0 || options?.abortSignal?.aborted) {
         break;
       }
       try {
@@ -176,6 +178,9 @@ export async function probeTelegram(
         break;
       } catch (err) {
         fetchError = err;
+        if (options?.abortSignal?.aborted) {
+          throw err;
+        }
         // On timeout or network error, promote the transport to its IPv4
         // fallback dispatcher so the next retry (and all future probes
         // sharing this cached transport) skip the stalled IPv6 path.
@@ -188,9 +193,7 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => {
-              setTimeout(resolve, delayMs);
-            });
+            await sleepWithAbort(delayMs, options?.abortSignal);
           }
         }
       }
