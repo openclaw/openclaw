@@ -282,8 +282,6 @@ class MainViewModel private constructor(
   private val prefs: SecurePrefs,
   savedStateHandle: SavedStateHandle,
 ) : AndroidViewModel(app) {
-  constructor(app: Application) : this(app, (app as NodeApp).prefs, SavedStateHandle())
-
   constructor(
     app: Application,
     savedStateHandle: SavedStateHandle,
@@ -292,7 +290,8 @@ class MainViewModel private constructor(
   internal constructor(
     app: NodeApp,
     prefs: SecurePrefs,
-  ) : this(app as Application, prefs, SavedStateHandle())
+    savedStateHandle: SavedStateHandle,
+  ) : this(app as Application, prefs, savedStateHandle)
 
   private val nodeApp = app as NodeApp
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)

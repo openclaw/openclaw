@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.ui.chat.PendingAttachment
 import android.content.Context
 import android.content.Intent
+import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -389,7 +390,7 @@ class MainViewModelTest {
             Context.MODE_PRIVATE,
           ),
       )
-    return MainViewModel(app, prefs) to prefs
+    return MainViewModel(app, prefs, SavedStateHandle()) to prefs
   }
 
   private fun draft(name: String): CronEditorDraftState {
