@@ -4,8 +4,8 @@ import ai.openclaw.wear.shared.WearProtocol
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.ChannelClient
+import com.google.android.gms.wearable.MessageClient
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test

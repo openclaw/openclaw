@@ -2,8 +2,8 @@ package ai.openclaw.app.wear
 
 import ai.openclaw.app.NodeApp
 import ai.openclaw.wear.shared.WearProtocol
-import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.ChannelClient
+import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
 import kotlinx.coroutines.runBlocking
 

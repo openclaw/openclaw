@@ -69,8 +69,9 @@ internal class WearProxyController(
         ?.lowercase(Locale.ROOT)
         ?.takeIf { value -> value.length == 2 && value.all { it in 'a'..'z' } }
         ?: if ("language" in params) throw WearProxyInvalidRequest("Invalid language") else null
-    val snapshot = startRealtimeTalk(sourceNodeId, language)
-      ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
+    val snapshot =
+      startRealtimeTalk(sourceNodeId, language)
+        ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk is unavailable")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
 
@@ -80,8 +81,9 @@ internal class WearProxyController(
   ): JsonElement {
     if (sourceNodeId.isBlank()) throw WearProxyInvalidRequest("Missing Watch node")
     params.requireOnly()
-    val snapshot = stopRealtimeTalk(sourceNodeId)
-      ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk belongs to another Watch")
+    val snapshot =
+      stopRealtimeTalk(sourceNodeId)
+        ?: throw WearProxyGatewayException("action_rejected", "Real-Time Talk belongs to another Watch")
     return WearRealtimeTalkCodec.encode(snapshot)
   }
 

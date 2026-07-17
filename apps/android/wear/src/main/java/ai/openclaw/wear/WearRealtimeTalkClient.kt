@@ -14,11 +14,6 @@ import android.os.SystemClock
 import com.google.android.gms.tasks.Task
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.Wearable
-import java.io.InputStream
-import java.io.OutputStream
-import java.util.Locale
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +28,11 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 internal class WearRealtimeTalkClient(
   context: Context,
@@ -51,6 +51,7 @@ internal class WearRealtimeTalkClient(
   val channelFailed: StateFlow<Boolean> = _channelFailed
 
   @Volatile private var activeNodeId: String? = null
+
   @Volatile private var audioRecord: AudioRecord? = null
   private var channel: ChannelClient.Channel? = null
   private var channelInput: InputStream? = null
@@ -74,7 +75,10 @@ internal class WearRealtimeTalkClient(
     try {
       openChannel(nodeId)
       val language =
-        Locale.getDefault().language.lowercase(Locale.ROOT)
+        Locale
+          .getDefault()
+          .language
+          .lowercase(Locale.ROOT)
           .takeIf { value -> value.length == ISO_639_1_LANGUAGE_LENGTH }
       val snapshot = repository.startRealtimeTalk(language, nodeId)
       activeNodeId = nodeId
@@ -171,16 +175,17 @@ internal class WearRealtimeTalkClient(
       )
     require(minimumBuffer > 0)
     val recorder =
-      AudioRecord.Builder()
+      AudioRecord
+        .Builder()
         .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
         .setAudioFormat(
-          AudioFormat.Builder()
+          AudioFormat
+            .Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build(),
-        )
-        .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
+        ).setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
         .build()
     check(recorder.state == AudioRecord.STATE_INITIALIZED)
     audioRecord = recorder
@@ -236,7 +241,8 @@ internal class WearRealtimeTalkClient(
       _isPlaying.value = true
       val durationMillis =
         ((written / PCM_16_BYTES.toDouble()) / WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ * 1_000.0)
-          .toLong().coerceAtLeast(1L)
+          .toLong()
+          .coerceAtLeast(1L)
       playbackEndsAtMillis = maxOf(SystemClock.elapsedRealtime(), playbackEndsAtMillis) + durationMillis
       schedulePlaybackIdle()
     }
@@ -250,16 +256,17 @@ internal class WearRealtimeTalkClient(
         AudioFormat.ENCODING_PCM_16BIT,
       )
     require(minimumBuffer > 0)
-    return AudioTrack.Builder()
+    return AudioTrack
+      .Builder()
       .setAudioAttributes(wearSpeechAudioAttributes)
       .setAudioFormat(
-        AudioFormat.Builder()
+        AudioFormat
+          .Builder()
           .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
           .setSampleRate(WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ)
           .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
           .build(),
-      )
-      .setTransferMode(AudioTrack.MODE_STREAM)
+      ).setTransferMode(AudioTrack.MODE_STREAM)
       .setBufferSizeInBytes(maxOf(minimumBuffer * 2, frameBytes * 4))
       .build()
       .also { check(it.state == AudioTrack.STATE_INITIALIZED) }

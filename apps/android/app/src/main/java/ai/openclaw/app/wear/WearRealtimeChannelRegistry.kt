@@ -7,20 +7,20 @@ import ai.openclaw.wear.shared.WearRealtimeAudioFraming
 import android.content.Context
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.Wearable
-import java.io.InputStream
-import java.io.OutputStream
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.InputStream
+import java.io.OutputStream
+import java.util.concurrent.ConcurrentHashMap
 
 internal class WearRealtimeChannelRegistry(
   context: Context,

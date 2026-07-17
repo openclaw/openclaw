@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import android.Manifest
 import android.app.Activity
 import android.app.RemoteInput
@@ -9,7 +10,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
-import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult

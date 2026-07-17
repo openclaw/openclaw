@@ -1,8 +1,8 @@
 package ai.openclaw.wear
 
-import ai.openclaw.wear.shared.WearRpcMethod
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearRpcMethod
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject

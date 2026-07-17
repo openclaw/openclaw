@@ -1,13 +1,13 @@
 package ai.openclaw.wear.shared
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class WearRealtimeTalkSnapshot(
@@ -34,16 +34,21 @@ enum class WearRealtimeTalkRole { USER, ASSISTANT }
 enum class WearRealtimeTalkStatus { OFF, CONNECTING, LISTENING, THINKING, SPEAKING, ERROR }
 
 object WearRealtimeTalkCodec {
-  private val json = Json { encodeDefaults = true; explicitNulls = false; ignoreUnknownKeys = true }
+  private val json =
+    Json {
+      encodeDefaults = true
+      explicitNulls = false
+      ignoreUnknownKeys = true
+    }
 
-  fun encode(snapshot: WearRealtimeTalkSnapshot): JsonElement =
-    json.encodeToJsonElement(WearRealtimeTalkSnapshot.serializer(), snapshot)
+  fun encode(snapshot: WearRealtimeTalkSnapshot): JsonElement = json.encodeToJsonElement(WearRealtimeTalkSnapshot.serializer(), snapshot)
 
-  fun decode(payload: JsonElement): WearRealtimeTalkSnapshot =
-    json.decodeFromJsonElement(WearRealtimeTalkSnapshot.serializer(), payload)
+  fun decode(payload: JsonElement): WearRealtimeTalkSnapshot = json.decodeFromJsonElement(WearRealtimeTalkSnapshot.serializer(), payload)
 }
 
-enum class WearRealtimeAudioFrameType(val wireValue: Int) {
+enum class WearRealtimeAudioFrameType(
+  val wireValue: Int,
+) {
   INPUT_PCM(1),
   OUTPUT_PCM(2),
   CLEAR_OUTPUT(3),

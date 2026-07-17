@@ -7359,6 +7359,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
+    public let language: String?
     public let vadthreshold: Double?
     public let silencedurationms: Int?
     public let prefixpaddingms: Int?
@@ -7373,6 +7374,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         provider: String? = nil,
         model: String? = nil,
         voice: String? = nil,
+        language: String? = nil,
         vadthreshold: Double? = nil,
         silencedurationms: Int? = nil,
         prefixpaddingms: Int? = nil,
@@ -7386,6 +7388,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         self.provider = provider
         self.model = model
         self.voice = voice
+        self.language = language
         self.vadthreshold = vadthreshold
         self.silencedurationms = silencedurationms
         self.prefixpaddingms = prefixpaddingms
@@ -7401,6 +7404,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case provider
         case model
         case voice
+        case language
         case vadthreshold = "vadThreshold"
         case silencedurationms = "silenceDurationMs"
         case prefixpaddingms = "prefixPaddingMs"
@@ -7674,6 +7678,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
+    public let language: String?
     public let vadthreshold: Double?
     public let silencedurationms: Int?
     public let prefixpaddingms: Int?
@@ -7689,6 +7694,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         provider: String? = nil,
         model: String? = nil,
         voice: String? = nil,
+        language: String? = nil,
         vadthreshold: Double? = nil,
         silencedurationms: Int? = nil,
         prefixpaddingms: Int? = nil,
@@ -7703,6 +7709,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         self.provider = provider
         self.model = model
         self.voice = voice
+        self.language = language
         self.vadthreshold = vadthreshold
         self.silencedurationms = silencedurationms
         self.prefixpaddingms = prefixpaddingms
@@ -7719,6 +7726,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         case provider
         case model
         case voice
+        case language
         case vadthreshold = "vadThreshold"
         case silencedurationms = "silenceDurationMs"
         case prefixpaddingms = "prefixPaddingMs"
