@@ -136,7 +136,6 @@ function utteranceFromRow(row: Record<string, unknown>): TranscriptUtterance {
 /** Durable transcript store rooted at a caller-provided directory. */
 export class TranscriptsStore {
   private readonly stateDb: OpenClawStateDatabase | undefined;
-  private sqliteReadReady = false;
 
   constructor(
     private readonly rootDir: string,
@@ -145,20 +144,11 @@ export class TranscriptsStore {
     this.stateDb = stateDb;
   }
 
-  /** Mark SQLite as ready for reads after Doctor has imported legacy data. */
-  markSqliteReadReady(): void {
-    this.sqliteReadReady = true;
-  }
-
   private kyselyDb(): import("kysely").Kysely<OpenClawStateKyselyDatabase> {
     if (!this.stateDb) {
       throw new Error("TranscriptsStore SQLite operations require an OpenClawStateDatabase handle");
     }
     return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(this.stateDb.db);
-  }
-
-  private get useSqliteForReads(): boolean {
-    return Boolean(this.stateDb) && this.sqliteReadReady;
   }
 
   /** Resolve the dated directory for a transcript session. */
@@ -287,8 +277,8 @@ export class TranscriptsStore {
 
   /** Read one session descriptor plus its directory. */
   async readSessionEntry(sessionId: string): Promise<TranscriptsSessionEntry | undefined> {
-    if (this.useSqliteForReads) {
-      const sqlite = this.stateDb!;
+    if (this.stateDb) {
+      const sqlite = this.stateDb;
       const db = this.kyselyDb();
       const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
       if (qualified?.[1] && qualified[2]) {
@@ -336,7 +326,7 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     utterance: TranscriptUtterance,
   ): Promise<void> {
-    if (this.stateDb && this.sqliteReadReady) {
+    if (this.stateDb) {
       const ts = nowMs();
       runOpenClawStateWriteTransaction((database) => {
         const db = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(database.db);
@@ -380,7 +370,7 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
-    if (this.useSqliteForReads) {
+    if (this.stateDb) {
       return await this.readUtterancesFromSqlite(session.sessionId, session.startedAt, options);
     }
     return await this.readUtterancesFromDir(await this.findSessionDirForSession(session), options);
@@ -391,7 +381,7 @@ export class TranscriptsStore {
     sessionDir: string,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
-    if (this.useSqliteForReads) {
+    if (this.stateDb) {
       const dirName = path.basename(sessionDir);
       const parentDir = path.basename(path.dirname(sessionDir));
       const datePrefix = /^\d{4}-\d{2}-\d{2}$/.test(parentDir) ? parentDir : undefined;
@@ -531,7 +521,7 @@ export class TranscriptsStore {
 
   /** Mark a transcript session as stopped when metadata exists. */
   async updateStopped(sessionId: string, stoppedAt: string): Promise<void> {
-    if (this.stateDb && this.sqliteReadReady) {
+    if (this.stateDb) {
       const ts = nowMs();
       const qualified = sessionId.match(/^(\d{4}-\d{2}-\d{2})\/(.+)$/);
       if (qualified?.[1] && qualified[2]) {
@@ -594,7 +584,7 @@ export class TranscriptsStore {
   ): Promise<string> {
     const dir =
       session !== undefined
-        ? this.useSqliteForReads
+        ? this.stateDb
           ? this.sessionDir(session)
           : await this.findSessionDirForSession(session)
         : ((await this.findSessionDir(summary.sessionId)) ??

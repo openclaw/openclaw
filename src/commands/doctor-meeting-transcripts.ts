@@ -136,10 +136,6 @@ export async function runDoctorMeetingTranscripts(
     }
   }
 
-  if (report.issues.length === 0) {
-    sqliteStore.markSqliteReadReady();
-  }
-
   report.repaired = options.shouldRepair && report.issues.length === 0;
   return report;
 }

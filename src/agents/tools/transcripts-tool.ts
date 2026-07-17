@@ -74,11 +74,14 @@ function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   let stateDb: OpenClawStateDatabase | undefined;
   try {
     stateDb = openOpenClawStateDatabase({ env: process.env }) as OpenClawStateDatabase;
-  } catch {
-    // Shared state database may be unavailable (e.g. Node <24.15.0 embeds
-    // SQLite 3.51.2 which fails the WAL-safety assertion). Fall back to
-    // file-backed store; the Doctor migration is not available on this
-    // runtime, so SQLite reads remain gated until a future upgrade.
+  } catch (err) {
+    // Only fall back to file-backed store when the SQLite runtime is
+    // permanently unavailable (e.g. Node <24.15.0 with SQLite 3.51.2).
+    // Transient errors (lock, corruption, permissions) propagate.
+    if (err instanceof Error && err.message.includes("SQLite support is unavailable or unsafe")) {
+      return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
+    }
+    throw err;
   }
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), stateDb);
 }
