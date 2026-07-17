@@ -168,6 +168,7 @@ describe("Codex app-server attempt context", () => {
         params: {
           sessionId: "session-1",
           sessionKey: "agent:marketing-agent:session-1",
+          sandboxed: true,
           config: {
             agents: {
               defaults: { workspace: workspaceDir },
@@ -186,6 +187,7 @@ describe("Codex app-server attempt context", () => {
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",

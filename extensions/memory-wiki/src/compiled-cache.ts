@@ -5,6 +5,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import type { PluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { WikiFreshnessLevel } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { loadMemoryWikiVaultGeneration } from "./log.js";
 import type { WikiPageKind, WikiPageSummary, WikiRelationship } from "./markdown.js";
 
 export const LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS = [
@@ -161,6 +162,19 @@ function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | nul
   return active;
 }
 
+async function resolveValidatedActiveVault(
+  config: ResolvedMemoryWikiConfig,
+): Promise<ActiveVault | null> {
+  const active = resolveActiveVault(config);
+  if (!active) {
+    return null;
+  }
+  // Re-read the durable vault identity at the async preparation/compile boundary.
+  // A same-path restore must never expose the predecessor owner's compiled claims.
+  const currentGeneration = await loadMemoryWikiVaultGeneration(active.path);
+  return currentGeneration === active.generation ? active : null;
+}
+
 function parseSnapshot(
   bytes: Uint8Array,
   generation: string,
@@ -221,7 +235,7 @@ export function createMemoryWikiCompiledCacheStore(
       }
       const metadata = entry.metadata;
       const vaultPath = path.resolve(config.vault.path);
-      const activeVault = resolveActiveVault(config);
+      const activeVault = await resolveValidatedActiveVault(config);
       if (!activeVault) {
         return null;
       }
@@ -239,7 +253,7 @@ export function createMemoryWikiCompiledCacheStore(
     async write(config, snapshot) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const vaultPath = path.resolve(config.vault.path);
-      const activeVault = resolveActiveVault(config);
+      const activeVault = await resolveValidatedActiveVault(config);
       if (!activeVault) {
         throw new Error(`Memory Wiki vault is not active: ${vaultPath}`);
       }

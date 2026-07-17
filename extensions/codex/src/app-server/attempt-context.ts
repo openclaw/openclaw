@@ -267,6 +267,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
+            sandboxed: params.params.sandboxed,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -867,6 +868,7 @@ async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }): Promise<string | undefined> {
   const memoryRecallInstructions = params.memoryToolRouted
     ? await renderCodexMemoryRecallInstructions({
@@ -874,6 +876,7 @@ async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
         citationsMode: params.citationsMode,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -889,6 +892,7 @@ async function renderCodexMemoryRecallInstructions(params: {
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 }): Promise<string | undefined> {
   const availableTools = new Set(params.toolNames);
   const memoryPrompt = await prepareMemorySystemPromptAddition({
@@ -896,6 +900,7 @@ async function renderCodexMemoryRecallInstructions(params: {
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.

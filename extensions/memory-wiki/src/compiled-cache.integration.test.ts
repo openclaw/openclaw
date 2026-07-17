@@ -259,12 +259,10 @@ describe("Memory Wiki compiled cache lifecycle", () => {
       "utf8",
     );
 
-    resetMemoryWikiCompiledCacheOwnersForTests();
-    await activateVault(config);
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
   });
 
-  it("performs no filesystem I/O while loading a prepared snapshot", async () => {
+  it("revalidates vault identity while loading a prepared snapshot", async () => {
     const { config } = await createPersistentVault({
       initialize: true,
       config: { context: { includeCompiledDigestPrompt: true } },
@@ -275,7 +273,10 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     await expect(preparePrompt(config)).resolves.toContain("prepared");
     expect(stat).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
+    expect(readFile).toHaveBeenCalledWith(
+      path.join(config.vault.path, ".openclaw-wiki", "log.jsonl"),
+      "utf8",
+    );
   });
 
   it("treats transient SQLite read failures as a recoverable cache miss", async () => {
