@@ -707,6 +707,36 @@ describe("renderQuickSettings", () => {
     ).toBe("/avatar/main");
   });
 
+  it("falls back to the built-in logo when the assistant avatar request fails", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "assets/avatars/nova-portrait.png",
+          assistantAvatarUrl: "/openclaw/avatar/main",
+          assistantAvatarStatus: "local",
+          basePath: "/openclaw",
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(
+      ".config-identity--assistant .config-identity__avatar",
+    );
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/avatar/main");
+
+    avatar?.dispatchEvent(new Event("error"));
+
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/apple-touch-icon.png");
+    expect(avatar?.classList.contains("config-identity__avatar--fallback")).toBe(true);
+
+    avatar?.dispatchEvent(new Event("error"));
+    expect(avatar?.getAttribute("src")).toBe("/openclaw/apple-touch-icon.png");
+  });
+
   it("shows the configured avatar source when the assistant falls back to the logo", () => {
     const container = document.createElement("div");
 

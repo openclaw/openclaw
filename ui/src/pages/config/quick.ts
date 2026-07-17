@@ -282,6 +282,19 @@ function formatAssistantAvatarIssue(
   return reason ? t("quickSettings.personal.avatarIssues.cannotRender") : null;
 }
 
+function handleAssistantAvatarPreviewError(event: Event, props: QuickSettingsProps) {
+  const image = event.currentTarget;
+  if (!(image instanceof HTMLImageElement)) {
+    return;
+  }
+  const fallbackUrl = controlUiPublicAssetPath("apple-touch-icon.png", props.basePath ?? "");
+  if (image.getAttribute("src") === fallbackUrl) {
+    return;
+  }
+  image.src = fallbackUrl;
+  image.classList.add("config-identity__avatar--fallback");
+}
+
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   const assistantName =
     normalizeOptionalString(props.assistantName) ?? t("quickSettings.personal.assistant");
@@ -292,6 +305,7 @@ function renderAssistantAvatarPreview(props: QuickSettingsProps) {
       class="config-identity__avatar"
       src=${assistantAvatarUrl}
       alt=${assistantName}
+      @error=${(event: Event) => handleAssistantAvatarPreviewError(event, props)}
     />`;
   }
   const assistantAvatarText = resolveAssistantTextAvatar(
