@@ -380,6 +380,8 @@ public struct OpenClawChatView: View {
             self.messageRow(for: msg, contextWindowTokens: contextWindowTokens)
         }
 
+        OpenClawQuestionCards(viewModel: self.viewModel)
+
         if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
@@ -701,12 +703,6 @@ public struct OpenClawChatView: View {
     private var hasVisibleStreamingAssistantText: Bool {
         guard let text = self.viewModel.streamingAssistantText else { return false }
         return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-    }
-
-    private var hasVisibleTransientContent: Bool {
-        self.viewModel.hasBlockingRunActivity ||
-            !self.viewModel.pendingToolCalls.isEmpty ||
-            self.hasVisibleStreamingAssistantText
     }
 
     @ViewBuilder
@@ -1034,6 +1030,15 @@ public struct OpenClawChatView: View {
             from: nil,
             for: nil)
         #endif
+    }
+}
+
+extension OpenClawChatView {
+    private var hasVisibleTransientContent: Bool {
+        self.viewModel.hasBlockingRunActivity ||
+            !self.viewModel.pendingToolCalls.isEmpty ||
+            self.hasVisibleStreamingAssistantText ||
+            !self.viewModel.visibleQuestionCards.isEmpty
     }
 }
 
