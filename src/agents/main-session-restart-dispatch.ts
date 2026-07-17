@@ -28,9 +28,11 @@ import {
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
-import type {
-  MainSessionRecoveryObservation,
-  MainSessionRecoveryReservation,
+import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
+import {
+  isMainRestartRecoveryCandidate,
+  type MainSessionRecoveryObservation,
+  type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
@@ -295,15 +297,37 @@ function scheduleRestartRecoveryReservationRollback(
   // Keep the exact reservation token alive after transient store outages.
   // A Gateway restart safely retires the timer and its stale-generation slot.
   setTimeout(() => {
-    void rollbackRestartRecoveryReservation(params).catch((error: unknown) => {
-      log.warn(
-        `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
-      );
-      scheduleRestartRecoveryReservationRollback(
-        params,
-        Math.min(delayMs * 2, RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS),
-      );
-    });
+    void rollbackRestartRecoveryReservation(params).then(
+      ({ entry, sessionKey }) => {
+        const state = entry?.mainRestartRecovery;
+        if (
+          entry?.sessionId === params.reservation.sessionId &&
+          sessionKey &&
+          entry.status === "running" &&
+          entry.abortedLastRun === true &&
+          isMainRestartRecoveryCandidate(entry, sessionKey) &&
+          state &&
+          !state.foregroundClaims &&
+          !state.reservation &&
+          !state.tombstone
+        ) {
+          scheduleMainSessionRecoveryPendingTarget({
+            sessionId: entry.sessionId,
+            sessionKey,
+            storePath: params.storePath,
+          });
+        }
+      },
+      (error: unknown) => {
+        log.warn(
+          `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
+        );
+        scheduleRestartRecoveryReservationRollback(
+          params,
+          Math.min(delayMs * 2, RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS),
+        );
+      },
+    );
   }, delayMs).unref?.();
 }
 

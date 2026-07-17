@@ -36,6 +36,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
+import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import {
   markRestartAbortedMainSessions,
@@ -1112,6 +1113,9 @@ describe("main-session-restart-recovery", () => {
       throw new Error("gateway unavailable");
     });
     const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    const schedulePendingSpy = vi
+      .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
+      .mockImplementation(() => {});
     let cleanupFailures = 0;
     const replacementSpy = vi
       .spyOn(sessionAccessor, "applySessionEntryReplacements")
@@ -1140,7 +1144,13 @@ describe("main-session-restart-recovery", () => {
         },
         { timeout: 3_000 },
       );
+      expect(schedulePendingSpy).toHaveBeenCalledWith({
+        sessionId: "main-session",
+        sessionKey: "agent:main:main",
+        storePath,
+      });
     } finally {
+      schedulePendingSpy.mockRestore();
       replacementSpy.mockRestore();
     }
 
