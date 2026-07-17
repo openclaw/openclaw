@@ -2925,7 +2925,7 @@ describe("chrome MCP page parsing", () => {
 
     await expect(navPromise).rejects.toThrow(/Chrome MCP "navigate_page".*timed out/);
 
-    // Switch back to real timers before testing reconnect behaviour.
+    // Switch back to real timers before testing reconnect behavior.
     vi.useRealTimers();
 
     // Next call must use a fresh session — factory is called a second time.

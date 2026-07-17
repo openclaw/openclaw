@@ -344,7 +344,7 @@ async function sendApnsRelayRequest(params: {
         reason: "RelayResponseTooLarge",
       };
     }
-    // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behaviour:
+    // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behavior:
     // treat the body as absent and derive status/ok from the HTTP response.
     json = null;
   }

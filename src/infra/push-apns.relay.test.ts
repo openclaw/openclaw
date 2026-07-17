@@ -356,7 +356,7 @@ describe("push-apns.relay", () => {
 
     it("treats an empty relay body as absent and derives status from the HTTP response", async () => {
       // Empty body: JSON.parse("") throws -> soft null fallback (not an overflow), same as the
-      // prior response.json() behaviour. Confirms the new try/catch does not regress empty bodies.
+      // prior response.json() behavior. Confirms the new try/catch does not regress empty bodies.
       const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 

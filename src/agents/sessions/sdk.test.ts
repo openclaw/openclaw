@@ -718,7 +718,7 @@ describe("createAgentSession thinking level defaults", () => {
   });
 
   it("falls back to DEFAULT_THINKING_LEVEL for non-off provider defaults", async () => {
-    // Non-off provider defaults (adaptive, high, low) preserve prior SDK behaviour
+    // Non-off provider defaults (adaptive, high, low) preserve prior SDK behavior
     // to avoid silent cost changes for DeepSeek, OpenRouter, xAI, and Anthropic users.
     for (const nonOffDefault of ["adaptive", "high", "low"] as const) {
       thinkingMocks.resolveThinkingDefaultForModel.mockReturnValue(nonOffDefault);

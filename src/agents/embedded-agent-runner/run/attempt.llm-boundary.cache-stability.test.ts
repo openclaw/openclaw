@@ -346,7 +346,7 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
 
   it("historical inbound metadata is stripped (UI-clean) before the timestamp is applied", () => {
     // Historical user turns get their inbound-metadata blocks stripped (same as
-    // the original boundary behaviour), then stamped. The current turn keeps its
+    // the original boundary behavior), then stamped. The current turn keeps its
     // metadata. We only assert the historical strip+stamp here.
     const metaBlock =
       'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\n';

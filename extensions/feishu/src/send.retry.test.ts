@@ -1,7 +1,7 @@
 /**
  * Unit tests for requestFeishuApi retry logic and getFeishuSendRateLimitCode.
  *
- * Tests the retry behaviour directly via requestFeishuApi with retryDelayMs:0
+ * Tests the retry behavior directly via requestFeishuApi with retryDelayMs:0
  * so no fake timers are needed. Related: issue #70879.
  */
 
