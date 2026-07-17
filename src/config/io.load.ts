@@ -35,9 +35,10 @@ export function loadConfigFromContext(
   options: { skipSuspiciousRecovery?: boolean } = {},
 ): OpenClawConfig {
   const { deps, configPath } = context;
+  let envBeforeRead: Record<string, string | undefined> | undefined;
   try {
     maybeLoadDotEnvForConfig(deps.env);
-    const envBeforeRead = snapshotEnv(deps.env);
+    envBeforeRead = snapshotEnv(deps.env);
     if (!deps.fs.existsSync(configPath)) {
       loggedConfigWarningFingerprints.delete(configPath);
       if (
@@ -188,6 +189,18 @@ export function loadConfigFromContext(
     );
     return context.finalizeLoadedRuntimeConfig(cfg);
   } catch (error) {
+    // Restore env mutations from this config read before any rethrow.
+    // resolveConfigForRead() applies env.vars to process.env; any subsequent
+    // failure (INVALID_CONFIG, DuplicateAgentDirError, or other) leaks those
+    // mutations. envBeforeRead is undefined only when maybeLoadDotEnvForConfig()
+    // throws, which happens before any config env mutations are applied.
+    if (envBeforeRead) {
+      restoreEnvChangesIfUnchanged({
+        env: deps.env,
+        before: envBeforeRead,
+        after: snapshotEnv(deps.env),
+      });
+    }
     if (error instanceof DuplicateAgentDirError) {
       deps.logger.error(error.message);
       throw error;
