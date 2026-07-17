@@ -1073,7 +1073,10 @@ async function initSessionStateAttemptLocked(
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
-  if (classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human") {
+  if (
+    !isSystemEvent &&
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
+  ) {
     registerMainSessionGroupWatch({
       sessionKey,
       agentId,
