@@ -1784,6 +1784,11 @@ export const pl: TranslationMap = {
       testingButton: "Testowanie…",
       testing: "Testowanie — prośba do {modelRef} o szybką odpowiedź…",
     },
+    empty: {
+      title: "Zalecane instalacje",
+      intro:
+        "Nie wykryto istniejącego dostępu do AI. Zainstaluj jedno z tych narzędzi, a następnie sprawdź ponownie.",
+    },
     unavailable: {
       title: "Wykryto, ale nie przetestowano automatycznie",
     },
@@ -2347,6 +2352,13 @@ export const pl: TranslationMap = {
     session: "Sesja",
     outputTruncated: "Podgląd zredagowany i skrócony.",
     noOutputPreview: "Brak podglądu wyjścia.",
+    answerCandidate: {
+      title: "Kandydat na odpowiedź",
+      itemId: "Element",
+      candidate: "Kandydująca odpowiedź",
+      superseded: "Zastąpiona odpowiedź",
+      selected: "Wybrana odpowiedź",
+    },
     status: {
       running: "Uruchomiono",
       done: "Gotowe",
@@ -2509,6 +2521,20 @@ export const pl: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Brak agentów lub sesji.",
+        busy: "Zajęty",
+        idle: "Bezczynna",
+        progress: "Ukończono {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "Żadne niestandardowe widżety nie oczekują na zatwierdzenie.",
+        kind: "Widżet niestandardowy",
+        requestedBy: "Zażądane przez {agent}",
+        approve: "Zatwierdź",
+        reject: "Odrzuć",
+        permissionRequired: "Wymagane uprawnienie do zatwierdzania",
       },
       usage: {
         cost: "Cost",
@@ -3544,6 +3570,19 @@ export const pl: TranslationMap = {
     disconnected: "Rozłączono z Gateway.",
     archivedSessionDisabled: "Przywróć tę sesję, aby wysyłać wiadomości.",
     loadOlder: "Załaduj starsze",
+    sessionHeader: {
+      renameTooltip: "Zmień nazwę sesji",
+      renameAria: "Zmień nazwę sesji {title}",
+      renameInputAria: "Tytuł sesji",
+      renameInputPlaceholder: "Tytuł sesji",
+      workspaceAria: "Akcje przestrzeni roboczej dla {workspace}",
+      revealFinder: "Pokaż w Finderze",
+      revealFileExplorer: "Pokaż w Eksploratorze plików",
+      revealFileManager: "Otwórz w menedżerze plików",
+      copyPath: "Kopiuj ścieżkę",
+      copyBranch: "Kopiuj nazwę gałęzi",
+      copied: "Skopiowano",
+    },
     catalog: {
       remoteViewOnly: "Ta sesja znajduje się na sparowanym węźle i jest tylko do odczytu.",
       unsupportedViewOnly: "To zewnętrzne źródło sesji jest tylko do odczytu.",
@@ -3597,7 +3636,12 @@ export const pl: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Dodatkowe wiadomości podczas pracy agenta",
     followUpModeQueue: "Dodaj do kolejki do zakończenia przebiegu",
+    followUpModeServer: "Domyślne ustawienie serwera ({mode})",
+    followUpModeLoading: "ładowanie…",
     followUpModeSteer: "Włącz do aktywnego przebiegu",
+    followUpModeUsingServer: "Używanie domyślnego ustawienia serwera ({mode})",
+    followUpModeOverriding: "Zastępowanie domyślnego ustawienia serwera ({mode})",
+    followUpModeReset: "Przywróć domyślne ustawienie serwera",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3678,6 +3722,7 @@ export const pl: TranslationMap = {
       updateGateway: "Zaktualizuj Gateway",
       allSessions: "Wszystkie sesje",
       chats: "Czaty",
+      groupCatalogSessionsByProject: "Grupuj według projektu",
       openSessionMenu: "Open session menu",
       sortBy: "Sortuj według",
       sortCreated: "Utworzono",
@@ -3725,6 +3770,11 @@ export const pl: TranslationMap = {
       pause: "Wstrzymaj cel",
       resume: "Wznów cel",
       clear: "Wyczyść cel",
+    },
+    questions: {
+      title: "Codex wymaga danych wejściowych",
+      other: "Wpisz inną odpowiedź",
+      submit: "Wyślij odpowiedź",
     },
     messages: {
       activity: "Aktywność",
@@ -3813,6 +3863,11 @@ export const pl: TranslationMap = {
         limitHours: "Limit {hours}-godzinny",
       },
       takePhoto: "Zrób zdjęcie",
+      cameraBusy: "Kamera jest zajęta lub niedostępna dla przeglądarki.",
+      cameraNoneFound: "Nie znaleziono kamery.",
+      cameraPermissionBlocked:
+        "Dostęp do kamery jest zablokowany. Zezwól na dostęp do kamery i mikrofonu w ustawieniach witryny w przeglądarce.",
+      cameraPreview: "Podgląd kamery",
       dismissVoiceInputError: "Zamknij błąd wprowadzania głosowego",
       microphoneAccessFailed: "Nie można uzyskać dostępu do wejść mikrofonu.",
       microphoneBusy: "Wejścia mikrofonu są zajęte lub niedostępne dla przeglądarki.",
@@ -3829,6 +3884,7 @@ export const pl: TranslationMap = {
       selectedMicrophoneUnavailable:
         "Wybrany mikrofon jest niedostępny. Wybierz inne wejście lub domyślne ustawienie systemowe.",
       startVoiceInput: "Rozpocznij wprowadzanie głosowe",
+      startVideoTalk: "Rozpocznij rozmowę wideo",
       stillListening: "Nadal słucham",
       stopVoiceInput: "Zatrzymaj wprowadzanie głosowe",
       systemDefaultMicrophone: "Domyślne systemowe",

@@ -42,11 +42,22 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
+        let traceKey = OpenClawChatWindowShell.assistantTraceDefaultsKey
+        let previousTraceValue = UserDefaults.standard.object(forKey: traceKey)
+        UserDefaults.standard.removeObject(forKey: traceKey)
+        defer {
+            if let previousTraceValue {
+                UserDefaults.standard.set(previousTraceValue, forKey: traceKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: traceKey)
+            }
+        }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             presentation: .window,
             transport: TestTransport())
         let window = try #require(controller._testWindow)
+        let capabilities = try #require(controller._testChatCapabilities)
 
         #expect(window.styleMask.contains(.fullSizeContentView))
         #expect(window.titleVisibility == .hidden)
@@ -56,6 +67,10 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.isMovableByWindowBackground)
         #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
         #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
+        #expect(capabilities.hasTalkControl)
+        #expect(capabilities.hasSpeech)
+        #expect(capabilities.hasVoiceNoteControl)
+        #expect(capabilities.showsAssistantTrace)
 
         controller.show()
         #expect(window.titleVisibility == .hidden)

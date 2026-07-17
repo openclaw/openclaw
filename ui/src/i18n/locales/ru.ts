@@ -1787,6 +1787,11 @@ export const ru: TranslationMap = {
       testingButton: "Проверка…",
       testing: "Проверка — запрашиваем у {modelRef} быстрый ответ…",
     },
+    empty: {
+      title: "Рекомендуемые установки",
+      intro:
+        "Существующий доступ к ИИ не обнаружен. Установите один из этих инструментов и проверьте снова.",
+    },
     unavailable: {
       title: "Обнаружено, но не проверено автоматически",
     },
@@ -2344,6 +2349,13 @@ export const ru: TranslationMap = {
     session: "Сессия",
     outputTruncated: "Предпросмотр отредактирован и усечен.",
     noOutputPreview: "Нет предпросмотра вывода.",
+    answerCandidate: {
+      title: "Вариант ответа",
+      itemId: "Элемент",
+      candidate: "Вариант ответа",
+      superseded: "Замененный ответ",
+      selected: "Выбранный ответ",
+    },
     status: {
       running: "Выполняется",
       done: "Готово",
@@ -2506,6 +2518,20 @@ export const ru: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Пока нет агентов или сессий.",
+        busy: "Занят",
+        idle: "Бездействует",
+        progress: "Выполнено {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "Нет пользовательских виджетов, ожидающих утверждения.",
+        kind: "Пользовательский виджет",
+        requestedBy: "Запрошено {agent}",
+        approve: "Одобрить",
+        reject: "Отклонить",
+        permissionRequired: "Требуется разрешение на утверждение",
       },
       usage: {
         cost: "Стоимость",
@@ -3546,6 +3572,19 @@ export const ru: TranslationMap = {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",
     loadOlder: "Загрузить более ранние",
+    sessionHeader: {
+      renameTooltip: "Переименовать сеанс",
+      renameAria: "Переименовать сессию {title}",
+      renameInputAria: "Название сессии",
+      renameInputPlaceholder: "Название сессии",
+      workspaceAria: "Действия рабочей области для {workspace}",
+      revealFinder: "Показать в Finder",
+      revealFileExplorer: "Показать в проводнике",
+      revealFileManager: "Открыть в файловом менеджере",
+      copyPath: "Копировать путь",
+      copyBranch: "Скопировать имя ветки",
+      copied: "Скопировано",
+    },
     catalog: {
       remoteViewOnly: "Этот сеанс находится на сопряжённом узле и доступен только для просмотра.",
       unsupportedViewOnly: "Этот внешний источник сеансов доступен только для просмотра.",
@@ -3599,7 +3638,12 @@ export const ru: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Последующие сообщения во время работы агента",
     followUpModeQueue: "Добавлять в очередь до завершения выполнения",
+    followUpModeServer: "По умолчанию на сервере ({mode})",
+    followUpModeLoading: "загрузка…",
     followUpModeSteer: "Направлять в активное выполнение",
+    followUpModeUsingServer: "Используется значение по умолчанию на сервере ({mode})",
+    followUpModeOverriding: "Переопределение значения по умолчанию на сервере ({mode})",
+    followUpModeReset: "Сбросить к серверному значению по умолчанию",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Терминал",
@@ -3680,6 +3724,7 @@ export const ru: TranslationMap = {
       updateGateway: "Обновить Gateway",
       allSessions: "Все сеансы",
       chats: "Чаты",
+      groupCatalogSessionsByProject: "Группировать по проекту",
       openSessionMenu: "Open session menu",
       sortBy: "Сортировать по",
       sortCreated: "Создано",
@@ -3727,6 +3772,11 @@ export const ru: TranslationMap = {
       pause: "Приостановить цель",
       resume: "Возобновить цель",
       clear: "Очистить цель",
+    },
+    questions: {
+      title: "Codex требуется ввод",
+      other: "Ввести другой ответ",
+      submit: "Отправить ответ",
     },
     messages: {
       activity: "Активность",
@@ -3815,6 +3865,11 @@ export const ru: TranslationMap = {
         limitHours: "{hours}-часовой лимит",
       },
       takePhoto: "Сделать фото",
+      cameraBusy: "Камера занята или недоступна для браузера.",
+      cameraNoneFound: "Камера не найдена.",
+      cameraPermissionBlocked:
+        "Доступ к камере заблокирован. Разрешите доступ к камере и микрофону в настройках сайта в браузере.",
+      cameraPreview: "Предпросмотр камеры",
       dismissVoiceInputError: "Закрыть ошибку голосового ввода",
       microphoneAccessFailed: "Не удалось получить доступ к входам микрофона.",
       microphoneBusy: "Входы микрофона заняты или недоступны для браузера.",
@@ -3831,6 +3886,7 @@ export const ru: TranslationMap = {
       selectedMicrophoneUnavailable:
         "Выбранный микрофон недоступен. Выберите другой вход или System default.",
       startVoiceInput: "Начать голосовой ввод",
+      startVideoTalk: "Начать видеозвонок",
       stillListening: "Прослушивание продолжается",
       stopVoiceInput: "Остановить голосовой ввод",
       systemDefaultMicrophone: "Системный по умолчанию",

@@ -176,7 +176,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: promptState.developerInstructions,
-      messages: codexModelInputHistoryMessages,
+      messages: structuredClone(historyState.messages),
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       ...("beforeAgentStartResult" in params

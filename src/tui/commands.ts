@@ -41,7 +41,7 @@ const COMMAND_ALIASES: Record<string, string> = {
 // These shared commands have explicit local TUI routing but no same-named
 // built-in autocomplete entry. Other shared commands require the Gateway and
 // must stay out of local autocomplete and model prompts.
-const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "stop"]);
+const LOCAL_TUI_ROUTED_SHARED_COMMANDS = new Set(["btw", "goal", "queue", "stop"]);
 
 function createLevelCompletion(
   levels: string[],

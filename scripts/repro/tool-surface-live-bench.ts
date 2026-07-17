@@ -3,7 +3,7 @@
 // Tool Search (code/tools), and Code Mode, over a decoy-heavy catalog.
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import type { Model } from "../../packages/agent-core/src/llm.js";
 import type { AgentEvent, AgentTool } from "../../packages/agent-core/src/types.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../src/agents/code-mode.js";
@@ -53,6 +53,47 @@ const PROVIDERS: Record<
 type Plot = { id: string; crop: string; hectares: number; irrigation: string; yieldScore: number };
 type Sensor = { id: string; plotId: string; kind: string; battery: number; alert: boolean };
 type Shipment = { id: string; plotId: string; buyer: string; tons: number; paid: boolean };
+
+const PlotOutputSchema = Type.Object(
+  {
+    id: Type.String(),
+    crop: Type.String(),
+    hectares: Type.Number(),
+    irrigation: Type.String(),
+    yieldScore: Type.Number(),
+  },
+  { additionalProperties: false },
+);
+const SensorOutputSchema = Type.Object(
+  {
+    id: Type.String(),
+    plotId: Type.String(),
+    kind: Type.String(),
+    battery: Type.Number(),
+    alert: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+const ShipmentOutputSchema = Type.Object(
+  {
+    id: Type.String(),
+    plotId: Type.String(),
+    buyer: Type.String(),
+    tons: Type.Number(),
+    paid: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+const IrrigationUpdateOutputSchema = Type.Union([
+  Type.Object(
+    { ok: Type.Literal(true), id: Type.String(), mode: Type.String() },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    { ok: Type.Literal(false), error: Type.String(), id: Type.String() },
+    { additionalProperties: false },
+  ),
+]);
 
 function createOrchardService() {
   const plots: Plot[] = [
@@ -147,12 +188,14 @@ function makeTool(
   description: string,
   properties: Parameters<typeof Type.Object>[0],
   execute: (params: Record<string, unknown>) => unknown,
+  outputSchema?: TSchema,
 ): AnyAgentTool {
   const tool = {
     name,
     label: name,
     description,
     parameters: Type.Object(properties),
+    ...(outputSchema ? { outputSchema } : {}),
     execute: async (_toolCallId: string, params: unknown) =>
       jsonResult(
         await execute(
@@ -172,6 +215,7 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       "List orchard plots with crop, hectares, irrigation mode, and yield score.",
       {},
       () => service.listPlots(),
+      Type.Array(PlotOutputSchema),
     ),
     makeTool(
       PLUGIN_ID,
@@ -179,6 +223,7 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       "Get one orchard plot by id.",
       { id: Type.String() },
       (params) => service.getPlot(stringParam(params, "id")),
+      Type.Union([PlotOutputSchema, Type.Null()]),
     ),
     makeTool(
       PLUGIN_ID,
@@ -187,6 +232,7 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       { plotId: Type.Optional(Type.String()) },
       (params) =>
         service.listSensors(typeof params.plotId === "string" ? params.plotId : undefined),
+      Type.Array(SensorOutputSchema),
     ),
     makeTool(
       PLUGIN_ID,
@@ -195,6 +241,7 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       { buyer: Type.Optional(Type.String()) },
       (params) =>
         service.listShipments(typeof params.buyer === "string" ? params.buyer : undefined),
+      Type.Array(ShipmentOutputSchema),
     ),
     makeTool(
       PLUGIN_ID,
@@ -202,6 +249,7 @@ function createOrchardTools(service: OrchardService): AnyAgentTool[] {
       "Set the irrigation mode for one plot after its sensors have been read.",
       { id: Type.String(), mode: Type.String() },
       (params) => service.updateIrrigation(stringParam(params, "id"), stringParam(params, "mode")),
+      IrrigationUpdateOutputSchema,
     ),
   ];
 }

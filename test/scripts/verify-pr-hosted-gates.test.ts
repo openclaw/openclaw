@@ -129,6 +129,56 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(/Missing successful recent CI workflow/);
   });
 
+  it("lets a gate-proven pending rerun win over an older terminal failure", () => {
+    const failedRun = {
+      ...successfulRun("CI", 40, "2026-06-17T10:40:00Z"),
+      conclusion: "failure",
+    };
+    const pendingRerun = {
+      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 1,
+      created_at: "2026-06-17T10:50:00Z",
+    };
+    const gateJob = {
+      name: "openclaw/ci-gate",
+      run_id: 42,
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "success",
+      completed_at: "2026-06-17T10:51:30Z",
+    };
+
+    // The newer pending run is re-resolving the failure; its successful gate
+    // proves the selected lanes, so the stale failure must not block.
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [failedRun, pendingRerun],
+      ciGateJobs: [gateJob],
+    });
+    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
+
+    // Without gate proof the pending run still blocks (no early acceptance),
+    // and a failure that IS the latest scheduled run still blocks outright.
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [failedRun, pendingRerun], ciGateJobs: [] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [failedRun], ciGateJobs: [gateJob] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A stalled OLDER run's gate must not mask a newer terminal failure.
+    const stalledOlderRun = { ...pendingRerun, created_at: "2026-06-17T10:40:00Z" };
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [failedRun, stalledOlderRun],
+        ciGateJobs: [gateJob],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+  });
+
   it("requires the latest scheduled workflow run to pass", () => {
     const evidence = collectHostedGateEvidence({
       sha,

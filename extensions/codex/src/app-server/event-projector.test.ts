@@ -376,6 +376,183 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Second candidate", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+        lateTool,
+        {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      ]),
+    );
+
+    const candidateEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+      .map((event) => event.data);
+    expect(candidateEvents).toEqual([
+      expect.objectContaining({
+        itemId: "answer-1",
+        status: "candidate",
+        progressText: "First candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-1",
+        status: "superseded",
+        progressText: "First candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-2",
+        status: "candidate",
+        progressText: "Second candidate",
+        hideFromChannelProgress: true,
+      }),
+      expect.objectContaining({
+        itemId: "answer-2",
+        status: "selected",
+        progressText: "Second candidate",
+        hideFromChannelProgress: true,
+      }),
+    ]);
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Second candidate"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("answer_candidate");
+  });
+
+  it("does not reselect a final answer superseded by late tool work", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+        lateTool,
+      ]),
+    );
+
+    const candidateStatuses = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+      .map((event) => event.data.status);
+    expect(candidateStatuses).toEqual(["candidate", "superseded"]);
+  });
+
   it("streams final-answer assistant deltas into partial replies", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();

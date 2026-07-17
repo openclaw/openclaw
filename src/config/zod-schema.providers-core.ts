@@ -722,6 +722,7 @@ const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z.boolean().optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),

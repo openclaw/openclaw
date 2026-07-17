@@ -25,7 +25,9 @@ export type OutboundSessionRoute = {
   recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
+  /** Canonical conversation identity mirrored into MsgContext.From. */
   from: string;
+  /** Routable delivery address mirrored into MsgContext.To. */
   to: string;
   threadId?: string | number;
 };
@@ -246,6 +248,8 @@ export async function ensureOutboundSessionEntry(params: {
     MessageThreadId: params.route.threadId,
     OriginatingChannel: params.channel,
     OriginatingTo: params.route.to,
+    NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
+    NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
   };
   try {
     await recordInboundSessionMeta({

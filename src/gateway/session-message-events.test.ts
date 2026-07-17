@@ -44,6 +44,10 @@ let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
 
+// No explicit hook timeout: the suite harness cold-imports the full gateway
+// server graph, which can legitimately exceed 60s on contended CI runners.
+// Sibling gateway suites rely on the shared project hookTimeout (120s, 180s on
+// Windows) for the same boot; tightening it here caused flaky hook timeouts.
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
@@ -52,7 +56,7 @@ beforeAll(async () => {
     timeoutMs: SETUP_RPC_TIMEOUT_MS,
   });
   await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
-}, 60_000);
+});
 
 afterAll(async () => {
   subscribedOperatorWs?.close();

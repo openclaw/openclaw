@@ -1,5 +1,5 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -25,6 +25,21 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 
+const queuedSessionWrite = vi.hoisted(() => vi.fn());
+
+vi.mock("../../shared/store-writer-queue.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/store-writer-queue.js")>();
+  return {
+    ...actual,
+    runQueuedStoreWrite: async (
+      params: Parameters<typeof actual.runQueuedStoreWrite>[0],
+    ): Promise<unknown> => {
+      queuedSessionWrite();
+      return await actual.runQueuedStoreWrite(params);
+    },
+  };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite active transcript event projection", () => {
@@ -37,6 +52,7 @@ describe("SQLite active transcript event projection", () => {
   };
 
   beforeEach(() => {
+    queuedSessionWrite.mockReset();
     stateDir = tempDirs.make("openclaw-active-transcript-");
     scope = {
       agentId: "main",
@@ -366,6 +382,15 @@ describe("SQLite active transcript event projection", () => {
       messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
       touchSessionEntry: false,
     });
+    let resolveCompletionQueued!: () => void;
+    const completionQueued = new Promise<void>((resolve) => {
+      resolveCompletionQueued = resolve;
+    });
+    queuedSessionWrite.mockImplementation(() => {
+      if (queuedSessionWrite.mock.calls.length === 2) {
+        resolveCompletionQueued();
+      }
+    });
     let releaseWriter!: () => void;
     let writerEntered!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -390,9 +415,9 @@ describe("SQLite active transcript event projection", () => {
       (error: unknown) => ({ error }),
     );
 
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    // The second queued write is the orphan sweep issued after the worker's done message.
+    await completionQueued;
+    expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
     releaseWriter();
     await heldWriter;
 

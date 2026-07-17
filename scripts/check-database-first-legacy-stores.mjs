@@ -39,6 +39,7 @@ const legacyWriteCallees = new Set([
 const fsModuleSpecifiers = new Set(["node:fs", "node:fs/promises", "fs", "fs/promises"]);
 
 const helperWriteCallees = new Set([
+  "acquireFileLock",
   "appendRegularFile",
   "appendRegularFileSync",
   "replaceFileAtomic",
@@ -49,6 +50,7 @@ const helperWriteCallees = new Set([
   "writeJsonFileAtomically",
   "writeJsonSync",
   "writeTextAtomic",
+  "withFileLock",
 ]);
 
 const fsSafeStoreFactoryCallees = new Set([
@@ -77,7 +79,7 @@ const fsSafeStoreWriteMethods = new Set([
 const fsSafeJsonStoreWriteMethods = new Set(["update", "updateOr", "write"]);
 
 const helperWriteModulePattern =
-  /(?:^|\/)(?:fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
+  /(?:^|\/)(?:file-lock|fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
 const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
@@ -97,6 +99,7 @@ const legacyStorePatterns = [
   /\bcommitments\/commitments\.json\b/u,
   /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
   /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
+  /\bmcp-oauth\/[^"'`]*\.json\b/u,
   /\bnode\.json\b/u,
   /\bsubagents\/runs\.json\b/u,
   /\btmp\/skill-uploads\b/u,
@@ -111,6 +114,8 @@ const legacyStorePatterns = [
   /\bopenclaw-native-hook-relays\b/u,
   /(?:^|\/)(?:meta|file-meta)\.json$/u,
   /(?:^|\/)viewer\.html$/u,
+  /(?:^|\/)qmd\/embed\.lock(?:\.lock)?$/u,
+  /(?:^|\/)qmd-write\.lock(?:\.lock)?$/u,
 ];
 
 const allowedRuntimeMigrationPaths = [
@@ -118,10 +123,12 @@ const allowedRuntimeMigrationPaths = [
   "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
+  "src/infra/state-migrations.acp-replay.ts",
   "src/infra/state-migrations.tui-last-session.ts",
   "src/infra/state-migrations.commitments.ts",
   "src/infra/state-migrations.managed-outgoing-images.ts",
   "src/infra/state-migrations.apns.ts",
+  "src/infra/state-migrations.mcp-oauth.ts",
   "src/infra/state-migrations.workspace-setup.ts",
   "src/infra/state-migrations.web-push.ts",
   "src/infra/state-migrations.node-host.ts",

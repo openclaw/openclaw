@@ -1778,6 +1778,11 @@ export const pt_BR: TranslationMap = {
       testingButton: "Testando…",
       testing: "Testando — solicitando uma resposta rápida de {modelRef}…",
     },
+    empty: {
+      title: "Instalações recomendadas",
+      intro:
+        "Nenhum acesso de IA existente foi detectado. Instale uma destas ferramentas e verifique novamente.",
+    },
     unavailable: {
       title: "Detectado, mas não testado automaticamente",
     },
@@ -2335,6 +2340,13 @@ export const pt_BR: TranslationMap = {
     session: "Sessão",
     outputTruncated: "Prévia redigida e truncada.",
     noOutputPreview: "Nenhuma prévia de saída.",
+    answerCandidate: {
+      title: "Resposta candidata",
+      itemId: "Item",
+      candidate: "Resposta candidata",
+      superseded: "Resposta substituída",
+      selected: "Resposta selecionada",
+    },
     status: {
       running: "Em execução",
       done: "Concluída",
@@ -2497,6 +2509,20 @@ export const pt_BR: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Nenhum agente ou sessão ainda.",
+        busy: "Ocupado",
+        idle: "Ociosa",
+        progress: "{percent}% concluído",
+      },
+      customWidgetApprovals: {
+        empty: "Nenhum widget personalizado aguardando aprovação.",
+        kind: "Widget personalizado",
+        requestedBy: "Solicitado por {agent}",
+        approve: "Aprovar",
+        reject: "Rejeitar",
+        permissionRequired: "Permissão de aprovação necessária",
       },
       usage: {
         cost: "Cost",
@@ -3533,6 +3559,19 @@ export const pt_BR: TranslationMap = {
     disconnected: "Desconectado do gateway.",
     archivedSessionDisabled: "Restaure esta sessão para enviar mensagens.",
     loadOlder: "Carregar anteriores",
+    sessionHeader: {
+      renameTooltip: "Renomear sessão",
+      renameAria: "Renomear sessão {title}",
+      renameInputAria: "Título da sessão",
+      renameInputPlaceholder: "Título da sessão",
+      workspaceAria: "Ações do workspace para {workspace}",
+      revealFinder: "Mostrar no Finder",
+      revealFileExplorer: "Mostrar no Explorador de Arquivos",
+      revealFileManager: "Abrir no gerenciador de arquivos",
+      copyPath: "Copiar caminho",
+      copyBranch: "Copiar nome do branch",
+      copied: "Copiado",
+    },
     catalog: {
       remoteViewOnly: "Esta sessão está em um nó pareado e é somente para visualização.",
       unsupportedViewOnly: "Esta fonte de sessão externa é somente para visualização.",
@@ -3585,7 +3624,12 @@ export const pt_BR: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Acompanhamentos enquanto o agente está trabalhando",
     followUpModeQueue: "Colocar na fila até a execução terminar",
+    followUpModeServer: "Padrão do servidor ({mode})",
+    followUpModeLoading: "carregando…",
     followUpModeSteer: "Direcionar para a execução ativa",
+    followUpModeUsingServer: "Usando padrão do servidor ({mode})",
+    followUpModeOverriding: "Substituindo padrão do servidor ({mode})",
+    followUpModeReset: "Redefinir para o padrão do servidor",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3666,6 +3710,7 @@ export const pt_BR: TranslationMap = {
       updateGateway: "Atualizar o Gateway",
       allSessions: "Todas as sessões",
       chats: "Conversas",
+      groupCatalogSessionsByProject: "Agrupar por projeto",
       openSessionMenu: "Open session menu",
       sortBy: "Ordenar por",
       sortCreated: "Criado",
@@ -3713,6 +3758,11 @@ export const pt_BR: TranslationMap = {
       pause: "Pausar objetivo",
       resume: "Retomar objetivo",
       clear: "Limpar objetivo",
+    },
+    questions: {
+      title: "Codex precisa de entrada",
+      other: "Digite outra resposta",
+      submit: "Enviar resposta",
     },
     messages: {
       activity: "Atividade",
@@ -3801,6 +3851,11 @@ export const pt_BR: TranslationMap = {
         limitHours: "Limite de {hours} horas",
       },
       takePhoto: "Tirar foto",
+      cameraBusy: "A câmera está ocupada ou indisponível para o navegador.",
+      cameraNoneFound: "Nenhuma câmera foi encontrada.",
+      cameraPermissionBlocked:
+        "O acesso à câmera está bloqueado. Permita o acesso à câmera e ao microfone nas configurações do site no navegador.",
+      cameraPreview: "Visualização da câmera",
       dismissVoiceInputError: "Dispensar erro de entrada de voz",
       microphoneAccessFailed: "Não foi possível acessar as entradas de microfone.",
       microphoneBusy: "As entradas de microfone estão ocupadas ou indisponíveis para o navegador.",
@@ -3818,6 +3873,7 @@ export const pt_BR: TranslationMap = {
       selectedMicrophoneUnavailable:
         "O microfone selecionado está indisponível. Escolha outra entrada ou o padrão do sistema.",
       startVoiceInput: "Iniciar entrada de voz",
+      startVideoTalk: "Iniciar conversa em vídeo",
       stillListening: "Ainda ouvindo",
       stopVoiceInput: "Parar entrada de voz",
       systemDefaultMicrophone: "Padrão do sistema",

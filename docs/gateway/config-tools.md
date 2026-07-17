@@ -111,7 +111,7 @@ The shorthand is also accepted:
 MCP declarations are exposed through the read-only virtual API file surface in
 code mode. Guest code can call `API.list("mcp")` and
 `API.read("mcp/<server>.d.ts")` to inspect TypeScript-style signatures before
-calling `MCP.<server>.<tool>()`. See [Code mode](/reference/code-mode) for the
+calling `MCP.<server>.<tool>()`. See [Code Mode](/tools/code-mode) for the
 runtime contract, limits, and debugging steps.
 
 ### `tools.allow` / `tools.deny`

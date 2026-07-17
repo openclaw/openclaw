@@ -686,8 +686,7 @@ fn main() {
     } else {
         builder
     };
-    let builder = builder
-        .plugin(tauri_plugin_notification::init())
+    let builder = notify::register(builder)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())

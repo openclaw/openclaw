@@ -1764,6 +1764,10 @@ export const hi: TranslationMap = {
       testingButton: "परीक्षण हो रहा है…",
       testing: "परीक्षण हो रहा है — त्वरित उत्तर के लिए {modelRef} से पूछा जा रहा है…",
     },
+    empty: {
+      title: "अनुशंसित इंस्टॉल",
+      intro: "कोई मौजूदा AI एक्सेस नहीं मिला। इनमें से कोई एक टूल इंस्टॉल करें, फिर दोबारा जाँचें।",
+    },
     unavailable: {
       title: "पता लगाया गया, लेकिन स्वचालित रूप से परीक्षण नहीं किया गया",
     },
@@ -2302,6 +2306,13 @@ export const hi: TranslationMap = {
     session: "सत्र",
     outputTruncated: "पूर्वावलोकन संपादित और छोटा किया गया।",
     noOutputPreview: "कोई आउटपुट पूर्वावलोकन नहीं।",
+    answerCandidate: {
+      title: "उत्तर उम्मीदवार",
+      itemId: "आइटम",
+      candidate: "उम्मीदवार उत्तर",
+      superseded: "प्रतिस्थापित उत्तर",
+      selected: "चयनित उत्तर",
+    },
     status: {
       running: "चल रहा है",
       done: "पूर्ण",
@@ -2464,6 +2475,20 @@ export const hi: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "अभी तक कोई एजेंट या सत्र नहीं है।",
+        busy: "व्यस्त",
+        idle: "निष्क्रिय",
+        progress: "{percent}% पूर्ण",
+      },
+      customWidgetApprovals: {
+        empty: "कोई कस्टम विजेट अनुमोदन की प्रतीक्षा में नहीं है।",
+        kind: "कस्टम विजेट",
+        requestedBy: "{agent} द्वारा अनुरोधित",
+        approve: "स्वीकृत करें",
+        reject: "अस्वीकार करें",
+        permissionRequired: "अनुमोदन अनुमति आवश्यक है",
       },
       usage: {
         cost: "लागत",
@@ -3482,6 +3507,19 @@ export const hi: TranslationMap = {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",
     loadOlder: "पुराने लोड करें",
+    sessionHeader: {
+      renameTooltip: "सत्र का नाम बदलें",
+      renameAria: "सत्र {title} का नाम बदलें",
+      renameInputAria: "सत्र शीर्षक",
+      renameInputPlaceholder: "सत्र शीर्षक",
+      workspaceAria: "{workspace} के लिए वर्कस्पेस क्रियाएँ",
+      revealFinder: "Finder में दिखाएँ",
+      revealFileExplorer: "File Explorer में दिखाएँ",
+      revealFileManager: "फ़ाइल प्रबंधक में खोलें",
+      copyPath: "पथ कॉपी करें",
+      copyBranch: "ब्रांच नाम कॉपी करें",
+      copied: "कॉपी किया गया",
+    },
     catalog: {
       remoteViewOnly: "यह सत्र एक युग्मित नोड पर है और केवल देखने के लिए है।",
       unsupportedViewOnly: "यह बाहरी सत्र स्रोत केवल देखने के लिए है।",
@@ -3534,7 +3572,12 @@ export const hi: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "एजेंट के काम करते समय फ़ॉलो-अप",
     followUpModeQueue: "रन समाप्त होने तक कतार में रखें",
+    followUpModeServer: "सर्वर डिफ़ॉल्ट ({mode})",
+    followUpModeLoading: "लोड हो रहा है…",
     followUpModeSteer: "सक्रिय रन को दिशा दें",
+    followUpModeUsingServer: "सर्वर डिफ़ॉल्ट ({mode}) का उपयोग कर रहे हैं",
+    followUpModeOverriding: "सर्वर डिफ़ॉल्ट ({mode}) को ओवरराइड कर रहे हैं",
+    followUpModeReset: "सर्वर डिफ़ॉल्ट पर रीसेट करें",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "टर्मिनल",
@@ -3615,6 +3658,7 @@ export const hi: TranslationMap = {
       updateGateway: "Gateway अपडेट करें",
       allSessions: "सभी सत्र",
       chats: "चैट",
+      groupCatalogSessionsByProject: "प्रोजेक्ट के अनुसार समूहित करें",
       openSessionMenu: "Open session menu",
       sortBy: "इसके अनुसार क्रमबद्ध करें",
       sortCreated: "बनाया गया",
@@ -3662,6 +3706,11 @@ export const hi: TranslationMap = {
       pause: "लक्ष्य रोकें",
       resume: "लक्ष्य फिर से शुरू करें",
       clear: "लक्ष्य साफ़ करें",
+    },
+    questions: {
+      title: "Codex को इनपुट चाहिए",
+      other: "कोई अन्य उत्तर टाइप करें",
+      submit: "उत्तर सबमिट करें",
     },
     messages: {
       activity: "गतिविधि",
@@ -3750,6 +3799,11 @@ export const hi: TranslationMap = {
         limitHours: "{hours}-घंटे की सीमा",
       },
       takePhoto: "फ़ोटो लें",
+      cameraBusy: "कैमरा व्यस्त है या ब्राउज़र के लिए अनुपलब्ध है।",
+      cameraNoneFound: "कोई कैमरा नहीं मिला।",
+      cameraPermissionBlocked:
+        "कैमरा एक्सेस अवरुद्ध है। ब्राउज़र साइट सेटिंग्स में कैमरा और माइक्रोफ़ोन एक्सेस की अनुमति दें।",
+      cameraPreview: "कैमरा पूर्वावलोकन",
       dismissVoiceInputError: "वॉइस इनपुट त्रुटि बंद करें",
       microphoneAccessFailed: "माइक्रोफ़ोन इनपुट तक पहुँचने में असमर्थ।",
       microphoneBusy: "माइक्रोफ़ोन इनपुट व्यस्त हैं या ब्राउज़र के लिए उपलब्ध नहीं हैं।",
@@ -3765,6 +3819,7 @@ export const hi: TranslationMap = {
       selectedMicrophoneUnavailable:
         "चुना गया माइक्रोफ़ोन उपलब्ध नहीं है। कोई दूसरा इनपुट या System default चुनें।",
       startVoiceInput: "वॉइस इनपुट शुरू करें",
+      startVideoTalk: "वीडियो टॉक शुरू करें",
       stillListening: "अभी भी सुन रहा है",
       stopVoiceInput: "वॉइस इनपुट बंद करें",
       systemDefaultMicrophone: "सिस्टम डिफ़ॉल्ट",
