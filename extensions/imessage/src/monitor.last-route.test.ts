@@ -188,7 +188,9 @@ describe("iMessage monitor last-route updates", () => {
       };
       params.replyOptions?.onTypingController?.(typingController);
       await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await params.replyOptions?.onToolResult?.({
+      const onToolResult = params.replyOptions?.onToolResult;
+      expect(onToolResult).toBeTypeOf("function");
+      await onToolResult?.({
         text: "💨Fast: auto-off(75s>=60s)",
         channelData: { openclawProgressKind: "fast-mode-auto" },
       });
@@ -279,7 +281,9 @@ describe("iMessage monitor last-route updates", () => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(params.replyOptions?.onToolStart).toBeUndefined();
-      await params.replyOptions?.onToolResult?.({
+      const onToolResult = params.replyOptions?.onToolResult;
+      expect(onToolResult).toBeTypeOf("function");
+      await onToolResult?.({
         text: "💨Fast: auto-off(75s>=60s)",
         channelData: { openclawProgressKind: "fast-mode-auto" },
       });
@@ -348,6 +352,7 @@ describe("iMessage monitor last-route updates", () => {
       expect.objectContaining({ typing: true }),
       expect.anything(),
     );
+    expect(client.request).not.toHaveBeenCalledWith("send", expect.anything(), expect.anything());
   });
 
   it("starts direct typing before dispatching the inbound turn", async () => {
