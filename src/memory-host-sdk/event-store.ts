@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-store.js";
 import {
   createPluginStateSyncKeyedStore,
   pluginStateEntriesInKeyRange,
@@ -40,7 +40,9 @@ export type PersistedMemoryHostEvent = {
 };
 
 function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
+  // Workspace aliases must share one event/cursor namespace. Otherwise two
+  // configured paths to the same workspace can publish conflicting exports.
+  const resolved = resolveWorkspaceStateIdentity(workspaceDir).workspacePath.replace(/\\/g, "/");
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 

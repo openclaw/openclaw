@@ -4,7 +4,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { resolveStateDir } from "../config/paths.js";
+import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { withFileLock } from "../infra/file-lock.js";
+import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
+import { syncDirectoryBestEffort } from "../infra/sqlite-snapshot.js";
 import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -13,7 +17,25 @@ import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.jsonl";
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS = 1_000;
 const MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES = 1024 * 1024;
+const MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS = {
+  retries: { retries: 20, factor: 1.3, minTimeout: 25, maxTimeout: 250, randomize: true },
+  stale: 30_000,
+} as const;
 const memoryHostEventExportQueue = new KeyedAsyncQueue();
+
+function isMissingPathError(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  return (
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    (error instanceof FsSafeError && code === "not-found")
+  );
+}
+
+function resolveMemoryHostEventExportLockTarget(workspaceDir: string): string {
+  const workspaceHash = sha256HexPrefix(path.resolve(workspaceDir), 32);
+  return path.join(resolveStateDir(), `.memory-host-events-export-${workspaceHash}`);
+}
 
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
@@ -68,37 +90,69 @@ function serializeMemoryHostEventExport(
 async function materializeMemoryHostEventExport(params: {
   workspaceDir: string;
 }): Promise<string | undefined> {
-  const workspaceKey = path.resolve(params.workspaceDir);
-  // Snapshot and replacement stay in one per-workspace queue. Otherwise an
-  // older concurrent listing can overwrite a newer derived export.
-  return memoryHostEventExportQueue.enqueue(workspaceKey, async () => {
-    const storedEvents = listStoredMemoryHostEvents({
-      workspaceDir: params.workspaceDir,
-      limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
-    });
-    if (storedEvents.length === 0) {
+  const requestedWorkspace = path.resolve(params.workspaceDir);
+  const workspace = await fs.stat(requestedWorkspace).catch((error: unknown) => {
+    if (isMissingPathError(error)) {
       return undefined;
     }
-    const content = serializeMemoryHostEventExport(storedEvents);
-    const absolutePath = path.join(
-      params.workspaceDir,
-      ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"),
+    throw error;
+  });
+  if (!workspace?.isDirectory()) {
+    return undefined;
+  }
+  const workspaceRoot = await createFsSafeRoot(requestedWorkspace, {
+    hardlinks: "reject",
+    mkdir: true,
+    mode: 0o600,
+    symlinks: "reject",
+  });
+  const workspaceKey = workspaceRoot.rootReal;
+  // The queue handles re-entrant calls in this process; the sidecar lock makes
+  // snapshot, cleanup, and replacement one ordered operation across processes.
+  return memoryHostEventExportQueue.enqueue(workspaceKey, async () => {
+    const absolutePath = path.join(workspaceKey, ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"));
+    return await withFileLock(
+      resolveMemoryHostEventExportLockTarget(workspaceKey),
+      MEMORY_HOST_EVENT_EXPORT_LOCK_OPTIONS,
+      async () => {
+        const storedEvents = listStoredMemoryHostEvents({
+          workspaceDir: workspaceKey,
+          limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
+        });
+        if (storedEvents.length === 0) {
+          try {
+            await workspaceRoot.remove(MEMORY_HOST_EVENTS_RELATIVE_PATH);
+          } catch (error) {
+            if (isMissingPathError(error)) {
+              return undefined;
+            }
+            throw error;
+          }
+          // Persist removal before releasing the cross-process export lock. Otherwise
+          // a crash can resurrect a stale export after SQLite retention removed it.
+          await syncDirectoryBestEffort(path.dirname(absolutePath));
+          return undefined;
+        }
+        const content = serializeMemoryHostEventExport(storedEvents);
+        // SQLite is authoritative. Reading this bounded export only avoids replacing
+        // an unchanged named artifact and preserves stable mtimes for bridge consumers.
+        const existing = await workspaceRoot
+          .readText(MEMORY_HOST_EVENTS_RELATIVE_PATH)
+          .catch((error: unknown) => {
+            if (isMissingPathError(error)) {
+              return undefined;
+            }
+            throw error;
+          });
+        if (existing !== content) {
+          await workspaceRoot.write(MEMORY_HOST_EVENTS_RELATIVE_PATH, content, {
+            mkdir: true,
+            mode: 0o600,
+          });
+        }
+        return absolutePath;
+      },
     );
-    // SQLite is authoritative. Reading this bounded export only avoids replacing
-    // an unchanged named artifact and preserves stable mtimes for bridge consumers.
-    const existing = await fs.readFile(absolutePath, "utf8").catch(() => undefined);
-    if (existing !== content) {
-      await replaceFileAtomic({
-        filePath: absolutePath,
-        content,
-        dirMode: 0o700,
-        mode: 0o600,
-        tempPrefix: `${path.basename(absolutePath)}.export`,
-        syncParentDir: true,
-        syncTempFile: true,
-      });
-    }
-    return absolutePath;
   });
 }
 
