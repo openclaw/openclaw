@@ -32,6 +32,7 @@ function boundedTextErrorResponse(
   const encoded = new TextEncoder().encode(body);
   let read = false;
   const cancel = vi.fn(async () => undefined);
+  const cancelBody = vi.fn(async () => undefined);
   const releaseLock = vi.fn();
   const text = vi.fn(async () => {
     throw new Error("response.text() should not be called");
@@ -41,6 +42,7 @@ function boundedTextErrorResponse(
     status,
     headers: new Headers(),
     body: {
+      cancel: cancelBody,
       getReader: () => ({
         read: async () => {
           if (read) {
@@ -56,7 +58,7 @@ function boundedTextErrorResponse(
     text,
   } as unknown as Response;
 
-  return { response, cancel, releaseLock, text };
+  return { response, cancel, cancelBody, releaseLock, text };
 }
 
 function oversizedJsonResponse(): { response: Response; wasCanceled: () => boolean } {
@@ -364,6 +366,7 @@ describe("OpenRouter OAuth", () => {
     expect(message).not.toContain("tail-marker");
     expect(errorResponse.text).not.toHaveBeenCalled();
     expect(errorResponse.cancel).toHaveBeenCalledTimes(1);
+    expect(errorResponse.cancelBody).toHaveBeenCalledTimes(1);
     expect(errorResponse.releaseLock).toHaveBeenCalledTimes(1);
   });
 

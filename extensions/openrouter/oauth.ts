@@ -198,6 +198,7 @@ async function exchangeOpenRouterOAuthCode(params: {
   });
   const body = await readResponseBody(response);
   if (!response.ok) {
+    void response.body?.cancel()?.catch(() => {});
     const message = extractOpenRouterError(body);
     throw new Error(
       `OpenRouter OAuth key exchange failed (${response.status})${message ? `: ${message}` : ""}`,
