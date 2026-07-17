@@ -111,4 +111,23 @@ describe("outbound message planning", () => {
       },
     ]);
   });
+
+  it("keeps newline-mode paragraphs as separate units under a large transport limit", () => {
+    // Codex finals arrive as one accumulated payload; packing to textLimit would
+    // collapse intended WhatsApp bubbles before coalescing can separate them.
+    const units = planOutboundTextMessageUnits({
+      text: "First bubble.\n\nSecond bubble.",
+      textLimit: 4000,
+      chunkMode: "newline",
+      chunker: (text) => [text],
+      overrides: {},
+    });
+
+    expect(
+      units.map((unit) => (unit.kind === "text" ? [unit.kind, unit.text] : [unit.kind])),
+    ).toEqual([
+      ["text", "First bubble."],
+      ["text", "Second bubble."],
+    ]);
+  });
 });

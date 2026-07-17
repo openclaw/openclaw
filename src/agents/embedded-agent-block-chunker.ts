@@ -156,7 +156,11 @@ export class EmbeddedBlockChunker {
       return;
     }
 
-    if (force && this.#buffer.length <= maxChars) {
+    // Without paragraph flushing, a force drain of an under-max buffer is one
+    // final payload. With flushOnParagraph, keep blank-line boundaries even on
+    // the terminal force flush so accumulated final replies (e.g. Codex) do not
+    // collapse into a single delivery unit.
+    if (force && this.#buffer.length <= maxChars && !this.#chunking.flushOnParagraph) {
       if (this.#buffer.trim().length > 0) {
         emit(this.#buffer);
       }
@@ -177,8 +181,9 @@ export class EmbeddedBlockChunker {
         break;
       }
 
-      if (this.#chunking.flushOnParagraph && !force) {
-        const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
+      if (this.#chunking.flushOnParagraph) {
+        const paragraphMinChars = force ? 1 : minChars;
+        const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, paragraphMinChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
         if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
@@ -189,7 +194,16 @@ export class EmbeddedBlockChunker {
           reopenFence = undefined;
           continue;
         }
-        if (remainingLength < maxChars) {
+        if (force && !paragraphBreak) {
+          const chunk = `${reopenPrefix}${source.slice(start)}`;
+          if (chunk.trim().length > 0) {
+            emit(chunk);
+          }
+          start = source.length;
+          reopenFence = undefined;
+          break;
+        }
+        if (!force && remainingLength < maxChars) {
           break;
         }
       }

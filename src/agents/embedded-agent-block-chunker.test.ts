@@ -74,7 +74,18 @@ describe("EmbeddedBlockChunker", () => {
     chunker.append("First paragraph.\n \nSecond paragraph.");
 
     expect(drainChunks(chunker)).toStrictEqual([]);
-    expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
+    // Force + flushOnParagraph preserves blank-line boundaries instead of
+    // collapsing the accumulated buffer into one delivery unit.
+    expect(drainChunks(chunker, true)).toEqual(["First paragraph.", "Second paragraph."]);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it("force flushes multi-paragraph Codex-style finals as separate units", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 4000 });
+
+    chunker.append("Short reply part one.\n\nShort reply part two.");
+
+    expect(drainChunks(chunker, true)).toEqual(["Short reply part one.", "Short reply part two."]);
     expect(chunker.bufferedText).toBe("");
   });
 
