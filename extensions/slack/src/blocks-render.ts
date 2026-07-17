@@ -2,12 +2,12 @@
 import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
-  reduceInteractiveReply,
+  reduceLegacyInteractiveReply,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
-  InteractiveReply,
+  LegacyInteractiveReply,
   MessagePresentation,
   MessagePresentationAction,
   MessagePresentationButtonsBlock,
@@ -228,7 +228,7 @@ export function resolveSlackBlockOffsets(blocks?: readonly SlackBlock[]): SlackB
  * @deprecated Use buildSlackPresentationBlocks with MessagePresentation.
  */
 export function buildSlackInteractiveBlocks(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
   options: SlackBlockRenderOptions = {},
 ): SlackBlock[] {
   const initialState = {
@@ -236,7 +236,7 @@ export function buildSlackInteractiveBlocks(
     buttonIndex: options.buttonIndexOffset ?? 0,
     selectIndex: options.selectIndexOffset ?? 0,
   };
-  return reduceInteractiveReply(interactive, initialState, (state, block) => {
+  return reduceLegacyInteractiveReply(interactive, initialState, (state, block) => {
     if (block.type === "text") {
       const trimmed = block.text.trim();
       if (!trimmed) {

@@ -7,7 +7,6 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
-  testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.test-helpers.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
@@ -21,6 +20,7 @@ import {
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
+  applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
   makeContext,
   type AgentHandlerArgs,
@@ -260,7 +260,9 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        subagentRegistryTesting.setDepsForTest({
+        // Route through the harness helper so the ensureRuntimePluginsLoaded
+        // pin survives this wholesale deps override.
+        applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow: () => {
             throw new Error("disk full");
           },

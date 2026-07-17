@@ -1,4 +1,3 @@
-// Type contracts for channel turn normalization, admission, dispatch, and delivery.
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type {
   GetReplyOptions,
@@ -272,6 +271,11 @@ export type AssembledChannelTurn = {
   toolsAllow?: string[];
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;
+  sessionInitRetry?: {
+    delaysMs: readonly number[];
+    signal?: AbortSignal;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  };
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
@@ -302,8 +306,29 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   messageId?: string;
 };
 
+type ChannelTurnRoute = {
+  agentId: string;
+  sessionKey: string;
+};
+
+type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInboundSession"> & {
+  route: ChannelTurnRoute;
+};
+
+export type ChannelTurnPlan = RoutedChannelTurn<
+  Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
+>;
+
+type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
+  PreparedChannelTurn<TDispatchResult>
+> & {
+  cfg: OpenClawConfig;
+};
+
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */
 export type ChannelTurnResolved<TDispatchResult = DispatchFromConfigResult> =
+  | ChannelTurnPlan
+  | PreparedChannelTurnPlan<TDispatchResult>
   | (AssembledChannelTurn & {
       admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     })

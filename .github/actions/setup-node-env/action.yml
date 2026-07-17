@@ -35,6 +35,14 @@ inputs:
       alongside.
     required: false
     default: "false"
+  save-sticky-disk:
+    description: >
+      Whether this job may commit the shared dependency snapshot. One
+      designated job per node-version key; only honored outside pull_request
+      events so feature-branch installs can never publish a protected
+      snapshot.
+    required: false
+    default: "false"
   runtime-cache-sticky-disk:
     description: Whether runtime caches should use Blacksmith sticky disks instead of actions/cache.
     required: false
@@ -116,14 +124,25 @@ runs:
       if: inputs.sticky-disk == 'true'
       uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
       with:
-        # The key covers every dependency and lifecycle input. PR scope keeps
-        # feature snapshots separate from protected pushes. The v2 marker lets
-        # exact warm hits trust the snapshotted stock layout without rescanning.
-        key: ${{ github.repository }}-node-deps-bind-v2-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'protected' }}-${{ inputs.node-version }}-frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
+        # One stable disk per node-version. The v2 per-PR/per-manifest-hash
+        # keys minted a new backing disk for every PR and dependency change
+        # and saturated Blacksmith's installation-wide sticky-disk budget,
+        # 429-failing every mount. Install inputs live in the runtime
+        # fingerprint marker below instead of the key, so dependency changes
+        # refresh this disk in place rather than allocating a new one.
+        key: ${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-deps
-        # v1.4.0 skips commit after failed/cancelled steps or ambiguous failure
-        # detection, so an incomplete first hydration cannot seed this key.
-        commit: if-missing
+        # Single semantic writer: only the designated trusted-push job may
+        # commit, so pull_request clones stay read-only. Like every sticky
+        # disk here, this gate binds cooperating code, not hostile code: the
+        # enforced trust boundary is the fork/dispatch runner gate in ci.yml,
+        # and same-repo PR authors already hold repository write access.
+        # Explicit true (not on-change) because the allocated-byte heuristic
+        # can miss a fingerprint refresh whose reinstall keeps disk usage
+        # stable, permanently stranding consumers on a stale marker. v1.4.0
+        # skips commit after failed/cancelled steps, so a broken install
+        # cannot seed this key.
+        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
 
     - name: Mount protected Vitest transform seed
       if: inputs.vitest-fs-cache == 'true' && (inputs.sticky-disk == 'true' || inputs.runtime-cache-sticky-disk == 'true') && github.event_name == 'pull_request' && runner.os != 'Windows'
@@ -254,6 +273,12 @@ runs:
     - name: Bind sticky node_modules into workspace
       if: inputs.sticky-disk == 'true'
       shell: bash
+      env:
+        # Evaluated before this step's bind mount populates node_modules, so
+        # the '**/package.json' glob only sees checkout manifests. Recomputing
+        # this hash any later would sweep snapshot-internal package.json files
+        # into the fingerprint and permanently miss the warm path.
+        DEPS_FINGERPRINT: node-${{ inputs.node-version }}-frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
       run: |
         set -euo pipefail
         sticky_root=/var/tmp/openclaw-node-deps
@@ -271,6 +296,7 @@ runs:
         findmnt --target "$workspace_modules"
         # zizmor: ignore[github-env] static trusted path defined in this composite action.
         echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
+        echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$DEPS_FINGERPRINT" >> "$GITHUB_ENV"
         # pnpm exec may reconcile a restored workspace before nested builds.
         # Sticky jobs already have every build tool, so invoke their Node entrypoints directly.
         echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"
@@ -309,6 +335,7 @@ runs:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
         STICKY_DISK: ${{ inputs.sticky-disk }}
         STICKY_ROOT: /var/tmp/openclaw-node-deps
+        STICKY_WRITER: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
       run: |
         set -euo pipefail
         export PATH="$NODE_BIN:$PATH"
@@ -353,19 +380,36 @@ runs:
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           export NODE_PATH="$PNPM_CONFIG_MODULES_DIR${NODE_PATH:+:$NODE_PATH}"
         fi
-        sticky_ready_marker="$STICKY_ROOT/.install-complete-v2"
-        if [ "$STICKY_DISK" = "true" ] && [ -f "$sticky_ready_marker" ]; then
+        sticky_marker="$STICKY_ROOT/.openclaw-deps-fingerprint"
+        sticky_fingerprint=""
+        if [ "$STICKY_DISK" = "true" ] && [ -f "$sticky_marker" ]; then
+          sticky_fingerprint="$(<"$sticky_marker")"
+        fi
+        if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ] &&
+          [ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]; then
           bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"
-          echo "Sticky dependency snapshot is ready; skipping pnpm install"
+          echo "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install"
         else
+          if [ "$STICKY_DISK" = "true" ] && [ -n "$sticky_fingerprint" ]; then
+            echo "Sticky dependency snapshot is stale (disk: $sticky_fingerprint, want: $OPENCLAW_STICKY_DEPS_FINGERPRINT); reinstalling"
+          fi
+          # A stale marker must not survive a mid-install failure: the commit
+          # heuristics skip failed steps, but a wrong marker plus a partial
+          # tree would poison every consumer if one ever slipped through.
+          if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
+            rm -f "$sticky_marker"
+          fi
           pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             rm -rf node_modules
             ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
             ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
           fi
-          if [ "$STICKY_DISK" = "true" ]; then
-            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"
+          # Only the designated trusted writer captures importer archives and
+          # publishes the fingerprint; read-only clones are discarded at job
+          # end, so capturing there would only burn shard wall clock.
+          if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
+            bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"
           fi
         fi
 

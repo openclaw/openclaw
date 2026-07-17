@@ -63,6 +63,7 @@
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
+    "features.goals": false,
     "features.standalone_web_search": false,
     "web_search": "cached"
   },
@@ -104,6 +105,7 @@
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
+    "features.goals": false,
     "features.standalone_web_search": false,
     "web_search": "cached"
   },

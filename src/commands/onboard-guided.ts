@@ -351,6 +351,19 @@ async function runGuidedOnboardingFlow(
   detectionProgress.stop(t("wizard.guided.detected"));
   if (detection.candidates.length === 0) {
     await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
+    if (detection.recommendedInstalls.length > 0) {
+      const recommendedInstalls = detection.recommendedInstalls.map((install) =>
+        t("wizard.guided.recommendedInstall", {
+          label: install.label,
+          hint: install.hint,
+          website: install.website,
+        }),
+      );
+      await prompter.note(
+        recommendedInstalls.join("\n"),
+        t("wizard.guided.recommendedInstallsTitle"),
+      );
+    }
   } else {
     const candidates = detection.candidates.map((candidate) =>
       t("wizard.guided.detectedCandidate", {

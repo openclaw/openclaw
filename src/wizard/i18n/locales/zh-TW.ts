@@ -270,6 +270,8 @@ export const zh_TW = {
       failureUnavailable: "此 AI 路由目前不可用。",
       failureUnknown: "Completion 因未知原因失敗。",
       foundNothing: "未在此機器上偵測到既有 AI 存取方式。",
+      recommendedInstall: "{label} — {hint}\n  {website}",
+      recommendedInstallsTitle: "建議安裝",
       intro: "連接你的 AI",
       invalidConfigDetails: "OpenClaw 設定 {path} 無效：\n{issues}",
       invalidConfigRepair:

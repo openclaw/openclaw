@@ -354,15 +354,33 @@ describe("applySystemAgentModelSelection", () => {
 
 describe("detectSetupInference", () => {
   it("preserves the shared inference candidate order", async () => {
-    const resolveManifestProviderAuthChoices = vi.fn(() => []);
+    const resolveManifestProviderAuthChoices = vi.fn(() => [
+      {
+        pluginId: "anthropic",
+        providerId: "anthropic",
+        methodId: "cli",
+        choiceId: "anthropic-cli",
+        choiceLabel: "Anthropic Claude CLI",
+        deprecatedChoiceIds: ["claude-cli"],
+        icon: "https://cdn.example.com/claude.svg",
+        website: "https://claude.example.com/download",
+      },
+    ]);
     const detection = await detectSetupInference({
       resolveManifestProviderAuthChoices,
+      enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
     expect(detection.candidates).toHaveLength(2);
-    expect(detection.candidates[0]).toMatchObject({ kind: "claude-cli", recommended: false });
+    expect(detection.candidates[0]).toMatchObject({
+      kind: "claude-cli",
+      recommended: false,
+      icon: "https://cdn.example.com/claude.svg",
+      website: "https://claude.example.com/download",
+    });
     expect(detection.candidates[1]).toMatchObject({ kind: "codex-cli", recommended: false });
     expect(detection.setupComplete).toBe(false);
+    expect(detection.recommendedInstalls).toHaveLength(9);
     expect(detection.workspace.length).toBeGreaterThan(0);
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),
@@ -418,6 +436,8 @@ describe("detectSetupInference", () => {
           choiceId: "local-model",
           choiceLabel: "Local Server",
           appGuidedDiscovery: true,
+          icon: "https://cdn.example.com/local.svg",
+          website: "https://local.example.com/download",
         },
       ],
       enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
@@ -433,6 +453,8 @@ describe("detectSetupInference", () => {
         modelRef: "local/qwen-tool",
         recommended: false,
         credentials: true,
+        icon: "https://cdn.example.com/local.svg",
+        website: "https://local.example.com/download",
       },
     ]);
     expect(detection.unavailableCandidates).toEqual([
@@ -485,6 +507,8 @@ describe("detectSetupInference", () => {
         choiceId: "zeta-api-key",
         choiceLabel: "Zeta API key",
         choiceHint: "Direct key",
+        icon: "https://cdn.example.com/zeta.svg",
+        website: "https://zeta.example.com/keys",
         optionKey: "zetaApiKey",
         cliOption: "--zeta-api-key <key>",
         appGuidedSecret: true,
@@ -522,6 +546,8 @@ describe("detectSetupInference", () => {
         id: "zeta-api-key",
         label: "Zeta API key",
         hint: "Direct key",
+        icon: "https://cdn.example.com/zeta.svg",
+        website: "https://zeta.example.com/keys",
       },
     ]);
   });
@@ -557,6 +583,8 @@ describe("detectSetupInference", () => {
         choiceId: "openai",
         choiceLabel: "ChatGPT Login",
         choiceHint: "Browser sign-in",
+        icon: "https://cdn.example.com/openai.svg",
+        website: "https://openai.example.com/login",
         groupLabel: "OpenAI",
         onboardingFeatured: true,
         appGuidedAuth: "oauth",
@@ -597,6 +625,8 @@ describe("detectSetupInference", () => {
         label: "ChatGPT Login",
         hint: "Browser sign-in",
         groupLabel: "OpenAI",
+        icon: "https://cdn.example.com/openai.svg",
+        website: "https://openai.example.com/login",
         kind: "oauth",
         featured: true,
       },

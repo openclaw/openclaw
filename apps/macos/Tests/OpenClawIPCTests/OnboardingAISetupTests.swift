@@ -627,6 +627,8 @@ struct OnboardingAISetupTests {
             label: "OpenAI",
             hint: nil,
             groupLabel: "OpenAI",
+            icon: nil,
+            website: nil,
             kind: "oauth",
             featured: true
         )

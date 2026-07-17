@@ -5394,6 +5394,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/webchat
 - Headings:
+  - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired
   - H2: Security surface

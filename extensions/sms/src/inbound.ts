@@ -170,23 +170,12 @@ export async function dispatchSmsInboundEvent(params: {
             To: params.msg.to,
           },
         });
-        const storePath = params.channelRuntime.session.resolveStorePath(
-          params.cfg.session?.store,
-          {
-            agentId: route.agentId,
-          },
-        );
         return {
           cfg: params.cfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          agentId: route.agentId,
-          routeSessionKey: sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey },
           ctxPayload,
-          recordInboundSession: params.channelRuntime.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            params.channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: from,

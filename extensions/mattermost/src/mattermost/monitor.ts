@@ -1,10 +1,17 @@
-import { implicitMentionKindWhen } from "openclaw/plugin-sdk/channel-inbound";
 // Mattermost plugin module implements monitor behavior.
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { implicitMentionKindWhen } from "openclaw/plugin-sdk/channel-inbound";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  createReplyDispatcherWithTyping,
+  dispatchInboundMessage,
+  finalizeInboundContext,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -430,7 +437,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         const to =
           kind === "direct" ? `user:${optsLocal.userId}` : `channel:${optsLocal.channelId}`;
         const bodyText = `[Button click: user @${optsLocal.userName} selected "${optsLocal.actionName}"]`;
-        const ctxPayload = core.channel.reply.finalizeInboundContext({
+        const ctxPayload = finalizeInboundContext({
           Body: bodyText,
           BodyForAgent: bodyText,
           RawBody: bodyText,
@@ -497,55 +504,48 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           isDirect: kind === "direct",
           dmRetryOptions: account.config.dmChannelRetry,
         });
-        const { dispatcher, replyOptions, markDispatchIdle } =
-          core.channel.reply.createReplyDispatcherWithTyping({
-            ...replyPipeline,
-            resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-            onDeliverySettled: deliveryBarrier.markDeliverySettled,
-            humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
-            deliver: async (payload: ReplyPayload) => {
-              await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                to,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostReplyRootId({
-                  kind,
-                  threadRootId: threadContext.effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-                onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-              });
-              runtime.log?.(`delivered button-click reply to ${to}`);
-            },
-            onError: (err, info) => {
-              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
-            },
-            onReplyStart: typingCallbacks?.onReplyStart,
-          });
-
-        await core.channel.reply.withReplyDispatcher({
-          dispatcher,
-          onSettled: () => {
-            markDispatchIdle();
-          },
-          run: () =>
-            core.channel.reply.dispatchReplyFromConfig({
-              ctx: ctxPayload,
+        const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+          ...replyPipeline,
+          resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+          onDeliverySettled: deliveryBarrier.markDeliverySettled,
+          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+          deliver: async (payload: ReplyPayload) => {
+            await deliverMattermostReplyPayload({
+              core,
               cfg,
-              dispatcher,
-              replyOptions: {
-                ...replyOptions,
-                disableBlockStreaming:
-                  typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-                onModelSelected,
-              },
-            }),
+              payload,
+              to,
+              accountId: account.accountId,
+              agentId: route.agentId,
+              replyToId: resolveMattermostReplyRootId({
+                kind,
+                threadRootId: threadContext.effectiveReplyToId,
+                replyToId: payload.replyToId,
+              }),
+              textLimit,
+              tableMode,
+              sendMessage: sendMessageMattermost,
+              onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+            });
+            runtime.log?.(`delivered button-click reply to ${to}`);
+          },
+          onError: (err, info) => {
+            runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
+          },
+          onReplyStart: typingCallbacks?.onReplyStart,
+        });
+
+        await dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          onSettled: () => markDispatchIdle(),
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected,
+          },
         });
       },
       log: (msg) => runtime.log?.(msg),
@@ -632,7 +632,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       params.kind === "direct"
         ? `Mattermost DM from ${params.senderName}`
         : `Mattermost message in ${params.roomLabel} from ${params.senderName}`;
-    const ctxPayload = core.channel.reply.finalizeInboundContext({
+    const ctxPayload = finalizeInboundContext({
       Body: params.commandText,
       BodyForAgent: params.commandText,
       RawBody: params.commandText,
@@ -707,67 +707,60 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       isDirect: params.kind === "direct",
       dmRetryOptions: account.config.dmChannelRetry,
     });
-    const { dispatcher, replyOptions, markDispatchIdle } =
-      core.channel.reply.createReplyDispatcherWithTyping({
-        ...replyPipeline,
-        resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
-        onDeliverySettled: deliveryBarrier.markDeliverySettled,
-        // Picker-triggered confirmations should stay immediate.
-        deliver: async (payload: ReplyPayload) => {
-          const trimmedPayload = {
-            ...payload,
-            text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
-          };
+    const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+      ...replyPipeline,
+      resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
+      onDeliverySettled: deliveryBarrier.markDeliverySettled,
+      // Picker-triggered confirmations should stay immediate.
+      deliver: async (payload: ReplyPayload) => {
+        const trimmedPayload = {
+          ...payload,
+          text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode).trim(),
+        };
 
-          if (!shouldDeliverReplies) {
-            if (trimmedPayload.text) {
-              capturedTexts.push(trimmedPayload.text);
-            }
-            return;
+        if (!shouldDeliverReplies) {
+          if (trimmedPayload.text) {
+            capturedTexts.push(trimmedPayload.text);
           }
+          return;
+        }
 
-          await deliverMattermostReplyPayload({
-            core,
-            cfg,
-            payload: trimmedPayload,
-            to,
-            accountId: account.accountId,
-            agentId: params.route.agentId,
-            replyToId: resolveMattermostReplyRootId({
-              kind: params.kind,
-              threadRootId: params.effectiveReplyToId,
-              replyToId: trimmedPayload.replyToId,
-            }),
-            textLimit,
-            // The picker path already converts and trims text before capture/delivery.
-            tableMode: "off",
-            sendMessage: sendMessageMattermost,
-            onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
-          });
-        },
-        onError: (err, info) => {
-          runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
-        },
-        onReplyStart: typingCallbacks?.onReplyStart,
-      });
-
-    await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        markDispatchIdle();
-      },
-      run: () =>
-        core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
+        await deliverMattermostReplyPayload({
+          core,
           cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            disableBlockStreaming:
-              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-            onModelSelected,
-          },
-        }),
+          payload: trimmedPayload,
+          to,
+          accountId: account.accountId,
+          agentId: params.route.agentId,
+          replyToId: resolveMattermostReplyRootId({
+            kind: params.kind,
+            threadRootId: params.effectiveReplyToId,
+            replyToId: trimmedPayload.replyToId,
+          }),
+          textLimit,
+          // The picker path already converts and trims text before capture/delivery.
+          tableMode: "off",
+          sendMessage: sendMessageMattermost,
+          onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
+        });
+      },
+      onError: (err, info) => {
+        runtime.error?.(`mattermost model picker ${info.kind} reply failed: ${String(err)}`);
+      },
+      onReplyStart: typingCallbacks?.onReplyStart,
+    });
+
+    await dispatchInboundMessage({
+      ctx: ctxPayload,
+      cfg,
+      dispatcher,
+      onSettled: () => markDispatchIdle(),
+      replyOptions: {
+        ...replyOptions,
+        disableBlockStreaming:
+          typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+        onModelSelected,
+      },
     });
 
     return capturedTexts.join("\n\n").trim();
@@ -1296,7 +1289,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
 
         const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
-        const body = core.channel.reply.formatInboundEnvelope({
+        const body = formatInboundEnvelope({
           channel: "Mattermost",
           from: fromLabel,
           timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
@@ -1312,7 +1305,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             limit: historyLimit,
             currentMessage: combinedBody,
             formatEntry: (entry) =>
-              core.channel.reply.formatInboundEnvelope({
+              formatInboundEnvelope({
                 channel: "Mattermost",
                 from: fromLabel,
                 timestamp: entry.timestamp,
@@ -1335,7 +1328,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 limit: historyLimit,
               })
             : undefined;
-        const ctxPayload = core.channel.reply.finalizeInboundContext({
+        const ctxPayload = finalizeInboundContext({
           Body: combinedBody,
           BodyForAgent: bodyForAgent,
           InboundHistory: inboundHistory,
@@ -1388,10 +1381,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 normalizeEntry: normalizeMattermostAllowEntry,
               })
             : null;
-
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
 
         const previewLine = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
         logVerboseMessage(
@@ -1591,11 +1580,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           dmRetryOptions: account.config.dmChannelRetry,
         });
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
-          core.channel.reply.createReplyDispatcherWithTyping({
+          createReplyDispatcherWithTyping({
             ...replyPipeline,
             resolveFollowupAdmissionBarrierTimeoutPolicy: deliveryBarrier.resolveTimeoutPolicy,
             onDeliverySettled: deliveryBarrier.markDeliverySettled,
-            humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+            humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
             typingCallbacks,
             deliver: async (payloadEntry: ReplyPayload, info) => {
               if (info.kind === "final") {
@@ -1715,12 +1704,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 raw: post,
               }),
               resolveTurn: () => ({
+                cfg,
                 channel: "mattermost",
                 accountId: route.accountId,
-                routeSessionKey: route.sessionKey,
-                storePath,
+                route: { agentId: route.agentId, sessionKey: route.sessionKey },
                 ctxPayload,
-                recordInboundSession: core.channel.session.recordInboundSession,
                 record: {
                   updateLastRoute:
                     kind === "direct"
@@ -1772,131 +1760,124 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   });
                 },
                 runDispatch: () =>
-                  core.channel.reply.withReplyDispatcher({
+                  dispatchInboundMessage({
+                    ctx: ctxPayload,
+                    cfg,
                     dispatcher,
-                    onSettled: () => {
-                      markDispatchIdle();
-                    },
-                    run: () =>
-                      core.channel.reply.dispatchReplyFromConfig({
-                        ctx: ctxPayload,
-                        cfg,
-                        dispatcher,
-                        replyOptions: {
-                          ...replyOptions,
-                          allowProgressCallbacksWhenSourceDeliverySuppressed:
-                            draftToolProgressEnabled ? true : undefined,
-                          preserveProgressCallbackStartOrder: draftPreviewEnabled
-                            ? true
-                            : undefined,
-                          onObservedReplyDelivery: draftToolProgressEnabled
-                            ? () => draftStream.clear()
-                            : undefined,
-                          disableBlockStreaming: draftPreviewEnabled
-                            ? true
-                            : typeof account.blockStreaming === "boolean"
-                              ? !account.blockStreaming
+                    onSettled: () => markDispatchIdle(),
+                    replyOptions: {
+                      ...replyOptions,
+                      allowProgressCallbacksWhenSourceDeliverySuppressed: draftToolProgressEnabled
+                        ? true
+                        : undefined,
+                      preserveProgressCallbackStartOrder: draftPreviewEnabled ? true : undefined,
+                      onObservedReplyDelivery: draftToolProgressEnabled
+                        ? () => draftStream.clear()
+                        : undefined,
+                      disableBlockStreaming: draftPreviewEnabled
+                        ? true
+                        : typeof account.blockStreaming === "boolean"
+                          ? !account.blockStreaming
+                          : undefined,
+                      ...(suppressDefaultToolProgressMessages
+                        ? { suppressDefaultToolProgressMessages: true }
+                        : {}),
+                      onModelSelected,
+                      onPartialReply: (payloadResult) => {
+                        if (account.streamingMode !== "progress") {
+                          return updateDraftFromPartial(payloadResult.text);
+                        }
+                        return undefined;
+                      },
+                      onAssistantMessageStart: () => {
+                        lastPartialText = "";
+                        progressDraft.resetReasoningProgress();
+                        if (account.streamingMode === "block") {
+                          blockPreviewAssistantMessagePending = true;
+                          return;
+                        }
+                        if (account.streamingMode !== "progress") {
+                          progressDraft.reset();
+                        }
+                      },
+                      onReasoningEnd: () => {
+                        // Hidden reasoning has no visible boundary. Only transitions that
+                        // actually render text, reasoning, or tools rotate preview posts.
+                        lastPartialText = "";
+                        progressDraft.resetReasoningProgress();
+                        if (
+                          account.streamingMode !== "block" &&
+                          account.streamingMode !== "progress"
+                        ) {
+                          progressDraft.reset();
+                        }
+                      },
+                      onReasoningStream: async (payloadResult) => {
+                        if (account.streamingMode === "progress") {
+                          await progressDraft.pushReasoningProgress(
+                            payloadResult.text || "Thinking…",
+                            { snapshot: payloadResult.isReasoningSnapshot === true },
+                          );
+                          return;
+                        }
+                        if (!lastPartialText) {
+                          const boundarySettled = enterBlockPreviewActivity("reasoning");
+                          draftStream.update("Thinking…");
+                          previewBoundaryController.noteUpdate();
+                          await boundarySettled;
+                        }
+                      },
+                      onToolStart: async (payloadValue) => {
+                        if (!draftToolProgressEnabled) {
+                          return;
+                        }
+                        const boundarySettled = enterBlockPreviewActivity("tool");
+                        // Boundary detach and progress staging both happen synchronously before
+                        // their first await; agent callbacks may be dispatched fire-and-forget.
+                        const progressSettled = progressDraft.pushToolProgress(
+                          buildChannelProgressDraftLineForEntry(
+                            account.config,
+                            {
+                              event: "tool",
+                              itemId: payloadValue.itemId,
+                              toolCallId: payloadValue.toolCallId,
+                              name: payloadValue.name,
+                              phase: payloadValue.phase,
+                              args: payloadValue.args,
+                            },
+                            payloadValue.detailMode
+                              ? { detailMode: payloadValue.detailMode }
                               : undefined,
-                          ...(suppressDefaultToolProgressMessages
-                            ? { suppressDefaultToolProgressMessages: true }
-                            : {}),
-                          onModelSelected,
-                          onPartialReply: (payloadResult) => {
-                            if (account.streamingMode !== "progress") {
-                              return updateDraftFromPartial(payloadResult.text);
-                            }
-                            return undefined;
-                          },
-                          onAssistantMessageStart: () => {
-                            lastPartialText = "";
-                            progressDraft.resetReasoningProgress();
-                            if (account.streamingMode === "block") {
-                              blockPreviewAssistantMessagePending = true;
-                              return;
-                            }
-                            if (account.streamingMode !== "progress") {
-                              progressDraft.reset();
-                            }
-                          },
-                          onReasoningEnd: () => {
-                            // Hidden reasoning has no visible boundary. Only transitions that
-                            // actually render text, reasoning, or tools rotate preview posts.
-                            lastPartialText = "";
-                            progressDraft.resetReasoningProgress();
-                            if (
-                              account.streamingMode !== "block" &&
-                              account.streamingMode !== "progress"
-                            ) {
-                              progressDraft.reset();
-                            }
-                          },
-                          onReasoningStream: async (payloadResult) => {
-                            if (account.streamingMode === "progress") {
-                              await progressDraft.pushReasoningProgress(
-                                payloadResult.text || "Thinking…",
-                                { snapshot: payloadResult.isReasoningSnapshot === true },
-                              );
-                              return;
-                            }
-                            if (!lastPartialText) {
-                              const boundarySettled = enterBlockPreviewActivity("reasoning");
-                              draftStream.update("Thinking…");
-                              previewBoundaryController.noteUpdate();
-                              await boundarySettled;
-                            }
-                          },
-                          onToolStart: async (payloadValue) => {
-                            if (!draftToolProgressEnabled) {
-                              return;
-                            }
-                            const boundarySettled = enterBlockPreviewActivity("tool");
-                            // Boundary detach and progress staging both happen synchronously before
-                            // their first await; agent callbacks may be dispatched fire-and-forget.
-                            const progressSettled = progressDraft.pushToolProgress(
-                              buildChannelProgressDraftLineForEntry(
-                                account.config,
-                                {
-                                  event: "tool",
-                                  itemId: payloadValue.itemId,
-                                  toolCallId: payloadValue.toolCallId,
-                                  name: payloadValue.name,
-                                  phase: payloadValue.phase,
-                                  args: payloadValue.args,
-                                },
-                                payloadValue.detailMode
-                                  ? { detailMode: payloadValue.detailMode }
-                                  : undefined,
-                              ),
-                              { startImmediately: true },
-                            );
-                            previewBoundaryController.noteUpdate();
-                            await Promise.all([boundarySettled, progressSettled]);
-                          },
-                          onItemEvent: async (payloadLocal) => {
-                            if (!draftToolProgressEnabled) {
-                              return;
-                            }
-                            const boundarySettled = enterBlockPreviewActivity("tool");
-                            const progressSettled = progressDraft.pushToolProgress(
-                              buildChannelProgressDraftLineForEntry(account.config, {
-                                event: "item",
-                                itemId: payloadLocal.itemId,
-                                itemKind: payloadLocal.kind,
-                                title: payloadLocal.title,
-                                name: payloadLocal.name,
-                                phase: payloadLocal.phase,
-                                status: payloadLocal.status,
-                                summary: payloadLocal.summary,
-                                progressText: payloadLocal.progressText,
-                                meta: payloadLocal.meta,
-                              }),
-                              { startImmediately: true },
-                            );
-                            previewBoundaryController.noteUpdate();
-                            await Promise.all([boundarySettled, progressSettled]);
-                          },
-                        },
-                      }),
+                          ),
+                          { startImmediately: true },
+                        );
+                        previewBoundaryController.noteUpdate();
+                        await Promise.all([boundarySettled, progressSettled]);
+                      },
+                      onItemEvent: async (payloadLocal) => {
+                        if (!draftToolProgressEnabled) {
+                          return;
+                        }
+                        const boundarySettled = enterBlockPreviewActivity("tool");
+                        const progressSettled = progressDraft.pushToolProgress(
+                          buildChannelProgressDraftLineForEntry(account.config, {
+                            event: "item",
+                            itemId: payloadLocal.itemId,
+                            itemKind: payloadLocal.kind,
+                            title: payloadLocal.title,
+                            name: payloadLocal.name,
+                            phase: payloadLocal.phase,
+                            status: payloadLocal.status,
+                            summary: payloadLocal.summary,
+                            progressText: payloadLocal.progressText,
+                            meta: payloadLocal.meta,
+                          }),
+                          { startImmediately: true },
+                        );
+                        previewBoundaryController.noteUpdate();
+                        await Promise.all([boundarySettled, progressSettled]);
+                      },
+                    },
                   }),
               }),
             },

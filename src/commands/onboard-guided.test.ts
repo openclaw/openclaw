@@ -93,6 +93,7 @@ function detection(
     unavailableCandidates: [],
     manualProviders: [],
     authOptions: [],
+    recommendedInstalls: [],
     workspace: "/tmp/openclaw-workspace",
     setupComplete: false,
     ...overrides,
@@ -620,7 +621,21 @@ describe("runGuidedOnboarding", () => {
     const prompter = createWizardPrompter({ select });
     const deps = setupDeps({
       prompter,
-      detect: vi.fn(async () => detection({ candidates: [], manualProviders: [] })),
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [],
+          manualProviders: [],
+          recommendedInstalls: [
+            {
+              id: "ollama",
+              label: "Ollama",
+              hint: "Run open models locally",
+              website: "https://ollama.com/download",
+              icon: "https://cdn.simpleicons.org/ollama",
+            },
+          ],
+        }),
+      ),
     });
     const runtime = makeRuntime();
 
@@ -630,6 +645,10 @@ describe("runGuidedOnboarding", () => {
     expect(deps.activate).not.toHaveBeenCalled();
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(prompter.note).toHaveBeenCalledWith(
+      "Ollama — Run open models locally\n  https://ollama.com/download",
+      "Recommended installs",
+    );
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("No inference option is available yet"),
       "AI access",
@@ -783,7 +802,10 @@ describe("runGuidedOnboarding", () => {
               credentials: true,
             },
           ],
+          unavailableCandidates: [],
           manualProviders: [],
+          authOptions: [],
+          recommendedInstalls: [],
           workspace: "/gateway/workspace",
           setupComplete: false,
         };

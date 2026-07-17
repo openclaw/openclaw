@@ -1,6 +1,6 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import type { MeetRealtimeAudioTransport } from "./realtime-audio-transport.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -12,13 +12,16 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-export function createNodeMeetRealtimeAudioTransport(params: {
+export function createNodeMeetingRealtimeAudioTransport(params: {
   runtime: PluginRuntime;
   nodeId: string;
   bridgeId: string;
   logger: RuntimeLogger;
+  /** Platform registration owns this stable command name; paired nodes call it verbatim. */
+  commandName: string;
+  logScope: string;
   logPrefix: string;
-}): MeetRealtimeAudioTransport {
+}): MeetingRealtimeAudioTransport {
   let stopped = false;
   let inputStarted = false;
   let consecutiveInputErrors = 0;
@@ -32,7 +35,7 @@ export function createNodeMeetRealtimeAudioTransport(params: {
     }
   };
 
-  const transport: MeetRealtimeAudioTransport = {
+  const transport: MeetingRealtimeAudioTransport = {
     onFatal: (handler) => {
       fatalHandler = handler;
       if (fatalSignaled) {
@@ -53,7 +56,7 @@ export function createNodeMeetRealtimeAudioTransport(params: {
             // Long-poll cadence bounds both normal input latency and transient-error retries.
             const raw = await params.runtime.nodes.invoke({
               nodeId: params.nodeId,
-              command: "googlemeet.chrome",
+              command: params.commandName,
               params: { action: "pullAudio", bridgeId: params.bridgeId, timeoutMs: 250 },
               timeoutMs: 2_000,
             });
@@ -76,7 +79,7 @@ export function createNodeMeetRealtimeAudioTransport(params: {
             consecutiveInputErrors += 1;
             lastInputError = message;
             params.logger.warn(
-              `[google-meet] ${params.logPrefix} audio input failed (${consecutiveInputErrors}/5): ${message}`,
+              `${params.logScope} ${params.logPrefix} audio input failed (${consecutiveInputErrors}/5): ${message}`,
             );
             if (
               consecutiveInputErrors >= 5 ||
@@ -100,20 +103,20 @@ export function createNodeMeetRealtimeAudioTransport(params: {
       try {
         await params.runtime.nodes.invoke({
           nodeId: params.nodeId,
-          command: "googlemeet.chrome",
+          command: params.commandName,
           params: { action: "stop", bridgeId: params.bridgeId },
           timeoutMs: 5_000,
         });
       } catch (error) {
         params.logger.debug?.(
-          `[google-meet] node audio bridge stop ignored: ${formatErrorMessage(error)}`,
+          `${params.logScope} node audio bridge stop ignored: ${formatErrorMessage(error)}`,
         );
       }
     },
     writeOutput: async (audio) => {
       await params.runtime.nodes.invoke({
         nodeId: params.nodeId,
-        command: "googlemeet.chrome",
+        command: params.commandName,
         params: {
           action: "pushAudio",
           bridgeId: params.bridgeId,
@@ -125,7 +128,7 @@ export function createNodeMeetRealtimeAudioTransport(params: {
     clearOutput: async () => {
       await params.runtime.nodes.invoke({
         nodeId: params.nodeId,
-        command: "googlemeet.chrome",
+        command: params.commandName,
         params: { action: "clearAudio", bridgeId: params.bridgeId },
         timeoutMs: 5_000,
       });

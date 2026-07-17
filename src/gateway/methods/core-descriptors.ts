@@ -73,6 +73,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   // without the shared three-write budget so the automatic ladder can finish.
   { name: "openclaw.setup.activate", scope: "operator.admin" },
   { name: "openclaw.setup.auth.start", scope: "operator.admin" },
+  { name: "openclaw.setup.prepare.start", scope: "operator.admin" },
   { name: "wizard.start", scope: "operator.admin" },
   { name: "wizard.next", scope: "operator.admin" },
   { name: "wizard.cancel", scope: "operator.admin" },

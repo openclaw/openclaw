@@ -165,6 +165,43 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  type RunParams = Parameters<typeof actual.runChannelInboundEvent>[0];
+  type TestTurn = {
+    storePath: string;
+    recordInboundSession: Parameters<
+      typeof actual.runPreparedInboundReply
+    >[0]["recordInboundSession"];
+  };
+  return {
+    ...actual,
+    runChannelInboundEvent: (params: RunParams) => {
+      const resolveTurn = params.adapter.resolveTurn;
+      return actual.runChannelInboundEvent({
+        ...params,
+        adapter: {
+          ...params.adapter,
+          resolveTurn: async (input, eventClass, preflight) => {
+            const resolved = await resolveTurn(input, eventClass, preflight);
+            if (!("route" in resolved) || !("runDispatch" in resolved)) {
+              return resolved;
+            }
+            const { route, ...turn } = resolved;
+            const testTurn = (params.raw as { turn: TestTurn }).turn;
+            return {
+              ...turn,
+              routeSessionKey: route.sessionKey,
+              storePath: testTurn.storePath,
+              recordInboundSession: testTurn.recordInboundSession,
+            };
+          },
+        },
+      });
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();

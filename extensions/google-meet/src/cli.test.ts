@@ -1014,9 +1014,19 @@ describe("google-meet CLI", () => {
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,
+      inCall: true,
+      manualActionRequired: false,
+      manualActionReason: undefined,
+      manualActionMessage: undefined,
       listenVerified: true,
       listenTimedOut: false,
+      captioning: true,
+      captionsEnabledAttempted: true,
       transcriptLines: 1,
+      lastCaptionAt: undefined,
+      lastCaptionSpeaker: undefined,
+      lastCaptionText: undefined,
+      recentTranscript: [],
       session: {
         id: "meet_1",
         url: "https://meet.google.com/abc-defg-hij",
