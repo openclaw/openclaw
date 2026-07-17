@@ -388,13 +388,13 @@ describe("attachConfigIssueDiagnostics", () => {
   });
 
   it("preserves non-canonical numeric record keys", () => {
-    const parsed = { records: { "01": { mode: "bad" }, "1": { mode: "good" } } };
+    const recordConfig = { records: { "01": { mode: "bad" }, "1": { mode: "good" } } };
     const issues = attachConfigIssueDiagnostics(
       [issue(["records", "01", "mode"], "Invalid input")],
       {
         raw: '{ records: { "01": { mode: "bad" }, "1": { mode: "good" } } }',
-        parsed,
-        effective: parsed,
+        parsed: recordConfig,
+        effective: recordConfig,
         configPath: "/tmp/openclaw.json",
         formatPathForDisplay: true,
         includeReceivedValueHint: true,
@@ -409,11 +409,11 @@ describe("attachConfigIssueDiagnostics", () => {
   });
 
   it("uses structured paths to distinguish dotted keys from nested keys", () => {
-    const parsed = { "foo.bar": "literal", foo: { bar: "nested" } };
+    const dottedConfig = { "foo.bar": "literal", foo: { bar: "nested" } };
     const params = {
       raw: ['{ "foo.bar": "literal",', '  foo: { bar: "nested" } }'].join("\n"),
-      parsed,
-      effective: parsed,
+      parsed: dottedConfig,
+      effective: dottedConfig,
       configPath: "/tmp/openclaw.json",
       formatPathForDisplay: true,
       includeReceivedValueHint: true,
@@ -434,11 +434,11 @@ describe("attachConfigIssueDiagnostics", () => {
   });
 
   it("does not let existing values steal missing dotted or nested paths", () => {
-    const parsed = { "foo.bar": "literal", foo: {} };
+    const dottedConfig = { "foo.bar": "literal", foo: {} };
     const params = {
       raw: ['{ "foo.bar": "literal",', "  foo: {} }"].join("\n"),
-      parsed,
-      effective: parsed,
+      parsed: dottedConfig,
+      effective: dottedConfig,
       configPath: "/tmp/openclaw.json",
       formatPathForDisplay: true,
       includeReceivedValueHint: true,
