@@ -32,6 +32,11 @@ class FakeGoogleLiveWebSocket extends EventTarget {
   emitMessage(message: unknown): void {
     this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
   }
+
+  emitClose(): void {
+    this.readyState = 3;
+    this.dispatchEvent(new Event("close"));
+  }
 }
 
 class FakeAudioContext {
@@ -240,9 +245,10 @@ describe("Google Live Video Talk", () => {
     });
 
     const sentBeforeStop = ws.sent.length;
-    transport.stop();
+    ws.emitClose();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(ws.sent).toHaveLength(sentBeforeStop);
+    expect(onStatus).toHaveBeenLastCalledWith("error", "Realtime connection closed");
     expect(onVideoStream).toHaveBeenLastCalledWith(null);
     expect(audioStop).toHaveBeenCalledOnce();
     expect(videoStop).toHaveBeenCalledOnce();

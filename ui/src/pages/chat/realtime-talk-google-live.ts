@@ -190,14 +190,10 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       void this.handleMessage(event.data);
     });
     this.ws.addEventListener("close", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection closed");
-      }
+      this.failConnection("Realtime connection closed");
     });
     this.ws.addEventListener("error", () => {
-      if (!this.closed) {
-        this.ctx.callbacks.onStatus?.("error", "Realtime connection failed");
-      }
+      this.failConnection("Realtime connection failed");
     });
   }
 
@@ -231,6 +227,15 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.outputContext = null;
     this.ws?.close();
     this.ws = null;
+  }
+
+  private failConnection(detail: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("error", detail);
+    // A terminal socket failure still owns live browser media until stop() releases it.
+    this.stop();
   }
 
   private startMicrophonePump(): void {
