@@ -5,8 +5,6 @@ import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
 import { ChannelImplicitMentionsSchema } from "./zod-schema.implicit-mentions.js";
 
-export { ChannelImplicitMentionsSchema };
-
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
