@@ -138,8 +138,12 @@ describe("music generate background helpers", () => {
       },
     });
 
+    // Shared helper assigns host-owned completion delivery; agent gets caption-only
+    // guidance (including message-tool caption sends without attachments).
     expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("final-reply MEDIA lines");
+    expectReplyInstructionContains("completion handoff");
+    expectReplyInstructionContains("Do not re-send, re-attach, or echo MEDIA lines");
+    expectReplyInstructionContains("short caption and no attachments");
   });
 
   it("keeps failed completion notices in the durable agent-loop handoff", async () => {
@@ -189,8 +193,10 @@ describe("music generate background helpers", () => {
         },
       });
 
+      // Same shared ownership instruction for legacy group/channel keys.
       expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("final-reply MEDIA lines");
+      expectReplyInstructionContains("completion handoff");
+      expectReplyInstructionContains("Do not re-send, re-attach, or echo MEDIA lines");
     },
   );
 });

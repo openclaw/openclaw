@@ -1098,6 +1098,62 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("assigns completion-handoff ownership so the agent is not told to re-attach MEDIA", async () => {
+    // Host-owned durable delivery already carries the generated artifact. Asking
+    // the resumed agent to also attach MEDIA lines produces a second channel send.
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+      path: "queued",
+    });
+    const lifecycle = createImageMediaLifecycle();
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-once",
+          runId: "tool:image_generate:once",
+          requesterSessionKey: "agent:main:telegram:direct:123",
+          taskLabel: "proof dog image",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "telegram:123",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.\nMEDIA:/tmp/generated-dog.png",
+        mediaUrls: ["/tmp/generated-dog.png"],
+        attachments: [
+          {
+            type: "image",
+            path: "/tmp/generated-dog.png",
+            mimeType: "image/png",
+            name: "generated-dog.png",
+          },
+        ],
+      }),
+    ).resolves.toEqual({ status: "delivered" });
+
+    const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
+      .calls[0]?.[0] as
+      | {
+          durableGeneratedMediaHandoff?: boolean;
+          internalEvents?: Array<{ replyInstruction?: string; mediaUrls?: string[] }>;
+        }
+      | undefined;
+    expect(announceParams?.durableGeneratedMediaHandoff).toBe(true);
+    const replyInstruction = announceParams?.internalEvents?.[0]?.replyInstruction ?? "";
+    expect(announceParams?.internalEvents?.[0]?.mediaUrls).toEqual(["/tmp/generated-dog.png"]);
+    expect(replyInstruction).toMatch(/owned by this completion handoff/i);
+    expect(replyInstruction).toMatch(/Do not re-send, re-attach, or echo MEDIA lines/i);
+    expect(replyInstruction).not.toMatch(/final-reply MEDIA lines/i);
+    expect(replyInstruction).not.toMatch(/every structured attachment from the internal event/i);
+    // Message-tool-only routes still need a caption path; attachments stay host-owned.
+    expect(replyInstruction).toMatch(/message\(action=["']send["']\)/i);
+    expect(replyInstruction).toMatch(/short caption and no attachments/i);
+    expect(replyInstruction).toMatch(/short normal final reply caption/i);
+  });
+
   it("does not direct-deliver generated media after requester abandonment", async () => {
     // Abandoned requester sessions are terminal; direct delivery would re-open a
     // conversation the task lifecycle already decided to stop.
