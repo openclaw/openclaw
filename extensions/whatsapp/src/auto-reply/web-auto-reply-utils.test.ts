@@ -136,14 +136,34 @@ describe("isBotMentionedFromTargets", () => {
     expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
 
-  it("ignores regex matches when other mentions are present", () => {
+  it("falls through to regex matches when native mentions target another participant", () => {
     const msg = makeMsg({
       body: "@OpenClaw please help",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });
+    expectMentioned(msg, mentionCfg, true);
+  });
+
+  it("rejects third-party native mentions when regexes do not match", () => {
+    const msg = makeMsg({
+      body: "please help",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
     expectMentioned(msg, mentionCfg, false);
+  });
+
+  it("does not use numeric self fallback when native mentions target another participant", () => {
+    const msg = makeMsg({
+      body: "please check +1 555 123 4567",
+      mentionedJids: ["19998887777@s.whatsapp.net"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, { mentionRegexes: [] }, false);
   });
 
   it("matches explicit self mentions", () => {

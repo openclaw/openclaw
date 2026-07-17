@@ -565,7 +565,7 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
-  it("does not treat group mention gating as self-chat under implicit self fallback", async () => {
+  it("uses configured mention patterns when native mentions target another group member", async () => {
     const cfg = makeConfig({
       channels: {
         whatsapp: {
@@ -580,6 +580,55 @@ describe("applyGroupGating", () => {
       msg: createGroupMessage({
         id: "g-other-mention",
         body: "@openclaw please check this",
+        mentionedJids: ["15550000000@s.whatsapp.net"],
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+    expect(groupHistories.get("whatsapp:default:group:123@g.us")).toBeUndefined();
+  });
+
+  it("rejects third-party native mentions when configured mention patterns do not match", async () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          groups: { "*": { requireMention: true } },
+        },
+      },
+      messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
+    });
+
+    const { result, groupHistories } = await runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "g-other-mention-no-pattern",
+        body: "@someone please check this",
+        mentionedJids: ["15550000000@s.whatsapp.net"],
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(false);
+    expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(1);
+  });
+
+  it("does not use numeric self fallback when native mentions target another group member", async () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    const { result, groupHistories } = await runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "g-other-mention-self-number",
+        body: "please check +1 555 123 4567",
         mentionedJids: ["15550000000@s.whatsapp.net"],
         selfE164: "+15551234567",
         selfJid: "15551234567@s.whatsapp.net",
