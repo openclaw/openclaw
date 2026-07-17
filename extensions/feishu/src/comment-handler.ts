@@ -230,6 +230,7 @@ export async function handleFeishuCommentEvent(
     conversation: { kind: "direct", id: commentTarget, label: conversationLabel },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: commentSessionKey,
       dispatchSessionKey: commentSessionKey,

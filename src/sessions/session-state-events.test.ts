@@ -26,6 +26,7 @@ import {
   recordSessionStateEvent,
   recordSubagentSpawned,
   recordSubagentTerminalState,
+  registerMainSessionGroupWatch,
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
@@ -36,6 +37,7 @@ const tempDirs: string[] = [];
 const watcher = "agent:main:main";
 const nestedWatcher = "agent:main:subagent:parent";
 const child = "agent:main:subagent:child";
+const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 let disposeHeartbeatWakeHandler: (() => void) | undefined;
 
@@ -63,6 +65,7 @@ function eventInput(
 function readCursor(
   database: ReturnType<typeof createDatabaseOptions>,
   watcherSessionKey = watcher,
+  targetSessionKey = child,
 ) {
   return openOpenClawStateDatabase(database)
     .db.prepare(
@@ -70,7 +73,7 @@ function readCursor(
        FROM session_watch_cursors
        WHERE watcher_session_key = ? AND target_session_key = ?`,
     )
-    .get(watcherSessionKey, child) as
+    .get(watcherSessionKey, targetSessionKey) as
     | {
         last_seen_sequence: number;
         notified_sequence: number;
@@ -525,6 +528,80 @@ describe("session state events", () => {
       notified_sequence: afterRegistration.sequence,
       material_sequence: afterRegistration.sequence,
     });
+  });
+
+  it("registers the main watcher once only under dmScope main", () => {
+    const database = createDatabaseOptions();
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { ...database, now: 100 },
+      ),
+    ).toBe(true);
+    expect(
+      registerMainSessionGroupWatch(
+        { sessionKey: group, agentId: "main", dmScope: "main" },
+        { ...database, now: 200 },
+      ),
+    ).toBe(true);
+    expect(
+      registerMainSessionGroupWatch(
+        {
+          sessionKey: "agent:main:slack:channel:room-2",
+          agentId: "main",
+          dmScope: "per-channel-peer",
+        },
+        database,
+      ),
+    ).toBe(false);
+
+    const rows = openOpenClawStateDatabase(database)
+      .db.prepare(
+        `SELECT watcher_session_key, target_session_key, updated_at
+         FROM session_watch_cursors`,
+      )
+      .all();
+    expect(rows).toEqual([
+      {
+        watcher_session_key: watcher,
+        target_session_key: group,
+        updated_at: 100,
+      },
+    ]);
+  });
+
+  it("records and coalesces group activity without an immediate wake", async () => {
+    vi.useFakeTimers();
+    const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+    disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
+    await vi.advanceTimersByTimeAsync(300);
+    wakes.mockClear();
+    const database = createDatabaseOptions();
+    registerMainSessionGroupWatch(
+      { sessionKey: group, agentId: "main", dmScope: "main" },
+      database,
+    );
+
+    for (const actorId of ["human-1", "human-2"]) {
+      recordSessionHumanDirectMessage(
+        {
+          sessionKey: group,
+          entry: { sessionId: "session-group", updatedAt: Date.now(), chatType: "group" },
+          agentId: "main",
+          actor: { actorType: "human", actorId },
+          channel: "telegram",
+        },
+        database,
+      );
+    }
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(listSessionStateEventsSince(group, "main", 0, 200, database).events).toHaveLength(2);
+    expect(peekSystemEventEntries(watcher)).toHaveLength(1);
+    const cursor = readCursor(database, watcher, group);
+    expect(cursor).toBeDefined();
+    expect(cursor!.material_sequence).toBeGreaterThan(cursor!.notified_sequence);
+    expect(wakes).not.toHaveBeenCalled();
   });
 
   it("gates unparented human turns on registered watchers", () => {

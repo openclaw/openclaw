@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { DmScope } from "../config/types.base.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,13 +11,14 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { buildAgentMainSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { classifySessionKind } from "./classify-session-kind.js";
 import type { InputProvenance } from "./input-provenance.js";
 import {
   NOTIFY_BY_SESSION_STATE_EVENT_KIND as NOTIFY_BY_KIND,
@@ -793,6 +795,27 @@ function hasSessionStateWatchers(
   }
 }
 
+/** List durable watch targets owned by one watcher; database failures grant nothing. */
+export function listSessionStateWatchTargets(
+  watcherSessionKey: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Set<string> {
+  try {
+    const { db } = openOpenClawStateDatabase(options);
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("target_session_key")
+        .where("watcher_session_key", "=", watcherSessionKey),
+    );
+    return new Set(rows.map((row) => row.target_session_key));
+  } catch (error) {
+    log.warn(`failed to list session state watch targets: ${String(error)}`);
+    return new Set();
+  }
+}
+
 /** Register an explicit watcher (e.g. a sessions_send coordinator) for a target session. */
 export function registerSessionStateWatch(
   params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
@@ -837,6 +860,39 @@ export function registerSessionStateWatch(
     log.warn(`failed to register session state watch: ${String(error)}`);
     return false;
   }
+}
+
+/** Register the personal agent's main session to observe one routed group session. */
+export function registerMainSessionGroupWatch(
+  params: {
+    sessionKey: string;
+    agentId: string;
+    entry?: SessionEntry;
+    dmScope: DmScope;
+    mainKey?: string;
+  },
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): boolean {
+  if (
+    params.dmScope !== "main" ||
+    classifySessionKind(params.sessionKey, params.entry) !== "group"
+  ) {
+    return false;
+  }
+  const watcherSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: params.mainKey,
+  });
+  // The watch is the durable ownership edge: it drives both ambient notices and
+  // the matching read carve-out without deriving policy from a channel id.
+  return registerSessionStateWatch(
+    {
+      watcherSessionKey,
+      targetSessionKey: params.sessionKey,
+      targetAgentId: params.agentId,
+    },
+    options,
+  );
 }
 
 export function recordSessionHumanDirectMessage(

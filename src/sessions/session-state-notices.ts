@@ -1,7 +1,9 @@
 /** Stale-state notice text, coalescing keys, and watcher eligibility. */
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { classifySessionKind } from "./classify-session-kind.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 
@@ -31,6 +33,25 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
   return !isSubagentSessionKey(watcherSessionKey);
 }
 
+function isGroupActivityTarget(targetSessionKey: string): boolean {
+  if (isSubagentSessionKey(targetSessionKey)) {
+    return false;
+  }
+  if (classifySessionKind(targetSessionKey) === "group") {
+    return true;
+  }
+  try {
+    return (
+      classifySessionKind(
+        targetSessionKey,
+        loadSessionEntry({ sessionKey: targetSessionKey, clone: false }),
+      ) === "group"
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Bare keys (session.scope="global") are store-local per agent, but cursors, the
 // system-event queue, and heartbeat wakes are keyed by session key alone. A notice
 // for one agent's child could be drained and acknowledged by another agent's global
@@ -46,10 +67,17 @@ export function enqueueSessionStateNotice(params: {
   targetSessionKey: string;
   lastSeenSequence: number;
 }): void {
+  const groupActivity = isGroupActivityTarget(params.targetSessionKey);
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
+    ...(groupActivity ? { replace: true } : {}),
   });
+  // Group activity is ambient context. Coalesce it for the next main turn instead
+  // of waking the personal agent once per inbound group message.
+  if (groupActivity) {
+    return;
+  }
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
     return;
   }
