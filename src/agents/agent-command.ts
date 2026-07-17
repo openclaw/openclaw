@@ -553,8 +553,7 @@ export async function agentCommand(
   );
 }
 
-/** Runs an agent turn from an inbound channel/gateway ingress context. */
-export async function agentCommandFromIngress(
+async function agentCommandFromIngressInternal(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
@@ -587,6 +586,27 @@ export async function agentCommandFromIngress(
 
     return result;
   });
+}
+
+/** Runs an agent turn from an inbound channel/gateway ingress context. */
+export async function agentCommandFromIngress(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv = defaultRuntime,
+  deps?: CliDeps,
+) {
+  return await agentCommandFromIngressInternal(opts, runtime, deps);
+}
+
+/** Internal Gateway entrypoint that restores a rejected restart-recovery admission. */
+export async function agentCommandFromGatewayIngress(
+  opts: AgentCommandIngressOpts,
+  runtime: RuntimeEnv,
+  deps: CliDeps | undefined,
+  recovery: {
+    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  },
+) {
+  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
 }
 
 export const testing = {
