@@ -99,6 +99,16 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
   });
 
+  it("handles comments between unquoted keys and colons", () => {
+    const raw = ["{", "  key // comment", '  : "value"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
+  });
+
+  it("handles comments directly after scalar values", () => {
+    const raw = ["{", "  ignored: 1 // comment", '  , target: "bad"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["target"])).toBe(3);
+  });
+
   it("handles single-quoted strings", () => {
     const raw = ["{", "  'key': 'value'", "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(2);
@@ -293,7 +303,7 @@ describe("attachConfigIssueDiagnostics", () => {
           allowedValues: ["minimal", "coding"],
         },
       ],
-      { raw, parsed, configPath: "/tmp/openclaw.json" },
+      { raw, parsed, effective: parsed, configPath: "/tmp/openclaw.json" },
     );
 
     expect(issues[0]?.path).toBe("agents.list.0.tools.profile");
@@ -314,6 +324,7 @@ describe("attachConfigIssueDiagnostics", () => {
       {
         raw,
         parsed,
+        effective: parsed,
         configPath: "/tmp/openclaw.json",
         formatPathForDisplay: true,
         includeReceivedValueHint: true,
@@ -329,6 +340,7 @@ describe("attachConfigIssueDiagnostics", () => {
     const issues = attachConfigIssueDiagnostics([{ path: "foo", message: "error" }], {
       raw: null,
       parsed: {},
+      effective: {},
       configPath: "/tmp/openclaw.json",
     });
 
@@ -347,6 +359,7 @@ describe("attachConfigIssueDiagnostics", () => {
       {
         raw: ["{", '  "$include": "./models.json"', "}"].join("\n"),
         parsed: { models: { providers: { openai: { api: "bad" } } } },
+        effective: { models: { providers: { openai: { api: "bad" } } } },
         configPath: "/tmp/openclaw.json",
         formatPathForDisplay: true,
         includeReceivedValueHint: true,
@@ -378,6 +391,7 @@ describe("attachConfigIssueDiagnostics", () => {
           "}",
         ].join("\n"),
         parsed: { plugins: { entries: { "123": { config: { mode: "bad" } } } } },
+        effective: { plugins: { entries: { "123": { config: { mode: "bad" } } } } },
         configPath: "/tmp/openclaw.json",
         formatPathForDisplay: true,
         includeReceivedValueHint: true,
@@ -385,7 +399,45 @@ describe("attachConfigIssueDiagnostics", () => {
     );
 
     expect(issues[0]?.path).toBe("plugins.entries.123.config.mode");
-    expect(issues[0]?.message).toContain('got: "bad"');
+    expect(issues[0]?.message).toBe('Invalid input (allowed: "good")');
     expect(issues[0]?.line).toBe(4);
+  });
+
+  it("omits values changed by environment substitution", () => {
+    const envRaw = raw.replace('"none"', '"${PROFILE}"');
+    const issues = attachConfigIssueDiagnostics(
+      [{ path: "agents.list.0.tools.profile", message: "Invalid input" }],
+      {
+        raw: envRaw,
+        parsed: { agents: { list: [{ tools: { profile: "${PROFILE}" } }] } },
+        effective: { agents: { list: [{ tools: { profile: "none" } }] } },
+        configPath: "/tmp/openclaw.json",
+        formatPathForDisplay: true,
+        includeReceivedValueHint: true,
+      },
+    );
+
+    expect(issues[0]?.message).toBe("Invalid input");
+    expect(issues[0]?.line).toBe(4);
+  });
+
+  it("omits arbitrary plugin-owned values", () => {
+    const pluginConfig = {
+      plugins: { entries: { custom: { config: { accessCode: "private" } } } },
+    };
+    const issues = attachConfigIssueDiagnostics(
+      [{ path: "plugins.entries.custom.config.accessCode", message: "Invalid input" }],
+      {
+        raw: '{ plugins: { entries: { custom: { config: { accessCode: "private" } } } } }',
+        parsed: pluginConfig,
+        effective: pluginConfig,
+        configPath: "/tmp/openclaw.json",
+        formatPathForDisplay: true,
+        includeReceivedValueHint: true,
+      },
+    );
+
+    expect(issues[0]?.message).toBe("Invalid input");
+    expect(issues[0]?.line).toBe(1);
   });
 });

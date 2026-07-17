@@ -956,6 +956,7 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
     raw: snapshot.raw,
     parsed: snapshot.parsed,
+    effective: snapshot.sourceConfig,
     configPath: snapshot.path,
     formatPathForDisplay: true,
     includeReceivedValueHint: true,
@@ -2637,6 +2638,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
         const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
           raw: snapshot.raw,
           parsed: snapshot.parsed,
+          effective: snapshot.sourceConfig,
           configPath: snapshot.path,
           formatPathForDisplay: true,
           includeReceivedValueHint: true,

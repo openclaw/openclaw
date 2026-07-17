@@ -1,28 +1,5 @@
-// JSON5-aware config issue path navigator and display enrichment.
-//
-// Supported JSON5 subset for path navigation:
-// - Objects: { key: value } with quoted (" "), single-quoted (' '), or unquoted
-//   identifier-like keys (A-Z, a-z, _, $, 0-9)
-// - Arrays: [value, ...] with bracket notation
-// - Strings: double-quoted and single-quoted, with \n, \t, \", \', \\, \uXXXX,
-//   \xXX escape sequences, and multi-line (backslash-newline continuation)
-// - Numbers: integers, floats, hex (0x), leading decimal (.5), Infinity, NaN
-// - Comments: // line and /* block */
-// - Trailing commas in objects and arrays
-// - null, true, false literals
-//
-// The navigator only needs to find the byte offset of a value at a given path.
-// It does NOT need to fully parse every value — it skips over values using
-// skipVal/skipComposite. This means value-level syntax (hex numbers, special
-// values) is handled naturally by the value skipper.
-//
-// Known limitations (navigator fails gracefully, returns undefined):
-// - Unquoted keys with non-ASCII characters (Unicode letters outside A-Z, a-z,
-//   _, $). Quoted Unicode keys ("café") work fine.
-// - The navigator's scalar skipper is permissive and may skip past text that
-//   the canonical JSON5 parser would reject. This is safe because the navigator
-//   only runs on configs that have already been successfully parsed.
 import path from "node:path";
+import JSON5 from "json5";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigValidationIssue } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
@@ -31,266 +8,213 @@ export type ConfigIssuePathSegment = string | number;
 
 type Cursor = { pos: number };
 
-function lineAtOffset(raw: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < raw.length; i++) {
-    if (raw[i] === "\n") {
-      line++;
-    }
-  }
-  return line;
-}
-
-function skipWS(raw: string, c: Cursor): void {
-  while (c.pos < raw.length) {
-    const ch = raw[c.pos];
-    if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") {
-      c.pos++;
+function skipTrivia(raw: string, cursor: Cursor): void {
+  while (cursor.pos < raw.length) {
+    const char = raw[cursor.pos];
+    if (/\s/u.test(char ?? "")) {
+      cursor.pos++;
       continue;
     }
-    if (ch === "/" && raw[c.pos + 1] === "/") {
-      c.pos += 2;
-      while (c.pos < raw.length && raw[c.pos] !== "\n") {
-        c.pos++;
+    if (char === "/" && raw[cursor.pos + 1] === "/") {
+      cursor.pos += 2;
+      while (cursor.pos < raw.length && !/[\n\r\u2028\u2029]/u.test(raw[cursor.pos] ?? "")) {
+        cursor.pos++;
       }
       continue;
     }
-    if (ch === "/" && raw[c.pos + 1] === "*") {
-      c.pos += 2;
-      while (c.pos < raw.length - 1) {
-        if (raw[c.pos] === "*" && raw[c.pos + 1] === "/") {
-          c.pos += 2;
-          break;
-        }
-        c.pos++;
-      }
+    if (char === "/" && raw[cursor.pos + 1] === "*") {
+      const close = raw.indexOf("*/", cursor.pos + 2);
+      cursor.pos = close === -1 ? raw.length : close + 2;
       continue;
     }
-    break;
-  }
-}
-
-function skipStr(raw: string, c: Cursor): void {
-  const quote = raw[c.pos];
-  c.pos++;
-  while (c.pos < raw.length) {
-    const ch = raw[c.pos];
-    if (ch === "\\") {
-      c.pos += 2;
-    } else if (ch === quote) {
-      c.pos++;
-      return;
-    } else {
-      c.pos++;
-    }
-  }
-}
-
-function skipVal(raw: string, c: Cursor): void {
-  skipWS(raw, c);
-  if (c.pos >= raw.length) {
     return;
   }
-  const ch = raw[c.pos];
-  if (ch === '"' || ch === "'") {
-    skipStr(raw, c);
-  } else if (ch === "{" || ch === "[") {
-    skipComposite(raw, c);
-  } else {
-    while (c.pos < raw.length) {
-      const ch2 = raw[c.pos];
-      if (
-        ch2 === "," ||
-        ch2 === "}" ||
-        ch2 === "]" ||
-        ch2 === "/" ||
-        ch2 === " " ||
-        ch2 === "\t" ||
-        ch2 === "\r" ||
-        ch2 === "\n"
-      ) {
-        return;
-      }
-      c.pos++;
+}
+
+function scanQuoted(raw: string, cursor: Cursor): void {
+  const quote = raw[cursor.pos++];
+  while (cursor.pos < raw.length) {
+    const char = raw[cursor.pos++];
+    if (char === "\\") {
+      cursor.pos++;
+    } else if (char === quote) {
+      return;
     }
   }
 }
 
-function skipComposite(raw: string, c: Cursor): void {
-  const open = raw[c.pos];
-  const close = open === "{" ? "}" : "]";
-  let depth = 1;
-  c.pos++;
-  while (c.pos < raw.length && depth > 0) {
-    const ch = raw[c.pos];
-    if (ch === '"' || ch === "'") {
-      skipStr(raw, c);
-    } else if (ch === "\\") {
-      c.pos += 2;
-    } else if (ch === open) {
-      depth++;
-      c.pos++;
-    } else if (ch === close) {
-      depth--;
-      c.pos++;
-    } else if (ch === "/" && raw[c.pos + 1] === "/") {
-      c.pos += 2;
-      while (c.pos < raw.length && raw[c.pos] !== "\n") {
-        c.pos++;
-      }
-    } else if (ch === "/" && raw[c.pos + 1] === "*") {
-      c.pos += 2;
-      while (c.pos < raw.length - 1) {
-        if (raw[c.pos] === "*" && raw[c.pos + 1] === "/") {
-          c.pos += 2;
-          break;
-        }
-        c.pos++;
-      }
-    } else {
-      c.pos++;
-    }
-  }
-}
-
-function readStr(raw: string, c: Cursor): string | null {
-  skipWS(raw, c);
-  const quote = raw[c.pos];
-  if (quote !== '"' && quote !== "'") {
-    return null;
-  }
-  c.pos++;
-  let value = "";
-  while (c.pos < raw.length) {
-    const ch = raw[c.pos];
-    if (ch === "\\") {
-      const next = raw[c.pos + 1];
-      if (next !== undefined) {
-        value += next;
-      }
-      c.pos += 2;
-    } else if (ch === quote) {
-      c.pos++;
-      return value;
-    } else {
-      value += ch;
-      c.pos++;
-    }
-  }
-  return null;
-}
-
-function readKey(raw: string, c: Cursor): string | null {
-  skipWS(raw, c);
-  const ch = raw[c.pos];
-  if (ch === '"' || ch === "'") {
-    return readStr(raw, c);
-  }
-  if (ch !== undefined && /[A-Za-z_$]/.test(ch)) {
-    const start = c.pos;
-    c.pos++;
-    while (c.pos < raw.length && /[A-Za-z0-9_$]/.test(raw[c.pos] ?? "")) {
-      c.pos++;
-    }
-    return raw.slice(start, c.pos);
-  }
-  return null;
-}
-
-function expect(raw: string, c: Cursor, ch: string): boolean {
-  skipWS(raw, c);
-  if (raw[c.pos] !== ch) {
+function consume(raw: string, cursor: Cursor, expected: string): boolean {
+  skipTrivia(raw, cursor);
+  if (raw[cursor.pos] !== expected) {
     return false;
   }
-  c.pos++;
+  cursor.pos++;
   return true;
 }
 
-function navigateToOffset(
-  raw: string,
-  segments: readonly ConfigIssuePathSegment[],
-): number | undefined {
-  if (segments.length === 0 || raw.trim().length === 0) {
-    return undefined;
+function readObjectKey(raw: string, cursor: Cursor): string | null {
+  skipTrivia(raw, cursor);
+  const start = cursor.pos;
+  const char = raw[cursor.pos];
+  if (char === '"' || char === "'") {
+    scanQuoted(raw, cursor);
+  } else {
+    while (
+      cursor.pos < raw.length &&
+      !/[\s:]/u.test(raw[cursor.pos] ?? "") &&
+      !(raw[cursor.pos] === "/" && /[/*]/u.test(raw[cursor.pos + 1] ?? ""))
+    ) {
+      cursor.pos++;
+    }
   }
-  const c: Cursor = { pos: 0 };
-  skipWS(raw, c);
-  return navigateAt(raw, c, segments, 0);
+  if (cursor.pos === start) {
+    return null;
+  }
+  const token = raw.slice(start, cursor.pos);
+  try {
+    if (char === '"' || char === "'") {
+      const parsed = JSON5.parse(token);
+      return typeof parsed === "string" ? parsed : null;
+    }
+    const parsed = JSON5.parse(`{${token}:null}`) as Record<string, unknown>;
+    return Object.keys(parsed)[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
-function navigateAt(
+function skipValue(raw: string, cursor: Cursor): void {
+  skipTrivia(raw, cursor);
+  const char = raw[cursor.pos];
+  if (char === '"' || char === "'") {
+    scanQuoted(raw, cursor);
+    return;
+  }
+  if (char === "{") {
+    cursor.pos++;
+    while (cursor.pos < raw.length) {
+      skipTrivia(raw, cursor);
+      if (raw[cursor.pos] === "}") {
+        cursor.pos++;
+        return;
+      }
+      if (readObjectKey(raw, cursor) === null || !consume(raw, cursor, ":")) {
+        return;
+      }
+      skipValue(raw, cursor);
+      skipTrivia(raw, cursor);
+      if (raw[cursor.pos] === ",") {
+        cursor.pos++;
+      }
+    }
+    return;
+  }
+  if (char === "[") {
+    cursor.pos++;
+    while (cursor.pos < raw.length) {
+      skipTrivia(raw, cursor);
+      if (raw[cursor.pos] === "]") {
+        cursor.pos++;
+        return;
+      }
+      skipValue(raw, cursor);
+      skipTrivia(raw, cursor);
+      if (raw[cursor.pos] === ",") {
+        cursor.pos++;
+      }
+    }
+    return;
+  }
+  while (
+    cursor.pos < raw.length &&
+    !/[,}\]\s]/u.test(raw[cursor.pos] ?? "") &&
+    !(raw[cursor.pos] === "/" && /[/*]/u.test(raw[cursor.pos + 1] ?? ""))
+  ) {
+    cursor.pos++;
+  }
+}
+
+function locateValueOffset(
   raw: string,
-  c: Cursor,
+  cursor: Cursor,
   segments: readonly ConfigIssuePathSegment[],
   depth: number,
 ): number | undefined {
   const segment = segments[depth];
   const isLeaf = depth === segments.length - 1;
   if (typeof segment === "number") {
-    if (!expect(raw, c, "[")) {
+    if (!consume(raw, cursor, "[")) {
       return undefined;
     }
-    for (let i = 0; i < segment; i++) {
-      skipVal(raw, c);
-      if (!expect(raw, c, ",")) {
+    for (let index = 0; cursor.pos < raw.length; index++) {
+      skipTrivia(raw, cursor);
+      if (raw[cursor.pos] === "]") {
+        return undefined;
+      }
+      if (index === segment) {
+        return isLeaf ? cursor.pos : locateValueOffset(raw, cursor, segments, depth + 1);
+      }
+      skipValue(raw, cursor);
+      if (!consume(raw, cursor, ",")) {
         return undefined;
       }
     }
-    if (isLeaf) {
-      skipWS(raw, c);
-      return c.pos;
-    }
-    return navigateAt(raw, c, segments, depth + 1);
-  }
-  if (!expect(raw, c, "{")) {
     return undefined;
   }
-  while (c.pos < raw.length) {
-    skipWS(raw, c);
-    if (raw[c.pos] === "}") {
+
+  if (!consume(raw, cursor, "{")) {
+    return undefined;
+  }
+  while (cursor.pos < raw.length) {
+    skipTrivia(raw, cursor);
+    if (raw[cursor.pos] === "}") {
       return undefined;
     }
-    const key = readKey(raw, c);
-    if (key === null) {
+    const key = readObjectKey(raw, cursor);
+    if (key === null || !consume(raw, cursor, ":")) {
       return undefined;
     }
-    if (!expect(raw, c, ":")) {
-      return undefined;
-    }
+    skipTrivia(raw, cursor);
     if (key === segment) {
-      if (isLeaf) {
-        skipWS(raw, c);
-        return c.pos;
-      }
-      return navigateAt(raw, c, segments, depth + 1);
+      return isLeaf ? cursor.pos : locateValueOffset(raw, cursor, segments, depth + 1);
     }
-    skipVal(raw, c);
-    skipWS(raw, c);
-    if (raw[c.pos] === ",") {
-      c.pos++;
+    skipValue(raw, cursor);
+    skipTrivia(raw, cursor);
+    if (raw[cursor.pos] === ",") {
+      cursor.pos++;
       continue;
-    }
-    if (raw[c.pos] === "}") {
-      return undefined;
     }
     return undefined;
   }
   return undefined;
 }
 
-export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
-  if (segments.length === 0) {
-    return "";
-  }
-  let out = "";
-  for (const s of segments) {
-    if (typeof s === "number") {
-      out += `[${s}]`;
-    } else {
-      out = out ? `${out}.${s}` : s;
+function lineAtOffset(raw: string, offset: number): number {
+  let line = 1;
+  for (let index = 0; index < offset; index++) {
+    const char = raw[index];
+    if (char === "\r") {
+      line++;
+      if (raw[index + 1] === "\n") {
+        index++;
+      }
+    } else if (char === "\n" || char === "\u2028" || char === "\u2029") {
+      line++;
     }
   }
-  return out;
+  return line;
+}
+
+export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
+  return segments.reduce<string>(
+    (result, segment) =>
+      typeof segment === "number"
+        ? `${result}[${segment}]`
+        : result
+          ? `${result}.${segment}`
+          : segment,
+    "",
+  );
 }
 
 export function parseConfigIssuePath(
@@ -302,38 +226,21 @@ export function parseConfigIssuePath(
     return [];
   }
   const segments: ConfigIssuePathSegment[] = [];
-  let i = 0;
-  while (i < trimmed.length) {
-    if (trimmed[i] === ".") {
-      i++;
+  for (const match of trimmed.matchAll(/(?:^|\.)([^.\[]+)|\[(\d+)\]/g)) {
+    const dotSegment = match[1];
+    if (dotSegment !== undefined) {
+      const numeric = Number(dotSegment);
+      segments.push(
+        opts?.numericDotSegments && Number.isInteger(numeric) && numeric >= 0
+          ? numeric
+          : dotSegment,
+      );
       continue;
     }
-    if (trimmed[i] === "[") {
-      const close = trimmed.indexOf("]", i + 1);
-      if (close === -1) {
-        break;
-      }
-      const n = Number(trimmed.slice(i + 1, close));
-      if (Number.isInteger(n) && n >= 0) {
-        segments.push(n);
-      }
-      i = close + 1;
-      continue;
+    const index = Number(match[2]);
+    if (Number.isInteger(index) && index >= 0) {
+      segments.push(index);
     }
-    let end = i;
-    while (end < trimmed.length && trimmed[end] !== "." && trimmed[end] !== "[") {
-      end++;
-    }
-    const seg = trimmed.slice(i, end);
-    if (seg) {
-      const n = Number(seg);
-      if (opts?.numericDotSegments && Number.isInteger(n) && n >= 0) {
-        segments.push(n);
-      } else {
-        segments.push(seg);
-      }
-    }
-    i = end;
   }
   return segments;
 }
@@ -342,19 +249,19 @@ export function resolveConfigValueAtPath(
   root: unknown,
   segments: readonly ConfigIssuePathSegment[],
 ): unknown {
-  let current: unknown = root;
-  for (const s of segments) {
-    if (typeof s === "number") {
-      if (!Array.isArray(current) || s < 0 || s >= current.length) {
+  let current = root;
+  for (const segment of segments) {
+    if (typeof segment === "number") {
+      if (!Array.isArray(current) || segment >= current.length) {
         return undefined;
       }
-      current = current[s];
-    } else {
-      if (!current || typeof current !== "object" || Array.isArray(current)) {
-        return undefined;
-      }
-      current = (current as Record<string, unknown>)[s];
+      current = current[segment];
+      continue;
     }
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
   }
   return current;
 }
@@ -364,64 +271,53 @@ function resolveSegmentsAgainstParsed(
   rawSegments: readonly ConfigIssuePathSegment[],
 ): ConfigIssuePathSegment[] {
   const resolved: ConfigIssuePathSegment[] = [];
-  let current: unknown = root;
-  for (const s of rawSegments) {
-    if (typeof s === "number") {
-      if (Array.isArray(current)) {
-        resolved.push(s);
-        current = current[s];
-      } else {
-        const key = String(s);
-        resolved.push(key);
-        current =
-          current && typeof current === "object"
-            ? (current as Record<string, unknown>)[key]
-            : undefined;
-      }
-    } else {
-      resolved.push(s);
+  let current = root;
+  for (const segment of rawSegments) {
+    if (typeof segment === "number" && !Array.isArray(current)) {
+      const key = String(segment);
+      resolved.push(key);
       current =
-        current && typeof current === "object" && !Array.isArray(current)
-          ? (current as Record<string, unknown>)[s]
+        current && typeof current === "object"
+          ? (current as Record<string, unknown>)[key]
           : undefined;
+      continue;
     }
+    resolved.push(segment);
+    current = resolveConfigValueAtPath(current, [segment]);
   }
   return resolved;
 }
 
-function safeStringify(v: unknown): string | null {
-  if (v === undefined) {
+function stringifyReceivedValue(value: unknown): string | null {
+  if (value === undefined) {
     return null;
   }
   try {
-    const s = JSON.stringify(v);
-    if (s === undefined) {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
       return null;
     }
-    return s.length > 160 ? `${s.slice(0, 157)}...` : s;
+    return serialized.length > 160 ? `${serialized.slice(0, 157)}...` : serialized;
   } catch {
     return null;
   }
 }
 
-function messageAlreadyHasReceived(message: string): boolean {
-  return message.toLowerCase().includes("got:") || /\breceived\b/.test(message.toLowerCase());
+function isPluginOwnedConfigPath(pathValue: string): boolean {
+  return (
+    pathValue.startsWith("channels.") || /^plugins\.entries\.[^.]+\.config(?:\.|$)/.test(pathValue)
+  );
 }
 
 function shouldOmitReceivedValue(pathValue: string, value: unknown): boolean {
-  if (value === undefined) {
-    return true;
-  }
-  if (isSecretRef(value)) {
-    return true;
-  }
-  if (isSensitiveConfigPath(pathValue)) {
-    return true;
-  }
-  if (typeof value === "object" && value !== null) {
-    return true;
-  }
-  return safeStringify(value) === null;
+  return (
+    value === undefined ||
+    isSecretRef(value) ||
+    isSensitiveConfigPath(pathValue) ||
+    isPluginOwnedConfigPath(pathValue) ||
+    (typeof value === "object" && value !== null) ||
+    stringifyReceivedValue(value) === null
+  );
 }
 
 export function appendReceivedValueHint(
@@ -429,30 +325,32 @@ export function appendReceivedValueHint(
   pathValue: string,
   value: unknown,
 ): string {
-  if (shouldOmitReceivedValue(pathValue, value)) {
+  if (
+    shouldOmitReceivedValue(pathValue, value) ||
+    message.toLowerCase().includes("got:") ||
+    /\breceived\b/i.test(message)
+  ) {
     return message;
   }
-  const label = safeStringify(value);
-  if (!label || messageAlreadyHasReceived(message)) {
-    return message;
-  }
-  return `${message}, got: ${label}`;
+  const label = stringifyReceivedValue(value);
+  return label ? `${message}, got: ${label}` : message;
 }
 
 export function resolveConfigIssueLineInRaw(
   raw: string,
   segments: readonly ConfigIssuePathSegment[],
 ): number | undefined {
-  const offset = navigateToOffset(raw, segments);
-  if (offset === undefined) {
+  if (segments.length === 0 || raw.trim().length === 0) {
     return undefined;
   }
-  return lineAtOffset(raw, offset);
+  const offset = locateValueOffset(raw, { pos: 0 }, segments, 0);
+  return offset === undefined ? undefined : lineAtOffset(raw, offset);
 }
 
 export type AttachConfigIssueDiagnosticsParams = {
   raw: string | null | undefined;
   parsed: unknown;
+  effective: unknown;
   configPath?: string | null;
   formatPathForDisplay?: boolean;
   includeReceivedValueHint?: boolean;
@@ -468,25 +366,28 @@ export function attachConfigIssueDiagnostics(
   params: AttachConfigIssueDiagnosticsParams,
 ): ConfigIssueDiagnostics[] {
   const raw = typeof params.raw === "string" ? params.raw : null;
-  const configBasename =
+  const sourceFile =
     typeof params.configPath === "string" && params.configPath.trim()
       ? path.basename(params.configPath)
       : "openclaw.json";
   return issues.map((issue) => {
     const rawSegments = parseConfigIssuePath(issue.path, { numericDotSegments: true });
     const segments = resolveSegmentsAgainstParsed(params.parsed, rawSegments);
-    const receivedValue = resolveConfigValueAtPath(params.parsed, segments);
+    const literalValue = resolveConfigValueAtPath(params.parsed, segments);
+    const effectiveValue = resolveConfigValueAtPath(params.effective, segments);
     const line = raw === null ? undefined : resolveConfigIssueLineInRaw(raw, segments);
-    const canResolve = line !== undefined;
+    // Validation follows includes, env substitution, and migrations. Only a
+    // matching root-file literal is both accurate and safe to echo here.
+    const canShowReceivedValue = line !== undefined && Object.is(literalValue, effectiveValue);
     const message =
-      params.includeReceivedValueHint && canResolve
-        ? appendReceivedValueHint(issue.message, issue.path, receivedValue)
+      params.includeReceivedValueHint && canShowReceivedValue
+        ? appendReceivedValueHint(issue.message, issue.path, effectiveValue)
         : issue.message;
     return {
       ...issue,
       path: params.formatPathForDisplay ? formatConfigIssuePath(segments) : issue.path,
       message,
-      ...(canResolve ? { line, sourceFile: configBasename } : {}),
+      ...(line === undefined ? {} : { line, sourceFile }),
     };
   });
 }

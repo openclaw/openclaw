@@ -312,6 +312,7 @@ function makeInvalidSnapshot(params: {
   path?: string;
   raw?: string;
   parsed?: unknown;
+  sourceConfig?: OpenClawConfig;
 }): ConfigFileSnapshot {
   const parsed = params.parsed ?? {};
   return {
@@ -319,7 +320,7 @@ function makeInvalidSnapshot(params: {
     exists: true,
     raw: params.raw ?? "{}",
     parsed,
-    sourceConfig: parsed as OpenClawConfig,
+    sourceConfig: params.sourceConfig ?? (parsed as OpenClawConfig),
     resolved: parsed as OpenClawConfig,
     valid: false,
     runtimeConfig: {},
