@@ -392,6 +392,26 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("cancels the response body after a non-ok model discovery response", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel");
+    const fetchMock = vi.fn(async () => response);
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result).toEqual({
+      reachable: true,
+      status: 503,
+      models: [],
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("reports malformed model list JSON with an owned error", async () => {
     const fetchMock = vi.fn(async () => malformedJsonResponse());
 

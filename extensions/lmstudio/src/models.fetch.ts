@@ -68,12 +68,15 @@ async function fetchLmstudioEndpoint(params: {
     });
   }
   const fetchFn = params.fetchImpl ?? fetch;
+  const response = await fetchFn(params.url, {
+    ...params.init,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   return {
-    response: await fetchFn(params.url, {
-      ...params.init,
-      signal: AbortSignal.timeout(timeoutMs),
-    }),
-    release: async () => {},
+    response,
+    release: async () => {
+      await response.body?.cancel().catch(() => undefined);
+    },
   };
 }
 
