@@ -618,6 +618,7 @@ export type ComputerToolInvocationState = {
   // order: a click racing a type could type into the wrong app, and split
   // mouse down/move/up could interleave. Chaining preserves invocation order.
   opQueue: Promise<unknown>;
+  pendingOps: number;
 };
 
 export function createComputerToolInvocationState(): ComputerToolInvocationState {
@@ -625,6 +626,7 @@ export function createComputerToolInvocationState(): ComputerToolInvocationState
     computerState: { kind: "unbound" },
     heldButtonTarget: undefined,
     opQueue: Promise.resolve(),
+    pendingOps: 0,
   };
 }
 
@@ -664,11 +666,12 @@ export function createComputerTool(options?: {
     }
   };
   const serialize = <T>(state: ComputerToolInvocationState, fn: () => Promise<T>): Promise<T> => {
+    state.pendingOps += 1;
     const result = state.opQueue.then(fn, fn);
-    state.opQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
+    const settle = () => {
+      state.pendingOps -= 1;
+    };
+    state.opQueue = result.then(settle, settle);
     return result;
   };
   return {

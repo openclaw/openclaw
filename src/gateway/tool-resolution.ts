@@ -71,10 +71,14 @@ const computerInvocationStates = new Map<
   { state: ComputerToolInvocationState; expiresAt: number }
 >();
 
-export function resolveComputerInvocationState(sessionKey: string): ComputerToolInvocationState {
+function isIdleComputerInvocationState(state: ComputerToolInvocationState): boolean {
+  return state.heldButtonTarget === undefined && state.pendingOps === 0;
+}
+
+function resolveComputerInvocationState(sessionKey: string): ComputerToolInvocationState {
   const now = Date.now();
   for (const [key, entry] of computerInvocationStates) {
-    if (entry.expiresAt <= now) {
+    if (entry.expiresAt <= now && isIdleComputerInvocationState(entry.state)) {
       computerInvocationStates.delete(key);
     }
   }
@@ -90,12 +94,15 @@ export function resolveComputerInvocationState(sessionKey: string): ComputerTool
     expiresAt: now + COMPUTER_INVOCATION_STATE_TTL_MS,
   };
   computerInvocationStates.set(sessionKey, created);
-  while (computerInvocationStates.size > COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
-    const oldestKey = computerInvocationStates.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
+  if (computerInvocationStates.size > COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+    for (const [key, entry] of computerInvocationStates) {
+      if (key !== sessionKey && isIdleComputerInvocationState(entry.state)) {
+        computerInvocationStates.delete(key);
+        if (computerInvocationStates.size <= COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+          break;
+        }
+      }
     }
-    computerInvocationStates.delete(oldestKey);
   }
   return created.state;
 }

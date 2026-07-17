@@ -19,8 +19,7 @@ vi.mock("../agents/tools/gateway.js", async (importOriginal) => {
 
 vi.mock("../agents/utils/sleep.js", () => ({ sleep: sleepMock }));
 
-const { resolveComputerInvocationState, resolveGatewayScopedTools } =
-  await import("./tool-resolution.js");
+const { resolveGatewayScopedTools } = await import("./tool-resolution.js");
 
 function macComputerNode(nodeId: string) {
   return {
@@ -122,26 +121,95 @@ describe("gateway computer invocation state", () => {
     ).resolves.toBeDefined();
   });
 
-  it("reuses session state within the ttl and expires it once idle past the ttl", () => {
-    vi.useFakeTimers();
+  it("keeps a held button guarded past the ttl and expires only released idle state", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const sessionKey = "agent:main:computer-ttl";
-    const first = resolveComputerInvocationState(sessionKey);
+    await resolveComputerTool(sessionKey).execute("down", {
+      action: "left_mouse_down",
+      node: "mac-a",
+    });
 
-    vi.advanceTimersByTime(14 * 60 * 1000);
-    expect(resolveComputerInvocationState(sessionKey)).toBe(first);
+    vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+    await expect(
+      resolveComputerTool(sessionKey).execute("still-held", {
+        action: "left_mouse_down",
+        node: "mac-b",
+      }),
+    ).rejects.toThrow(/left button may still be held on node mac-a/);
 
-    vi.advanceTimersByTime(14 * 60 * 1000);
-    expect(resolveComputerInvocationState(sessionKey)).toBe(first);
+    await resolveComputerTool(sessionKey).execute("up", { action: "left_mouse_up" });
+    await expect(
+      resolveComputerTool(sessionKey).execute("affinity", { action: "screenshot" }),
+    ).resolves.toMatchObject({ details: { node: "mac-a" } });
 
-    vi.advanceTimersByTime(16 * 60 * 1000);
-    expect(resolveComputerInvocationState(sessionKey)).not.toBe(first);
+    vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+    await expect(
+      resolveComputerTool(sessionKey).execute("after-idle-expiry", { action: "screenshot" }),
+    ).rejects.toThrow(/multiple computer-capable nodes connected/);
   });
 
-  it("evicts the least recently touched session state beyond the cap", () => {
-    const first = resolveComputerInvocationState("agent:main:computer-evict-0");
-    for (let index = 1; index <= 64; index += 1) {
-      resolveComputerInvocationState(`agent:main:computer-evict-${index}`);
+  it("keeps a held button guarded under session-cap pressure", async () => {
+    const sessionKey = "agent:main:computer-evict";
+    await resolveComputerTool(sessionKey).execute("down", {
+      action: "left_mouse_down",
+      node: "mac-a",
+    });
+
+    for (let index = 0; index < 64; index += 1) {
+      await resolveComputerTool(`agent:main:computer-evict-filler-${index}`).execute(
+        `filler-${index}`,
+        { action: "screenshot", node: "mac-b" },
+      );
     }
-    expect(resolveComputerInvocationState("agent:main:computer-evict-0")).not.toBe(first);
+
+    await expect(
+      resolveComputerTool(sessionKey).execute("after-cap-pressure", {
+        action: "left_mouse_down",
+        node: "mac-b",
+      }),
+    ).rejects.toThrow(/left button may still be held on node mac-a/);
+
+    await resolveComputerTool(sessionKey).execute("up", { action: "left_mouse_up" });
+    await expect(
+      resolveComputerTool(sessionKey).execute("after-release", {
+        action: "left_mouse_down",
+        node: "mac-b",
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("keeps in-flight input on the session queue across rebuilds and ttl pressure", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const sessionKey = "agent:main:computer-inflight";
+    let releaseDown = () => {};
+    const downGate = new Promise<void>((resolve) => {
+      releaseDown = resolve;
+    });
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      const request = body as { command?: string; params?: { action?: string } };
+      if (request.command === "computer.act" && request.params?.action === "left_mouse_down") {
+        await downGate;
+      }
+      return screenshotPayload();
+    });
+
+    const downPromise = resolveComputerTool(sessionKey).execute("down", {
+      action: "left_mouse_down",
+      node: "mac-a",
+    });
+    await vi.waitFor(() => {
+      expect(dispatchedComputerActions()).toEqual([{ nodeId: "mac-a", action: "left_mouse_down" }]);
+    });
+
+    vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+    const retargetPromise = resolveComputerTool(sessionKey).execute("retarget", {
+      action: "left_mouse_down",
+      node: "mac-b",
+    });
+    releaseDown();
+
+    await expect(downPromise).resolves.toBeDefined();
+    await expect(retargetPromise).rejects.toThrow(/left button may still be held on node mac-a/);
+    expect(dispatchedComputerActions()).toEqual([{ nodeId: "mac-a", action: "left_mouse_down" }]);
   });
 });
