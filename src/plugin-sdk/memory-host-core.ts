@@ -20,7 +20,6 @@ export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPromptSectionBuilder,
-  MemoryPromptSectionPreparer,
 } from "../plugins/memory-state.js";
 export { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 export { resolveSessionAgentId } from "../agents/agent-scope.js";

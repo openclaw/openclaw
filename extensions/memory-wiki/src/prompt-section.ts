@@ -1,8 +1,5 @@
 // Memory Wiki plugin module implements prompt section behavior.
-import type {
-  MemoryPromptSectionBuilder,
-  MemoryPromptSectionPreparer,
-} from "openclaw/plugin-sdk/memory-host-core";
+import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import {
   loadMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -188,8 +185,8 @@ export function createWikiPromptSectionBuilder(): MemoryPromptSectionBuilder {
 export function createWikiPromptSectionPreparer(params: {
   config: ResolvedMemoryWikiConfig;
   resolveConfig: MemoryWikiConfigResolver;
-}): MemoryPromptSectionPreparer {
-  return async ({ agentId }) => {
+}) {
+  return async ({ agentId }: Parameters<MemoryPromptSectionBuilder>[0]) => {
     // Context-free preparation must not choose or disclose another agent's vault.
     if (params.config.vault.scope === "agent" && !agentId) {
       return [];
