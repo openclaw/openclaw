@@ -61,7 +61,7 @@ import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation
 import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "./tool-stream.ts";
+import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
 import "../../components/resizable-divider.ts";
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
@@ -83,6 +83,7 @@ export type ChatProps = {
   runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  planStatus?: PlanStatus | null;
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
@@ -279,6 +280,7 @@ export function renderChat(props: ChatProps) {
       showToolCalls: props.showToolCalls,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      planStatus: props.planStatus,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       assistantName: props.assistantName,
@@ -331,6 +333,7 @@ export function renderChat(props: ChatProps) {
     runStatus: props.runStatus,
     compactionStatus: props.compactionStatus,
     fallbackStatus: props.fallbackStatus,
+    planStatus: props.planStatus,
     messages: props.messages,
     stream: props.stream,
     queue: props.queue,

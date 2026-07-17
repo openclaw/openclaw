@@ -1,6 +1,6 @@
 // Shared mocks and fixtures for agent-runner execution tests.
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
@@ -361,7 +361,7 @@ export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   });
 }
 
-export function createMockReplyOperation(): {
+export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
   freezeAbortMock: ReturnType<typeof vi.fn>;
@@ -380,7 +380,7 @@ export function createMockReplyOperation(): {
     replyOperation: {
       key: "main",
       sessionId: "session",
-      abortSignal: new AbortController().signal,
+      abortSignal: options?.abortSignal ?? new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
       acceptedSteeredInboundAudio: false,

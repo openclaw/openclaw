@@ -45,14 +45,6 @@ import type {
 } from "./session-catalog-types.js";
 import * as upstream from "./session-upstream-activity.js";
 
-export type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
-export type {
-  ClaudeSessionCatalogHost,
-  ClaudeSessionCatalogPage,
-  ClaudeSessionCatalogResult,
-  ClaudeSessionCatalogSession,
-  ClaudeSessionTranscriptPage,
-} from "./session-catalog-types.js";
 export * from "./session-catalog-shared.js";
 
 const DEFAULT_PAGE_LIMIT = 50;
@@ -65,6 +57,7 @@ const MAX_SEARCH_LENGTH = 500;
 const MAX_CURSOR_LENGTH = 256;
 
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
+const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
@@ -105,6 +98,40 @@ type DesktopSessionMetadata = {
 type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
+
+type CatalogDiscoveryCacheEntry = {
+  // The module-global cache is keyed by canonical transcript path, so an entry must also record the
+  // discovery context it was built in. `root` is the logical (unresolved) projects root: it scopes
+  // the entry to its homeDir even when the root itself is a symlink, so a different homeDir scan
+  // cannot reuse it and eviction can find it without re-resolving a now-missing root. mtime+size+ino
+  // detect any content change or atomic replacement; sessionId guards against a canonical path being
+  // reached under a different filename-derived id (e.g. an aliased/renamed symlink).
+  root: string;
+  mtimeMs: number;
+  size: number;
+  ino: number;
+  sessionId: string;
+  // Bytes this file charged against the scan budget when first scanned. Cache hits re-charge it so
+  // byte-budget-limited discovery stops at the same frontier whether or not the cache is warm,
+  // keeping pagination deterministic across repeated identical calls.
+  scannedBytes: number;
+  record: CatalogRecord | null;
+  sidechain: boolean;
+};
+
+const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
+
+function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
+  catalogDiscoveryCache.delete(filePath);
+  catalogDiscoveryCache.set(filePath, entry);
+  while (catalogDiscoveryCache.size > MAX_CATALOG_DISCOVERY_CACHE_ENTRIES) {
+    const oldestPath = catalogDiscoveryCache.keys().next().value;
+    if (oldestPath === undefined) {
+      break;
+    }
+    catalogDiscoveryCache.delete(oldestPath);
+  }
+}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -310,11 +337,20 @@ async function discoverCliRecords(
   const root = projectsDir(homeDir);
   const resolvedRoot = await fs.realpath(root).catch(() => undefined);
   if (!resolvedRoot) {
+    // The root (or a parent) is gone. Entries are tagged with the logical root, so evict by that
+    // rather than a lexical containment test the canonical cache keys would never satisfy.
+    for (const [cachedPath, entry] of catalogDiscoveryCache) {
+      if (entry.root === root) {
+        catalogDiscoveryCache.delete(cachedPath);
+      }
+    }
     return;
   }
   let discoveredFiles = 0;
   let scannedBytes = 0;
-  for (const projectDir of await childDirectories(root)) {
+  let truncated = false;
+  const seenFilePaths = new Set<string>();
+  scan: for (const projectDir of await childDirectories(root)) {
     let names: string[];
     try {
       names = await fs.readdir(projectDir);
@@ -322,8 +358,12 @@ async function discoverCliRecords(
       continue;
     }
     for (const name of names) {
-      if (!name.endsWith(".jsonl") || discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
+      if (!name.endsWith(".jsonl")) {
         continue;
+      }
+      if (discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
+        truncated = true;
+        break scan;
       }
       discoveredFiles += 1;
       const sessionId = name.slice(0, -".jsonl".length);
@@ -339,10 +379,52 @@ async function discoverCliRecords(
       if (!filePath) {
         continue;
       }
+      seenFilePaths.add(filePath);
+      const fileStat = await fs.stat(filePath).catch(() => undefined);
+      if (!fileStat?.isFile()) {
+        continue;
+      }
+      const cached = catalogDiscoveryCache.get(filePath);
+      // Claude transcripts only append while active, then stay static, so mtime+size+ino identify
+      // the parsed content (ino also rejects an atomic replacement that reused the same mtime/size),
+      // and sessionId ensures the record is served only under the filename-derived id it was built
+      // for. These files are owner-owned and append-only; a mid-scan read-permission revocation is
+      // not a state the Claude CLI produces, so a hit intentionally skips the open() re-check.
+      if (
+        cached &&
+        cached.root === root &&
+        cached.mtimeMs === fileStat.mtimeMs &&
+        cached.size === fileStat.size &&
+        cached.ino === fileStat.ino &&
+        cached.sessionId === sessionId &&
+        // Only replay the cached record if a cold scan would also reach its metadata under the
+        // current remaining byte budget. Once earlier files grow, replaying a record whose original
+        // scan cost now crosses the frontier would surface a record a cold scan stops before; fall
+        // through to a bounded rescan instead so warm and cold discovery (and pagination) match.
+        scannedBytes + cached.scannedBytes <= MAX_CATALOG_METADATA_SCAN_BYTES
+      ) {
+        if (cached.sidechain) {
+          sidechainIds.add(sessionId);
+        }
+        if (cached.record) {
+          records.set(sessionId, cached.record);
+        }
+        // Cache hits read no transcript bytes, but they still charge the file's original scan cost
+        // so the byte-budget cutoff matches a cold scan; otherwise repeated calls would free budget
+        // and progressively discover more files.
+        scannedBytes += cached.scannedBytes;
+        if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
+          truncated = true;
+          break scan;
+        }
+        continue;
+      }
       const handle = await fs.open(filePath, "r").catch(() => undefined);
       if (!handle) {
         continue;
       }
+      let cacheable = false;
+      let fileScannedBytes = 0;
       try {
         const stat = await handle.stat();
         let aiTitle: string | undefined;
@@ -434,20 +516,48 @@ async function discoverCliRecords(
         if (!stopFile && fileOffset >= stat.size && pending.length > 0) {
           inspectLine(pending);
         }
+        // A read whose chunk was capped by the remaining global budget stops on a smaller boundary
+        // than a cold scan would, so its fileOffset undercounts the true unconstrained scan cost.
+        // Don't cache such an entry: replaying its low cost later (with more budget free) would let
+        // the warm scan cross the frontier and surface sessions a cold scan omits.
+        const budgetConstrained = scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES;
+        cacheable =
+          !budgetConstrained &&
+          (stopFile || fileOffset >= stat.size || fileOffset >= CLAUDE_METADATA_PREFIX_BYTES);
+        fileScannedBytes = fileOffset;
       } finally {
         await handle.close();
       }
+      // Negative and sidechain-only results are cached too; unchanged files should not be reparsed.
+      if (cacheable) {
+        cacheCatalogDiscovery(filePath, {
+          root,
+          mtimeMs: fileStat.mtimeMs,
+          size: fileStat.size,
+          ino: fileStat.ino,
+          sessionId,
+          scannedBytes: fileScannedBytes,
+          record: records.get(sessionId) ?? null,
+          sidechain: sidechainIds.has(sessionId),
+        });
+      }
       if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
-        return;
+        truncated = true;
+        break scan;
       }
     }
-    if (discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
-      break;
+  }
+  if (!truncated) {
+    // A complete scan is authoritative for this root: drop any of its entries not seen this pass.
+    for (const [cachedPath, entry] of catalogDiscoveryCache) {
+      if (entry.root === root && !seenFilePaths.has(cachedPath)) {
+        catalogDiscoveryCache.delete(cachedPath);
+      }
     }
   }
 }
 
-export async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -857,7 +967,7 @@ function parseGatewayQuery(value: unknown): {
   };
 }
 
-export async function listClaudeSessionCatalog(params: {
+async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
 }): Promise<ClaudeSessionCatalogResult> {
@@ -1066,7 +1176,7 @@ async function readBoundedClaudeHistory(params: {
   return items;
 }
 
-export async function resolveNodeClaudeRecord(params: {
+async function resolveNodeClaudeRecord(params: {
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;

@@ -38,10 +38,17 @@ collapse it, hide it, or delete it.
 
 ## Built-in widgets
 
-Nine trusted widgets ship with the plugin and render as first-party UI:
+Ten trusted widgets ship with the plugin and render as first-party UI:
 
 `stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
-`instances`, `activity`.
+`instances`, `activity`, `chart`.
+
+The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
+`sparkline`, or `gauge`. Bind `value` to a numeric array or to an object shaped like
+`{ "points": [1, { "y": 2 }, { "value": 3 }] }`. Set `props.type` to select the
+visual and optionally set finite numeric `props.min` and `props.max` bounds. Invalid
+types, bounds, points, and series longer than 500 entries render a safe error state;
+empty series render an empty state.
 
 Widgets declare data through **bindings**, they never fetch on their own:
 

@@ -1,6 +1,8 @@
 // Maps the Control UI light/dark surfaces onto the terminal's 16-color theme.
-import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
-import type { TerminalDynamicColors } from "./terminal-color-queries.ts";
+import type {
+  CreateGhosttyTerminalOptions,
+  TerminalDefaultColors,
+} from "@openclaw/libterminal/browser";
 
 type TerminalTheme = NonNullable<
   NonNullable<CreateGhosttyTerminalOptions["terminalOptions"]>["theme"]
@@ -30,9 +32,9 @@ const ANSI = {
 const DYNAMIC_COLORS = {
   dark: { background: "#0e1015", cursor: "#ff5c5c", foreground: "#d7dae0" },
   light: { background: "#f7f8fa", cursor: "#1b1e26", foreground: "#1b1e26" },
-} as const satisfies Record<"dark" | "light", TerminalDynamicColors>;
+} as const satisfies Record<"dark" | "light", TerminalDefaultColors>;
 
-export function terminalDynamicColors(mode: "dark" | "light"): TerminalDynamicColors {
+export function terminalDynamicColors(mode: "dark" | "light"): TerminalDefaultColors {
   return DYNAMIC_COLORS[mode];
 }
 

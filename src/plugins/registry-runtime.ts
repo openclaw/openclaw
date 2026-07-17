@@ -3,6 +3,11 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
+  createPluginBlobStore,
+  type OpenBlobStoreOptions,
+  type PluginBlobStore,
+} from "../plugin-state/plugin-blob-store.js";
+import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
@@ -462,32 +467,38 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
-          const assertPluginStateAllowed = () => {
+          const assertPluginStateAllowed = (methodName: "openBlobStore" | "openKeyedStore") => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
               registry.plugins.find((entry) => entry.id === pluginId);
             if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
               throw new Error(
-                "openKeyedStore is only available for trusted plugins in this release.",
+                `${methodName} is only available for trusted plugins in this release.`,
               );
             }
           };
           return {
             ...baseState,
+            openBlobStore: <TMetadata>(
+              options: OpenBlobStoreOptions,
+            ): PluginBlobStore<TMetadata> => {
+              assertPluginStateAllowed("openBlobStore");
+              return createPluginBlobStore<TMetadata>(pluginId, options);
+            },
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               return createPluginStateKeyedStore<T>(pluginId, options);
             },
             openSyncKeyedStore: <T>(
               options: OpenKeyedStoreOptions,
             ): PluginStateSyncKeyedStore<T> => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertPluginStateAllowed();
+              assertPluginStateAllowed("openKeyedStore");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
                 ...options,

@@ -25,7 +25,6 @@ const ROOT_SECTIONS = [
   "tools",
   "bindings",
   "broadcast",
-  "audio",
   "media",
   "messages",
   "commands",
@@ -212,10 +211,6 @@ const TARGET_KEYS = [
   "nodeHost.skills.enabled",
   "media",
   "media.preserveFilenames",
-  "audio",
-  "audio.transcription",
-  "audio.transcription.command",
-  "audio.transcription.timeoutSeconds",
   "bindings",
   "bindings[].agentId",
   "bindings[].match",
@@ -277,6 +272,10 @@ const TARGET_KEYS = [
   "channels.defaults",
   "channels.defaults.groupPolicy",
   "channels.defaults.contextVisibility",
+  "channels.defaults.implicitMentions",
+  "channels.defaults.implicitMentions.replyToBot",
+  "channels.defaults.implicitMentions.quotedBot",
+  "channels.defaults.implicitMentions.threadParticipation",
   "channels.defaults.heartbeat",
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
@@ -890,14 +889,7 @@ describe("config help copy quality", () => {
     expect(/differs|per provider/i.test(targetTo)).toBe(true);
   });
 
-  it("documents broadcast and audio command examples", () => {
-    const audioCmd = expectDefined(
-      FIELD_HELP["audio.transcription.command"],
-      'FIELD_HELP["audio.transcription.command"] test invariant',
-    );
-    expect(audioCmd.includes("whisper-cli")).toBe(true);
-    expect(audioCmd.includes("{input}")).toBe(true);
-
+  it("documents broadcast command examples", () => {
     const broadcastMap = expectDefined(
       FIELD_HELP["broadcast.*"],
       'FIELD_HELP["broadcast.*"] test invariant',

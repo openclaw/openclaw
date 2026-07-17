@@ -413,7 +413,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
+      // Concurrent Knip scans need cores and memory headroom.
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find(
@@ -428,6 +429,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(releaseChecksStep.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(releaseChecksScript).toContain('-f ref="$release_checks_target_ref"');
+    expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
     expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');

@@ -44,6 +44,25 @@
         "screenIndex"
       ]
     },
+    "screen": {
+      "emoji": "🖥️",
+      "title": "Screen",
+      "detailKeys": [
+        "action",
+        "sessionKey",
+        "dock"
+      ]
+    },
+    "terminal": {
+      "emoji": "⌨️",
+      "title": "Terminal",
+      "detailKeys": [
+        "action",
+        "sessionId",
+        "command",
+        "cwd"
+      ]
+    },
     "process": {
       "emoji": "🧰",
       "title": "Process",
@@ -459,15 +478,10 @@
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",
-      "actions": {
-        "restart": {
-          "label": "restart",
-          "detailKeys": [
-            "reason",
-            "delayMs"
-          ]
-        }
-      }
+      "detailKeys": [
+        "action",
+        "path"
+      ]
     },
     "exec": {
       "emoji": "🛠️",

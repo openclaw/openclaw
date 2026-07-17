@@ -150,7 +150,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -179,7 +179,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -201,7 +201,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await testing.downloadFile("https://example.com/archive.tar.gz", destination, body.byteLength);
 
@@ -243,6 +243,11 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     await expect(ensureTool("fd", true)).resolves.toBe("fd");
+    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });
