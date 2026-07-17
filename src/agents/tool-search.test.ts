@@ -413,6 +413,24 @@ describe("Tool Search", () => {
     await expect(runtime.callValue("orchard_optional_shipment")).resolves.toBeNull();
   });
 
+  it("preserves an explicit undefined details marker through result snapshots", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_empty_details", "Return an empty orchard result");
+    target.execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "No orchard result" }],
+      details: undefined,
+    }));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    const call = await runtime.call("orchard_empty_details");
+    expect(Object.prototype.hasOwnProperty.call(call.result, "details")).toBe(true);
+    await expect(runtime.callValue("orchard_empty_details")).resolves.toBeUndefined();
+  });
+
   it("rejects final catalog details that drift from a declared output schema", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const target = pluginTool("orchard_bad_output", "Return a bad orchard result");

@@ -962,9 +962,15 @@ function freezeJsonSnapshot(value: unknown): unknown {
 function snapshotToolSearchTargetTranscriptResult(
   result: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
+  const hasDetails = "details" in result;
   const snapshot = toJsonSafe(result);
   if (!isRecord(snapshot)) {
     throw new Error("Tool Search target result could not be captured for transcript projection.");
+  }
+  if (hasDetails && !("details" in snapshot)) {
+    // `details` presence selects callValue unwrapping. JSON serialization drops
+    // an explicit undefined, so restore that marker before freezing the envelope.
+    snapshot.details = result.details === undefined ? undefined : toJsonSafe(result.details);
   }
   return freezeJsonSnapshot(snapshot) as AgentToolResult<unknown>;
 }
