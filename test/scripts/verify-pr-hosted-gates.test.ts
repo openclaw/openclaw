@@ -41,6 +41,7 @@ function successfulRun(name: string, id: number, updatedAt: string) {
     path: ".github/workflows/ci.yml",
     created_at: "2026-06-17T10:46:24Z",
     updated_at: updatedAt,
+    check_suite_id: 77_000 + id,
     html_url: `https://github.com/openclaw/openclaw/actions/runs/${id}`,
   };
 }
@@ -50,6 +51,26 @@ function releaseGateRun(id: number, updatedAt: string) {
     ...successfulRun(`CI release gate ${sha}`, id, updatedAt),
     event: "workflow_dispatch",
     display_title: `CI release gate ${sha}`,
+  };
+}
+
+function checkRun(
+  name: string,
+  status: string,
+  conclusion: string | null,
+  completedAt: string | null,
+  // Defaults to CI run id 1's suite with the Actions app identity; spoofing
+  // tests override these to prove the gate rejects foreign producers.
+  { checkSuiteId = 77_001, appSlug = "github-actions" } = {},
+) {
+  return {
+    id: 10_000,
+    name,
+    status,
+    conclusion,
+    completed_at: completedAt,
+    check_suite: { id: checkSuiteId },
+    app: { slug: appSlug },
   };
 }
 
@@ -197,6 +218,7 @@ describe("verify-pr-hosted-gates", () => {
 
     expect(evidence).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [
         expect.objectContaining({ name: "CI", id: 1 }),
         expect.objectContaining({ name: "Blacksmith Testbox", id: 3 }),
@@ -230,8 +252,212 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1 })],
     });
+  });
+
+  it("accepts a recent successful ci-gate check while the CI run is in progress", () => {
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+          status: "in_progress",
+          conclusion: null,
+        },
+      ],
+      fetchCheckRuns: () => [
+        checkRun("openclaw/ci-gate", "completed", "success", "2026-06-17T10:53:00Z"),
+        checkRun("checks-node", "completed", "success", "2026-06-17T10:52:00Z"),
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      ciEvidence: "ci-gate-check",
+      ciGateCheckCompletedAt: "2026-06-17T10:53:00Z",
+      workflows: [expect.objectContaining({ name: "CI", id: 1, status: "in_progress" })],
+    });
+  });
+
+  it("ignores unrelated red checks when the ci-gate check is green", () => {
+    // Advisory scans and other workflows' reds do not flip the merge button;
+    // blocking on them would recreate the straggler problem this path fixes.
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+          status: "in_progress",
+          conclusion: null,
+        },
+      ],
+      fetchCheckRuns: () => [
+        checkRun("openclaw/ci-gate", "completed", "success", "2026-06-17T10:53:00Z"),
+        checkRun("Scan shared kit from iOS", "completed", "failure", "2026-06-17T10:52:00Z"),
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      ciEvidence: "ci-gate-check",
+      ciGateCheckCompletedAt: "2026-06-17T10:53:00Z",
+      workflows: [expect.objectContaining({ name: "CI", id: 1, status: "in_progress" })],
+    });
+  });
+
+  it("ignores a spoofed ci-gate check from a foreign app or suite", () => {
+    // A non-Actions app (or another workflow's suite) publishing a check named
+    // openclaw/ci-gate must never satisfy the merge gate.
+    for (const spoof of [{ appSlug: "evil-app" }, { checkSuiteId: 99_999 }]) {
+      expect(() =>
+        collectHostedGateEvidence({
+          sha,
+          workflowRuns: [
+            {
+              ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+              status: "in_progress",
+              conclusion: null,
+            },
+          ],
+          fetchCheckRuns: () => [
+            checkRun("openclaw/ci-gate", "completed", "success", "2026-06-17T10:53:00Z", spoof),
+          ],
+        }),
+      ).toThrow("openclaw/ci-gate=missing");
+    }
+  });
+
+  it("rejects a failed ci-gate check even when other checks are green", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => [
+          checkRun("openclaw/ci-gate", "completed", "failure", "2026-06-17T10:53:00Z"),
+          checkRun("checks-node", "completed", "success", "2026-06-17T10:52:00Z"),
+        ],
+      }),
+    ).toThrow("openclaw/ci-gate=completed/failure");
+  });
+
+  it("blocks a cancelled current-head gate instead of reusing older evidence", () => {
+    // A terminal non-success on the current head must fail closed even when a
+    // previous SHA has green evidence available through the recentSha path.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        recentSha: previousSha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => [
+          checkRun("openclaw/ci-gate", "completed", "cancelled", "2026-06-17T10:53:00Z", {
+            checkSuiteId: 77_002,
+          }),
+        ],
+      }),
+    ).toThrow("openclaw/ci-gate=completed/cancelled");
+  });
+
+  it("rejects a timed-out ci-gate check", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => [
+          checkRun("openclaw/ci-gate", "completed", "timed_out", "2026-06-17T10:53:00Z"),
+        ],
+      }),
+    ).toThrow("openclaw/ci-gate=completed/timed_out");
+  });
+
+  it("rejects an in-progress ci-gate check with its state in the error", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => [checkRun("openclaw/ci-gate", "in_progress", null, null)],
+      }),
+    ).toThrow("openclaw/ci-gate=in_progress/unknown");
+  });
+
+  it("rejects a successful ci-gate check older than 24 hours", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => [
+          checkRun("openclaw/ci-gate", "completed", "success", "2026-06-16T10:54:59Z"),
+        ],
+      }),
+    ).toThrow("completed_at=2026-06-16T10:54:59Z");
+  });
+
+  it("does not fetch check runs for a completed successful CI workflow", () => {
+    let fetchCalls = 0;
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [successfulRun("CI", 1, "2026-06-17T10:54:00Z")],
+      fetchCheckRuns: () => {
+        fetchCalls += 1;
+        return [];
+      },
+    });
+
+    expect(evidence.ciEvidence).toBe("workflow-run");
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("fails closed when the check-runs fetch fails", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+        fetchCheckRuns: () => {
+          throw new Error("GitHub check-runs API unavailable");
+        },
+      }),
+    ).toThrow("GitHub check-runs API unavailable");
   });
 
   it("accepts 13-hour green evidence from the recorded pre-rebase head", () => {
@@ -254,6 +480,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(evidence).toEqual({
       headSha: sha,
       evidenceHeadSha: previousSha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
     });
   });
@@ -277,6 +504,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(evidence).toEqual({
       headSha: sha,
       evidenceHeadSha: previousSha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
     });
   });
@@ -310,6 +538,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(evidence).toEqual({
       headSha: sha,
       evidenceHeadSha: previousSha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
     });
   });
@@ -428,6 +657,7 @@ describe("verify-pr-hosted-gates", () => {
       expect(evidence).toEqual({
         headSha: sha,
         evidenceHeadSha: previousSha,
+        ciEvidence: "workflow-run",
         workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
       });
     },
@@ -528,6 +758,7 @@ describe("verify-pr-hosted-gates", () => {
     expect(evidence).toEqual({
       headSha: sha,
       evidenceHeadSha: previousSha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
     });
   });
@@ -585,6 +816,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 2, headSha: sha })],
     });
   });
@@ -604,6 +836,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: sha })],
     });
   });
@@ -622,6 +855,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: "CI", id: 2 })],
     });
   });
@@ -641,6 +875,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: `CI release gate ${sha}`, id: 1 })],
     });
   });
@@ -672,6 +907,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [expect.objectContaining({ name: `CI release gate ${sha}`, id: 2 })],
     });
   });
@@ -727,6 +963,7 @@ describe("verify-pr-hosted-gates", () => {
       }),
     ).toEqual({
       headSha: sha,
+      ciEvidence: "workflow-run",
       workflows: [
         expect.objectContaining({ name: "CI", id: 3 }),
         expect.objectContaining({ name: "Blacksmith Testbox", id: 4 }),

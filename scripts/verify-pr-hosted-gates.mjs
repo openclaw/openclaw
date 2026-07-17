@@ -19,10 +19,18 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 ];
 const WORKFLOW_RUNS_PAGE_SIZE = 100;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
+const CHECK_RUNS_PAGE_SIZE = 100;
 const COMPARE_COMMITS_PAGE_SIZE = 100;
 export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+// This job needs every merge-blocking CI job, so its successful check is the
+// repository's button-green signal. That check survives workflow-run reruns.
+const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
+
+class CiGateCheckRunsFetchError extends Error {}
+class BlockingCiGateCheckError extends Error {}
+class CiGateCheckStateError extends Error {}
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -130,25 +138,22 @@ function latestRun(runs) {
   )[0];
 }
 
-function runUpdatedAtMs(run) {
-  const value = Date.parse(String(run?.updated_at ?? ""));
-  return Number.isFinite(value) ? value : null;
+function isRecentTimestamp(value, nowMs) {
+  const timestampMs = Date.parse(String(value ?? ""));
+  return (
+    Number.isFinite(timestampMs) &&
+    timestampMs >= nowMs - HOSTED_GATE_MAX_AGE_MS &&
+    timestampMs <= nowMs + HOSTED_GATE_CLOCK_SKEW_MS
+  );
 }
 
 function isRecentRun(run, nowMs) {
-  const updatedAtMs = runUpdatedAtMs(run);
-  return (
-    updatedAtMs !== null &&
-    updatedAtMs >= nowMs - HOSTED_GATE_MAX_AGE_MS &&
-    updatedAtMs <= nowMs + HOSTED_GATE_CLOCK_SKEW_MS
-  );
+  return isRecentTimestamp(run?.updated_at, nowMs);
 }
 
 function isSuccessfulRecentRun(run, nowMs) {
   return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
 }
-
-const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
 
 /**
  * True when this run's own openclaw/ci-gate job already succeeded on the
@@ -193,6 +198,14 @@ function isGateProvenInProgressRun(run, ciGateJobs, nowMs) {
     (run?.status === "in_progress" || run?.status === "queued") &&
     isRecentRun(run, nowMs) &&
     hasSuccessfulCiGateJob(run, ciGateJobs, nowMs)
+  );
+}
+
+function isSuccessfulRecentCheckRun(checkRun, nowMs) {
+  return (
+    checkRun?.status === "completed" &&
+    checkRun.conclusion === "success" &&
+    isRecentTimestamp(checkRun.completed_at, nowMs)
   );
 }
 
@@ -258,6 +271,112 @@ function successfulRunOrThrow(
   }
   throw new Error(
     `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+  );
+}
+
+function checkRunSortTimestamp(checkRun) {
+  return checkRun?.completed_at ?? checkRun?.started_at ?? checkRun?.updated_at ?? "";
+}
+
+// Merge-gate evidence must come from the authoritative CI run: any app can
+// publish a check with a spoofed display name, so bind by the run's own
+// check suite and the GitHub Actions app before trusting it.
+function latestAuthoritativeCheckRun(checkRuns, name, checkSuiteId) {
+  return checkRuns
+    .filter(
+      (checkRun) =>
+        checkRun?.name === name &&
+        checkRun?.app?.slug === "github-actions" &&
+        Number.isFinite(checkSuiteId) &&
+        checkRun?.check_suite?.id === checkSuiteId,
+    )
+    .toSorted((left, right) =>
+      String(checkRunSortTimestamp(right)).localeCompare(String(checkRunSortTimestamp(left))),
+    )[0];
+}
+
+function formatCiGateCheckState(checkRun) {
+  if (!checkRun) {
+    return `${CI_GATE_CHECK_NAME}=missing`;
+  }
+  return `${CI_GATE_CHECK_NAME}=${checkRun.status ?? "unknown"}/${checkRun.conclusion ?? "unknown"}, completed_at=${checkRun.completed_at ?? "unknown"}`;
+}
+
+function successfulCiEvidenceOrThrow(
+  runs,
+  sha,
+  { allowManual = true, nowMs = Date.now(), ciGateJobs = [], fetchCheckRuns } = {},
+) {
+  const matchingRuns = matchingAuthoritativeRuns(runs, "CI", sha, allowManual);
+  let run = preferredCiRun(matchingRuns, nowMs);
+  if (isSuccessfulRecentRun(run, nowMs)) {
+    return { run, ciEvidence: "workflow-run" };
+  }
+
+  let gateProvenRun;
+  try {
+    gateProvenRun = successfulRunOrThrow(runs, "CI", sha, {
+      allowManual,
+      nowMs,
+      ciGateJobs,
+    });
+  } catch {
+    // The check-run path below owns its fail-closed error taxonomy when present.
+  }
+  if (gateProvenRun) {
+    run = gateProvenRun;
+  }
+
+  let ciGateState = "";
+  if (isRecentRun(run, nowMs) && typeof fetchCheckRuns === "function") {
+    let checkRuns;
+    try {
+      checkRuns = fetchCheckRuns(sha);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new CiGateCheckRunsFetchError(`Failed to fetch check runs for ${sha}: ${detail}`, {
+        cause: error,
+      });
+    }
+    if (!Array.isArray(checkRuns)) {
+      throw new CiGateCheckRunsFetchError(
+        `Failed to fetch check runs for ${sha}: expected an array.`,
+      );
+    }
+
+    const ciGateCheck = latestAuthoritativeCheckRun(
+      checkRuns,
+      CI_GATE_CHECK_NAME,
+      run?.check_suite_id,
+    );
+    ciGateState = formatCiGateCheckState(ciGateCheck);
+    // Only the gate check itself decides: commit-level check-runs include
+    // advisory scans and other workflows whose reds do not flip the merge
+    // button, and blocking on them would recreate the straggler problem.
+    // Any terminal non-success (failure, timed_out, cancelled, stale, ...)
+    // blocks hard so the previous-head evidence fallback cannot mask it.
+    if (ciGateCheck?.status === "completed" && ciGateCheck.conclusion !== "success") {
+      throw new BlockingCiGateCheckError(
+        `Missing successful recent CI workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}. CI gate check: ${ciGateState}.`,
+      );
+    }
+    if (isSuccessfulRecentCheckRun(ciGateCheck, nowMs)) {
+      return {
+        run,
+        ciEvidence: "ci-gate-check",
+        ciGateCheckCompletedAt: ciGateCheck.completed_at,
+      };
+    }
+  }
+
+  if (gateProvenRun && typeof fetchCheckRuns !== "function") {
+    return { run: gateProvenRun, ciEvidence: "ci-gate-job" };
+  }
+
+  const checkStateSuffix = ciGateState ? ` CI gate check: ${ciGateState}.` : "";
+  const ErrorType = ciGateState ? CiGateCheckStateError : Error;
+  throw new ErrorType(
+    `Missing successful recent CI workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}.${checkStateSuffix}`,
   );
 }
 
@@ -346,6 +465,7 @@ export function collectHostedGateEvidence({
   pullRequestHeadRepository = "",
   workflowRuns,
   ciGateJobs = [],
+  fetchCheckRuns,
   changelogOnly = false,
   nowMs = Date.now(),
 }) {
@@ -357,15 +477,19 @@ export function collectHostedGateEvidence({
   const collectForSha = (evidenceSha, { allowManual, requiredScheduledWorkflows = new Set() }) => {
     const workflows = [];
     const fallbackCoveredWorkflows = [];
+    let ciEvidence;
+    let ciGateCheckCompletedAt;
     if (!changelogOnly) {
-      workflows.push(
-        successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
-          allowManual,
-          nowMs,
-          // Gate proof only vouches for the exact head under verification.
-          ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
-        }),
-      );
+      const ci = successfulCiEvidenceOrThrow(workflowRuns, evidenceSha, {
+        allowManual,
+        nowMs,
+        // Gate-job proof only vouches for the exact head under verification.
+        ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
+        fetchCheckRuns,
+      });
+      workflows.push(ci.run);
+      ciEvidence = ci.ciEvidence;
+      ciGateCheckCompletedAt = ci.ciGateCheckCompletedAt;
     }
     for (const workflowName of SCHEDULED_HOSTED_WORKFLOWS) {
       const matchingRuns = matchingAuthoritativeRuns(
@@ -396,7 +520,7 @@ export function collectHostedGateEvidence({
         }),
       );
     }
-    return { workflows, fallbackCoveredWorkflows };
+    return { workflows, fallbackCoveredWorkflows, ciEvidence, ciGateCheckCompletedAt };
   };
 
   let evidenceSha = sha;
@@ -404,6 +528,12 @@ export function collectHostedGateEvidence({
   try {
     selected = collectForSha(sha, { allowManual: true });
   } catch (exactError) {
+    if (
+      exactError instanceof CiGateCheckRunsFetchError ||
+      exactError instanceof BlockingCiGateCheckError
+    ) {
+      throw exactError;
+    }
     // Hosted CI proves the PR cohort, not ancestry freshness. A newer head's
     // failure must not discard a complete same-PR green cohort from the last
     // 24 hours; review and focused gates own the newer delta.
@@ -444,10 +574,21 @@ export function collectHostedGateEvidence({
         evidenceSha = fallbackSha;
         break;
       } catch (error) {
+        if (
+          error instanceof CiGateCheckRunsFetchError ||
+          error instanceof BlockingCiGateCheckError
+        ) {
+          throw error;
+        }
         fallbackError ??= error;
       }
     }
     if (!selected) {
+      if (fallbackError && exactError instanceof CiGateCheckStateError) {
+        throw new Error(`${fallbackError.message} Exact-head ${exactError.message}`, {
+          cause: exactError,
+        });
+      }
       throw fallbackError ?? exactError;
     }
   }
@@ -469,6 +610,12 @@ export function collectHostedGateEvidence({
   };
   if (evidenceSha !== sha) {
     evidence.evidenceHeadSha = evidenceSha;
+  }
+  if (selected.ciEvidence) {
+    evidence.ciEvidence = selected.ciEvidence;
+  }
+  if (selected.ciGateCheckCompletedAt) {
+    evidence.ciGateCheckCompletedAt = selected.ciGateCheckCompletedAt;
   }
   if (selected.fallbackCoveredWorkflows.length > 0) {
     evidence.fallbackCoveredWorkflows = selected.fallbackCoveredWorkflows;
@@ -515,6 +662,34 @@ function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
     loadWorkflowRunsForQuery((page) => withPage(query, page)),
   );
   return [...new Map(workflowRuns.map((run) => [run.id, run])).values()];
+}
+
+function loadCheckRuns(repo, sha) {
+  const loadPage = (page) =>
+    JSON.parse(
+      execGhApiRead(
+        `repos/${repo}/commits/${sha}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&filter=latest&page=${page}`,
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ),
+    );
+
+  const firstPage = loadPage(1);
+  if (!Array.isArray(firstPage?.check_runs)) {
+    throw new Error("Expected check_runs to be an array.");
+  }
+  const checkRuns = [...firstPage.check_runs];
+  const pageCount = Math.ceil((firstPage.total_count ?? checkRuns.length) / CHECK_RUNS_PAGE_SIZE);
+  for (let page = 2; page <= pageCount; page += 1) {
+    const nextPage = loadPage(page);
+    if (!Array.isArray(nextPage?.check_runs)) {
+      throw new Error(`Expected check_runs page ${page} to be an array.`);
+    }
+    checkRuns.push(...nextPage.check_runs);
+  }
+  return checkRuns;
 }
 
 export function compareCommitPageCount(totalCommits) {
@@ -640,6 +815,7 @@ function main(argv = process.argv.slice(2)) {
     pullRequestHeadRepository: headRepository,
     workflowRuns,
     ciGateJobs: loadCiGateJobs(args.repo, workflowRuns, args.sha),
+    fetchCheckRuns: (evidenceSha) => loadCheckRuns(args.repo, evidenceSha),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
