@@ -8,7 +8,7 @@ Fixes Android composer media leaking across Gateway, agent, and chat switches. T
 
 Fixes malformed Android agent and profile initials when display names begin with emoji. Thanks @Leon-SK668.
 
-Adds a Wear OS companion for sessions, transcripts, text and voice replies, realtime Talk, abort controls, reply notifications, and a launch Tile. The watch proxies through the paired phone and stores no Gateway credentials. Thanks @sibbl and @IWhatsskill.
+Adds a Wear OS companion for agent and session selection, transcripts, text and voice replies, realtime Talk, Gateway controls, reply notifications, local appearance and speech settings, and a launch Tile. The watch proxies through the paired phone and stores no Gateway credentials. Thanks @sibbl and @IWhatsskill.
 
 ## 2026.7.2 - 2026-07-13
 

@@ -7,10 +7,13 @@ import android.app.RemoteInput
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +29,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.delay
@@ -66,10 +73,19 @@ internal fun OpenClawWearApp(
   val snapshot = state.toConversationSnapshot()
   val speaking by speaker.isSpeaking.collectAsState()
   val view = LocalView.current
+  val lifecycleOwner = LocalLifecycleOwner.current
+  val activity = LocalActivity.current
   val initialSettings = remember(settingsStore) { settingsStore.read() }
   var interaction by remember { mutableStateOf(WearInteractionState.READY) }
   var themeMode by remember { mutableStateOf(initialSettings.themeMode) }
   var autoSpeak by remember { mutableStateOf(initialSettings.autoSpeak) }
+  var notificationsGranted by remember {
+    mutableStateOf(
+      Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
+        PackageManager.PERMISSION_GRANTED,
+    )
+  }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
@@ -129,6 +145,25 @@ internal fun OpenClawWearApp(
         view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       }
     }
+
+  val notificationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      notificationsGranted = granted
+    }
+
+  DisposableEffect(lifecycleOwner, view.context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          notificationsGranted =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(view.context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   fun toggleRealtimeTalk() {
     if (state.talkBusy || state.controlBusy) return
@@ -211,6 +246,7 @@ internal fun OpenClawWearApp(
         actionBusy = state.sending || state.talkBusy || state.controlBusy,
         themeMode = themeMode,
         autoSpeak = autoSpeak,
+        notificationsGranted = notificationsGranted,
         onTalk = {
           interaction = WearInteractionState.LISTENING
           val intent =
@@ -260,6 +296,28 @@ internal fun OpenClawWearApp(
           autoSpeak = enabled
           settingsStore.writeAutoSpeak(enabled)
           if (!enabled) speaker.stop()
+        },
+        onRequestNotifications = {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+          }
+        },
+        onOpenNotificationSettings = {
+          if (activity != null) {
+            val notificationSettings =
+              Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+            try {
+              activity.startActivity(notificationSettings)
+            } catch (_: ActivityNotFoundException) {
+              activity.startActivity(
+                Intent(
+                  Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                  "package:${activity.packageName}".toUri(),
+                ),
+              )
+            }
+          }
         },
         onSpeakLatest = {
           snapshot.latestAssistantMessage()?.text?.let(speaker::speak)

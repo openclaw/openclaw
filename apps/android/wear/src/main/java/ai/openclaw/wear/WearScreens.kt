@@ -101,6 +101,7 @@ internal fun OpenClawWearScreens(
   actionBusy: Boolean,
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
+  notificationsGranted: Boolean,
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -110,6 +111,8 @@ internal fun OpenClawWearScreens(
   onGatewayEnabledChange: (Boolean) -> Unit,
   onThemeModeChange: (WearThemeMode) -> Unit,
   onAutoSpeakChange: (Boolean) -> Unit,
+  onRequestNotifications: () -> Unit,
+  onOpenNotificationSettings: () -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
@@ -203,10 +206,13 @@ internal fun OpenClawWearScreens(
             snapshot = snapshot,
             themeMode = themeMode,
             autoSpeak = autoSpeak,
+            notificationsGranted = notificationsGranted,
             gatewayControlSupported = snapshot.gatewayControlsSupported,
             actionBusy = actionBusy,
             onThemeModeChange = onThemeModeChange,
             onAutoSpeakChange = onAutoSpeakChange,
+            onRequestNotifications = onRequestNotifications,
+            onOpenNotificationSettings = onOpenNotificationSettings,
             onRefresh = onRefresh,
             onGatewayEnabledChange = onGatewayEnabledChange,
           )
@@ -1077,10 +1083,13 @@ private fun ControlsPage(
   snapshot: WearConversationSnapshot,
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
+  notificationsGranted: Boolean,
   gatewayControlSupported: Boolean,
   actionBusy: Boolean,
   onThemeModeChange: (WearThemeMode) -> Unit,
   onAutoSpeakChange: (Boolean) -> Unit,
+  onRequestNotifications: () -> Unit,
+  onOpenNotificationSettings: () -> Unit,
   onRefresh: () -> Unit,
   onGatewayEnabledChange: (Boolean) -> Unit,
 ) {
@@ -1110,6 +1119,29 @@ private fun ControlsPage(
         themeMode = themeMode,
         onThemeModeChange = onThemeModeChange,
       )
+    }
+    item {
+      SelectionButton(
+        title = stringResource(R.string.reply_alerts),
+        detail =
+          if (notificationsGranted) {
+            stringResource(R.string.on)
+          } else {
+            stringResource(R.string.enable_alerts)
+          },
+        selected = notificationsGranted,
+        enabled = !notificationsGranted && !actionBusy,
+        onClick = onRequestNotifications,
+      )
+    }
+    if (!notificationsGranted) {
+      item {
+        SecondaryButton(
+          label = stringResource(R.string.open_notification_settings),
+          enabled = !actionBusy,
+          onClick = onOpenNotificationSettings,
+        )
+      }
     }
     item {
       SelectionButton(
