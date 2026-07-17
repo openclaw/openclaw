@@ -297,6 +297,10 @@ export function parseOfficialExternalPluginCatalogTimestamp(value: string): numb
     : undefined;
 }
 
+export function isOfficialExternalPluginCatalogSequence(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 export function isOfficialExternalPluginCatalogFeed(
   raw: unknown,
 ): raw is OfficialExternalPluginCatalogFeed {
@@ -318,9 +322,7 @@ export function isOfficialExternalPluginCatalogFeed(
     typeof generatedAt === "string" &&
     generatedAt.trim().length > 0 &&
     generatedAtMs !== undefined &&
-    typeof sequence === "number" &&
-    Number.isInteger(sequence) &&
-    sequence >= 0 &&
+    isOfficialExternalPluginCatalogSequence(sequence) &&
     Array.isArray(entries)
   );
 }

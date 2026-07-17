@@ -18,6 +18,7 @@ import {
   type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type HostedOfficialExternalPluginCatalogTrustState,
+  isOfficialExternalPluginCatalogSequence,
   parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog.js";
 
@@ -123,7 +124,7 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
             generatedAt?: unknown;
           })
         : document;
-    if (typeof feed.sequence !== "number") {
+    if (!isOfficialExternalPluginCatalogSequence(feed.sequence)) {
       return undefined;
     }
     if (

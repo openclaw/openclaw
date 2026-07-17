@@ -289,6 +289,17 @@ describe("official external plugin catalog", () => {
         }),
       ).toBe(false);
     }
+    for (const sequence of [Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(
+        isOfficialExternalPluginCatalogFeed({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt: "2026-06-22T00:00:00.000Z",
+          sequence,
+          entries: [],
+        }),
+      ).toBe(false);
+    }
   });
 
   it("accepts valid timestamp serializations supported by shipped releases", () => {
@@ -569,6 +580,44 @@ describe("official external plugin catalog", () => {
           }),
         ),
       ).rejects.toThrow("sequence is older");
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: valid.body,
+          monotonic: {
+            sequence: validFeed.sequence,
+            generatedAt: validFeed.generatedAt,
+          },
+        }),
+      );
+
+      await expect(snapshotStore.read(url)).resolves.toMatchObject({ body: valid.body });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores an invalid recovered sequence when repairing a signed SQLite snapshot", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-signed-snapshot-sequence-"));
+    const url = "https://packages.acme.example/openclaw/feed";
+    const malformedBody =
+      '{"schemaVersion":1,"id":"openclaw-official-external-plugins","generatedAt":"not-a-date","sequence":1e999,"entries":[]}';
+    const validFeed = hostedCatalogFeed({
+      sequence: 10,
+      pluginName: "@openclaw/repaired-sequence",
+    });
+    const valid = signedHostedCatalogFeed({ feed: validFeed });
+    const snapshotStore = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+      stateDir,
+    });
+
+    try {
+      await snapshotStore.write(
+        signedHostedCatalogSnapshot({
+          body: malformedBody,
+          monotonic: { sequence: 10, generatedAt: "not-a-date" },
+        }),
+      );
       await snapshotStore.write(
         signedHostedCatalogSnapshot({
           body: valid.body,
