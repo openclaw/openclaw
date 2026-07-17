@@ -253,7 +253,7 @@ export async function launchChromeMeet(params: {
   const shouldStartRealtimeBridge =
     isGoogleMeetTalkBackMode(params.mode) &&
     result.browser?.inCall === true &&
-    result.browser.micMuted !== true &&
+    result.browser.micMuted === false &&
     result.browser.manualActionRequired !== true;
   const audioBridge = shouldStartRealtimeBridge ? await startRealtimeAudioBridge() : undefined;
   return { ...result, audioBridge };

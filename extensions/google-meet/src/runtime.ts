@@ -488,7 +488,7 @@ export class GoogleMeetRuntime {
       !session.chrome ||
       session.chrome.audioBridge ||
       session.chrome.health?.inCall !== true ||
-      session.chrome.health.micMuted === true ||
+      session.chrome.health.micMuted !== false ||
       session.chrome.health.manualActionRequired === true
     ) {
       return undefined;
