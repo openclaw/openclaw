@@ -475,10 +475,17 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
           }).toSorted(this.compareSidebarSessionRows);
     // The identity card is the main session's entry point; its row leaves the
     // list and its spawned children surface as top-level threads instead.
+    // Children index under the gateway row's literal key, which may be an
+    // equivalent alias (e.g. "main"), so promotion tracks every removed key.
     const mainSessionKey = this.selectedAgentMainSessionKey(selected);
-    const scopedRootRows = rootRows.filter(
-      (row) => !areUiSessionKeysEquivalent(row.key, mainSessionKey),
-    );
+    const mainSessionKeys = new Set<string>([mainSessionKey]);
+    const scopedRootRows = rootRows.filter((row) => {
+      if (areUiSessionKeysEquivalent(row.key, mainSessionKey)) {
+        mainSessionKeys.add(row.key);
+        return false;
+      }
+      return true;
+    });
     const lineageRoot = this.activeSessionLineageRoot;
     const lineageAgentId = normalizeAgentId(
       parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
@@ -499,7 +506,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       scopedRootRows.filter((row) => !adopted.has(row.key)),
       rows,
       navigationState.toSidebarSession,
-      new Set([mainSessionKey]),
+      mainSessionKeys,
     );
   }
 

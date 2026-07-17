@@ -522,6 +522,47 @@ describe("AppSidebar agent chip", () => {
     expect(rows[0]?.textContent).toContain("Research task");
   });
 
+  it("promotes main-session children to top-level threads, including alias parent keys", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    // The gateway row uses the unprefixed "main" alias; children index under
+    // that literal key, so promotion must follow the row's key, not only the
+    // synthesized agent:main:main form.
+    const harness = createSessionsHarness("main", ["main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 5,
+            childSessions: ["agent:main:subagent:thread-a"],
+          },
+          {
+            key: "agent:main:subagent:thread-a",
+            spawnedBy: "main",
+            kind: "direct",
+            label: "Spawned thread",
+            updatedAt: 4,
+          },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+
+    // The main row hides behind the identity card; its child surfaces as a
+    // top-level (non-child) thread row.
+    expect(sidebar.querySelector('[data-session-key="main"]')).toBeNull();
+    const promoted = sidebar.querySelector('[data-session-key="agent:main:subagent:thread-a"]');
+    expect(promoted).not.toBeNull();
+    expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
+    expect(promoted?.textContent).toContain("Spawned thread");
+  });
+
   it("loads and expands child sessions inline without root session controls", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
