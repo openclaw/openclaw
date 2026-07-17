@@ -386,7 +386,7 @@ export async function detectSetupInference(
       label: "Pi CLI",
       detail: "installed",
       reason:
-        "Pi is available for session use, but it is not a reusable guided-setup inference route yet.",
+        "Pi CLI is installed, but its whole-agent sessions require separate setup and are not a reusable guided-setup inference route.",
     });
   }
   if (opencode.found) {
@@ -395,7 +395,7 @@ export async function detectSetupInference(
       label: "OpenCode CLI",
       detail: "installed",
       reason:
-        "OpenCode is available through ACP, but it is not a reusable guided-setup inference route yet.",
+        "OpenCode CLI is installed, but its ACP harness requires separate setup and is not a reusable guided-setup inference route.",
     });
   }
   const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
