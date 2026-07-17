@@ -1,10 +1,13 @@
 // Assembles streamed backend events into TUI-visible messages.
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
   composeThinkingAndContent,
   extractContentFromMessage,
   extractThinkingFromMessage,
   resolveFinalAssistantText,
 } from "./tui-formatters.js";
+
+const MAX_TRACKED_STREAM_RUNS = 200;
 
 // Per-run state used to merge streaming deltas with final assistant messages.
 type RunStreamState = {
@@ -111,16 +114,22 @@ export class TuiStreamAssembler {
 
   private getOrCreateRun(runId: string): RunStreamState {
     let state = this.runs.get(runId);
-    if (!state) {
-      state = {
-        thinkingText: "",
-        contentText: "",
-        contentBlocks: [],
-        sawNonTextContentBlocks: false,
-        displayText: "",
-      };
+    if (state) {
+      // Refresh insertion order so an active older run survives eviction when newer runs arrive.
+      this.runs.delete(runId);
       this.runs.set(runId, state);
+      return state;
     }
+
+    state = {
+      thinkingText: "",
+      contentText: "",
+      contentBlocks: [],
+      sawNonTextContentBlocks: false,
+      displayText: "",
+    };
+    this.runs.set(runId, state);
+    pruneMapToMaxSize(this.runs, MAX_TRACKED_STREAM_RUNS);
     return state;
   }
 
