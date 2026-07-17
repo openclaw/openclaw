@@ -264,7 +264,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +3: question-gateway-runtime resolver plus request/result types.
-      8152,
+      // +1: async memory prompt preparation registration.
+      8153,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -299,7 +300,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
       // +1: question-gateway-runtime resolver.
-      4534,
+      // +1: async memory prompt preparation registration.
+      4535,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
