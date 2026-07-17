@@ -420,6 +420,7 @@ public struct OpenClawChatPlanSnapshot: Codable, Sendable {
     public let steps: [OpenClawChatPlanStep]
     public let explanation: String?
 
+    // periphery:ignore - package tests construct history fixtures; app consumers decode this payload.
     public init(steps: [OpenClawChatPlanStep], explanation: String? = nil) {
         self.steps = steps
         self.explanation = explanation
