@@ -242,9 +242,20 @@ const SERIALIZED_RESOLVE_MOCKS = Symbol.for("openclaw.serializedResolveMocks");
 // vi.mock registrations resolve. The slower pass then re-registers and wipes
 // already-evaluated manual mock modules mid-import-chain, so importers before
 // the wipe hold one factory instance and later importers get a fresh one
-// (vi.mocked(...) on the test's binding silently stops reaching prod). Coalesce
-// concurrent callers into one shared drain so registration happens exactly once
-// before any awaiting import proceeds.
+// (vi.mocked(...) on the test's binding silently stops reaching prod).
+//
+// The pin chains each caller onto its own sequential pass instead of sharing
+// one in-flight pass. Two invariants both matter:
+// - Serialization: a pass queued behind an in-flight one sees the cleared
+//   queue and no-ops, so a snapshot is never registered (and its mock modules
+//   never invalidated) twice.
+// - Freshness: every caller's pass starts at or after its call, so ids the
+//   caller queued (vi.mock/doMock/doUnmock before a dynamic import) are
+//   registered before its fetch proceeds. Sharing one pass breaks this — a
+//   caller can coalesce onto a pass snapshotted before its ids were queued and
+//   then import with mock state unresolved (observed: auth-provenance's
+//   doUnmock + Promise.all imports loading the real provider-auth warm worker
+//   and a 120s oauth refresh instead of the mocked provider hook).
 export function serializeMockerResolveMocks(
   mocker: SerializableMocker & { [SERIALIZED_RESOLVE_MOCKS]?: boolean },
 ): void {
@@ -254,26 +265,28 @@ export function serializeMockerResolveMocks(
   mocker[SERIALIZED_RESOLVE_MOCKS] = true;
   const original = mocker.resolveMocks.bind(mocker);
   const statics = mocker.constructor as { pendingIds?: unknown[] };
-  const drain = async (): Promise<void> => {
-    do {
-      const queue = statics.pendingIds;
-      const processedCount = queue?.length ?? 0;
-      await original();
-      // Upstream snapshots the queue contents at pass start and reassigns the
-      // pendingIds static to [] at the end, so ids queued during the pass's
-      // RPC window land in the abandoned array. Requeue them or a coalesced
-      // caller's vi.mock registration would be silently dropped.
-      if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
-        statics.pendingIds?.push(...queue.slice(processedCount));
-      }
-    } while ((statics.pendingIds?.length ?? 0) > 0);
+  const runPass = async (): Promise<void> => {
+    const queue = statics.pendingIds;
+    const processedCount = queue?.length ?? 0;
+    await original();
+    // Upstream snapshots the queue contents at pass start and reassigns the
+    // pendingIds static to [] at the end, so ids queued during the pass's RPC
+    // window land in the abandoned array. Requeue them so the next chained
+    // pass registers them instead of silently dropping the registration.
+    if (queue && queue !== statics.pendingIds && queue.length > processedCount) {
+      statics.pendingIds?.push(...queue.slice(processedCount));
+    }
   };
-  let inflight: Promise<void> | null = null;
+  let tail: Promise<void> = Promise.resolve();
   mocker.resolveMocks = () => {
-    inflight ??= drain().finally(() => {
-      inflight = null;
-    });
-    return inflight;
+    const pass = tail.then(runPass);
+    // Keep the chain alive after a rejected pass; the rejection still reaches
+    // the caller that owns that pass, matching upstream behavior.
+    tail = pass.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pass;
   };
 }
 

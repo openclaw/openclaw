@@ -1,7 +1,7 @@
-// Guards the resolveMocks serialization pin: concurrent callers must coalesce
-// into one shared drain so a late second pass cannot re-register and invalidate
-// already-evaluated manual mock modules mid-import-chain, while ids queued
-// during an in-flight pass still get registered before callers proceed.
+// Guards the resolveMocks serialization pin: passes run sequentially so a
+// drained snapshot is never registered (and its mock modules never
+// invalidated) twice, while every caller's pass starts at or after its call so
+// previously queued ids are registered before the caller's fetch proceeds.
 import { describe, expect, it } from "vitest";
 import { serializeMockerResolveMocks } from "./non-isolated-runner.js";
 
@@ -34,7 +34,7 @@ class FakeMocker {
 }
 
 describe("serializeMockerResolveMocks", () => {
-  it("coalesces concurrent resolveMocks callers into one pass", async () => {
+  it("serializes concurrent callers and never re-registers a drained snapshot", async () => {
     FakeMocker.pendingIds = ["mock-a", "mock-b"];
     const mocker = new FakeMocker();
     serializeMockerResolveMocks(mocker);
@@ -42,26 +42,29 @@ describe("serializeMockerResolveMocks", () => {
     await Promise.all([mocker.resolveMocks(), mocker.resolveMocks(), mocker.resolveMocks()]);
 
     expect(mocker.maxConcurrentPasses).toBe(1);
+    // Later chained passes see the cleared queue and no-op instead of
+    // re-registering (and re-invalidating) the same snapshot.
     expect(mocker.passes).toBe(1);
     expect(mocker.processed).toEqual(["mock-a", "mock-b"]);
     expect(FakeMocker.pendingIds).toEqual([]);
   });
 
-  it("registers ids queued while a pass is in flight before callers proceed", async () => {
+  it("registers ids queued while a pass is in flight before the later caller resolves", async () => {
     FakeMocker.pendingIds = ["mock-a"];
     const mocker = new FakeMocker();
     serializeMockerResolveMocks(mocker);
 
     const first = mocker.resolveMocks();
     // Upstream would abandon this push when it reassigns pendingIds to [];
-    // the wrapper must requeue it into a follow-up pass.
+    // the wrapper must requeue it and the second caller's own chained pass
+    // must register it before that caller proceeds with its fetch.
     FakeMocker.pendingIds.push("mock-late");
-    const coalesced = mocker.resolveMocks();
-    await Promise.all([first, coalesced]);
+    const second = mocker.resolveMocks();
+    await second;
 
     expect(mocker.processed).toEqual(["mock-a", "mock-late"]);
     expect(mocker.maxConcurrentPasses).toBe(1);
-    expect(mocker.passes).toBe(2);
+    await first;
     expect(FakeMocker.pendingIds).toEqual([]);
   });
 
