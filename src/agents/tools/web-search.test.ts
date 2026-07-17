@@ -3,6 +3,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import {
   MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
@@ -12,11 +13,7 @@ import {
   parseWebSearchTimeFilters,
 } from "./web-search-provider-common.js";
 import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
-import {
-  createWebSearchTool,
-  normalizeWebSearchOutput,
-  WebSearchOutputSchema,
-} from "./web-search.js";
+import { createWebSearchTool } from "./web-search.js";
 
 describe("web_search tool schema", () => {
   it("marks query as required for model tool-call schemas", () => {
@@ -35,11 +32,13 @@ describe("web_search tool schema", () => {
     expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
 
-  it("declares the normalized output contract without an incomplete compact hint", () => {
+  it("declares the normalized output contract with a complete compact hint", () => {
     const tool = createWebSearchTool();
 
     expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
-    expect(compactToolOutputHint(tool?.outputSchema)).toBeUndefined();
+    expect(compactToolOutputHint(tool?.outputSchema)).toBe(
+      '{ error: string; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; queryTerms?: Array<string>; tookMs?: number } | { content: string; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number }',
+    );
   });
 });
 
