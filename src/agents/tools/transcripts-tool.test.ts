@@ -12,6 +12,18 @@ const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
 }));
 
+vi.mock("../../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-state-db.js")>();
+  return {
+    ...actual,
+    openOpenClawStateDatabase: () => {
+      throw new Error(
+        "SQLite support is unavailable or unsafe in this Node runtime. (mocked for test)",
+      );
+    },
+  };
+});
+
 vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../transcripts/provider-registry.js")>();
   return {
