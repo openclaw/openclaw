@@ -408,7 +408,7 @@ export class AcpSessionManager {
           handle: activeTurn.handle,
           reason: discardReason,
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           logVerbose(
             `acp-manager: force-discard cancel failed for ${sessionKey}: ${String(error)}`,
           );
@@ -443,7 +443,7 @@ export class AcpSessionManager {
           handle: ensured.handle,
           reason: "stale-actor-generation",
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           logVerbose(
             `acp-manager: stale generation close failed for ${params.sessionKey}: ${String(error)}`,
           );

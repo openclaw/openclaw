@@ -1,7 +1,7 @@
 /** Per-session async queue wrapper used by ACP manager operations. */
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
-export type SessionActorTaskContext = {
+type SessionActorTaskContext = {
   generation: number;
   isStale: () => boolean;
 };

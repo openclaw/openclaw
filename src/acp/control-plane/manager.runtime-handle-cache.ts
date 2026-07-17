@@ -103,7 +103,7 @@ export class ManagerRuntimeHandleCache {
         handle: cached.handle,
         reason: params.reason,
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         logVerbose(
           `acp-manager: force-detach close failed for ${params.sessionKey}: ${String(error)}`,
         );
