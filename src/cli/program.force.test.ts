@@ -189,6 +189,40 @@ describe("gateway --force helpers", () => {
     expect(() => forceFreePort(18789)).toThrow(/lsof not found/);
   });
 
+  it("swallows ESRCH when a listener exits between port listing and signal", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(
+      ["p42", "cnode", "p99", "cssh", ""].join("\n"),
+    );
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    const killMock = vi
+      .fn()
+      .mockReturnValueOnce(undefined) // PID 42 — success
+      .mockImplementationOnce(() => {
+        throw esrchErr; // PID 99 — exited after listing
+      });
+    process.kill = killMock;
+
+    const killed = forceFreePort(18789);
+
+    expect(killMock).toHaveBeenCalledTimes(2);
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(killMock).toHaveBeenCalledWith(99, "SIGTERM");
+    expect(killed).toEqual<PortProcess[]>([
+      { pid: 42, command: "node" },
+      { pid: 99, command: "ssh" },
+    ]);
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(["p42", "cnode", ""].join("\n"));
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    process.kill = vi.fn().mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => forceFreePort(18789)).toThrow(/failed to kill pid 42/);
+  });
+
   it("kills each listener and returns metadata", () => {
     (execFileSync as unknown as Mock).mockReturnValue(
       ["p42", "cnode", "p99", "cssh", ""].join("\n"),
