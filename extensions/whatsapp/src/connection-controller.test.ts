@@ -1076,7 +1076,7 @@ describe("WhatsAppConnectionController", () => {
       abortSignal: abort.signal,
     });
 
-    createWaSocketMock.mockResolvedValueOnce({ ws: { close: vi.fn() } } as never);
+    createWaSocketMock.mockResolvedValueOnce(createSocketWithTransportEmitter() as never);
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     await preAbortedController.openConnection({
       connectionId: "conn-pre-aborted",
