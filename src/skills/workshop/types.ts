@@ -200,6 +200,7 @@ export type SkillProposalActionInput = {
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   reason?: string;
+  explicitApprovalGranted?: boolean;
 };
 
 export type SkillProposalReadResult = {
@@ -211,4 +212,6 @@ export type SkillProposalReadResult = {
 export type SkillProposalApplyResult = {
   record: SkillProposalRecord;
   targetSkillFile: string;
+  changeSummary?: string;
+  requiresExplicitApproval?: boolean;
 };

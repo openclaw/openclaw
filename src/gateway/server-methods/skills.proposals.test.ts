@@ -32,12 +32,15 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => mocks.workspaceDir,
 }));
 
-vi.mock("../../skills/lifecycle/clawhub.js", () => ({
-  installSkillFromClawHub: vi.fn(),
-  readLocalSkillCardContentSync: vi.fn(),
-  searchSkillsFromClawHub: vi.fn(),
-  updateSkillsFromClawHub: vi.fn(),
-}));
+vi.mock("../../skills/lifecycle/clawhub.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../skills/lifecycle/clawhub.js")>();
+  return {
+    ...actual,
+    installSkillFromClawHub: vi.fn(),
+    searchSkillsFromClawHub: vi.fn(),
+    updateSkillsFromClawHub: vi.fn(),
+  };
+});
 
 vi.mock("../../skills/lifecycle/install.js", () => ({
   installSkill: vi.fn(),
@@ -301,5 +304,33 @@ describe("skills proposal gateway handlers", () => {
       "Skill proposal is not pending",
     );
     expect(mocks.chatSend).not.toHaveBeenCalled();
+  });
+
+  it("rejects low-continuity update proposals via Gateway apply and preserves the target file", async () => {
+    const skillDir = path.join(mocks.workspaceDir, "skills", "gateway-low-cont");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: gateway-low-cont\ndescription: Gateway low continuity target\n---\n\n# Gateway Low Cont\n\nStep one.\nStep two.\nStep three.\nStep four.\nStep five.\nStep six.\n",
+      "utf8",
+    );
+
+    const update = await callHandler("skills.proposals.update", {
+      skillName: "gateway-low-cont",
+      content: "# Rewrite\n\nNew step A.\nNew step B.\nNew step C.\nNew step D.\n",
+    });
+    expect(update.ok).toBe(true);
+    const updated = update.response as { record: { id: string } };
+
+    const apply = await callHandler("skills.proposals.apply", {
+      proposalId: updated.record.id,
+    });
+    expect(apply.ok).toBe(false);
+    expect((apply.error as { code?: string }).code).toBe("INVALID_REQUEST");
+    expect((apply.error as { message?: string }).message).toContain("explicit approval");
+
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Step one.",
+    );
   });
 });

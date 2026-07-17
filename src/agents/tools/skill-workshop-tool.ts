@@ -245,9 +245,14 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
+          explicitApprovalGranted: true,
         });
+        const summarySuffix = applied.changeSummary ? ` (${applied.changeSummary})` : "";
+        const approvalNote = applied.requiresExplicitApproval
+          ? " Note: insufficient content continuity with previous skill; explicit approval was required."
+          : "";
         return actionResult(applied.record, {
-          contentText: `Applied skill proposal ${applied.record.id}.`,
+          contentText: `Applied skill proposal ${applied.record.id}.${summarySuffix}${approvalNote}`,
           targetSkillFile: applied.targetSkillFile,
         });
       }
