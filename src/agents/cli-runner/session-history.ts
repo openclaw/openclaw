@@ -36,6 +36,7 @@ import {
   parseSessionEntries,
 } from "../sessions/session-manager.js";
 import { cliBackendLog } from "./log.js";
+import type { RunCliAgentParams } from "./types.js";
 
 /** Maximum transcript size read for CLI session history. */
 const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
@@ -53,6 +54,7 @@ type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   summary?: unknown;
+  idempotencyKey?: unknown;
 };
 type HistoryEntry = {
   type?: unknown;
@@ -76,6 +78,7 @@ type CliSessionTranscriptParams = {
   agentId?: string;
   config?: OpenClawConfig;
   storePath?: string;
+  excludeMessageIdempotencyKey?: string;
 };
 
 type RawTranscriptReseedReason =
@@ -98,6 +101,24 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "mcp",
   "session-expired",
 ]);
+
+/** Resolves a persisted current turn that must not be exposed as prior CLI history. */
+export function resolveCliSessionHistoryExcludedMessageIdempotencyKey(
+  params: Pick<
+    RunCliAgentParams,
+    "suppressNextUserMessagePersistence" | "userTurnTranscriptRecorder"
+  >,
+): string | undefined {
+  const recorder = params.userTurnTranscriptRecorder;
+  if (params.suppressNextUserMessagePersistence !== true || !recorder?.hasPersisted()) {
+    return undefined;
+  }
+  const message = recorder.getPersistedMessage?.() ?? recorder.message;
+  const idempotencyKey = (message as { idempotencyKey?: unknown } | undefined)?.idempotencyKey;
+  return typeof idempotencyKey === "string" && idempotencyKey.length > 0
+    ? idempotencyKey
+    : undefined;
+}
 
 /** Resolves how much prior transcript text may reseed a fresh CLI session. */
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
@@ -490,6 +511,7 @@ function finalizeCliSessionEntries(params: {
   entries: unknown[];
   source: string;
   truncated: boolean;
+  excludeMessageIdempotencyKey?: string;
 }): unknown[] {
   const entries = params.entries.map((entry) =>
     normalizeLoadedFileEntry(entry as ReturnType<typeof parseSessionEntries>[number]),
@@ -509,7 +531,21 @@ function finalizeCliSessionEntries(params: {
     );
     return [];
   }
-  return selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
+  const selectedEntries =
+    selectSessionTranscriptLeafControlledPath(sessionEntries) ?? sessionEntries;
+  if (!params.excludeMessageIdempotencyKey) {
+    return selectedEntries;
+  }
+  // Select the active branch before removing the already-persisted current
+  // turn so its tree edge cannot change leaf resolution for prior history.
+  return selectedEntries.filter((entry) => {
+    const candidate = entry as HistoryEntry;
+    if (candidate.type !== "message") {
+      return true;
+    }
+    const message = candidate.message as HistoryMessage | undefined;
+    return message?.idempotencyKey !== params.excludeMessageIdempotencyKey;
+  });
 }
 
 async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promise<unknown[]> {
@@ -532,6 +568,7 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
         entries: transcript.events,
         source: params.sessionFile,
         truncated: transcript.truncated,
+        excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
       });
     }
     const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
@@ -561,6 +598,7 @@ async function loadCliSessionEntries(params: CliSessionTranscriptParams): Promis
       entries,
       source: realSessionFile,
       truncated: transcript.truncated,
+      excludeMessageIdempotencyKey: params.excludeMessageIdempotencyKey,
     });
   } catch (error) {
     if (!isFileNotFoundError(error)) {

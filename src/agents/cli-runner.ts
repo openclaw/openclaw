@@ -39,6 +39,7 @@ import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
+  resolveCliSessionHistoryExcludedMessageIdempotencyKey,
   resolveCliSessionSqliteTranscriptScope,
 } from "./cli-runner/session-history.js";
 import type {
@@ -584,6 +585,8 @@ export async function runPreparedCliAgent(
 ): Promise<EmbeddedAgentRunResult> {
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
+  const excludeMessageIdempotencyKey =
+    resolveCliSessionHistoryExcludedMessageIdempotencyKey(params);
   const contextEngineSessionTarget = context.contextEngine
     ? resolveCliSessionSqliteTranscriptScope(params)
     : undefined;
@@ -609,6 +612,7 @@ export async function runPreparedCliAgent(
         agentId: params.agentId,
         config: params.config,
         ...(params.storePath ? { storePath: params.storePath } : {}),
+        ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
       })
     : [];
   const llmInputEvent = {
@@ -1197,6 +1201,7 @@ export async function runPreparedCliAgent(
           agentId: params.agentId,
           config: params.config,
           ...(params.storePath ? { storePath: params.storePath } : {}),
+          ...(excludeMessageIdempotencyKey ? { excludeMessageIdempotencyKey } : {}),
         })
       : [];
     const finishCliAttempt = async (
