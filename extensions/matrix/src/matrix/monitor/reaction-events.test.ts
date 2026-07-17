@@ -5,6 +5,7 @@ import {
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
   unregisterMatrixApprovalReactionTarget,
 } from "../../approval-reactions.js";
+import { installMatrixTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 
@@ -54,6 +55,7 @@ vi.mock("../send.js", () => ({
 }));
 
 beforeEach(() => {
+  installMatrixTestRuntime();
   resolveMatrixApproval.mockReset().mockResolvedValue({
     applied: true,
     approval: { id: "req-123", status: "allowed", decision: "allow-once" },

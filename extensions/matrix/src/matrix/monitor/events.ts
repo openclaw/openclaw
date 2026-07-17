@@ -1,148 +1,19 @@
 // Matrix plugin module implements events behavior.
-import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
 import { formatMatrixEncryptedEventDisabledWarning } from "../encryption-guidance.js";
 import type { MatrixClient } from "../sdk.js";
+import {
+  createMatrixE2eeHealthTracker,
+  formatMatrixE2eeCohortOverflowHint,
+  formatMatrixE2eeDegradationHint,
+  MATRIX_E2EE_DEGRADED_COHORT_LIMIT,
+} from "./e2ee-health.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
-
-const MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS = 2 * 60_000;
-const MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_THRESHOLD = 3;
-const MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT = 3;
-
-type MatrixPostHealthySyncDecryptFailureObservation = {
-  key: string;
-  roomId: string;
-  eventId: string;
-  sender: string | null;
-  eventTs: number;
-  error: string;
-};
-
-function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
-  return (
-    "matrix: repeated fresh encrypted messages are still failing to decrypt after Matrix resumed healthy sync. " +
-    "This device may still be missing new room keys. " +
-    `Check 'openclaw matrix verify status --verbose --account ${accountId}' and 'openclaw matrix devices list --account ${accountId}'.`
-  );
-}
-
-function isFreshPostHealthySyncDecryptFailure(params: {
-  event: MatrixRawEvent;
-  healthySyncSinceMs?: number;
-  graceMs?: number;
-  nowMs: number;
-}): boolean {
-  const { event, healthySyncSinceMs, graceMs = 0, nowMs } = params;
-  if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
-    return false;
-  }
-  const eventTs = event.origin_server_ts;
-  if (!Number.isFinite(eventTs) || eventTs <= 0) {
-    return false;
-  }
-  if (eventTs < healthySyncSinceMs + graceMs) {
-    return false;
-  }
-  if (eventTs > nowMs + 60_000) {
-    return false;
-  }
-  return true;
-}
-
-function createMatrixPostHealthySyncDecryptFailureTracker(params: {
-  getHealthySyncSinceMs?: () => number | undefined;
-  startupGraceMs?: number;
-}) {
-  let observations: MatrixPostHealthySyncDecryptFailureObservation[] = [];
-  let warningEmitted = false;
-  let trackedHealthySyncSinceMs: number | undefined;
-
-  const resetObservations = () => {
-    observations = [];
-    warningEmitted = false;
-  };
-
-  const pruneObservations = (nowMs: number) => {
-    observations = observations.filter(
-      (entry) => nowMs - entry.eventTs <= MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS,
-    );
-    if (observations.length === 0) {
-      warningEmitted = false;
-    }
-  };
-
-  return {
-    recordFailure(roomId: string, event: MatrixRawEvent, error: Error) {
-      const nowMs = Date.now();
-      const healthySyncSinceMs = params.getHealthySyncSinceMs?.();
-      if (healthySyncSinceMs !== trackedHealthySyncSinceMs) {
-        trackedHealthySyncSinceMs = healthySyncSinceMs;
-        resetObservations();
-      }
-      if (
-        !isFreshPostHealthySyncDecryptFailure({
-          event,
-          healthySyncSinceMs,
-          graceMs: params.startupGraceMs,
-          nowMs,
-        })
-      ) {
-        return { freshAfterHealthySync: false, failureCount: 0 } as const;
-      }
-
-      pruneObservations(nowMs);
-
-      const key = `${roomId}|${event.event_id}`;
-      if (!observations.some((entry) => entry.key === key)) {
-        observations.push({
-          key,
-          roomId,
-          eventId: event.event_id,
-          sender: typeof event.sender === "string" ? event.sender : null,
-          eventTs: event.origin_server_ts,
-          error: error.message,
-        });
-      }
-
-      const failureCount = observations.length;
-      if (warningEmitted || failureCount < MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_THRESHOLD) {
-        return { freshAfterHealthySync: true, failureCount } as const;
-      }
-
-      warningEmitted = true;
-      const rooms = uniqueStrings(observations.map((entry) => entry.roomId)).slice(
-        0,
-        MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
-      );
-      const senders = uniqueStrings(
-        observations
-          .map((entry) => entry.sender)
-          .filter((sender): sender is string => Boolean(sender)),
-      ).slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT);
-      const eventIds = observations
-        .slice(-MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT)
-        .map((entry) => entry.eventId);
-      const latestError = observations.at(-1)?.error ?? error.message;
-      return {
-        freshAfterHealthySync: true,
-        failureCount,
-        warning: {
-          rooms,
-          roomCount: new Set(observations.map((entry) => entry.roomId)).size,
-          senders,
-          senderCount: new Set(observations.map((entry) => entry.sender).filter(Boolean)).size,
-          eventIds,
-          latestError,
-          windowMs: MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_WINDOW_MS,
-        },
-      } as const;
-    },
-  };
-}
 
 function formatMatrixSelfDecryptionHint(accountId: string): string {
   return (
@@ -185,6 +56,8 @@ export function registerMatrixMonitorEvents(params: {
   logger: RuntimeLogger;
   startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
+  onE2eeDegraded?: (error: string) => void;
+  onE2eeRecovered?: () => void;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
   runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
@@ -205,12 +78,14 @@ export function registerMatrixMonitorEvents(params: {
     logger,
     startupGraceMs,
     getHealthySyncSinceMs,
+    onE2eeDegraded,
+    onE2eeRecovered,
     formatNativeDependencyHint,
     onRoomMessage,
     runDetachedTask,
     sasNoticeRetryDelayMs,
   } = params;
-  const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
+  const postHealthySyncDecryptFailureTracker = createMatrixE2eeHealthTracker({
     getHealthySyncSinceMs,
     startupGraceMs,
   });
@@ -251,6 +126,7 @@ export function registerMatrixMonitorEvents(params: {
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
+    postHealthySyncDecryptFailureTracker.recordEncryptedEvent(roomId, event);
     logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
   });
 
@@ -258,6 +134,15 @@ export function registerMatrixMonitorEvents(params: {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
     logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
+    if (
+      postHealthySyncDecryptFailureTracker.recordSuccess(
+        roomId,
+        event,
+        event.sender !== auth.userId,
+      )
+    ) {
+      onE2eeRecovered?.();
+    }
     if (routeVerificationEvent(roomId, event)) {
       return;
     }
@@ -273,14 +158,23 @@ export function registerMatrixMonitorEvents(params: {
   });
 
   client.on("room.failed_decryption", (roomId: string, event: MatrixRawEvent, error: Error) => {
+    const failureState = postHealthySyncDecryptFailureTracker.recordFailure(
+      roomId,
+      event,
+      error,
+      event.sender !== auth.userId,
+    );
+    const degradationError = failureState.cohortOverflowed
+      ? formatMatrixE2eeCohortOverflowHint()
+      : failureState.warning
+        ? formatMatrixE2eeDegradationHint(auth.accountId)
+        : null;
+    if (degradationError) {
+      onE2eeDegraded?.(degradationError);
+    }
     void runMonitorTask(
       `failed decryption handler room=${roomId} id=${event.event_id ?? "unknown"}`,
       async () => {
-        const failureState = postHealthySyncDecryptFailureTracker.recordFailure(
-          roomId,
-          event,
-          error,
-        );
         const selfUserId = await resolveMatrixSelfUserId(client, logVerboseMessage);
         const sender = typeof event.sender === "string" ? event.sender : null;
         const senderMatchesOwnUser = Boolean(selfUserId && sender && selfUserId === sender);
@@ -302,8 +196,8 @@ export function registerMatrixMonitorEvents(params: {
               : {}),
           },
         );
-        if (failureState.warning) {
-          logger.warn(formatMatrixPostHealthySyncDecryptionHint(auth.accountId), {
+        if (failureState.warning && degradationError) {
+          logger.warn(formatMatrixE2eeDegradationHint(auth.accountId), {
             roomId,
             eventId: event.event_id,
             failureCount: failureState.failureCount,
@@ -314,6 +208,13 @@ export function registerMatrixMonitorEvents(params: {
             sampleEventIds: failureState.warning.eventIds,
             latestError: failureState.warning.latestError,
             windowMs: failureState.warning.windowMs,
+          });
+        }
+        if (failureState.cohortOverflowed) {
+          logger.warn(formatMatrixE2eeCohortOverflowHint(), {
+            roomId,
+            eventId: event.event_id,
+            cohortLimit: MATRIX_E2EE_DEGRADED_COHORT_LIMIT,
           });
         }
         if (senderMatchesOwnUser) {

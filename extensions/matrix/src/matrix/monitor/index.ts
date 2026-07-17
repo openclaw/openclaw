@@ -471,6 +471,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logger,
       startupGraceMs,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
+      onE2eeDegraded: (error) => statusController.noteE2eeDegraded(error),
+      onE2eeRecovered: () => statusController.noteE2eeRecovered(),
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,

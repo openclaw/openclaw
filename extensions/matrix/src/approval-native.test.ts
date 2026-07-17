@@ -1,7 +1,12 @@
 // Matrix tests cover approval native plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { matrixApprovalCapability } from "./approval-native.js";
+import { installMatrixTestRuntime } from "./test-runtime.js";
+
+beforeEach(() => {
+  installMatrixTestRuntime();
+});
 
 function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>>,
