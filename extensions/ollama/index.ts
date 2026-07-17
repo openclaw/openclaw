@@ -452,23 +452,11 @@ async function resolveRequestedDynamicOllamaModel(params: {
   const showInfo = params.showApiKey
     ? await queryOllamaModelShowInfo(showBaseUrl, params.modelId, { apiKey: params.showApiKey })
     : await queryOllamaModelShowInfo(showBaseUrl, params.modelId);
-  // Failed /api/show must still produce a definition so /models add matches
-  // provider discovery + setup: tools off, reasoning name heuristics preserved.
+  // Catalog-missing dynamic resolve (/models add) treats /api/show as the
+  // existence probe. Failed inspection must stay unresolved so typos/404s do
+  // not become accepted config; tag-discovered + setup still use the marker.
   if (showInfo.showInspectionFailed) {
-    const definition = buildOllamaModelDefinition(
-      params.modelId,
-      showInfo.contextWindow,
-      undefined,
-      {
-        showInspectionFailed: true,
-      },
-    );
-    const model = params.capContextTokens ? capLocalOllamaModelContext(definition) : definition;
-    return toDynamicOllamaModel({
-      provider: params.provider,
-      providerConfig: params.providerConfig,
-      model,
-    });
+    return undefined;
   }
   if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
     return undefined;

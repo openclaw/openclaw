@@ -1321,7 +1321,45 @@ describe("ollama plugin", () => {
     }
   });
 
-  it("resolves requested Ollama models with tools off when /api/show fails", async () => {
+  it("keeps catalog-missing Ollama models unresolved when /api/show fails", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+    // Shared outcome of HTTP 404 and thrown /api/show (see provider-models tests).
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({ showInspectionFailed: true });
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "depseek-v4-pro:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "depseek-v4-pro:cloud",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toBeUndefined();
+      expect(buildOllamaModelDefinitionMock).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("keeps catalog-missing Ollama models unresolved when /api/show throws", async () => {
     const provider = registerProvider();
     const previous = process.env.OLLAMA_API_KEY;
     process.env.OLLAMA_API_KEY = "ollama-local";
@@ -1336,25 +1374,18 @@ describe("ollama plugin", () => {
       await provider.prepareDynamicModel?.({
         config: {},
         provider: "ollama",
-        modelId: "deepseek-r1:14b",
+        modelId: "typo-model:latest",
         modelRegistry: { find: vi.fn(() => null) },
       } as never);
 
-      const resolved = provider.resolveDynamicModel?.({
-        config: {},
-        provider: "ollama",
-        modelId: "deepseek-r1:14b",
-        modelRegistry: { find: vi.fn(() => null) },
-      } as never);
-      expect(resolved?.id).toBe("deepseek-r1:14b");
-      expect(resolved?.compat?.supportsTools).toBe(false);
-      expect(resolved?.reasoning).toBe(true);
-      expect(buildOllamaModelDefinitionMock).toHaveBeenCalledWith(
-        "deepseek-r1:14b",
-        undefined,
-        undefined,
-        { showInspectionFailed: true },
-      );
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "typo-model:latest",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OLLAMA_API_KEY;
