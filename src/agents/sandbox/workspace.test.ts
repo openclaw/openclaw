@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_AGENTS_FILENAME } from "../workspace.js";
+import { DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME } from "../workspace.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const tempRoots: string[] = [];
@@ -76,5 +76,46 @@ describe("ensureSandboxWorkspace", () => {
     await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).rejects.toThrow(
       "no such file",
     );
+  });
+
+  it("skips an oversized seed file but still seeds the others", async () => {
+    // 2 MiB limit mirrors SANDBOX_SEED_FILE_MAX_BYTES in the source module.
+    // An unbounded read would copy the oversized file through; the bound skips it.
+    const limit = 2 * 1024 * 1024;
+    const root = await makeTempRoot();
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    await fs.mkdir(seed, { recursive: true });
+    await fs.writeFile(
+      path.join(seed, DEFAULT_AGENTS_FILENAME),
+      `## Startup\n\n` + "x".repeat(limit),
+      "utf-8",
+    );
+    await fs.writeFile(path.join(seed, DEFAULT_TOOLS_FILENAME), "seeded-tools", "utf-8");
+
+    await ensureSandboxWorkspace(sandbox, seed, true);
+
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8")).rejects.toThrow(
+      "no such file",
+    );
+    await expect(fs.readFile(path.join(sandbox, DEFAULT_TOOLS_FILENAME), "utf-8")).resolves.toBe(
+      "seeded-tools",
+    );
+  });
+
+  it("seeds a bootstrap file just under the byte read limit", async () => {
+    const limit = 2 * 1024 * 1024;
+    const root = await makeTempRoot();
+    const seed = path.join(root, "seed");
+    const sandbox = path.join(root, "sandbox");
+    await fs.mkdir(seed, { recursive: true });
+    const content = "## Startup\n\nDo startup things.\n";
+    const padding = "x".repeat(limit - content.length - 1);
+    await fs.writeFile(path.join(seed, DEFAULT_AGENTS_FILENAME), content + padding, "utf-8");
+
+    await ensureSandboxWorkspace(sandbox, seed, true);
+
+    const seeded = await fs.readFile(path.join(sandbox, DEFAULT_AGENTS_FILENAME), "utf-8");
+    expect(seeded).toContain("Do startup things");
   });
 });
