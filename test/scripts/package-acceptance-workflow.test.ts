@@ -2385,7 +2385,7 @@ describe("package artifact reuse", () => {
     });
     expect(dockerAcceptanceJob.with).toMatchObject({
       allow_frozen_target_scenario_omissions:
-        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
     });
     expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",

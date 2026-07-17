@@ -1464,6 +1464,25 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("retains an exact canonical FTS row without duplicating it", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
+    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
   it("keeps canonical cache collisions while importing remaining legacy rows", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
@@ -1686,6 +1705,18 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
+    const legacyDb = new DatabaseSync(legacyPath);
+    try {
+      legacyDb.exec(`
+        INSERT INTO files VALUES ('SECOND.md', 'memory', 'second-file-hash', 11, 21);
+        INSERT INTO chunks VALUES (
+          'chunk-2', 'SECOND.md', 'memory', 1, 1, 'second-chunk-hash', 'embed-model',
+          'second legacy memory', '[0,1,0]', 31
+        );
+      `);
+    } finally {
+      legacyDb.close();
+    }
     await createCanonicalLegacyMemoryRowsWithFts(agentPath, "stale text");
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
@@ -1697,6 +1728,11 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     const keywordRows = await searchMigratedKeywordRows(agentPath, "stale");
     expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      chunks: [{ id: "chunk-1", text: "remember this" }],
+      cache: [],
+    });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
