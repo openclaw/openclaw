@@ -250,6 +250,13 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
         failedMaxEntries: MSTEAMS_INGRESS_FAILED_MAX_ENTRIES,
       });
       const receivedAt = Date.now();
+      // Install before the durable append: the drain can claim and consume the
+      // entry the moment the insert commits; a set afterwards would leak. A
+      // duplicate delivery must not clobber the first delivery's context.
+      const installedLiveContext = Boolean(liveContext) && !liveContexts.has(facts.eventId);
+      if (liveContext && installedLiveContext) {
+        liveContexts.set(facts.eventId, liveContext);
+      }
       const result = await queue.enqueue(
         facts.eventId,
         {
@@ -259,8 +266,9 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
         },
         { receivedAt, laneKey: facts.laneKey },
       );
-      if (liveContext && (result.kind === "accepted" || result.kind === "pending")) {
-        liveContexts.set(facts.eventId, liveContext);
+      if (installedLiveContext && !(result.kind === "accepted" || result.kind === "pending")) {
+        // Tombstoned duplicate: no claim will ever consume this context.
+        liveContexts.delete(facts.eventId);
       }
       requestDrain();
     },

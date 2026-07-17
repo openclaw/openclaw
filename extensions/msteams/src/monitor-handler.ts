@@ -175,9 +175,14 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   }
 
   handler.onMessage(async (context, next, turnAdoptionLifecycle) => {
+    let nextRan = false;
+    const runNext = async () => {
+      nextRan = true;
+      await next();
+    };
     try {
       const result = await handleTeamsMessage(context as MSTeamsTurnContext, turnAdoptionLifecycle);
-      await next();
+      await runNext();
       return result;
     } catch (err) {
       if (turnAdoptionLifecycle) {
@@ -185,7 +190,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       }
       deps.runtime.error(`msteams handler failed: ${formatUnknownError(err)}`);
     }
-    await next();
+    if (!nextRan) {
+      await runNext();
+    }
     return undefined;
   });
 
