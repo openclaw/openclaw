@@ -444,6 +444,22 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it("pins the v6.11 SwiftFormat contract for macOS CI", () => {
+    const workflow = readCiWorkflow();
+    const install = workflow.jobs["macos-swift"].steps.find(
+      (step) => step.name === "Install XcodeGen / SwiftLint / SwiftFormat",
+    );
+
+    expect(install.run).toContain('swiftformat_version="0.61.1"');
+    expect(install.run).toContain(
+      'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
+    );
+    expect(install.run).toContain(
+      "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
+    );
+    expect(install.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+  });
+
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
