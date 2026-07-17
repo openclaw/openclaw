@@ -82,6 +82,52 @@ describe("runGatewayConversationList", () => {
     expect(result.conversations[0]).not.toHaveProperty("sessionId");
   });
 
+  it("keeps route identity separate from its delivery address", async () => {
+    let discovered: ConversationIdentity[] = [];
+    const deps = {
+      resolveOutboundChannelPlugin: vi.fn(() => ({
+        id: "discord",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true, configured: true }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        directory: {
+          listPeers: async () => [
+            { kind: "user" as const, id: "delivery-alias-456", name: "Canonical Peer" },
+          ],
+          listGroups: async () => [],
+        },
+      })),
+      resolveOutboundSessionRoute: vi.fn(async () => ({
+        sessionKey: "agent:main:discord:direct:canonical-peer-123",
+        baseSessionKey: "agent:main:discord:direct:canonical-peer-123",
+        peer: { kind: "direct" as const, id: "canonical-peer-123" },
+        chatType: "direct" as const,
+        from: "discord:canonical-peer-123",
+        to: "user:delivery-alias-456",
+      })),
+      registerConversationAddresses: vi.fn((_scope, identities) => {
+        discovered = [...identities];
+      }),
+      listConversations: vi.fn(() => []),
+    };
+
+    await runGatewayConversationList(
+      { config: {}, agentId: "main", channel: "discord", limit: 50 },
+      deps as never,
+    );
+
+    expect(discovered).toEqual([
+      expect.objectContaining({
+        peerId: "canonical-peer-123",
+        deliveryTarget: "user:delivery-alias-456",
+        nativeDirectUserId: "canonical-peer-123",
+      }),
+    ]);
+  });
+
   it("merges live directory adapters with config-backed entries", async () => {
     const listPeers = vi.fn(async () => [
       { kind: "user" as const, id: "stale-peer", name: "Stale Peer" },

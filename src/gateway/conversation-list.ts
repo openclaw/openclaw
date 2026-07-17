@@ -192,7 +192,8 @@ async function discoverChannelAddresses(params: {
         channel: plugin.id,
         accountId,
         kind: route.chatType,
-        peerId: route.to,
+        // Match inbound MsgContext.From; the identity builder removes transport prefixes.
+        peerId: route.from,
         deliveryTarget: route.to,
         ...(route.threadId !== undefined ? { threadId: route.threadId } : {}),
         ...(route.peer.kind === "direct"
