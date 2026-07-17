@@ -87,7 +87,7 @@ describe("Codex ring-zero thread config", () => {
 });
 
 describe("Codex delegation capability", () => {
-  it("disables native delegation on start and resume without disabling other tools", () => {
+  it("disables native delegation and goal continuation on start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.delegationCapability = "report_only";
     const appServer = createAppServerOptions() as never;
@@ -112,7 +112,7 @@ describe("Codex delegation capability", () => {
     for (const request of [start, resume]) {
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
-      expect(request.config?.["features.goals"]).toBe(true);
+      expect(request.config?.["features.goals"]).toBe(false);
     }
   });
 });
