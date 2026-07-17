@@ -9,7 +9,7 @@ import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-d
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
-export type TelegramIngressNonRetryableFailure = {
+type TelegramIngressNonRetryableFailure = {
   reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
   message: string;
 };

@@ -42,7 +42,7 @@ const shouldDeadLetterRetryableSpooledUpdate = (
   attempt: number,
   now?: number,
 ) => shouldDeadLetterRetryableIngressEvent(update, attempt, undefined, now);
-import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.types.js";
+import type { TelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
 const runMock = vi.hoisted(() => vi.fn());
@@ -110,10 +110,10 @@ const pollingSessionTesting = {
 };
 // Mirrors core INGRESS_CLAIM_LEASE_MS (ingress-claim-owner).
 const telegramSpooledUpdateClaimLeaseMs = 30 * 60 * 1000;
-let claimNextTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimNextTelegramSpooledUpdate;
-let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
-let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
-let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
+let claimNextTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.test-support.js").claimNextTelegramSpooledUpdate;
+let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdateClaims;
+let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.test-support.js").listTelegramSpooledUpdates;
+let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.test-support.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 type TelegramMessageProcessingResult =
@@ -739,13 +739,13 @@ function startIsolatedIngressSession(params: {
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.js"));
     ({
       claimNextTelegramSpooledUpdate,
       listTelegramSpooledUpdateClaims,
       listTelegramSpooledUpdates,
       recoverStaleTelegramSpooledUpdateClaims,
-      writeTelegramSpooledUpdate,
-    } = await import("./telegram-ingress-spool.js"));
+    } = await import("./telegram-ingress-spool.test-support.js"));
     ({ createTelegramSpooledReplayDeferredParticipant } =
       await import("./bot-processing-outcome.js"));
   });

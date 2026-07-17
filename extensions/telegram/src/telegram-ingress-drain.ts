@@ -20,7 +20,7 @@ import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-no
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import { createShouldSupersedeTelegramSpooledPending } from "./telegram-ingress-supersede.js";
 
-export const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
+const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
 
@@ -41,7 +41,7 @@ export function resolveTelegramAdoptionStallTimeoutMs(params: {
   return DEFAULT_INGRESS_ADOPTION_STALL_MS;
 }
 
-export function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
+function telegramSpooledLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
   return getTelegramSequentialKey({
     update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
     ...(botInfo ? { me: botInfo } : {}),
@@ -56,12 +56,12 @@ export type TelegramIngressDrainLifecycle = {
   onAbandoned: () => void;
 };
 
-export type TelegramIngressDrainDispatch = (
+type TelegramIngressDrainDispatch = (
   update: unknown,
   lifecycle: TelegramIngressDrainLifecycle,
 ) => Promise<TelegramMessageProcessingResult | void> | TelegramMessageProcessingResult | void;
 
-export type CreateTelegramIngressDrainParams = {
+type CreateTelegramIngressDrainParams = {
   queue: ChannelIngressQueue<TelegramSpooledUpdatePayload>;
   /** Required for authorization-gated supersede (numeric allowlist). */
   cfg: OpenClawConfig;

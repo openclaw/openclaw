@@ -50,7 +50,7 @@ export type QueuedReplyDeliveryCorrelation = {
  * Exclusive: each lifecycle is its own collect-admission identity.
  * Cancel-only: share collect identity via ownerKey (gateway chat.send).
  */
-export type TurnAdoptionAdmission = "exclusive" | "cancel-only";
+type TurnAdoptionAdmission = "exclusive" | "cancel-only";
 
 /**
  * Canonical turn-ownership lifecycle (adopt / defer / abandon / settle).

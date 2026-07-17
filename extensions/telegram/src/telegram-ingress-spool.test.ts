@@ -10,13 +10,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import {
-  listTelegramSpooledUpdates,
   openTelegramIngressQueue,
   resolveTelegramIngressSpoolDir,
-  telegramQueueEventId,
   telegramSpooledUpdateLaneKey,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
+import {
+  listTelegramSpooledUpdates,
+  telegramQueueEventId,
+} from "./telegram-ingress-spool.test-support.js";
 
 async function withTempState<T>(
   fn: (stateDir: string, spoolDir: string) => Promise<T>,

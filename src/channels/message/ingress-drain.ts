@@ -49,14 +49,14 @@ class IngressAdoptionLostError extends Error {
   }
 }
 
-export type IngressAdoptionLost = IngressAdoptionLostError;
+type IngressAdoptionLost = IngressAdoptionLostError;
 
 export function isIngressAdoptionLostError(error: unknown): error is IngressAdoptionLostError {
   return error instanceof IngressAdoptionLostError;
 }
 
 /** Full pre-adoption → adoption ownership lifecycle for one claimed event. */
-export type ChannelIngressDispatchLifecycle = {
+type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
   abortSignal: AbortSignal;
   /**
@@ -83,7 +83,7 @@ export type ChannelIngressDispatchLifecycle = {
   onAbandoned: () => void;
 };
 
-export type ChannelIngressDrainDispatchResult =
+type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };

@@ -10,8 +10,12 @@ import {
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   isIngressAdoptionLostError,
-  type ChannelIngressDispatchLifecycle,
 } from "./ingress-drain.js";
+
+// Module-private in ingress-drain.ts; derive from the factory signature.
+type ChannelIngressDispatchLifecycle = Parameters<
+  Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
+>[1];
 import { createChannelIngressQueue } from "./ingress-queue.js";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,

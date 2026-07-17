@@ -10,11 +10,11 @@ import {
 } from "./telegram-ingress-drain.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
 
-export type TelegramSpooledBot = {
+type TelegramSpooledBot = {
   handleUpdate: (update: never) => Promise<void>;
 };
 
-export type CreateTelegramTransportIngressDrainParams = {
+type CreateTelegramTransportIngressDrainParams = {
   spoolDir: string;
   bot: TelegramSpooledBot;
   cfg: OpenClawConfig;

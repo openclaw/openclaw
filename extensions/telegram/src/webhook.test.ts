@@ -20,11 +20,11 @@ import {
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.js";
 import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
-  writeTelegramSpooledUpdate,
-} from "./telegram-ingress-spool.js";
+} from "./telegram-ingress-spool.test-support.js";
 
 const telegramSpooledRetryDeadLetterMinAgeMs = 24 * 60 * 60 * 1000;
 

@@ -13,13 +13,13 @@ import type { ChannelIngressQueueClaim, ChannelIngressQueueCorruptClaim } from "
 // so recovery can reclaim it even when the owner process still exists.
 export const INGRESS_CLAIM_LEASE_MS = 30 * 60 * 1000;
 
-export type IngressClaimOwnerIdentity = {
+type IngressClaimOwnerIdentity = {
   processId: string;
   processPid: number;
   claimedAt: number;
 };
 
-export type IngressClaimLivenessOptions = {
+type IngressClaimLivenessOptions = {
   maxAgeMs?: number;
   now?: number;
   /** Test seam for PID existence (including Linux TID impersonation). */
@@ -87,7 +87,7 @@ export function processPidFromOwnerId(ownerId: string): number {
 }
 
 /** Instance UUID from ownerId `pid:startToken:uuid`. */
-export function processInstanceIdFromOwnerId(ownerId: string): string | null {
+function processInstanceIdFromOwnerId(ownerId: string): string | null {
   const parts = ownerId.split(":");
   if (parts.length < 3) {
     return null;

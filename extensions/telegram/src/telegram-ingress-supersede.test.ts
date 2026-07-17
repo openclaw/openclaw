@@ -27,10 +27,10 @@ afterEach(() => {
 });
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import {
-  createShouldSupersedeTelegramSpooledPending,
   isTelegramAmbientSpooledUpdate,
   isTelegramSpooledUpdateSenderAuthorized,
-} from "./telegram-ingress-supersede.js";
+} from "./telegram-ingress-supersede-auth.js";
+import { createShouldSupersedeTelegramSpooledPending } from "./telegram-ingress-supersede.js";
 
 const OWNER_ID = "111";
 const STRANGER_ID = "999";

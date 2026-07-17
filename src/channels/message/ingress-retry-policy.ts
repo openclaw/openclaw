@@ -16,7 +16,7 @@ export type IngressRetryPolicyConfig = {
   maxMs?: number;
 };
 
-export type IngressRetryEventFacts = {
+type IngressRetryEventFacts = {
   receivedAt: number;
   attempts?: number;
   lastAttemptAt?: number;
@@ -28,7 +28,7 @@ export type IngressNonRetryableFailure = {
   message: string;
 };
 
-export type IngressFailureDisposition =
+type IngressFailureDisposition =
   | {
       kind: "fail";
       reason: string;
@@ -51,7 +51,7 @@ function resolveConfig(config?: IngressRetryPolicyConfig) {
 }
 
 /** Next attempt number after a failed dispatch (1-based for the attempt just finished). */
-export function resolveIngressAttemptNumber(event: IngressRetryEventFacts): number {
+function resolveIngressAttemptNumber(event: IngressRetryEventFacts): number {
   return (event.attempts ?? 0) + 1;
 }
 

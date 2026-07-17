@@ -3,19 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  resolveIngressAttemptNumber,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
 
 describe("ingress retry policy", () => {
-  it("resolves attempt numbers from stored attempts", () => {
-    expect(resolveIngressAttemptNumber({ receivedAt: 0 })).toBe(1);
-    expect(resolveIngressAttemptNumber({ receivedAt: 0, attempts: 0 })).toBe(1);
-    expect(resolveIngressAttemptNumber({ receivedAt: 0, attempts: 3 })).toBe(4);
-  });
-
   it.each([
     {
       name: "no prior error → immediate",

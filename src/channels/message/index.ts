@@ -40,11 +40,7 @@ export {
   createTypingCallbacks,
   resolveChannelSourceReplyDeliveryMode,
 } from "./reply-pipeline.js";
-export type {
-  ChannelIngressDispatchLifecycle,
-  ChannelIngressDrain,
-  ChannelIngressDrainDispatchResult,
-} from "./ingress-drain.js";
+export type { ChannelIngressDrain } from "./ingress-drain.js";
 export type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -53,7 +49,6 @@ export type {
   ChannelIngressQueueRecord,
 } from "./ingress-queue.js";
 export type { MessageAckPolicy, MessageReceiveContext } from "./receive.js";
-export type { IngressNonRetryableFailure } from "./ingress-retry-policy.js";
 export type {
   ChannelMessageAdapterShape,
   ChannelMessageDurableFinalAdapter,

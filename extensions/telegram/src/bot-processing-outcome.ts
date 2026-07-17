@@ -10,7 +10,7 @@ type TelegramUpdateProcessingFrame = {
   result?: TelegramMessageProcessingResult;
 };
 
-export type TelegramSpooledReplayLifecycle = {
+type TelegramSpooledReplayLifecycle = {
   abortSignal: AbortSignal;
   onAdopted: () => void | Promise<void>;
   onDeferred: () => void;

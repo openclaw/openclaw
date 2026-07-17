@@ -558,17 +558,6 @@ export function createDirectSessionPayload(): TelegramMessageContext["ctxPayload
   } as TelegramMessageContext["ctxPayload"];
 }
 
-export function observeDeliveredReply(text: string): Promise<void> {
-  return new Promise((resolve) => {
-    deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
-      if (params.replies?.some((reply) => reply.text === text)) {
-        resolve();
-      }
-      return { delivered: true };
-    });
-  });
-}
-
 export function createBot(): Bot {
   return {
     api: {
