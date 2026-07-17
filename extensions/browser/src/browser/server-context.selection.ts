@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 /**
  * Browser tab selection operations for default tab choice, focus, and close.
  */
@@ -64,10 +65,8 @@ function mergeOpenedTabSnapshot(
   return merged;
 }
 
-function waitForTabDiscoveryPoll(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, OPEN_TAB_DISCOVERY_POLL_MS);
-  });
+function waitForTabDiscoveryPoll(signal?: AbortSignal): Promise<void> {
+  return sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, signal);
 }
 
 /** Builds tab selection/focus/close operations for one resolved browser profile. */
@@ -155,7 +154,7 @@ export function createProfileSelectionOps({
     ) {
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
-        await waitForTabDiscoveryPoll();
+        await waitForTabDiscoveryPoll(options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
         unfilteredTabs = mergeOpenedTabSnapshot(listedTabs, openedTab);
