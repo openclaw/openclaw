@@ -7,6 +7,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { testing as sessionResetTesting } from "./session-reset-service.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   acpManagerMocks,
@@ -116,7 +117,6 @@ function expectForceDiscarded(
 }
 
 test("sessions.reset force-discards ACP runtime when cancel times out", async () => {
-  const { testing: sessionResetTesting } = await import("./session-reset-service.js");
   sessionResetTesting.setAcpCleanupTimeoutMsForTests(25);
   try {
     const prepareFreshSession = await setupAcpSession("backend-session-timeout");
@@ -134,7 +134,6 @@ test("sessions.reset force-discards ACP runtime when cancel times out", async ()
 });
 
 test("sessions.reset force-discards ACP runtime when close times out", async () => {
-  const { testing: sessionResetTesting } = await import("./session-reset-service.js");
   sessionResetTesting.setAcpCleanupTimeoutMsForTests(25);
   try {
     const prepareFreshSession = await setupAcpSession("backend-session-close-timeout");
