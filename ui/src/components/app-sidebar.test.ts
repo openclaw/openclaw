@@ -305,6 +305,14 @@ afterEach(() => {
 });
 
 describe("AppSidebar update card wiring", () => {
+  it("shows OpenClaw in the default pinned routes", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    const link = sidebar.querySelector<HTMLAnchorElement>('.nav-item[href="/custodian"]');
+    expect(link?.textContent?.trim()).toBe("OpenClaw");
+  });
+
   it("renders the update card in the footer after the attention slot and forwards its action", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));

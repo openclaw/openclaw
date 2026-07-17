@@ -1549,6 +1549,7 @@ export const en: TranslationMap = {
     chat: "Chat",
     settings: "Settings",
     settingsGeneral: "General",
+    askOpenClaw: "Ask OpenClaw",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
     settingsGroupSystem: "System",
