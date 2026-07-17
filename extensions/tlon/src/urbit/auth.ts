@@ -4,6 +4,7 @@ import { UrbitAuthError } from "./errors.js";
 import { urbitFetch } from "./fetch.js";
 
 const AUTH_RESPONSE_DRAIN_MAX_BYTES = 64 * 1024;
+const AUTH_RESPONSE_DRAIN_TIMEOUT_MS = 250;
 
 type UrbitAuthenticateOptions = {
   ssrfPolicy?: SsrFPolicy;
@@ -59,19 +60,53 @@ async function drainAuthResponseBody(response: Response): Promise<void> {
 
     const reader = response.body.getReader();
     let remaining = AUTH_RESPONSE_DRAIN_MAX_BYTES;
+    let releaseLock = true;
+    const deadlineMs = Date.now() + AUTH_RESPONSE_DRAIN_TIMEOUT_MS;
     try {
       while (remaining > 0) {
-        const { done, value } = await reader.read();
+        const timeoutMs = deadlineMs - Date.now();
+        if (timeoutMs <= 0) {
+          releaseLock = false;
+          void reader.cancel().catch(() => {});
+          return;
+        }
+        const result = await readAuthResponseChunk(reader, timeoutMs);
+        if (result === "timeout") {
+          releaseLock = false;
+          void reader.cancel().catch(() => {});
+          return;
+        }
+        const { done, value } = result;
         if (done || !value?.byteLength) {
           return;
         }
         remaining -= value.byteLength;
       }
-      await reader.cancel().catch(() => {});
+      void reader.cancel().catch(() => {});
     } finally {
-      reader.releaseLock();
+      if (releaseLock) {
+        reader.releaseLock();
+      }
     }
   } catch {
     // Body drain is compatibility-only; cookie handling below owns auth success/failure.
+  }
+}
+
+async function readAuthResponseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array> | "timeout"> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timeout = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([reader.read(), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
