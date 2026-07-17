@@ -302,6 +302,10 @@ fun ChatScreen(
   val voiceNoteState by voiceNoteRecorder.state.collectAsState()
   val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
   val voiceNoteLevel by voiceNoteRecorder.inputLevel.collectAsState()
+  val dictationController = rememberChatDictationController(viewModel)
+  val dictationState by dictationController.state.collectAsState()
+  val dictationActive =
+    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
       val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
@@ -334,6 +338,10 @@ fun ChatScreen(
           }
       }
     }
+
+  LaunchedEffect(composerOwner) {
+    dictationController.cancel()
+  }
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
@@ -591,7 +599,7 @@ fun ChatScreen(
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
-      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !sendInFlight,
+      recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive && !dictationActive && !sendInFlight,
       onStartVoiceNote = {
         scope.launch {
           val ownerSnapshot = composerOwner
@@ -623,6 +631,28 @@ fun ChatScreen(
         voiceNoteRecorder.cancel()
       },
       onFinishVoiceNote = voiceNoteRecorder::finish,
+      dictationState = dictationState,
+      dictationEnabled =
+        pendingRunCount == 0 &&
+          !micCaptureActive &&
+          !sendInFlight &&
+          (voiceNoteState is VoiceNoteRecorderState.Idle || voiceNoteState is VoiceNoteRecorderState.Failure),
+      onToggleDictation = {
+        if (dictationActive) {
+          dictationController.finish()
+        } else {
+          scope.launch {
+            val ownerSnapshot = composerOwner
+            val transcript = dictationController.start()
+            // Recognition can finish after navigation. Only the composer that started
+            // dictation may receive its transcript; otherwise a late result crosses drafts.
+            if (transcript != null && viewModel.isCurrentChatComposerOwner(ownerSnapshot)) {
+              inputDrafts[ownerSnapshot] =
+                appendChatDictationTranscript(inputDrafts[ownerSnapshot], transcript)
+            }
+          }
+        }
+      },
       onVoice = onVoice,
       onFixConnection = onOpenGatewaySettings,
       onCopyDiagnostics = {
@@ -1553,6 +1583,9 @@ private fun ChatComposer(
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
   onFinishVoiceNote: () -> Unit,
+  dictationState: ChatDictationState,
+  dictationEnabled: Boolean,
+  onToggleDictation: () -> Unit,
   onVoice: () -> Unit,
   onFixConnection: () -> Unit,
   onCopyDiagnostics: () -> Unit,
@@ -1568,6 +1601,8 @@ private fun ChatComposer(
     if (!thinkingSupported) thinkingSelectorExpanded = false
   }
 
+  val dictationActive =
+    dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
@@ -1577,6 +1612,7 @@ private fun ChatComposer(
       hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
+      dictationActive = dictationActive,
     )
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1658,6 +1694,9 @@ private fun ChatComposer(
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           onVoice = onVoice,
+          dictationActive = dictationActive,
+          dictationEnabled = dictationEnabled,
+          onToggleDictation = onToggleDictation,
           sendEnabled = sendEnabled,
           onSend = onSend,
           modifier = Modifier.weight(1f),
@@ -1670,6 +1709,7 @@ private fun ChatComposer(
     }
 
     VoiceNoteRecorderError(voiceNoteState)
+    ChatDictationError(dictationState)
 
     if (!healthOk && gatewayOffline) {
       ChatOfflineNotice(
@@ -2023,6 +2063,9 @@ private fun ChatInputPill(
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   onVoice: () -> Unit,
+  dictationActive: Boolean,
+  dictationEnabled: Boolean,
+  onToggleDictation: () -> Unit,
   sendEnabled: Boolean,
   onSend: () -> Unit,
   modifier: Modifier = Modifier,
@@ -2049,6 +2092,11 @@ private fun ChatInputPill(
       VoiceNoteRecordButton(
         enabled = recordVoiceNoteEnabled,
         onClick = onStartVoiceNote,
+      )
+      ChatDictationButton(
+        active = dictationActive,
+        enabled = dictationEnabled,
+        onClick = onToggleDictation,
       )
       Box(modifier = Modifier.weight(1f)) {
         ChatTextFieldValueAdapter(
