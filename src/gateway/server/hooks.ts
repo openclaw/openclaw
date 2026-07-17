@@ -21,8 +21,14 @@ import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
-import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
-import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
+import type {
+  HookAgentDispatchPayload,
+  HooksConfigResolved,
+} from "../hooks.js";
+import {
+  createHooksRequestHandler,
+  type HookClientIpConfig,
+} from "./hooks-request-handler.js";
 
 /**
  * Gateway hook HTTP handler factory.
@@ -32,7 +38,20 @@ import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-requ
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
+// Lazy-load the isolated-agent runtime once; concurrent hook dispatches share
+// the same in-flight import instead of issuing duplicate loader requests.
+let cronIsolatedAgentModulePromise: Promise<
+  typeof import("../../cron/isolated-agent.js")
+> | null = null;
+const loadCronIsolatedAgentModule = () => {
+  cronIsolatedAgentModulePromise ??= import("../../cron/isolated-agent.js");
+  return cronIsolatedAgentModulePromise;
+};
+
+function resolveHookEventSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): string {
   return params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
@@ -46,13 +65,17 @@ function shouldAnnounceHookRunResult(params: {
     return true;
   }
   return (
-    params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
+    params.deliver &&
+    params.result.delivered !== true &&
+    params.result.deliveryAttempted !== true
   );
 }
 
 function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
   const diagnosticsSummary =
-    result.status !== "ok" ? normalizeOptionalString(result.diagnostics?.summary) : undefined;
+    result.status !== "ok"
+      ? normalizeOptionalString(result.diagnostics?.summary)
+      : undefined;
   return (
     diagnosticsSummary ||
     normalizeOptionalString(result.summary) ||
@@ -61,7 +84,9 @@ function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
   );
 }
 
-function sanitizeHookConsoleValue(value: string | undefined): string | undefined {
+function sanitizeHookConsoleValue(
+  value: string | undefined,
+): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
@@ -70,7 +95,10 @@ function sanitizeHookConsoleValue(value: string | undefined): string | undefined
     const code = char.charCodeAt(0);
     return code < 32 || code === 127 ? " " : char;
   }).join("");
-  return truncateUtf16Safe(withoutControlChars.replace(/\s+/gu, " ").trim(), 500);
+  return truncateUtf16Safe(
+    withoutControlChars.replace(/\s+/gu, " ").trim(),
+    500,
+  );
 }
 
 function formatHookRunWarningConsoleMessage(params: {
@@ -102,15 +130,51 @@ export function createGatewayHooksRequestHandler(params: {
   port: number;
   logHooks: SubsystemLogger;
 }) {
-  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
+  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } =
+    params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
+  // Concurrent same-session agent hook runs race on the cron session-lifecycle
+  // claim; losers throw CronSessionLifecycleClaimError and their payloads are
+  // silently dropped (openclaw/openclaw#110109). Same-session events append to
+  // one session anyway, so serialize them: chain each run behind the previous
+  // in-flight run for the same sessionKey.
+  const agentHookRunChains = new Map<string, Promise<void>>();
+
+  const enqueueAgentHookRun = (
+    sessionKey: string,
+    run: () => Promise<void>,
+  ) => {
+    const prior = agentHookRunChains.get(sessionKey);
+    if (prior) {
+      logHooks.info("hook agent run queued behind in-flight same-session run", {
+        sessionKey,
+      });
+    }
+    // `run` never rejects (it handles its own failures), but chain through
+    // both branches so a defect in one run can never stall the session queue.
+    const next = prior ? prior.then(run, run) : run();
+    agentHookRunChains.set(sessionKey, next);
+    void next.finally(() => {
+      if (agentHookRunChains.get(sessionKey) === next) {
+        agentHookRunChains.delete(sessionKey);
+      }
+    });
+  };
+
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+  }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, {
       sessionKey,
     });
     if (value.mode === "now") {
-      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
+      requestHeartbeat({
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:wake",
+      });
     }
   };
 
@@ -151,7 +215,7 @@ export function createGatewayHooksRequestHandler(params: {
     };
 
     let hookEventSessionKey: string | undefined;
-    void runWithGatewayIndependentRootWorkContinuation(async () => {
+    const runAgentHook = async () => {
       try {
         // Agent hooks run after the HTTP response path has returned, so failure
         // handling must record a system event instead of throwing to the caller.
@@ -160,7 +224,8 @@ export function createGatewayHooksRequestHandler(params: {
           cfg,
           agentId: value.agentId,
         });
-        const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
+        const { runCronIsolatedAgentTurn } =
+          await loadCronIsolatedAgentModule();
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -171,8 +236,13 @@ export function createGatewayHooksRequestHandler(params: {
         });
         const summary = resolveHookRunSummary(result);
         const prefix =
-          result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+          result.status === "ok"
+            ? `Hook ${safeName}`
+            : `Hook ${safeName} (${result.status})`;
+        const shouldAnnounce = shouldAnnounceHookRunResult({
+          deliver: value.deliver,
+          result,
+        });
         if (result.status !== "ok") {
           logHooks.warn("hook agent run returned non-ok status", {
             sourcePath: value.sourcePath,
@@ -192,12 +262,17 @@ export function createGatewayHooksRequestHandler(params: {
           });
         }
         if (shouldAnnounce) {
-          const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
+          const eventSessionKey =
+            hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: eventSessionKey,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
+            requestHeartbeat({
+              source: "hook",
+              intent: "immediate",
+              reason: `hook:${jobId}`,
+            });
           }
         } else if (result.status === "ok" && !value.deliver) {
           logHooks.info("hook agent run completed without announcement", {
@@ -223,7 +298,10 @@ export function createGatewayHooksRequestHandler(params: {
           });
         }
       }
-    });
+    };
+    enqueueAgentHookRun(sessionKey, () =>
+      runWithGatewayIndependentRootWorkContinuation(runAgentHook),
+    );
 
     return runId;
   };
