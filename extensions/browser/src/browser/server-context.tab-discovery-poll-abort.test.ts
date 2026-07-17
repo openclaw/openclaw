@@ -1,20 +1,31 @@
-// Browser regression test: tab-discovery poll honors AbortSignal.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
 import "./server-context.chrome-test-harness.js";
+import * as cdpModule from "./cdp.js";
 import { OPEN_TAB_DISCOVERY_POLL_MS } from "./server-context.constants.js";
+import {
+  createTestBrowserRouteContext,
+  makeState,
+  originalFetch,
+} from "./server-context.remote-tab-ops.harness.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+async function flushUntil(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("condition did not settle");
 }
 
 function makeProfileRuntime(): ProfileRuntimeState {
@@ -37,14 +48,9 @@ function makeProfileRuntime(): ProfileRuntimeState {
 }
 
 describe("browser tab discovery poll abort", () => {
-  it("rejects promptly when AbortSignal fires during the discovery poll delay", async () => {
-    vi.useRealTimers();
-
+  it("cancels the selection discovery timer", async () => {
+    vi.useFakeTimers();
     const runtime = makeProfileRuntime();
-
-    // Return a local-managed tab with no wsUrl. supportsPerTabWs is true, so
-    // candidates becomes empty and ensureTabAvailable enters the poll loop at
-    // server-context.selection.ts:149-167 instead of resolving immediately.
     const tabWithoutWsUrl = {
       targetId: "PAGE",
       title: "page",
@@ -65,18 +71,80 @@ describe("browser tab discovery poll abort", () => {
     const controller = new AbortController();
     const ensurePromise = ops.ensureTabAvailable(undefined, { signal: controller.signal });
 
-    // Let the first two reads and the start of the poll loop run.
-    await sleep(OPEN_TAB_DISCOVERY_POLL_MS / 4);
-
-    const abortAt = performance.now();
+    await flushUntil(() => vi.getTimerCount() === 1);
     controller.abort();
 
     await expect(ensurePromise).rejects.toThrow(/aborted/i);
-    const elapsedMs = performance.now() - abortAt;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
-    // Without the fix the poll would wait the full OPEN_TAB_DISCOVERY_POLL_MS
-    // before the next loop iteration checks the signal. With the fix the abort
-    // listener interrupts the sleep immediately.
-    expect(elapsedMs).toBeLessThan(OPEN_TAB_DISCOVERY_POLL_MS / 2);
+  it("rejects when an in-flight tab read succeeds after abort", async () => {
+    vi.useFakeTimers();
+    const runtime = makeProfileRuntime();
+    const tab = {
+      targetId: "PAGE",
+      title: "page",
+      url: "http://127.0.0.1:3001",
+      wsUrl: "ws://127.0.0.1/devtools/page/PAGE",
+      type: "page" as const,
+    };
+    let resolveFirstRead!: (tabs: (typeof tab)[]) => void;
+    const firstRead = new Promise<(typeof tab)[]>((resolve) => {
+      resolveFirstRead = resolve;
+    });
+    const listTabs = vi
+      .fn()
+      .mockImplementationOnce(async () => await firstRead)
+      .mockResolvedValue([tab]);
+    const ops = createProfileSelectionOps({
+      profile: runtime.profile,
+      runtime,
+      getCdpControlPolicy: () => undefined,
+      ensureBrowserAvailable: async () => {},
+      listTabs,
+      openTab: async () => tab,
+    });
+    const controller = new AbortController();
+    const ensurePromise = ops.ensureTabAvailable(undefined, { signal: controller.signal });
+
+    await flushUntil(() => listTabs.mock.calls.length === 1);
+    controller.abort();
+    resolveFirstRead([tab]);
+
+    await expect(ensurePromise).rejects.toThrow(/aborted/i);
+    expect(listTabs).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels the opened-target discovery timer", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+      targetId: "PENDING",
+      finalUrl: "about:blank",
+    });
+    const fetchMock = vi.fn(async (url: unknown) => {
+      if (!String(url).includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${String(url)}`);
+      }
+      return { ok: true, json: async () => [] } as unknown as Response;
+    });
+    globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
+      "openclaw",
+    );
+    const controller = new AbortController();
+    const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS),
+    ).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+
+    await expect(openPromise).rejects.toThrow(/aborted/i);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

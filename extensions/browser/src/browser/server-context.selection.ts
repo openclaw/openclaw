@@ -1,7 +1,7 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 /**
  * Browser tab selection operations for default tab choice, focus, and close.
  */
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -65,10 +65,6 @@ function mergeOpenedTabSnapshot(
   return merged;
 }
 
-function waitForTabDiscoveryPoll(signal?: AbortSignal): Promise<void> {
-  return sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, signal);
-}
-
 /** Builds tab selection/focus/close operations for one resolved browser profile. */
 export function createProfileSelectionOps({
   profile,
@@ -99,6 +95,7 @@ export function createProfileSelectionOps({
     const readTabs = async (): Promise<BrowserTab[]> => {
       try {
         const tabs = await listTabs(options);
+        options?.signal?.throwIfAborted();
         sawSuccessfulList = true;
         if (tabs.length > 0) {
           lastNonEmptyTabs = tabs;
@@ -154,7 +151,7 @@ export function createProfileSelectionOps({
     ) {
       const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
       while (Date.now() < deadline) {
-        await waitForTabDiscoveryPoll(options?.signal);
+        await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, options?.signal);
         listedTabs = await readTabs();
         await openWhenConfirmedEmpty(listedTabs);
         unfilteredTabs = mergeOpenedTabSnapshot(listedTabs, openedTab);
