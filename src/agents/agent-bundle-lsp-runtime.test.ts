@@ -90,10 +90,7 @@ class MockChildProcess extends EventEmitter {
     if (this.respondMethods && !this.respondMethods.has(method)) {
       return;
     }
-    const result =
-      method === "initialize"
-        ? { capabilities: this.capabilities }
-        : null;
+    const result = method === "initialize" ? { capabilities: this.capabilities } : null;
     queueMicrotask(() => {
       const response = { jsonrpc: "2.0", id: body.id, result };
       const frame = this.frameResponse(response, method);
