@@ -421,7 +421,6 @@ class MainViewModel private constructor(
     removeChatSessionDeletionListener?.invoke()
     removeChatSessionDeletionListener = null
     attachedComposerRuntime = null
-    super.onCleared()
   }
 
   internal fun claimInitialIntentRouting(): Boolean = initialIntentGate.claim()

@@ -13,8 +13,8 @@ import java.util.UUID
 /** Upper bound of durable outbox rows per gateway; enqueue is refused beyond this. */
 internal const val OUTBOX_MAX_QUEUED = 50
 
-/** Recent UI receipts retained per composer owner after outbox retirement. */
-internal const val OUTBOX_ADMISSION_RECEIPTS_PER_OWNER = 4
+/** Crash-left UI receipts retained per Gateway/agent owner after outbox retirement. */
+internal const val OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER = 16
 
 /** Queued commands older than this are expired instead of sending stale instructions. */
 internal const val OUTBOX_EXPIRY_MS = 48L * 60L * 60L * 1000L
@@ -397,18 +397,19 @@ internal interface ChatOutboxDao {
   @Query("DELETE FROM composer_send_admissions WHERE id = :id")
   suspend fun deleteAdmissionReceipt(id: String): Int
 
+  // Live command rows remain recovery proof even during a send burst. The agent-wide window
+  // bounds retired receipts across sessions while a lifecycle save catches up with SavedState.
   @Query(
     "DELETE FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
-      "AND sessionKey = :sessionKey " +
+      "AND id NOT IN (SELECT id FROM outbox_commands) " +
       "AND rowid NOT IN " +
       "(SELECT rowid FROM composer_send_admissions WHERE gatewayId = :gatewayId AND ownerAgentId = :ownerAgentId " +
-      "AND sessionKey = :sessionKey " +
+      "AND id NOT IN (SELECT id FROM outbox_commands) " +
       "ORDER BY rowid DESC LIMIT :keep)",
   )
   suspend fun pruneAdmissionReceipts(
     gatewayId: String,
     ownerAgentId: String,
-    sessionKey: String,
     keep: Int,
   )
 
@@ -543,8 +544,7 @@ class RoomChatCommandOutbox internal constructor(
         dao.pruneAdmissionReceipts(
           gatewayId = gateway,
           ownerAgentId = owner,
-          sessionKey = key,
-          keep = OUTBOX_ADMISSION_RECEIPTS_PER_OWNER,
+          keep = OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER,
         )
       }
       dao.insert(entity)

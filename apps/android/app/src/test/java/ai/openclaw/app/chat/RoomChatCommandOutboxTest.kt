@@ -87,9 +87,9 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
-  fun admissionReceiptsRemainIndependentAcrossSessionOwners() =
+  fun admissionReceiptsStayBoundedAcrossSessionsForOneRoutingOwner() =
     runTest {
-      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER + 2) { index ->
         val id = "composer-command-$index"
         store.enqueue(
           gatewayId = "gateway-a",
@@ -103,33 +103,54 @@ class RoomChatCommandOutboxTest {
         store.delete(id)
       }
 
-      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
-        assertTrue(store.wasAdmitted("composer-command-$index"))
+      assertFalse(store.wasAdmitted("composer-command-0"))
+      assertFalse(store.wasAdmitted("composer-command-1"))
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER) { offset ->
+        assertTrue(store.wasAdmitted("composer-command-${offset + 2}"))
       }
     }
 
   @Test
-  fun admissionReceiptsStayBoundedWithinOneFullComposerOwner() =
+  fun activeAdmissionReceiptSurvivesFallbackPruningUntilCommandRetires() =
     runTest {
-      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER + 2) { index ->
-        val id = "same-session-command-$index"
+      val protectedId = "active-checkpoint"
+      store.enqueue(
+        gatewayId = "gateway-a",
+        sessionKey = "agent:main:protected",
+        text = "still pending",
+        thinkingLevel = "off",
+        nowMs = 0,
+        ownerAgentId = "main",
+        idempotencyKey = protectedId,
+      )
+      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_ROUTING_OWNER + 2) { index ->
+        val id = "retired-command-$index"
         store.enqueue(
           gatewayId = "gateway-a",
-          sessionKey = "agent:main:device",
+          sessionKey = "agent:main:device-$index",
           text = "message $index",
           thinkingLevel = "off",
-          nowMs = index.toLong(),
+          nowMs = index.toLong() + 1,
           ownerAgentId = "main",
           idempotencyKey = id,
         )
         store.delete(id)
       }
 
-      assertFalse(store.wasAdmitted("same-session-command-0"))
-      assertFalse(store.wasAdmitted("same-session-command-1"))
-      repeat(OUTBOX_ADMISSION_RECEIPTS_PER_OWNER) { offset ->
-        assertTrue(store.wasAdmitted("same-session-command-${offset + 2}"))
-      }
+      store.delete(protectedId)
+      assertTrue(store.wasAdmitted(protectedId))
+      val nextId = "next-retired-command"
+      store.enqueue(
+        gatewayId = "gateway-a",
+        sessionKey = "agent:main:next",
+        text = "advance the recovery window",
+        thinkingLevel = "off",
+        nowMs = 100,
+        ownerAgentId = "main",
+        idempotencyKey = nextId,
+      )
+      store.delete(nextId)
+      assertFalse(store.wasAdmitted(protectedId))
     }
 
   @Test
