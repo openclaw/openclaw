@@ -12,6 +12,7 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -478,6 +479,91 @@ describe("runAgentTurnWithFallback: CLI progress bridging", () => {
     expect(call?.kind).toBe("preamble");
     expect(call?.progressText).toBe("Let me check the files.");
     expect(call?.itemId).toBe("commentary-1");
+  });
+
+  it("delivers CLI pre-tool assistant blocks durably when block streaming is enabled", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(
+      async (params: { runId: string; emitCommentaryText?: boolean }) => {
+        expect(params.emitCommentaryText).toBe(true);
+        const agentEvents = await import("../../infra/agent-events.js");
+        agentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: {
+            kind: "preamble",
+            itemId: "commentary-1",
+            progressText: "Findings before the tool.",
+          },
+        });
+        agentEvents.emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "Bash",
+            toolCallId: "toolu_1",
+            args: { command: "pwd" },
+          },
+        });
+        return { payloads: [{ text: "Done." }], meta: {} };
+      },
+    );
+
+    const deliveryOrder: string[] = [];
+    const onBlockReply = vi.fn<NonNullable<GetReplyOptions["onBlockReply"]>>(async (payload) => {
+      deliveryOrder.push(`block:${payload.text}`);
+    });
+    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async (payload) => {
+      deliveryOrder.push(`tool:${payload.phase}`);
+    });
+    const blockReplyPipeline = createBlockReplyPipeline({
+      onBlockReply,
+      timeoutMs: 5_000,
+    });
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    try {
+      const result = await runAgentTurnWithFallback({
+        commandBody: "hi",
+        followupRun,
+        sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+        opts: { onBlockReply, onToolStart },
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline,
+        blockStreamingEnabled: true,
+        resolvedBlockStreamingBreak: "text_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      });
+
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "Findings before the tool.",
+      ]);
+      expect(deliveryOrder).toEqual(["block:Findings before the tool.", "tool:start"]);
+      expect(result).toMatchObject({
+        kind: "success",
+        runResult: { payloads: [{ text: "Done." }] },
+      });
+    } finally {
+      blockReplyPipeline.stop();
+    }
   });
 
   it("does not emit CLI preambles when both progress lanes are disabled", async () => {
