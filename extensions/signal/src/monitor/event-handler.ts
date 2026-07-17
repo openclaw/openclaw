@@ -218,6 +218,36 @@ async function finalizeSignalStatusReaction(params: {
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
+  const acceptedFlushEntries = new WeakSet<SignalInboundEntry>();
+  const acceptedFlushCountsByKey = new Map<string, number>();
+
+  const markAcceptedFlushEntry = (entry: SignalInboundEntry): string | null => {
+    const key = resolveSignalInboundDebounceKey(deps.accountId, entry);
+    if (!key) {
+      return null;
+    }
+    acceptedFlushEntries.add(entry);
+    acceptedFlushCountsByKey.set(key, (acceptedFlushCountsByKey.get(key) ?? 0) + 1);
+    return key;
+  };
+
+  const completeAcceptedFlushEntries = (entries: SignalInboundEntry[]) => {
+    for (const entry of entries) {
+      if (!acceptedFlushEntries.delete(entry)) {
+        continue;
+      }
+      const key = resolveSignalInboundDebounceKey(deps.accountId, entry);
+      if (!key) {
+        continue;
+      }
+      const nextCount = (acceptedFlushCountsByKey.get(key) ?? 0) - 1;
+      if (nextCount > 0) {
+        acceptedFlushCountsByKey.set(key, nextCount);
+      } else {
+        acceptedFlushCountsByKey.delete(key);
+      }
+    }
+  };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
     const fromLabel = formatInboundFromLabel({
@@ -794,9 +824,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
   const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
     // enqueue() awaits inline and overflow flushes, but not timer-backed work.
-    // Drain tracked inline work on shutdown; stop delayed work with no owner.
+    // Drain tracked accepted work on shutdown; stop delayed work with no owner.
     const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
-    if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+    const hasAcceptedFlush = entries.some((entry) => acceptedFlushEntries.has(entry));
+    if (!hasActiveEnqueue && !hasAcceptedFlush && deps.abortSignal?.aborted) {
       return;
     }
     try {
@@ -826,9 +857,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
   };
   const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
-  const flushNormalSignalInboundEntries = pendingInboundRegistry.completeAfter(
-    flushDebouncedSignalInboundEntries,
-  );
+  const flushNormalSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
+    try {
+      await flushDebouncedSignalInboundEntries(entries);
+    } finally {
+      completeAcceptedFlushEntries(entries);
+      pendingInboundRegistry.complete(entries);
+    }
+  };
 
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -842,7 +878,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }),
     onFlush: flushNormalSignalInboundEntries,
     onError: reportSignalInboundFlushError,
-    onCancel: pendingInboundRegistry.complete,
+    onCancel: (entries) => {
+      completeAcceptedFlushEntries(entries);
+      pendingInboundRegistry.complete(entries);
+    },
   });
   const { debouncer: controlDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -854,6 +893,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     onFlush: flushDebouncedSignalInboundEntries,
     onError: reportSignalInboundFlushError,
   });
+  const flushAcceptedDebounceKeys = async () => {
+    const keys = [...acceptedFlushCountsByKey.keys()];
+    await Promise.all(keys.map((key) => debouncer.flushKey(key)));
+  };
+  const flushAcceptedDebounceKeysOnAbort = () => {
+    if (acceptedFlushCountsByKey.size === 0) {
+      return;
+    }
+    // Durable ingress already accepted these rows. Force the first debounce flush
+    // during teardown; retry backoff remains abortable inside retrySignalInboundFlush.
+    if (deps.runTrackedTask) {
+      deps.runTrackedTask(flushAcceptedDebounceKeys);
+      return;
+    }
+    void flushAcceptedDebounceKeys().catch((err: unknown) => {
+      deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
+    });
+  };
+  deps.abortSignal?.addEventListener("abort", flushAcceptedDebounceKeysOnAbort, { once: true });
 
   async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
@@ -1389,12 +1447,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const inboundLane = resolveSignalControlLaneKey(deps.accountId, entry)
       ? controlDebouncer
       : debouncer;
+    let acceptedFlushKey: string | null = null;
     if (inboundLane === debouncer) {
       pendingInboundRegistry.track(entry);
+      if (turnAdoptionLifecycle) {
+        acceptedFlushKey = markAcceptedFlushEntry(entry);
+      }
     }
     activeEnqueueEntries.add(entry);
     try {
       await inboundLane.enqueue(entry);
+      if (acceptedFlushKey && deps.abortSignal?.aborted) {
+        await debouncer.flushKey(acceptedFlushKey);
+      }
     } finally {
       activeEnqueueEntries.delete(entry);
     }
