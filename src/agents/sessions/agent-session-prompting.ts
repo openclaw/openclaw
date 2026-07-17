@@ -34,7 +34,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private async handlePostAgentRun(): Promise<boolean> {
     const msg = this.lastAssistantMessage;
     this.lastAssistantMessage = undefined;
-    if (!msg) {
+    const endedForTurnHandoff = this.lastRunEndedForTurnHandoff;
+    this.lastRunEndedForTurnHandoff = false;
+    if (!msg || endedForTurnHandoff) {
+      // External delivery owns the next run after a deliberate turn handoff.
       return false;
     }
 

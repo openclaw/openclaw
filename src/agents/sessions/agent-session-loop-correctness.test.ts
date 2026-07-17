@@ -414,6 +414,48 @@ describe("AgentSession loop correctness", () => {
     expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 
+  it("leaves queued messages dormant after a turn handoff", async () => {
+    const sessionRef: { current?: AgentSession } = {};
+    const yieldTool: ToolDefinition = {
+      name: "yield_turn",
+      label: "Yield turn",
+      description: "ends the current turn for an external handoff",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const activeSession = sessionRef.current;
+        if (!activeSession) {
+          throw new Error("session not ready");
+        }
+        activeSession.agent.steer({
+          role: "custom",
+          customType: "test.turn-handoff",
+          content: "resume only for external delivery",
+          display: false,
+          timestamp: Date.now(),
+        });
+        activeSession.agent.abort({ code: "turn_handoff", turnHandoff: true });
+        return { content: [{ type: "text", text: "yielded" }], details: { yielded: true } };
+      },
+    };
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(
+          activeModel,
+          [{ type: "toolCall", id: "call-yield", name: "yield_turn", arguments: {} }],
+          "toolUse",
+        ),
+      ),
+    );
+    const { session } = await createTestSession({ customTools: [yieldTool] });
+    sessionRef.current = session;
+
+    await session.prompt("yield now");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(session.agent.hasQueuedMessages()).toBe(true);
+    session.agent.clearAllQueues();
+  });
+
   it("applies session model, tool, and prompt changes on the following tool turn", async () => {
     const nextModel = { ...testModel, id: "next-model" };
     const sessionRef: { current?: AgentSession } = {};
