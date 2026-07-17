@@ -1,9 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { cacheModelSetupDetection } from "./detect-cache.ts";
 import { detectModelSetup } from "./rpc.ts";
 
@@ -25,6 +26,29 @@ export function isDefaultChatLanding(
 export function locationsMatch(left: RouteLocation, right: RouteLocation): boolean {
   return (
     left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+  );
+}
+
+export function locationsMatchDefaultLanding(
+  current: RouteLocation,
+  expected: RouteLocation,
+  hello: GatewayHelloOk | null,
+): boolean {
+  if (locationsMatch(current, expected)) {
+    return true;
+  }
+  if (!hello || current.pathname !== expected.pathname || current.hash !== expected.hash) {
+    return false;
+  }
+  // Gateway hello adopts the canonical main-session key after bootstrap; that is not navigation.
+  const currentSearch = new URLSearchParams(current.search);
+  const expectedSearch = new URLSearchParams(expected.search);
+  const currentSession = resolveSessionKey(currentSearch.get("session"), hello);
+  const expectedSession = resolveSessionKey(expectedSearch.get("session"), hello);
+  currentSearch.delete("session");
+  expectedSearch.delete("session");
+  return (
+    currentSession === expectedSession && currentSearch.toString() === expectedSearch.toString()
   );
 }
 

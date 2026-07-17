@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { routeIdFromPath } from "../../app-routes.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
-import { isDefaultChatLanding, startModelSetupFirstRunRedirect } from "./first-run.ts";
+import {
+  isDefaultChatLanding,
+  locationsMatchDefaultLanding,
+  startModelSetupFirstRunRedirect,
+} from "./first-run.ts";
 
 describe("model setup first-run redirect", () => {
   it("recognizes only the implicit chat landing without a session deep link", () => {
@@ -33,6 +37,34 @@ describe("model setup first-run redirect", () => {
         { pathname: "/settings/general", search: "", hash: "" },
         "",
         routeIdFromPath,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the canonical main session on the default landing", () => {
+    const hello = {
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "dev",
+          mainKey: "main",
+          mainSessionKey: "agent:dev:main",
+        },
+      },
+    } as GatewayHelloOk;
+    const expected = { pathname: "/chat", search: "?session=main", hash: "" };
+
+    expect(
+      locationsMatchDefaultLanding(
+        { pathname: "/chat", search: "?session=agent%3Adev%3Amain", hash: "" },
+        expected,
+        hello,
+      ),
+    ).toBe(true);
+    expect(
+      locationsMatchDefaultLanding(
+        { pathname: "/chat", search: "?session=agent%3Adev%3Aother", hash: "" },
+        expected,
+        hello,
       ),
     ).toBe(false);
   });
