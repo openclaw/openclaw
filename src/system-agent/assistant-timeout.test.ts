@@ -4,7 +4,18 @@ import {
   SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
   SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
 } from "./assistant-prompts.js";
-import { resolveSystemAgentAssistantTimeoutFromManifests } from "./assistant-timeout.js";
+import "./assistant-timeout.js";
+
+const { resolveSystemAgentAssistantTimeoutFromManifests } = (
+  globalThis as Record<PropertyKey, unknown>
+)[Symbol.for("openclaw.systemAgentTimeoutTestApi")] as {
+  resolveSystemAgentAssistantTimeoutFromManifests: (params: {
+    route: { modelLabel: string; provider: string };
+    plugins: ReadonlyArray<{
+      modelPricing?: { providers?: Record<string, { external?: boolean }> };
+    }>;
+  }) => number;
+};
 
 describe("system-agent assistant timeout", () => {
   it.each([

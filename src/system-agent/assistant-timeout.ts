@@ -11,7 +11,7 @@ import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 
 type SystemAgentPricingManifest = Pick<PluginManifestRecord, "modelPricing">;
 
-export function resolveSystemAgentAssistantTimeoutFromManifests(params: {
+function resolveSystemAgentAssistantTimeoutFromManifests(params: {
   route: Pick<SystemAgentConfiguredRoute, "modelLabel" | "provider">;
   plugins: readonly SystemAgentPricingManifest[];
 }): number {
@@ -44,4 +44,10 @@ export function resolveSystemAgentAssistantTimeoutMs(route: SystemAgentConfigure
   } catch {
     return SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.systemAgentTimeoutTestApi")] = {
+    resolveSystemAgentAssistantTimeoutFromManifests,
+  };
 }
