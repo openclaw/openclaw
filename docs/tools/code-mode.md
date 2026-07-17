@@ -527,14 +527,16 @@ property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `conversations_list`,
 `conversations_send`, `conversations_turn`, `openclaw`, `screen`,
-`sessions_search`, `spawn_task`, `terminal`, and `web_fetch`. Exact
-passthroughs can reuse their owning protocol schema instead of duplicating a
-model-only contract. For example, the conversation tools expose the same
-Gateway result schemas used by `conversations.list`, `conversations.send`, and
-`conversations.turn`; `web_fetch` owns a tool-local schema whose hint exposes
-stable metadata, text, cache state, and nested spill metadata. When the quick
-index declares the fields, one cell can compose discovery and delivery without
-a separate inspection turn:
+`sessions_search`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+Exact passthroughs can reuse their owning protocol schema instead of
+duplicating a model-only contract. For example, the conversation tools expose
+the same Gateway result schemas used by `conversations.list`,
+`conversations.send`, and `conversations.turn`; `web_fetch` owns a tool-local
+schema whose hint exposes stable metadata, text, cache state, and nested spill
+metadata; `web_search` declares its exact normalized results/answer/error/raw
+union as a complete quick-index hint. When the quick index declares the
+fields, one cell can compose discovery and delivery without a separate
+inspection turn:
 
 ```javascript
 const listed = await tools.conversations_list({ query: "build bot" });

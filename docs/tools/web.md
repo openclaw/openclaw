@@ -122,6 +122,65 @@ xAI Responses.
 | [SearXNG](/tools/searxng-search)                 | Structured snippets                                            | Categories, language                             | None (self-hosted)                                                                      |
 | [Tavily](/tools/tavily)                          | Structured snippets                                            | Via `tavily_search` tool                         | `TAVILY_API_KEY`                                                                        |
 
+## Result shape
+
+`web_search` normalizes every bundled and external plugin provider at the core
+tool boundary. Callers receive exactly one of these closed shapes:
+
+```typescript
+type WebSearchOutput =
+  | {
+      kind: "error";
+      provider: string;
+      error: string;
+      message: string;
+      docs?: string;
+    }
+  | {
+      kind: "results";
+      provider: string;
+      query: string;
+      queryTerms?: string[];
+      count: number;
+      tookMs?: number;
+      results: Array<{
+        title: string;
+        url: string;
+        snippet?: string;
+        published?: string;
+        siteName?: string;
+      }>;
+      externalContent: {
+        untrusted: true;
+        source: "web_search";
+        wrapped: true;
+        provider?: string;
+      };
+      cached?: true;
+    }
+  | {
+      kind: "answer";
+      provider: string;
+      query: string;
+      tookMs?: number;
+      content: string;
+      citations?: Array<{ url: string; title?: string }>;
+      externalContent: {
+        untrusted: true;
+        source: "web_search";
+        wrapped: true;
+        provider?: string;
+      };
+      cached?: true;
+    };
+```
+
+Structured providers use `kind: "results"`; synthesized providers use
+`kind: "answer"`. Provider-specific fields such as raw scores, excerpts,
+related searches, inline-citation offsets, model ids, or session metadata are
+not passed through. Use a provider's dedicated tool when its richer response is
+part of your workflow.
+
 ## Auto-detection
 
 Provider lists in docs and setup flows are alphabetical. Auto-detection uses a

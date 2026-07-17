@@ -1,6 +1,8 @@
 // Web search tests cover model-facing schema limits, provider-specific time
 // filters, unsupported filter errors, and scoped provider config merging.
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import {
   MAX_SEARCH_COUNT,
   buildUnsupportedSearchFilterResponse,
@@ -10,7 +12,11 @@ import {
   parseWebSearchTimeFilters,
 } from "./web-search-provider-common.js";
 import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
-import { createWebSearchTool } from "./web-search.js";
+import {
+  createWebSearchTool,
+  normalizeWebSearchOutput,
+  WebSearchOutputSchema,
+} from "./web-search.js";
 
 describe("web_search tool schema", () => {
   it("marks query as required for model tool-call schemas", () => {
@@ -28,6 +34,564 @@ describe("web_search tool schema", () => {
 
     expect(parameters?.properties?.count?.maximum).toBe(MAX_SEARCH_COUNT);
   });
+
+  it("declares the normalized output contract without an incomplete compact hint", () => {
+    const tool = createWebSearchTool();
+
+    expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
+    expect(compactToolOutputHint(tool?.outputSchema)).toBeUndefined();
+  });
+});
+
+const externalContent = (provider?: string) => ({
+  untrusted: true as const,
+  source: "web_search" as const,
+  wrapped: true as const,
+  ...(provider ? { provider } : {}),
+});
+
+const normalizedProviderFixtures: Array<{
+  name: string;
+  provider: string;
+  query: string;
+  result: Record<string, unknown>;
+  expected: Record<string, unknown>;
+}> = [
+  {
+    name: "brave results with llm-context snippets",
+    provider: "brave",
+    query: "requested brave query",
+    result: {
+      query: "brave query",
+      provider: "brave",
+      mode: "llm-context",
+      count: 1,
+      tookMs: 12,
+      externalContent: externalContent("brave"),
+      results: [
+        {
+          title: "Brave title",
+          url: "https://brave.example/result",
+          snippets: ["Brave first snippet", "Brave second snippet"],
+          siteName: "brave.example",
+        },
+      ],
+      sources: [{ url: "https://brave.example/result" }],
+    },
+    expected: {
+      kind: "results",
+      provider: "brave",
+      query: "brave query",
+      count: 1,
+      tookMs: 12,
+      results: [
+        {
+          title: "Brave title",
+          url: "https://brave.example/result",
+          snippet: "Brave first snippet",
+          siteName: "brave.example",
+        },
+      ],
+      externalContent: externalContent("brave"),
+    },
+  },
+  {
+    name: "codex answer",
+    provider: "codex",
+    query: "requested codex query",
+    result: {
+      query: "codex query",
+      provider: "codex",
+      model: "gpt-5.6",
+      tookMs: 21,
+      externalContent: externalContent("codex"),
+      content: "Codex grounded answer",
+      searches: [{ query: "codex query" }],
+    },
+    expected: {
+      kind: "answer",
+      provider: "codex",
+      query: "codex query",
+      tookMs: 21,
+      content: "Codex grounded answer",
+      externalContent: externalContent("codex"),
+    },
+  },
+  {
+    name: "duckduckgo results",
+    provider: "duckduckgo",
+    query: "requested duck query",
+    result: {
+      query: "duck query",
+      provider: "duckduckgo",
+      count: 1,
+      results: [
+        {
+          title: "Duck title",
+          url: "https://duck.example/result",
+          snippet: "Duck snippet",
+          siteName: "duck.example",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "duckduckgo",
+      query: "duck query",
+      count: 1,
+      results: [
+        {
+          title: "Duck title",
+          url: "https://duck.example/result",
+          snippet: "Duck snippet",
+          siteName: "duck.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "exa results",
+    provider: "exa",
+    query: "requested exa query",
+    result: {
+      query: "exa query",
+      provider: "exa",
+      count: 1,
+      results: [
+        {
+          title: "Exa title",
+          url: "https://exa.example/result",
+          description: "Exa description",
+          published: "2026-07-16",
+          siteName: "exa.example",
+          summary: "Exa summary",
+          highlightScores: [0.9],
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "exa",
+      query: "exa query",
+      count: 1,
+      results: [
+        {
+          title: "Exa title",
+          url: "https://exa.example/result",
+          snippet: "Exa description",
+          published: "2026-07-16",
+          siteName: "exa.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "firecrawl cached results",
+    provider: "firecrawl",
+    query: "requested firecrawl query",
+    result: {
+      query: "firecrawl query",
+      provider: "firecrawl",
+      count: 1,
+      tookMs: 31,
+      cached: true,
+      externalContent: externalContent("firecrawl"),
+      results: [
+        {
+          title: "Firecrawl title",
+          url: "https://firecrawl.example/result",
+          description: "Firecrawl description",
+          published: "2026-07-15",
+          siteName: "firecrawl.example",
+          content: "Firecrawl full page content",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "firecrawl",
+      query: "firecrawl query",
+      count: 1,
+      tookMs: 31,
+      results: [
+        {
+          title: "Firecrawl title",
+          url: "https://firecrawl.example/result",
+          snippet: "Firecrawl description",
+          published: "2026-07-15",
+          siteName: "firecrawl.example",
+        },
+      ],
+      externalContent: externalContent("firecrawl"),
+      cached: true,
+    },
+  },
+  {
+    name: "gemini answer with object citations",
+    provider: "gemini",
+    query: "requested gemini query",
+    result: {
+      query: "gemini query",
+      provider: "gemini",
+      model: "gemini-2.5-flash",
+      content: "Gemini grounded answer",
+      citations: [
+        { url: "https://gemini.example/one", title: "Gemini source" },
+        { title: "Missing URL" },
+      ],
+    },
+    expected: {
+      kind: "answer",
+      provider: "gemini",
+      query: "gemini query",
+      content: "Gemini grounded answer",
+      citations: [{ url: "https://gemini.example/one", title: "Gemini source" }],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "grok answer with mixed citations",
+    provider: "grok",
+    query: "requested grok query",
+    result: {
+      query: "grok query",
+      provider: "grok",
+      model: "grok-4.3",
+      tookMs: 41,
+      externalContent: externalContent("grok"),
+      content: "Grok grounded answer",
+      citations: [
+        "https://grok.example/one",
+        { url: "https://grok.example/two", title: "Grok source" },
+        { title: "Missing URL" },
+        7,
+      ],
+      inlineCitations: [{ start: 0, end: 4, url: "https://grok.example/one" }],
+    },
+    expected: {
+      kind: "answer",
+      provider: "grok",
+      query: "grok query",
+      tookMs: 41,
+      content: "Grok grounded answer",
+      citations: [
+        { url: "https://grok.example/one" },
+        { url: "https://grok.example/two", title: "Grok source" },
+      ],
+      externalContent: externalContent("grok"),
+    },
+  },
+  {
+    name: "kimi answer with string citations",
+    provider: "kimi",
+    query: "requested kimi query",
+    result: {
+      query: "kimi query",
+      provider: "kimi",
+      model: "kimi-k2.6",
+      content: "Kimi grounded answer",
+      citations: ["https://kimi.example/source"],
+    },
+    expected: {
+      kind: "answer",
+      provider: "kimi",
+      query: "kimi query",
+      content: "Kimi grounded answer",
+      citations: [{ url: "https://kimi.example/source" }],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "minimax results",
+    provider: "minimax",
+    query: "requested minimax query",
+    result: {
+      query: "minimax query",
+      provider: "minimax",
+      count: 1,
+      results: [
+        {
+          title: "MiniMax title",
+          url: "https://minimax.example/result",
+          description: "MiniMax snippet",
+          published: "yesterday",
+          siteName: "minimax.example",
+        },
+      ],
+      relatedSearches: ["related query"],
+    },
+    expected: {
+      kind: "results",
+      provider: "minimax",
+      query: "minimax query",
+      count: 1,
+      results: [
+        {
+          title: "MiniMax title",
+          url: "https://minimax.example/result",
+          snippet: "MiniMax snippet",
+          published: "yesterday",
+          siteName: "minimax.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "ollama results",
+    provider: "ollama",
+    query: "requested ollama query",
+    result: {
+      query: "ollama query",
+      provider: "ollama",
+      count: 1,
+      results: [
+        {
+          title: "Ollama title",
+          url: "https://ollama.example/result",
+          snippet: "Ollama snippet",
+          siteName: "ollama.example",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "ollama",
+      query: "ollama query",
+      count: 1,
+      results: [
+        {
+          title: "Ollama title",
+          url: "https://ollama.example/result",
+          snippet: "Ollama snippet",
+          siteName: "ollama.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "parallel results with search queries",
+    provider: "parallel",
+    query: "requested parallel query",
+    result: {
+      objective: "Research Parallel",
+      searchQueries: ["parallel first query", "parallel second query"],
+      provider: "parallel",
+      count: 1,
+      results: [
+        {
+          title: "Parallel title",
+          url: "https://parallel.example/result",
+          description: "Parallel excerpts",
+          published: "2026-07-14",
+          siteName: "parallel.example",
+          excerpts: ["Parallel excerpts"],
+        },
+      ],
+      searchId: "search-id",
+      sessionId: "session-id",
+      warnings: ["warning"],
+      usage: [{ name: "search", count: 1 }],
+    },
+    expected: {
+      kind: "results",
+      provider: "parallel",
+      query: "parallel first query",
+      queryTerms: ["parallel first query", "parallel second query"],
+      count: 1,
+      results: [
+        {
+          title: "Parallel title",
+          url: "https://parallel.example/result",
+          snippet: "Parallel excerpts",
+          published: "2026-07-14",
+          siteName: "parallel.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "perplexity native results",
+    provider: "perplexity",
+    query: "requested perplexity query",
+    result: {
+      query: "perplexity query",
+      provider: "perplexity",
+      count: 1,
+      results: [
+        {
+          title: "Perplexity title",
+          url: "https://perplexity.example/result",
+          description: "Perplexity snippet",
+          published: "2026-07-13",
+          siteName: "perplexity.example",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "perplexity",
+      query: "perplexity query",
+      count: 1,
+      results: [
+        {
+          title: "Perplexity title",
+          url: "https://perplexity.example/result",
+          snippet: "Perplexity snippet",
+          published: "2026-07-13",
+          siteName: "perplexity.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "qa-lab minimal results",
+    provider: "qa-lab-search",
+    query: "requested qa query",
+    result: {
+      query: "qa query",
+      results: [
+        {
+          title: "QA Lab fixture",
+          url: "https://docs.openclaw.ai/qa-lab/search-fixture/1",
+          description: "QA Lab snippet",
+          siteName: "docs.openclaw.ai",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "qa-lab-search",
+      query: "qa query",
+      count: 1,
+      results: [
+        {
+          title: "QA Lab fixture",
+          url: "https://docs.openclaw.ai/qa-lab/search-fixture/1",
+          snippet: "QA Lab snippet",
+          siteName: "docs.openclaw.ai",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "searxng results",
+    provider: "searxng",
+    query: "requested searxng query",
+    result: {
+      query: "searxng query",
+      provider: "searxng",
+      count: 1,
+      results: [
+        {
+          title: "SearXNG title",
+          url: "https://searxng.example/result",
+          snippet: "SearXNG snippet",
+          siteName: "searxng.example",
+          img_src: "https://searxng.example/image.png",
+        },
+      ],
+    },
+    expected: {
+      kind: "results",
+      provider: "searxng",
+      query: "searxng query",
+      count: 1,
+      results: [
+        {
+          title: "SearXNG title",
+          url: "https://searxng.example/result",
+          snippet: "SearXNG snippet",
+          siteName: "searxng.example",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "tavily results",
+    provider: "tavily",
+    query: "requested tavily query",
+    result: {
+      query: "tavily query",
+      provider: "tavily",
+      count: 1,
+      results: [
+        {
+          title: "Tavily title",
+          url: "https://tavily.example/result",
+          snippet: "Tavily snippet",
+          published: "2026-07-12",
+          score: 0.8,
+        },
+      ],
+      answer: "Tavily summary",
+    },
+    expected: {
+      kind: "results",
+      provider: "tavily",
+      query: "tavily query",
+      count: 1,
+      results: [
+        {
+          title: "Tavily title",
+          url: "https://tavily.example/result",
+          snippet: "Tavily snippet",
+          published: "2026-07-12",
+        },
+      ],
+      externalContent: externalContent(),
+    },
+  },
+  {
+    name: "structured provider error",
+    provider: "brave",
+    query: "requested error query",
+    result: {
+      error: "missing_brave_api_key",
+      docs: "https://docs.openclaw.ai/tools/web",
+    },
+    expected: {
+      kind: "error",
+      provider: "brave",
+      error: "missing_brave_api_key",
+      message: "missing_brave_api_key",
+      docs: "https://docs.openclaw.ai/tools/web",
+    },
+  },
+  {
+    name: "external plugin arbitrary shape",
+    provider: "external-demo",
+    query: "requested external query",
+    result: {
+      arbitrary: { nested: "value" },
+      providerSpecificFlag: true,
+    },
+    expected: {
+      kind: "error",
+      provider: "external-demo",
+      error: "unrecognized_provider_result",
+      message: 'Web search provider "external-demo" returned an unrecognized result.',
+    },
+  },
+];
+
+describe("web_search normalized output contract", () => {
+  it.each(normalizedProviderFixtures)(
+    "normalizes $name",
+    ({ provider, query, result, expected }) => {
+      const normalized = normalizeWebSearchOutput({ provider, query, result });
+
+      expect(normalized).toEqual(expected);
+      expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+    },
+  );
 });
 
 describe("web_search freshness normalization", () => {
