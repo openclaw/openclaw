@@ -274,6 +274,47 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
+  it.each([
+    ["1e5", "1e5"],
+    ["0x10", "0x10"],
+    ["42", 42],
+  ])("string-or-number union field keeps typed spelling %s as %s", async (spelling, expected) => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { config: { threshold: 1 }, hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              threshold: { anyOf: [{ type: "integer" }, { type: "string" }] },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.patchForm(["threshold"], spelling);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    // Nondecimal spellings stay strings (a string variant accepts them
+    // verbatim); only plain decimals coerce to numbers.
+    expect(JSON.parse(raw as string)).toEqual({ threshold: expected });
+    runtimeConfig.dispose();
+  });
+
   it("stages inherited agent overrides and the default through the public capability", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"
