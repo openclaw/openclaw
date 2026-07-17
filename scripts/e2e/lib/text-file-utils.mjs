@@ -1,16 +1,14 @@
 // Text file tail helpers for E2E assertions.
 import fs from "node:fs";
-import { StringDecoder } from "node:string_decoder";
 
 function decodeUtf8Tail(buffer, truncated) {
-  if (!truncated) {
-    return buffer.toString("utf8");
-  }
   let start = 0;
-  while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
+  if (truncated) {
+    while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
+      start += 1;
+    }
   }
-  return new StringDecoder("utf8").write(buffer.subarray(start));
+  return buffer.subarray(start).toString("utf8");
 }
 
 export function tailText(text, maxBytes) {

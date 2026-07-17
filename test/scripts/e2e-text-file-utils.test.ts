@@ -24,6 +24,7 @@ describe("e2e text file utilities", () => {
     expect(tailText("short", 8)).toBe("short");
     expect(tailText("prefix-tail", 4)).toBe("tail");
     expect(tailText("prefix \u{1f600}tail", 7)).toBe("tail");
+    expect(tailText("prefix \u{1f600}tail", 8)).toBe("\u{1f600}tail");
   });
 
   it("reads only the requested file tail and treats missing or non-file paths as empty", () => {
@@ -36,6 +37,9 @@ describe("e2e text file utilities", () => {
     expect(readTextFileTail(file, 10)).toBe("line-three");
     writeFileSync(file, "prefix \u{1f600}tail", "utf8");
     expect(readTextFileTail(file, 7)).toBe("tail");
+    expect(readTextFileTail(file, 8)).toBe("\u{1f600}tail");
+    writeFileSync(file, Buffer.concat([Buffer.from("prefix tail"), Buffer.from([0xf0])]));
+    expect(readTextFileTail(file, 5)).toBe("tail\ufffd");
     expect(readTextFileTail(path.join(root, "missing.log"), 10)).toBe("");
     expect(readTextFileTail(directory, 10)).toBe("");
   });
