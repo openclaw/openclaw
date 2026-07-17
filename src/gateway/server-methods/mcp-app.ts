@@ -153,10 +153,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
               ...(view.csp ? { csp: view.csp } : {}),
               toolInput: view.toolInput,
               toolResult: view.toolResult,
-              // Reconstruction deliberately installs an empty authority set.
-              // Keep those restart-restored views resource-only until a fresh run grants App authority.
-              messageSupported:
-                view.allowedAppToolNames !== undefined && view.allowedAppToolNames.size > 0,
+              // Reconstruction marks views read-only; fresh runs may legitimately grant zero App tools.
+              messageSupported: view.allowedAppToolNames !== undefined && view.readOnly !== true,
             };
           },
           context.getRuntimeConfig(),

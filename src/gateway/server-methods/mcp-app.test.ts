@@ -33,6 +33,7 @@ const view = {
   uiResourceUri: "ui://demo/app",
   html: "<html>demo</html>",
   allowedAppToolNames: new Set(["shared", "app-only"]) as ReadonlySet<string> | undefined,
+  readOnly: undefined as boolean | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
   expiresAtMs: Date.now() + 60_000,
@@ -105,6 +106,7 @@ describe("MCP App gateway bridge", () => {
     view.toolCallCount = 0;
     view.activeRequests = 0;
     view.allowedAppToolNames = new Set(["shared", "app-only"]);
+    view.readOnly = undefined;
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
@@ -158,6 +160,16 @@ describe("MCP App gateway bridge", () => {
     });
 
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ messageSupported: false });
+  });
+
+  it("supports messages for a fresh view with no app-callable tools", async () => {
+    view.allowedAppToolNames = new Set();
+    const respond = await invoke("mcp.app.view", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+    });
+
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ messageSupported: true });
   });
 
   it("filters model-only tools from app discovery and execution", async () => {
@@ -215,7 +227,12 @@ describe("MCP App gateway bridge", () => {
 
   it("restores a transcript-backed view after a Gateway restart", async () => {
     const restoredRuntime = runtime();
-    const restoredView = { ...view, runtime: restoredRuntime, allowedAppToolNames: new Set() };
+    const restoredView = {
+      ...view,
+      runtime: restoredRuntime,
+      allowedAppToolNames: new Set(),
+      readOnly: true,
+    };
     mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
     mocks.restoreMcpAppView.mockResolvedValue({
       runtime: restoredRuntime,
