@@ -159,7 +159,7 @@ describe("nostr outbound cfg threading", () => {
   });
 
   it("recognizes uppercase npub targets", () => {
-    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId("NPUB1XYZ123")).toBe(true);
+    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.("NPUB1XYZ123")).toBe(true);
   });
 
   it("backs declared message adapter capabilities with outbound sends", async () => {
