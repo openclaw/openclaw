@@ -2,6 +2,7 @@
 import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "../agents/auth-profiles/policy.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ProviderAuthAliasLookupParams } from "../agents/provider-auth-aliases.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
@@ -30,6 +31,7 @@ function collectApiKeyProfileAssignment(params: {
   store: AuthProfileStore;
   agentDir: string;
   defaults: SecretDefaults | undefined;
+  authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
   const {
@@ -60,6 +62,7 @@ function collectApiKeyProfileAssignment(params: {
   params.profile.key = undefined;
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.context.sourceConfig,
+    authAliasLookupParams: params.authAliasLookupParams,
     store: params.store,
     provider: params.profile.provider,
     profileId: params.profileId,
@@ -90,6 +93,7 @@ function collectTokenProfileAssignment(params: {
   store: AuthProfileStore;
   agentDir: string;
   defaults: SecretDefaults | undefined;
+  authAliasLookupParams: ProviderAuthAliasLookupParams;
   context: ResolverContext;
 }): void {
   const {
@@ -120,6 +124,7 @@ function collectTokenProfileAssignment(params: {
   params.profile.token = undefined;
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.context.sourceConfig,
+    authAliasLookupParams: params.authAliasLookupParams,
     store: params.store,
     provider: params.profile.provider,
     profileId: params.profileId,
@@ -157,6 +162,12 @@ export function collectAuthStoreAssignments(params: {
   });
 
   const defaults = params.context.sourceConfig.secrets?.defaults;
+  const authAliasLookupParams: ProviderAuthAliasLookupParams = {
+    env: params.context.env,
+    ...(params.context.manifestRegistry
+      ? { metadataSnapshot: params.context.manifestRegistry }
+      : {}),
+  };
   for (const [profileId, profile] of Object.entries(params.store.profiles)) {
     if (profile.type === "api_key") {
       collectApiKeyProfileAssignment({
@@ -165,6 +176,7 @@ export function collectAuthStoreAssignments(params: {
         store: params.store,
         agentDir: params.agentDir,
         defaults,
+        authAliasLookupParams,
         context: params.context,
       });
       continue;
@@ -176,6 +188,7 @@ export function collectAuthStoreAssignments(params: {
         store: params.store,
         agentDir: params.agentDir,
         defaults,
+        authAliasLookupParams,
         context: params.context,
       });
     }
