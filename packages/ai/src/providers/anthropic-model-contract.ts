@@ -183,6 +183,14 @@ export function resolveModelBoundThinkingReplayMode(params: {
   if (!sourceIdentity && !hasConcreteResponseModel(params.source) && targetIdentity && sameRoute) {
     return "preserve";
   }
-  const sameModel = sourceApi === targetApi && sourceIdentity === targetIdentity;
+  // Signed/redacted thinking is cryptographically bound to the issuing
+  // platform, not just the model identity. Preserving across providers
+  // replays an `anthropic` signature through Bedrock/Vertex/proxy routes
+  // (or vice versa), which fails signature validation on every turn and
+  // permanently bricks the persisted session.
+  const sameProvider =
+    normalizeLowercaseStringOrEmpty(params.source.provider) ===
+    normalizeLowercaseStringOrEmpty(params.target.provider);
+  const sameModel = sameProvider && sourceApi === targetApi && sourceIdentity === targetIdentity;
   return sameModel ? "preserve" : "drop";
 }
