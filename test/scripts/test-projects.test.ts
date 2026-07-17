@@ -1905,6 +1905,10 @@ describe("scripts/test-projects changed-target routing", () => {
         ],
       ],
       [
+        ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+        ["test/scripts/ci-workflow-guards.test.ts"],
+      ],
+      [
         ".github/actions/setup-pnpm-store-cache/action.yml",
         [
           "test/scripts/package-acceptance-workflow.test.ts",

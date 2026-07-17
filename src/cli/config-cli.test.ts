@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -3894,36 +3895,39 @@ describe("config cli", () => {
   });
 
   describe("config file", () => {
-    it("prints the active config file path", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "file"]);
-
-      expect(mockLog).toHaveBeenCalledWith("/tmp/openclaw.json");
-      expect(mockWriteConfigFile).not.toHaveBeenCalled();
-    });
-
-    it("prints a resolved config file path under OPENCLAW_HOME", async () => {
-      const home = path.join(os.tmpdir(), "openclaw-home-token-config-file");
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = configPath;
-      mockReadConfigFileSnapshot.mockResolvedValueOnce(snapshot);
+    it("resolves the active path without initializing state", async () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-file-"));
+      const profile = "configfile-probe";
+      const stateDir = path.join(home, `.openclaw-${profile}`);
+      const configPath = path.join(stateDir, "openclaw.json");
       vi.stubEnv("OPENCLAW_HOME", home);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", "");
+      vi.stubEnv("OPENCLAW_PROFILE", "");
+      vi.stubEnv("OPENCLAW_STATE_DIR", "");
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      applyCliProfileEnv({ profile });
+      mockReadConfigFileSnapshot.mockImplementationOnce(async () => {
+        fs.mkdirSync(path.join(stateDir, "state"), { recursive: true });
+        fs.writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "initialized");
+        const snapshot = buildSnapshot({ resolved: {}, config: {} });
+        snapshot.path = configPath;
+        return snapshot;
+      });
 
       try {
         await runConfigCommand(["config", "file"]);
+        const output = String(lastMockArg(mockLog));
+        expect(output).toBe(configPath);
+        expect(path.isAbsolute(output)).toBe(true);
+        expect(output).not.toContain("$OPENCLAW_HOME");
+        expect(output).not.toContain("~");
+        expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+        expect(fs.existsSync(stateDir)).toBe(false);
+        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
       } finally {
         vi.unstubAllEnvs();
+        fs.rmSync(home, { recursive: true, force: true });
       }
-
-      const output = String(lastMockArg(mockLog));
-      expect(output).toBe(configPath);
-      expect(path.isAbsolute(output)).toBe(true);
-      expect(output).not.toContain("$OPENCLAW_HOME");
-      expect(output).not.toContain("~");
     });
   });
 });

@@ -526,4 +526,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 }
 
-customElements.define("openclaw-model-setup-page", ModelSetupPage);
+if (!customElements.get("openclaw-model-setup-page")) {
+  customElements.define("openclaw-model-setup-page", ModelSetupPage);
+}

@@ -697,6 +697,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
     ".github/actions/setup-node-env/sticky-importers.sh",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],

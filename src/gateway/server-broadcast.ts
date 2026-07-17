@@ -5,6 +5,7 @@ import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
+  QUESTIONS_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
@@ -33,6 +34,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
   "exec.approval.resolved": [APPROVALS_SCOPE],
+  "question.requested": [QUESTIONS_SCOPE],
+  "question.resolved": [QUESTIONS_SCOPE],
   heartbeat: [],
   "plugin.approval.requested": [APPROVALS_SCOPE],
   "plugin.approval.resolved": [APPROVALS_SCOPE],

@@ -32,6 +32,7 @@
   "approval-reaction-runtime",
   "approval-reply-runtime",
   "approval-runtime",
+  "question-gateway-runtime",
   "config-runtime",
   "config-contracts",
   "config-types",

@@ -793,9 +793,11 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "shows fast mode status",
+    "submits an exact argument completion with one Enter",
     async () => {
-      await fixture.run.write("/fast status\r", { delay: false });
+      await fixture.run.write("/fast status", { delay: false });
+      await fixture.run.waitForOutput("→ status");
+      await fixture.run.write("\r", { delay: false });
       await fixture.run.waitForOutput("fast mode: off");
     },
     TEST_TIMEOUT_MS,

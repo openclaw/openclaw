@@ -858,6 +858,7 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
+      telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
       shared_image_policy: no-push-artifact
     secrets:

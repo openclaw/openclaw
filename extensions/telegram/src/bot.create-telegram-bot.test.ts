@@ -491,6 +491,53 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("acknowledges question callbacks before their handler completes", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "disabled" } } });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      getOnHandler("callback_query") as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+    answerCallbackQuerySpy.mockClear();
+    let releaseHandler: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const callbackQuery = {
+      id: "cbq-question-early-ack",
+      data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: 42,
+      },
+    };
+    const pending = runTelegramMiddlewareChain({
+      ctx: {
+        update: { update_id: 403, callback_query: callbackQuery },
+        callbackQuery,
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: async (ctx) => {
+        await callbackHandler(ctx);
+        await handlerGate;
+      },
+    });
+    await flushTelegramTestMicrotasks();
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-early-ack");
+    if (!releaseHandler) {
+      throw new Error("Expected Telegram question callback release callback to be initialized");
+    }
+    releaseHandler();
+    await pending;
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("lets /status bypass a busy Telegram topic lane", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
@@ -2884,8 +2931,8 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       update: { update_id: 222 },
       callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+        id: "cb-question-duplicate",
+        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
         from: { id: 789, username: "testuser" },
         message: {
           chat: { id: 123, type: "private" },
@@ -2897,6 +2944,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({}),
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
 
     replySpy.mockClear();
 

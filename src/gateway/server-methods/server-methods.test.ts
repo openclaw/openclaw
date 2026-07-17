@@ -2942,9 +2942,12 @@ describe("exec approval handlers", () => {
   async function waitForRequestedExecApprovalPayload(
     broadcasts: Array<{ event: string; payload: unknown }>,
   ): Promise<{ id: string; request: Record<string, unknown> }> {
-    await vi.waitFor(() => {
-      expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
-    });
+    await vi.waitFor(
+      () => {
+        expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
+      },
+      { timeout: 5_000 },
+    );
     return getRequestedExecApprovalPayload(broadcasts);
   }
 

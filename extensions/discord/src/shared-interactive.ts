@@ -21,6 +21,7 @@ import type {
   DiscordComponentButtonStyle,
   DiscordComponentMessageSpec,
 } from "./components.types.js";
+import { buildDiscordQuestionCustomId } from "./question-custom-id.js";
 
 function resolveDiscordInteractiveButtonStyle(
   style?: InteractiveButtonStyle,
@@ -65,6 +66,7 @@ const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
 function buildDiscordButtonComponent(
   button: MessagePresentationButton,
+  optionIndex: number,
 ): DiscordComponentButtonSpec | undefined {
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
@@ -81,6 +83,20 @@ function buildDiscordButtonComponent(
       internalCustomId,
       ...(button.disabled === true ? { disabled: true } : {}),
     };
+  }
+  if (action.type === "question") {
+    const internalCustomId = buildDiscordQuestionCustomId({
+      questionId: action.questionId,
+      optionIndex,
+    });
+    return internalCustomId
+      ? {
+          label: button.label,
+          style: resolveDiscordInteractiveButtonStyle(button.style),
+          internalCustomId,
+          ...(button.disabled === true ? { disabled: true } : {}),
+        }
+      : undefined;
   }
   if (
     action.type === "web-app" &&
@@ -127,7 +143,7 @@ function appendDiscordButtonBlocks(
   buttons: readonly MessagePresentationButton[],
 ): void {
   const components = buttons
-    .map((button) => buildDiscordButtonComponent(button))
+    .map((button, optionIndex) => buildDiscordButtonComponent(button, optionIndex))
     .filter((button): button is DiscordComponentButtonSpec => Boolean(button));
   for (let index = 0; index < components.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
     blocks.push({
