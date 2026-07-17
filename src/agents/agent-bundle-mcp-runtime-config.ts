@@ -4,6 +4,7 @@ import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { PluginLruCache } from "../plugins/plugin-cache-primitives.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { assignSafeServerNames } from "./agent-bundle-mcp-names.js";
@@ -20,25 +21,25 @@ type PreparedSessionMcpConfig = {
 };
 type SessionMcpConfigDiscoveryCacheEntry = {
   loaded: LoadedMcpConfig;
-  preparedByVariant: Map<string, PreparedSessionMcpConfig>;
+  preparedByVariant: PluginLruCache<PreparedSessionMcpConfig>;
 };
 
 const SESSION_MCP_CONFIG_DISCOVERY_CACHE_KEY = Symbol.for(
-  "openclaw.sessionMcpConfigDiscoveryCache",
+  "openclaw.sessionMcpConfigDiscoveryCache.pluginLru.v1",
 );
 const SESSION_MCP_CONFIG_DISCOVERY_CACHE_LIMIT = 128;
 const SESSION_MCP_PREPARED_CONFIG_VARIANT_LIMIT = 64;
 const EMPTY_OPENCLAW_CONFIG: OpenClawConfig = {};
 
 type SessionMcpConfigDiscoveryCacheState = {
-  entries: Map<string, SessionMcpConfigDiscoveryCacheEntry>;
+  entries: PluginLruCache<SessionMcpConfigDiscoveryCacheEntry>;
   manifestRegistryIds: WeakMap<object, number>;
   nextManifestRegistryId: number;
 };
 
 function getSessionMcpConfigDiscoveryCacheState(): SessionMcpConfigDiscoveryCacheState {
   return resolveGlobalSingleton(SESSION_MCP_CONFIG_DISCOVERY_CACHE_KEY, () => ({
-    entries: new Map(),
+    entries: new PluginLruCache(SESSION_MCP_CONFIG_DISCOVERY_CACHE_LIMIT),
     manifestRegistryIds: new WeakMap(),
     nextManifestRegistryId: 1,
   }));
@@ -75,28 +76,6 @@ function buildSessionMcpConfigDiscoveryCacheKey(params: {
   });
 }
 
-function trimSessionMcpConfigDiscoveryCache(state: SessionMcpConfigDiscoveryCacheState): void {
-  while (state.entries.size > SESSION_MCP_CONFIG_DISCOVERY_CACHE_LIMIT) {
-    const oldest = state.entries.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    state.entries.delete(oldest);
-  }
-}
-
-function trimPreparedConfigVariants(
-  preparedByVariant: Map<string, PreparedSessionMcpConfig>,
-): void {
-  while (preparedByVariant.size > SESSION_MCP_PREPARED_CONFIG_VARIANT_LIMIT) {
-    const oldest = preparedByVariant.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    preparedByVariant.delete(oldest);
-  }
-}
-
 function clonePreparedSessionMcpConfig(
   prepared: PreparedSessionMcpConfig,
 ): PreparedSessionMcpConfig {
@@ -114,9 +93,6 @@ function loadCachedEmbeddedAgentMcpConfig(params: {
   const key = buildSessionMcpConfigDiscoveryCacheKey(params);
   const cached = state.entries.get(key);
   if (cached) {
-    // LRU order bounds long-lived processes that observe many config revisions.
-    state.entries.delete(key);
-    state.entries.set(key, cached);
     return cached;
   }
   // Bundle manifests and their MCP JSON are process-stable metadata. Keep the
@@ -125,7 +101,9 @@ function loadCachedEmbeddedAgentMcpConfig(params: {
   const discovered = structuredClone(loadEmbeddedAgentMcpConfig(params));
   const loaded = {
     loaded: discovered,
-    preparedByVariant: new Map(),
+    preparedByVariant: new PluginLruCache<PreparedSessionMcpConfig>(
+      SESSION_MCP_PREPARED_CONFIG_VARIANT_LIMIT,
+    ),
   };
   // Diagnostics can represent transient filesystem or manifest failures. Keep
   // those results session-owned so the next run retries discovery.
@@ -133,7 +111,6 @@ function loadCachedEmbeddedAgentMcpConfig(params: {
     return loaded;
   }
   state.entries.set(key, loaded);
-  trimSessionMcpConfigDiscoveryCache(state);
   return loaded;
 }
 
@@ -248,8 +225,6 @@ export function loadSessionMcpConfig(params: {
   });
   const prepared = discovery.preparedByVariant.get(variantKey);
   if (prepared) {
-    discovery.preparedByVariant.delete(variantKey);
-    discovery.preparedByVariant.set(variantKey, prepared);
     return clonePreparedSessionMcpConfig(prepared);
   }
   const mcpServers = filterMcpServers(discovery.loaded.mcpServers, {
@@ -271,7 +246,6 @@ export function loadSessionMcpConfig(params: {
     }),
   };
   discovery.preparedByVariant.set(variantKey, result);
-  trimPreparedConfigVariants(discovery.preparedByVariant);
   return clonePreparedSessionMcpConfig(result);
 }
 
