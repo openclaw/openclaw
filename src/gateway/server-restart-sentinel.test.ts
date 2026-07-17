@@ -810,7 +810,7 @@ describe("scheduleRestartSentinelWake", () => {
   it("continues exact-id recovery after another owner releases the notice", async () => {
     mocks.withActiveDeliveryClaim.mockResolvedValueOnce({
       status: "claimed-by-other-owner",
-    });
+    } as never);
     mocks.loadPendingDelivery
       .mockResolvedValueOnce({
         id: "restart-sentinel-notice:agent:main:main:123",
