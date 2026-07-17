@@ -101,7 +101,10 @@ import ai.openclaw.app.voice.VoiceWakeSuppressionReason
 import ai.openclaw.app.wear.WearProxyBridge
 import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
+import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -1115,10 +1118,19 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      startRealtimeTalk = { nodeId, language ->
+        if (startWearRealtimeTalk(nodeId, language)) wearRealtimeTalkSnapshot.value else null
+      },
+      stopRealtimeTalk = { nodeId ->
+        if (stopWearRealtimeTalk(nodeId)) wearRealtimeTalkSnapshot.value else null
+      },
     )
   }
 
-  internal suspend fun handleWearProxyRequest(request: WearMessage.Request): WearMessage.Response = wearProxyController.handle(request)
+  internal suspend fun handleWearProxyRequest(
+    sourceNodeId: String,
+    request: WearMessage.Request,
+  ): WearMessage.Response = wearProxyController.handle(request, sourceNodeId)
 
   private suspend fun requestWearGateway(
     method: String,
@@ -1590,6 +1602,64 @@ class NodeRuntime private constructor(
 
   val talkModeConversation: StateFlow<List<VoiceConversationEntry>>
     get() = talkMode.conversation
+
+  private val wearRealtimeTalkControllerLazy: Lazy<WearRealtimeTalkController> =
+    lazy {
+      WearRealtimeTalkController(
+        scope = scope,
+        isConnected = { gatewayConnectionDisplay.value.isConnected },
+        mainSessionKey = { resolveMainSessionKey() },
+        requestGateway = { method, paramsJson, timeoutMs ->
+          val gatewayId = connectedEndpoint?.stableId ?: error("Gateway not connected")
+          operatorSession.requestForEndpoint(gatewayId, method, paramsJson, timeoutMs)
+        },
+        sendGatewayFrame = { method, paramsJson, timeoutMs, onError ->
+          val gatewayId = connectedEndpoint?.stableId ?: error("Gateway not connected")
+          operatorSession.sendRequestFrameForEndpoint(gatewayId, method, paramsJson, timeoutMs) { error ->
+            onError(error.message)
+          }
+        },
+        sendWatchFrame = { nodeId, type, payload ->
+          val app = appContext as? NodeApp ?: error("Wear channel owner is unavailable")
+          app.wearRealtimeChannels.send(nodeId, type, payload)
+        },
+        onSnapshot = { snapshot ->
+          wearProxyBridge()?.publishTalk(WearRealtimeTalkCodec.encode(snapshot))
+        },
+      )
+    }
+
+  private val wearRealtimeTalkController: WearRealtimeTalkController
+    get() = wearRealtimeTalkControllerLazy.value
+
+  internal val wearRealtimeTalkSnapshot: StateFlow<WearRealtimeTalkSnapshot>
+    get() = wearRealtimeTalkController.snapshot
+
+  internal suspend fun startWearRealtimeTalk(
+    nodeId: String,
+    language: String?,
+  ): Boolean {
+    if (talkModeEnabled.value || micEnabled.value || micCooldown.value) return false
+    val resolvedLanguage = talkMode.resolveRealtimeLanguageHint(language)
+    return wearRealtimeTalkController.start(nodeId, resolvedLanguage)
+  }
+
+  internal suspend fun stopWearRealtimeTalk(nodeId: String? = null): Boolean {
+    val stopped = wearRealtimeTalkController.stop(nodeId)
+    if (stopped && nodeId != null) {
+      (appContext as? NodeApp)?.wearRealtimeChannels?.close(nodeId)
+    }
+    return stopped
+  }
+
+  internal fun appendWearRealtimeAudio(
+    nodeId: String,
+    payload: ByteArray,
+  ) {
+    if (wearRealtimeTalkControllerLazy.isInitialized()) {
+      wearRealtimeTalkController.appendAudio(nodeId, payload)
+    }
+  }
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
@@ -3875,6 +3945,7 @@ class NodeRuntime private constructor(
   }
 
   private fun disconnect(retireRunState: Boolean) {
+    if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
     prepareDisconnect(retireRunState)
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -4296,6 +4367,9 @@ class NodeRuntime private constructor(
     handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
+    if (wearRealtimeTalkControllerLazy.isInitialized()) {
+      wearRealtimeTalkController.handleGatewayEvent(event, payloadJson)
+    }
     chat.handleGatewayEvent(event, payloadJson)
     if (event == "chat" && !payloadJson.isNullOrBlank()) {
       runCatching { json.parseToJsonElement(payloadJson) }

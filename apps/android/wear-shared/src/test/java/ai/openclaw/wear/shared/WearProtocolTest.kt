@@ -57,6 +57,8 @@ class WearProtocolTest {
         WearRpcMethod.ChatHistory to "chat.history",
         WearRpcMethod.ChatSend to "chat.send",
         WearRpcMethod.ChatAbort to "chat.abort",
+        WearRpcMethod.TalkStart to "talk.start",
+        WearRpcMethod.TalkStop to "talk.stop",
       )
     methodNames.forEach { (method, wireName) ->
       val request = WearMessage.Request(requestId = "req-1", method = method)
@@ -81,6 +83,7 @@ class WearProtocolTest {
     assertEquals("/openclaw/wear/v1/request", WearProtocol.REQUEST_PATH)
     assertEquals("/openclaw/wear/v1/response", WearProtocol.RESPONSE_PATH)
     assertEquals("/openclaw/wear/v1/event", WearProtocol.EVENT_PATH)
+    assertEquals("/openclaw/wear/v1/realtime/audio", WearProtocol.REALTIME_AUDIO_CHANNEL_PATH)
     assertEquals("openclaw_phone_proxy_v1", WearProtocol.PHONE_CAPABILITY)
     assertEquals("openclaw_wear_companion_v1", WearProtocol.WATCH_CAPABILITY)
   }

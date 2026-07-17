@@ -77,8 +77,15 @@ internal class WearProxyBridge(
   private val sender: WearMessageSender,
   private val peerResolver: WearPeerResolver = WearPeerResolver { emptySet() },
   private val monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
-  private val handleRequest: suspend (WearMessage.Request) -> WearMessage.Response,
+  private val handleRequest: suspend (String, WearMessage.Request) -> WearMessage.Response,
 ) {
+  internal constructor(
+    scope: CoroutineScope,
+    sender: WearMessageSender,
+    peerResolver: WearPeerResolver = WearPeerResolver { emptySet() },
+    monotonicMillis: () -> Long = SystemClock::elapsedRealtime,
+    handleRequest: suspend (WearMessage.Request) -> WearMessage.Response,
+  ) : this(scope, sender, peerResolver, monotonicMillis, { _, request -> handleRequest(request) })
   private val peerLock = Any()
   private val peers = LinkedHashMap<String, Long>()
   private val missingPeers = LinkedHashSet<String>()
@@ -125,7 +132,7 @@ internal class WearProxyBridge(
       is WearBridgeOperation.Request -> {
         try {
           val response =
-            handleRequest(operation.message).copy(
+            handleRequest(operation.sourcePeer.nodeId, operation.message).copy(
               eventStreamId = eventStreamId,
               eventSequence = lastDeliveredSequence,
             )
@@ -201,6 +208,12 @@ internal class WearProxyBridge(
           terminal = state == "final" || state == "aborted" || state == "error",
         )
       }
+    }
+  }
+
+  fun publishTalk(payload: JsonElement) {
+    synchronized(overflowLock) {
+      publishEventLocked(WearEventType.Talk, payload)
     }
   }
 

@@ -1,6 +1,8 @@
 package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearRpcMethod
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -189,6 +191,31 @@ internal class WearGatewayRepository(
       phoneNodeId,
       requirePreferredNode = true,
     )
+  }
+
+  suspend fun startRealtimeTalk(
+    language: String?,
+    phoneNodeId: String,
+  ): WearRealtimeTalkSnapshot {
+    val response =
+      requester.request(
+        WearRpcMethod.TalkStart,
+        buildJsonObject { language?.let { put("language", it) } },
+        phoneNodeId,
+        requirePreferredNode = true,
+      )
+    return WearRealtimeTalkCodec.decode(response.payload)
+  }
+
+  suspend fun stopRealtimeTalk(phoneNodeId: String): WearRealtimeTalkSnapshot {
+    val response =
+      requester.request(
+        WearRpcMethod.TalkStop,
+        buildJsonObject {},
+        phoneNodeId,
+        requirePreferredNode = true,
+      )
+    return WearRealtimeTalkCodec.decode(response.payload)
   }
 }
 

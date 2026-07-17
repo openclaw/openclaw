@@ -506,6 +506,7 @@ describe("validateTalkClientCreateParams", () => {
         provider: "openai",
         model: "gpt-realtime-2",
         voice: "alloy",
+        language: "de",
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
@@ -611,6 +612,15 @@ describe("validateTalkEvent", () => {
 });
 
 describe("validateTalkSession", () => {
+  it("accepts an ISO-639-1 realtime input language", () => {
+    expect(
+      validateTalkSessionCreateParams({
+        mode: "realtime",
+        language: "de",
+      }),
+    ).toBe(true);
+  });
+
   it("accepts session-scoped provider, model, and voice selection", () => {
     expect(
       validateTalkSessionCreateParams({
@@ -668,6 +678,15 @@ describe("validateTalkSession", () => {
     expect(formatValidationErrors(validateTalkSessionCreateParams.errors)).toContain(
       "unexpected property 'instructionsOverride'",
     );
+  });
+
+  it("rejects non-ISO-639-1 realtime input languages", () => {
+    expect(
+      validateTalkSessionCreateParams({
+        mode: "realtime",
+        language: "de-DE",
+      }),
+    ).toBe(false);
   });
 
   it("accepts managed-room join, turn lifecycle params, and results", () => {

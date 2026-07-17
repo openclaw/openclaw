@@ -1,6 +1,8 @@
 package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearEventType
+import ai.openclaw.wear.shared.WearRealtimeTalkCodec
+import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,6 +28,8 @@ internal data class WearUiState(
   val streamText: String? = null,
   val activeRunId: String? = null,
   val sending: Boolean = false,
+  val realtimeTalk: WearRealtimeTalkSnapshot = WearRealtimeTalkSnapshot(),
+  val talkBusy: Boolean = false,
   val error: String? = null,
 )
 
@@ -39,6 +43,8 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     messages = emptyList(),
     streamText = null,
     activeRunId = null,
+    realtimeTalk = WearRealtimeTalkSnapshot(),
+    talkBusy = false,
     error = null,
   )
 
@@ -47,6 +53,7 @@ internal class WearViewModel(
 ) : AndroidViewModel(application) {
   private val app = application as WearApplication
   private val repository = app.gatewayRepository
+  private val realtimeTalkClient = app.realtimeTalkClient
   private val mutableState = MutableStateFlow(WearUiState())
   private val eventSequenceTracker = WearEventSequenceTracker()
   private val eventSourceTracker = WearEventSourceTracker()
@@ -63,6 +70,19 @@ internal class WearViewModel(
     }
     viewModelScope.launch {
       app.proxyClient.preferredPhoneChanges.collect(::reloadForPreferredPhone)
+    }
+    viewModelScope.launch {
+      realtimeTalkClient.channelFailed.collect { failed ->
+        if (failed) {
+          mutableState.update {
+            it.copy(
+              realtimeTalk = WearRealtimeTalkSnapshot(),
+              talkBusy = false,
+              error = "Watch audio link disconnected",
+            )
+          }
+        }
+      }
     }
     refresh()
   }
@@ -86,6 +106,7 @@ internal class WearViewModel(
   }
 
   fun closeSession() {
+    if (mutableState.value.realtimeTalk.active) stopRealtimeTalk()
     mutableState.update {
       it.copy(
         selectedSession = null,
@@ -96,6 +117,39 @@ internal class WearViewModel(
       )
     }
     loadSessions()
+  }
+
+  fun startRealtimeTalk() {
+    if (mutableState.value.talkBusy || mutableState.value.realtimeTalk.active) return
+    viewModelScope.launch {
+      mutableState.update { it.copy(talkBusy = true, error = null) }
+      try {
+        val snapshot = realtimeTalkClient.start()
+        mutableState.update { it.copy(realtimeTalk = snapshot, talkBusy = false) }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        mutableState.update { it.copy(talkBusy = false, error = err.userMessage()) }
+      }
+    }
+  }
+
+  fun stopRealtimeTalk() {
+    if (mutableState.value.talkBusy) return
+    viewModelScope.launch {
+      mutableState.update { it.copy(talkBusy = true) }
+      try {
+        val snapshot = realtimeTalkClient.stop()
+        mutableState.update { it.copy(realtimeTalk = snapshot, talkBusy = false) }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        realtimeTalkClient.disconnectLocal()
+        mutableState.update {
+          it.copy(realtimeTalk = WearRealtimeTalkSnapshot(), talkBusy = false, error = err.userMessage())
+        }
+      }
+    }
   }
 
   fun sendReply(text: String) {
@@ -275,6 +329,12 @@ internal class WearViewModel(
       WearEventType.Connection -> handleConnectionEvent(event.payload as? JsonObject)
       WearEventType.Chat -> handleChatEvent(event)
       WearEventType.Resync -> refresh()
+      WearEventType.Talk -> {
+        val payload = event.payload ?: return
+        runCatching { WearRealtimeTalkCodec.decode(payload) }
+          .getOrNull()
+          ?.let { snapshot -> mutableState.update { it.copy(realtimeTalk = snapshot, talkBusy = false) } }
+      }
     }
   }
 
@@ -304,6 +364,7 @@ internal class WearViewModel(
   }
 
   private fun reloadForPreferredPhone(nodeId: String?) {
+    realtimeTalkClient.disconnectLocal()
     cancelLoad()
     eventSequenceTracker.requireSnapshot()
     resyncEventBuffer.begin()
@@ -433,6 +494,10 @@ internal class WearViewModel(
     if (error.isConnectivityFailure() || mutableState.value.selectedSession?.key == sessionKey) {
       recordFailure(error)
     }
+  }
+
+  override fun onCleared() {
+    realtimeTalkClient.shutdown()
   }
 }
 

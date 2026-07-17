@@ -9,6 +9,7 @@ import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import ai.openclaw.app.wear.GoogleWearMessageSender
 import ai.openclaw.app.wear.GoogleWearPeerResolver
 import ai.openclaw.app.wear.WearProxyBridge
+import ai.openclaw.app.wear.WearRealtimeChannelRegistry
 import android.app.Application
 import android.content.res.Configuration
 import android.os.StrictMode
@@ -39,8 +40,14 @@ class NodeApp : Application() {
       scope = runtimeScope,
       sender = GoogleWearMessageSender(this),
       peerResolver = GoogleWearPeerResolver(this),
-      handleRequest = { request -> ensureBackgroundRuntime().handleWearProxyRequest(request) },
+      handleRequest = { sourceNodeId, request ->
+        ensureBackgroundRuntime().handleWearProxyRequest(sourceNodeId, request)
+      },
     )
+  }
+
+  internal val wearRealtimeChannels: WearRealtimeChannelRegistry by lazy {
+    WearRealtimeChannelRegistry(this, runtimeScope)
   }
 
   /**
