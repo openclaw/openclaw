@@ -2043,4 +2043,33 @@ describe("isAnthropicFoundryDeployment", () => {
     },
   );
 });
+describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
+  it("setEncoding prevents multi-byte character corruption across chunk boundaries", async () => {
+    const { PassThrough } = await import("node:stream");
+
+    // Simulate the fix: setEncoding("utf8") on a stream that receives
+    // a multi-byte UTF-8 smiley (U+1F60A, 0xF0 0x9F 0x98 0x8A) split
+    // at exactly the wrong byte boundary.
+    const stream = new PassThrough();
+    stream.setEncoding("utf8");
+
+    const chunks: string[] = [];
+    stream.on("data", (chunk: string) => {
+      chunks.push(chunk);
+    });
+
+    // Send the emoji split across two writes
+    stream.write(Buffer.from([0xf0, 0x9f]));
+    stream.write(Buffer.from([0x98, 0x8a]));
+    stream.end();
+
+    const result = chunks.join("");
+    // Without setEncoding, each `.toString("utf8")` would produce U+FFFD
+    // on its partial sequence (0xF0 0x9F → incomplete → U+FFFD).
+    // With setEncoding, the decoder reassembles the full code point.
+    expect(result).toBe("\u{1F60A}");
+    expect(result).not.toContain("�");
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
