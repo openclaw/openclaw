@@ -495,6 +495,8 @@ export interface ToolDefinition<
   label: string;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Declare that this tool may request a turn handoff via its finalized result. */
+  canYield?: boolean;
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */

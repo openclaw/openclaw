@@ -482,6 +482,8 @@ export interface AgentTool<
   outputSchema?: TSchema;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Declare that this tool may request a turn handoff via `AgentToolResult.control`. */
+  canYield?: boolean;
   /**
    * Optional compatibility shim for raw tool-call arguments before schema validation.
    * Must return an object that matches `TParameters`.
