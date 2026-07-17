@@ -57,6 +57,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import {
   emitSubagentEndedHookOnce,
+  emitSubagentProgressEndedHook,
   resolveLifecycleOutcomeFromRunOutcome,
 } from "./subagent-registry-completion.js";
 import {
@@ -763,6 +764,7 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resolveSubagentTask: findSubagentTaskForRun,
   shouldEmitEndedHookForRun,
   emitSubagentEndedHookForRun,
+  emitSubagentProgressEndedForRun: emitSubagentProgressEndedHook,
   notifyContextEngineSubagentEnded,
   retireSupersededRun: retireSupersededSubagentRun,
   resumeSubagentRun,

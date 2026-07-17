@@ -105,6 +105,7 @@ describe("method scope resolution", () => {
     ["exec.approvals.set", ["operator.admin"]],
     ["exec.approvals.node.get", ["operator.admin"]],
     ["exec.approvals.node.set", ["operator.admin"]],
+    ["conversations.list", ["operator.admin"]],
     ["conversations.send", ["operator.admin"]],
     ["conversations.turn", ["operator.admin"]],
     ["conversations.turn.cancel", ["operator.admin"]],

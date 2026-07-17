@@ -45,7 +45,7 @@ execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
 tools available instead for direct, unsandboxed execution.
 
 This Codex-native feature is separate from
-[OpenClaw code mode](/reference/code-mode), an opt-in QuickJS-WASI runtime
+[OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
 broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes): `openai/gpt-5.6-sol` is the model

@@ -58,6 +58,12 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: teams-meetings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/teams-meetings/**"
+          - "docs/plugins/teams-meetings.md"
+          - "docs/plugins/reference/teams-meetings.md"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:

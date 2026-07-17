@@ -850,9 +850,15 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     );
     return { changes, warnings: [] };
   } catch (err) {
+    // Reaching this catch inside doctor means repair itself refused or failed,
+    // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
+    const reason = String(err).replace(
+      /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\./u,
+      "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
+    );
     return {
       changes: [],
-      warnings: [`Failed migrating shared state database schema at ${pathname}: ${String(err)}`],
+      warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
     };
   } finally {
     if (db.isOpen) {
@@ -1358,6 +1364,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
+  ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_paired", "approved_via TEXT");

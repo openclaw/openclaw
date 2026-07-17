@@ -33,33 +33,46 @@ type MockGatewayCall = {
 
 function createDeps() {
   const callGatewayMock = vi.fn(async (input: MockGatewayCall) =>
-    input.method === "conversations.send"
+    input.method === "conversations.list"
       ? {
-          status: "sent" as const,
-          conversationRef: conversation.conversationRef,
-          channel: "reef",
-          messageId: "reef-outbound-1",
-          queueId: "queue-1",
+          conversations: [
+            {
+              conversationRef: conversation.conversationRef,
+              channel: conversation.channel,
+              accountId: conversation.accountId,
+              kind: conversation.kind,
+              target: conversation.target,
+              firstSeenAt: conversation.firstSeenAt,
+              lastSeenAt: conversation.lastSeenAt,
+            },
+          ],
         }
-      : {
-          status: "replied" as const,
-          conversationRef: conversation.conversationRef,
-          channel: "reef",
-          messageId: "reef-outbound-1",
-          correlationPersisted: true,
-          reply: {
+      : input.method === "conversations.send"
+        ? {
+            status: "sent" as const,
             conversationRef: conversation.conversationRef,
-            messageId: "reef-inbound-1",
-            replyToId: "reef-outbound-1",
-            text: "peer acknowledged",
-            timestamp: 300,
+            channel: "reef",
+            messageId: "reef-outbound-1",
+            queueId: "queue-1",
+          }
+        : {
+            status: "replied" as const,
+            conversationRef: conversation.conversationRef,
+            channel: "reef",
+            messageId: "reef-outbound-1",
+            correlationPersisted: true,
+            reply: {
+              conversationRef: conversation.conversationRef,
+              messageId: "reef-inbound-1",
+              replyToId: "reef-outbound-1",
+              text: "peer acknowledged",
+              timestamp: 300,
+            },
           },
-        },
   );
   return {
     callGateway: callGatewayMock as never,
     callGatewayMock,
-    listConversations: vi.fn(() => [conversation]),
   };
 }
 
@@ -68,12 +81,13 @@ describe("conversation tools", () => {
     const deps = createDeps();
     const result = await createConversationsListTool({ agentId: "main" }, deps).execute("list", {
       channel: "reef",
+      query: "@peer-agent",
     });
 
-    expect(deps.listConversations).toHaveBeenCalledWith(
-      { agentId: "main" },
-      { channel: "reef", limit: 50 },
-    );
+    expect(deps.callGatewayMock).toHaveBeenCalledWith({
+      method: "conversations.list",
+      params: { agentId: "main", channel: "reef", query: "@peer-agent", limit: 50 },
+    });
     expect(result.details).toEqual({
       conversations: [
         {

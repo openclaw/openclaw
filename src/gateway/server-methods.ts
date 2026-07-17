@@ -727,7 +727,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSendHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["conversations.send", "conversations.turn", "conversations.turn.cancel"],
+    methods: [
+      "conversations.list",
+      "conversations.send",
+      "conversations.turn",
+      "conversations.turn.cancel",
+    ],
     loadHandlers: loadConversationHandlers,
   }),
   ...createLazyCoreHandlers({

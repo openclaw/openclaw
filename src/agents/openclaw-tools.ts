@@ -623,6 +623,7 @@ export function createOpenClawTools(
             currentMessagingTarget: options?.currentMessagingTarget,
             currentChannelId: options?.currentChannelId,
             currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,

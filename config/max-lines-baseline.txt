@@ -134,9 +134,6 @@ extensions/google-meet/index.ts
 extensions/google-meet/src/cli.test.ts
 extensions/google-meet/src/cli.ts
 extensions/google-meet/src/meet.ts
-extensions/google-meet/src/realtime.ts
-extensions/google-meet/src/runtime.ts
-extensions/google-meet/src/transports/chrome.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -281,7 +278,6 @@ extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
-extensions/slack/src/monitor/context.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts

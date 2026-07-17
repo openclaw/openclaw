@@ -1769,6 +1769,10 @@ export const ko: TranslationMap = {
       testingButton: "테스트 중…",
       testing: "테스트 중 — {modelRef}에 빠른 응답을 요청하는 중…",
     },
+    empty: {
+      title: "권장 설치 항목",
+      intro: "기존 AI 액세스가 감지되지 않았습니다. 다음 도구 중 하나를 설치한 후 다시 확인하세요.",
+    },
     unavailable: {
       title: "감지되었지만 자동 테스트되지 않음",
     },
@@ -2316,6 +2320,13 @@ export const ko: TranslationMap = {
     session: "세션",
     outputTruncated: "미리 보기가 마스킹되고 잘렸습니다.",
     noOutputPreview: "출력 미리보기가 없습니다.",
+    answerCandidate: {
+      title: "답변 후보",
+      itemId: "항목",
+      candidate: "후보 답변",
+      superseded: "대체된 답변",
+      selected: "선택된 답변",
+    },
     status: {
       running: "실행 중",
       done: "완료",
@@ -3714,6 +3725,11 @@ export const ko: TranslationMap = {
       pause: "목표 일시 중지",
       resume: "목표 재개",
       clear: "목표 지우기",
+    },
+    questions: {
+      title: "Codex에 입력이 필요합니다",
+      other: "다른 답변 입력",
+      submit: "답변 제출",
     },
     messages: {
       activity: "활동",
