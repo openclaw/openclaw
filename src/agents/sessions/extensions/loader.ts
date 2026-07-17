@@ -636,18 +636,17 @@ export async function loadExtensionFromFactory(
 /**
  * Load extensions from paths.
  */
-async function loadExtensionsInternal(
+export async function loadExtensionsCached(
   paths: string[],
   cwd: string,
   eventBus?: EventBus,
-  useCache = false,
 ): Promise<LoadExtensionsResult> {
   const extensions: Extension[] = [];
   const errors: Array<{ path: string; error: string }> = [];
   const resolvedEventBus = eventBus ?? createEventBus();
   const runtime = createExtensionRuntime();
-  const cacheScope = useCache ? useExtensionCacheCwd(cwd) : undefined;
-  const resolvedCwd = cacheScope?.cwd ?? cwd;
+  const cacheScope = useExtensionCacheCwd(cwd);
+  const resolvedCwd = cacheScope.cwd;
   const context: ExtensionLoadContext = { cacheScope };
 
   for (const extPath of paths) {
@@ -674,20 +673,4 @@ async function loadExtensionsInternal(
     errors,
     runtime,
   };
-}
-
-export async function loadExtensions(
-  paths: string[],
-  cwd: string,
-  eventBus?: EventBus,
-): Promise<LoadExtensionsResult> {
-  return loadExtensionsInternal(paths, cwd, eventBus);
-}
-
-export async function loadExtensionsCached(
-  paths: string[],
-  cwd: string,
-  eventBus?: EventBus,
-): Promise<LoadExtensionsResult> {
-  return loadExtensionsInternal(paths, cwd, eventBus, true);
 }

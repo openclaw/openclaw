@@ -172,7 +172,7 @@ describe("makeProxyFetch", () => {
     expect(proxyAgentSpy).not.toHaveBeenCalled();
     await proxyFetch("https://api.example.com/v1/audio");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith({ uri: proxyUrl });
+    expect(proxyAgentSpy).toHaveBeenCalledWith(expect.objectContaining({ uri: proxyUrl }));
     expect(undiciFetch).toHaveBeenCalledOnce();
     const [input] = requireUndiciFetchCall();
     const init = requireUndiciFetchInit();
@@ -191,10 +191,12 @@ describe("makeProxyFetch", () => {
 
       await proxyFetch("https://api.example.com/v1/audio");
 
-      expect(proxyAgentSpy).toHaveBeenCalledWith({
-        uri: "https://proxy.test:8443",
-        proxyTls: { ca: "explicit-proxy-fetch-ca" },
-      });
+      expect(proxyAgentSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          uri: "https://proxy.test:8443",
+          proxyTls: expect.objectContaining({ ca: "explicit-proxy-fetch-ca" }),
+        }),
+      );
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
@@ -367,7 +369,9 @@ describe("resolveProxyFetchFromEnv", () => {
         HTTPS_PROXY: "http://proxy.test:8080",
       }),
     );
-    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ httpsProxy: "http://proxy.test:8080" }),
+    );
 
     await fetchFn("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledOnce();
@@ -391,10 +395,12 @@ describe("resolveProxyFetchFromEnv", () => {
       );
 
       expect(fetchFn).toBeTypeOf("function");
-      expect(envAgentSpy).toHaveBeenCalledWith({
-        httpsProxy: "https://proxy.test:8443",
-        proxyTls: { ca: "proxy-fetch-ca" },
-      });
+      expect(envAgentSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          httpsProxy: "https://proxy.test:8443",
+          proxyTls: expect.objectContaining({ ca: "proxy-fetch-ca" }),
+        }),
+      );
     } finally {
       stopActiveManagedProxyRegistration(registration);
     }
@@ -435,10 +441,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "http://fallback.test:3128",
-      httpsProxy: "http://fallback.test:3128",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "http://fallback.test:3128",
+        httpsProxy: "http://fallback.test:3128",
+      }),
+    );
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
@@ -451,7 +459,9 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ httpsProxy: "http://lower.test:1080" }),
+    );
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
@@ -464,10 +474,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "http://lower-http.test:1080",
-      httpsProxy: "http://lower-http.test:1080",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "http://lower-http.test:1080",
+        httpsProxy: "http://lower-http.test:1080",
+      }),
+    );
   });
 
   it("returns proxy fetch when ALL_PROXY is set", () => {
@@ -481,10 +493,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "socks5://all-proxy.test:1080",
-      httpsProxy: "socks5://all-proxy.test:1080",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "socks5://all-proxy.test:1080",
+        httpsProxy: "socks5://all-proxy.test:1080",
+      }),
+    );
   });
 
   it("returns undefined when EnvHttpProxyAgent constructor throws", () => {

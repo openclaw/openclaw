@@ -21,6 +21,7 @@ const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+const DESTINATION_AGENT = Symbol("destination agent");
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
@@ -47,14 +48,18 @@ class MockAgent extends EventEmitter {
     super();
   }
 
-  createOriginDispatcher(options: Record<string, unknown>): EventEmitter {
+  createOriginDispatcher(options: Record<string, unknown>, emitConnect = true): EventEmitter {
     const factory = this.options?.factory;
-    if (typeof factory === "function") {
-      return factory(new URL("https://service.test"), options) as EventEmitter;
+    const dispatcher =
+      typeof factory === "function"
+        ? (factory(new URL("https://service.test"), options) as EventEmitter)
+        : options.connections === 1
+          ? new MockClient(new URL("https://service.test"), options)
+          : new MockPool(new URL("https://service.test"), options);
+    if (emitConnect) {
+      this.emit("connect", new URL("https://service.test"), [this, dispatcher]);
     }
-    return options.connections === 1
-      ? new MockClient(new URL("https://service.test"), options)
-      : new MockPool(new URL("https://service.test"), options);
+    return dispatcher;
   }
 }
 
@@ -80,18 +85,26 @@ class MockPool extends EventEmitter {
 
 class MockEnvHttpProxyAgent extends EventEmitter {
   readonly __testStub = true;
+  readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
     super();
+    this[DESTINATION_AGENT] = new MockAgent(
+      expectOptionsRecord(options, "expected EnvHttpProxyAgent options"),
+    );
     envHttpProxyAgentCtor(options);
   }
 }
 
 class MockProxyAgent extends EventEmitter {
   readonly __testStub = true;
+  readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
     super();
+    this[DESTINATION_AGENT] = new MockAgent(
+      expectOptionsRecord(options, "expected ProxyAgent options"),
+    );
     proxyAgentCtor(options);
   }
 }
@@ -105,17 +118,6 @@ function installUndiciRuntimeDeps(): void {
     ProxyAgent: MockProxyAgent,
     fetch: vi.fn(),
   };
-}
-
-function createProxyClientFromOptions(options: Record<string, unknown>): EventEmitter {
-  const clientFactory = options.clientFactory;
-  if (typeof clientFactory !== "function") {
-    throw new Error("expected ProxyAgent clientFactory");
-  }
-  const pool = clientFactory(new URL("https://service.test"), {
-    connect: proxyConnect,
-  }) as MockPool;
-  return pool.createClient();
 }
 
 function expectOptionsRecord(options: unknown, message: string): Record<string, unknown> {
@@ -163,24 +165,28 @@ describe("undici dispatcher errors", () => {
       name: "direct agent client",
       createClient: () => {
         const agent = createHttp1Agent() as unknown as MockAgent;
-        return agent.createOriginDispatcher({ connections: 1 });
+        return agent.createOriginDispatcher({ connections: 1 }, false);
       },
     },
     {
       name: "explicit proxy client",
       createClient: () => {
-        createHttp1ProxyAgent({ uri: "http://proxy.test:8080" });
-        return createProxyClientFromOptions(requireProxyAgentOptions());
+        const agent = createHttp1ProxyAgent({
+          uri: "http://proxy.test:8080",
+        }) as unknown as MockProxyAgent;
+        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 }, false);
       },
     },
     {
       name: "environment proxy client",
       createClient: () => {
-        createHttp1EnvHttpProxyAgent({ httpsProxy: "http://proxy.test:8080" });
-        return createProxyClientFromOptions(requireEnvHttpProxyAgentOptions());
+        const agent = createHttp1EnvHttpProxyAgent({
+          httpsProxy: "http://proxy.test:8080",
+        }) as unknown as MockEnvHttpProxyAgent;
+        return agent[DESTINATION_AGENT].createOriginDispatcher({ connections: 1 }, false);
       },
     },
-  ])("handles an internal error from $name", ({ createClient }) => {
+  ])("handles an internal error from $name before connect", ({ createClient }) => {
     installUndiciRuntimeDeps();
     const client = createClient();
     const error = new Error("stream handler aborted");

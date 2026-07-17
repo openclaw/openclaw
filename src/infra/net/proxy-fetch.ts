@@ -2,16 +2,14 @@
 // options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
-import {
-  addActiveManagedProxyTlsOptions,
-  resolveManagedEnvHttpProxyAgentOptions,
-} from "./proxy/managed-proxy-undici.js";
+import { resolveManagedEnvHttpProxyAgentOptions } from "./proxy/managed-proxy-undici.js";
 import { fetchWithPreparedRuntimeDispatcher } from "./runtime-fetch.js";
 import {
-  createHttp1EnvHttpProxyAgent,
-  createHttp1ProxyAgent,
-  loadUndiciRuntimeDeps,
-} from "./undici-runtime.js";
+  buildHttp1EnvHttpProxyAgentOptions,
+  buildHttp1ProxyAgentOptions,
+} from "./undici-dispatcher-options.js";
+import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
+import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
@@ -25,10 +23,13 @@ type ProxyFetchWithMetadata = typeof fetch & {
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const runtimeDeps = loadUndiciRuntimeDeps();
-  let agent: ReturnType<typeof createHttp1ProxyAgent> | null = null;
-  const resolveAgent = (): ReturnType<typeof createHttp1ProxyAgent> => {
+  const { ProxyAgent } = runtimeDeps;
+  let agent: InstanceType<typeof ProxyAgent> | null = null;
+  const resolveAgent = (): InstanceType<typeof ProxyAgent> => {
     if (!agent) {
-      agent = createHttp1ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
+      agent = withUndiciErrorDiagnostics(
+        new ProxyAgent(buildHttp1ProxyAgentOptions({ uri: proxyUrl })),
+      );
     }
     return agent;
   };
@@ -71,7 +72,10 @@ export function resolveProxyFetchFromEnv(
   }
   try {
     const runtimeDeps = loadUndiciRuntimeDeps();
-    const agent = createHttp1EnvHttpProxyAgent(proxyOptions);
+    const { EnvHttpProxyAgent } = runtimeDeps;
+    const agent = withUndiciErrorDiagnostics(
+      new EnvHttpProxyAgent(buildHttp1EnvHttpProxyAgentOptions(proxyOptions)),
+    );
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
         ...init,
