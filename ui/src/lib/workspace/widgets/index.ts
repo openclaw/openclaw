@@ -36,4 +36,4 @@ export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefi
   return BUILTIN_WIDGET_RENDERERS[name];
 }
 
-export type { BuiltinWidgetContext, PreviewViewport } from "./types.ts";
+export type { BuiltinWidgetContext } from "./types.ts";

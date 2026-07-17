@@ -23,13 +23,13 @@ import { widgetProps } from "./types.ts";
  */
 const EMBED_SANDBOX_CEILING = "scripts" as const;
 
-export function resolveWorkspaceEmbedSandbox(
+function resolveWorkspaceEmbedSandbox(
   mode: BuiltinWidgetContext["embed"]["embedSandboxMode"],
 ): string {
   return resolveEmbedSandbox(mode, EMBED_SANDBOX_CEILING);
 }
 
-export type EmbedUrlDecision =
+type EmbedUrlDecision =
   | { status: "missing" }
   | { status: "blocked"; reason: "external" | "scheme"; url: string }
   | { status: "ok"; url: string; external: boolean };
