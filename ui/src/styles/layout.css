@@ -1630,10 +1630,40 @@ html.openclaw-native-macos
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
+  width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 28px;
+  padding: 2px 12px 0 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: color-mix(in srgb, var(--muted) 90%, var(--text) 10%);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-catalog-project__head:hover,
+.sidebar-session-catalog-project__head:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-project__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.sidebar-session-catalog-project__icon svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
 }
 
 .sidebar-session-catalog-project__label {

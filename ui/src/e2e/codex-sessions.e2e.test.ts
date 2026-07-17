@@ -19,6 +19,7 @@ let browser: Browser;
 let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
+const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -92,6 +93,10 @@ suite("Codex native session catalog", () => {
   it("groups sessions by host and hides empty offline nodes", async () => {
     const page = await browser.newPage({ viewport: { height: 1100, width: 1440 } });
     await page.addInitScript((key) => localStorage.removeItem(key), catalogGroupingStorageKey);
+    await page.addInitScript(
+      (key) => localStorage.removeItem(key),
+      collapsedSessionSectionsStorageKey,
+    );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
       methodResponses: {
@@ -229,6 +234,33 @@ suite("Codex native session catalog", () => {
       expect(
         await page.evaluate((key) => localStorage.getItem(key), catalogGroupingStorageKey),
       ).toBe("project");
+
+      await openclawProject.click();
+      await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("false");
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(0);
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(0);
+      expect(await section.getByText("Other project session", { exact: true }).count()).toBe(1);
+      expect(await openclawProject.count()).toBe(1);
+      expect(
+        await openclawProject.locator(".sidebar-session-catalog-project__count").textContent(),
+      ).toBe("2");
+      expect(
+        await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
+          collapsedSessionSectionsStorageKey,
+        ),
+      ).toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+
+      await openclawProject.click();
+      await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
+      expect(await section.getByText("Local planning session", { exact: true }).count()).toBe(1);
+      expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
+      expect(
+        await page.evaluate(
+          (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
+          collapsedSessionSectionsStorageKey,
+        ),
+      ).not.toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });

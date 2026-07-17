@@ -292,23 +292,33 @@ function renderCatalogHostGroup(
       </div>
       <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
         ${projectGroups
-          ? html`${projectGroups.groups.map(
-              (group) => html`
-                <div
+          ? html`${projectGroups.groups.map((group) => {
+              const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
+              const collapsed = params.collapsedSections.has(sectionId);
+              return html`
+                <button
+                  type="button"
                   class="sidebar-session-catalog-project__head"
                   data-session-catalog-project=${group.key}
+                  aria-expanded=${String(!collapsed)}
                   title=${group.title}
+                  @click=${() => params.onToggleSection(sectionId)}
                 >
+                  <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
                   <span class="sidebar-session-catalog-project__label">${group.label}</span>
                   <span class="sidebar-session-catalog-project__count" aria-hidden="true"
                     >${group.sessions.length}</span
                   >
-                </div>
-                ${group.sessions.map((session) =>
-                  renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-                )}
-              `,
-            )}
+                </button>
+                ${collapsed
+                  ? nothing
+                  : group.sessions.map((session) =>
+                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                    )}
+              `;
+            })}
             ${projectGroups.ungrouped.map((session) =>
               renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
             )}`
