@@ -165,28 +165,33 @@ function locateValueOffset(
   if (!consume(raw, cursor, "{")) {
     return undefined;
   }
+  let lastMatch: number | undefined;
   while (cursor.pos < raw.length) {
     skipTrivia(raw, cursor);
     if (raw[cursor.pos] === "}") {
-      return undefined;
+      return lastMatch;
     }
     const key = readObjectKey(raw, cursor);
     if (key === null || !consume(raw, cursor, ":")) {
       return undefined;
     }
     skipTrivia(raw, cursor);
+    const valueStart = cursor.pos;
     if (key === segment) {
-      return isLeaf ? cursor.pos : locateValueOffset(raw, cursor, segments, depth + 1);
+      lastMatch = isLeaf
+        ? valueStart
+        : locateValueOffset(raw, { pos: valueStart }, segments, depth + 1);
     }
+    cursor.pos = valueStart;
     skipValue(raw, cursor);
     skipTrivia(raw, cursor);
     if (raw[cursor.pos] === ",") {
       cursor.pos++;
       continue;
     }
-    return undefined;
+    return lastMatch;
   }
-  return undefined;
+  return lastMatch;
 }
 
 function lineAtOffset(raw: string, offset: number): number {
@@ -217,10 +222,7 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   );
 }
 
-export function parseConfigIssuePath(
-  pathValue: string,
-  opts?: { numericDotSegments?: boolean },
-): ConfigIssuePathSegment[] {
+export function parseConfigIssuePath(pathValue: string): ConfigIssuePathSegment[] {
   const trimmed = pathValue.trim();
   if (!trimmed || trimmed === "<root>") {
     return [];
@@ -229,12 +231,7 @@ export function parseConfigIssuePath(
   for (const match of trimmed.matchAll(/(?:^|\.)([^.\[]+)|\[(\d+)\]/g)) {
     const dotSegment = match[1];
     if (dotSegment !== undefined) {
-      const numeric = Number(dotSegment);
-      segments.push(
-        opts?.numericDotSegments && Number.isInteger(numeric) && numeric >= 0
-          ? numeric
-          : dotSegment,
-      );
+      segments.push(dotSegment);
       continue;
     }
     const index = Number(match[2]);
@@ -273,6 +270,14 @@ function resolveSegmentsAgainstParsed(
   const resolved: ConfigIssuePathSegment[] = [];
   let current = root;
   for (const segment of rawSegments) {
+    if (typeof segment === "string" && Array.isArray(current)) {
+      const index = Number(segment);
+      if (Number.isSafeInteger(index) && index >= 0 && String(index) === segment) {
+        resolved.push(index);
+        current = current[index];
+        continue;
+      }
+    }
     if (typeof segment === "number" && !Array.isArray(current)) {
       const key = String(segment);
       resolved.push(key);
@@ -291,6 +296,9 @@ function resolveSegmentsAgainstParsed(
 function stringifyReceivedValue(value: unknown): string | null {
   if (value === undefined) {
     return null;
+  }
+  if (typeof value === "number" && (!Number.isFinite(value) || Object.is(value, -0))) {
+    return Object.is(value, -0) ? "-0" : String(value);
   }
   try {
     const serialized = JSON.stringify(value);
@@ -371,7 +379,7 @@ export function attachConfigIssueDiagnostics(
       ? path.basename(params.configPath)
       : "openclaw.json";
   return issues.map((issue) => {
-    const rawSegments = parseConfigIssuePath(issue.path, { numericDotSegments: true });
+    const rawSegments = parseConfigIssuePath(issue.path);
     const segments = resolveSegmentsAgainstParsed(params.parsed, rawSegments);
     const literalValue = resolveConfigValueAtPath(params.parsed, segments);
     const effectiveValue = resolveConfigValueAtPath(params.effective, segments);

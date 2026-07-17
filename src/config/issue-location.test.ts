@@ -38,10 +38,14 @@ describe("parseConfigIssuePath", () => {
     ]);
   });
 
-  it("parses legacy dot notation with numericDotSegments", () => {
-    expect(
-      parseConfigIssuePath("agents.list.3.tools.profile", { numericDotSegments: true }),
-    ).toEqual(["agents", "list", 3, "tools", "profile"]);
+  it("preserves numeric dot segments until the parent type is known", () => {
+    expect(parseConfigIssuePath("agents.list.3.tools.profile")).toEqual([
+      "agents",
+      "list",
+      "3",
+      "tools",
+      "profile",
+    ]);
   });
 
   it("returns empty for root marker", () => {
@@ -107,6 +111,11 @@ describe("resolveConfigIssueLineInRaw", () => {
   it("handles comments directly after scalar values", () => {
     const raw = ["{", "  ignored: 1 // comment", '  , target: "bad"', "}"].join("\n");
     expect(resolveConfigIssueLineInRaw(raw, ["target"])).toBe(3);
+  });
+
+  it("uses the active value when an object repeats a key", () => {
+    const raw = ["{", '  key: "old",', '  key: "bad"', "}"].join("\n");
+    expect(resolveConfigIssueLineInRaw(raw, ["key"])).toBe(3);
   });
 
   it("handles single-quoted strings", () => {
@@ -277,6 +286,17 @@ describe("appendReceivedValueHint", () => {
       "already got: something",
     );
   });
+
+  it.each([
+    [Number.NaN, "NaN"],
+    [Number.POSITIVE_INFINITY, "Infinity"],
+    [Number.NEGATIVE_INFINITY, "-Infinity"],
+    [-0, "-0"],
+  ])("renders JSON5 number %s without coercing it to null", (value, label) => {
+    expect(appendReceivedValueHint("invalid input", "some.path", value)).toBe(
+      `invalid input, got: ${label}`,
+    );
+  });
 });
 
 describe("attachConfigIssueDiagnostics", () => {
@@ -401,6 +421,27 @@ describe("attachConfigIssueDiagnostics", () => {
     expect(issues[0]?.path).toBe("plugins.entries.123.config.mode");
     expect(issues[0]?.message).toBe('Invalid input (allowed: "good")');
     expect(issues[0]?.line).toBe(4);
+  });
+
+  it("preserves non-canonical numeric record keys", () => {
+    const parsed = { records: { "01": { mode: "bad" }, "1": { mode: "good" } } };
+    const issues = attachConfigIssueDiagnostics(
+      [{ path: "records.01.mode", message: "Invalid input" }],
+      {
+        raw: '{ records: { "01": { mode: "bad" }, "1": { mode: "good" } } }',
+        parsed,
+        effective: parsed,
+        configPath: "/tmp/openclaw.json",
+        formatPathForDisplay: true,
+        includeReceivedValueHint: true,
+      },
+    );
+
+    expect(issues[0]).toMatchObject({
+      path: "records.01.mode",
+      message: 'Invalid input, got: "bad"',
+      line: 1,
+    });
   });
 
   it("omits values changed by environment substitution", () => {
