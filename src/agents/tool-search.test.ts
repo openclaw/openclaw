@@ -394,7 +394,7 @@ describe("Tool Search", () => {
     );
   });
 
-  it("preserves policy-blocked results outside a declared success output schema", async () => {
+  it("rejects policy blocks outside a declared success output schema", async () => {
     const execute = vi.fn(async () => jsonResult({ id: "should-not-run" }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -418,11 +418,9 @@ describe("Tool Search", () => {
       resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
     );
 
-    await expect(runtime.callValue("orchard_policy_block")).resolves.toEqual({
-      status: "blocked",
-      deniedReason: "plugin-before-tool-call",
-      reason: "blocked by orchard policy",
-    });
+    await expect(runtime.callValue("orchard_policy_block")).rejects.toThrow(
+      "was blocked before execution: blocked by orchard policy",
+    );
     expect(execute).not.toHaveBeenCalled();
   });
 

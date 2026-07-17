@@ -1818,8 +1818,16 @@ async function assertCatalogOutputMatchesSchema(
   entry: ToolSearchCatalogEntry,
   result: AgentToolResult<unknown>,
 ): Promise<void> {
-  if (isPreExecutionBlockedToolResult(result)) {
+  if (!entry.outputSchema) {
     return;
+  }
+  if (isPreExecutionBlockedToolResult(result)) {
+    const details = unwrapToolResultValue(result);
+    const reason =
+      isRecord(details) && typeof details.reason === "string" && details.reason.trim()
+        ? details.reason
+        : "Tool call blocked by policy";
+    throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
   }
   const validation = await validateCatalogOutputValue(entry, unwrapToolResultValue(result));
   if (!validation) {

@@ -1289,7 +1289,7 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
 }
 
 // Success output schemas do not describe policy-layer terminal results. Track
-// identity instead of status shape so a tool cannot spoof a validation bypass.
+// identity so catalog boundaries can reject them without trusting spoofable status fields.
 const preExecutionBlockedToolResults = new WeakSet<object>();
 
 export function isPreExecutionBlockedToolResult(result: unknown): boolean {

@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { buildBlockedToolResult } from "./agent-tools.before-tool-call.js";
 import {
   clearCodeModeNamespacesForPlugin,
   createCodeModeNamespaceTool,
@@ -1181,6 +1182,41 @@ describe("Code Mode", () => {
     expect(details.value).toBe(
       "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
     );
+  });
+
+  it("surfaces policy blocks as guest call errors for declared outputs", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const target = pluginTool("fake_policy_block", "Return policy-controlled rows");
+    target.outputSchema = Type.Array(
+      Type.Object({ id: Type.String() }, { additionalProperties: false }),
+    );
+    target.execute = vi.fn(async () =>
+      buildBlockedToolResult({ reason: "blocked by orchard policy" }),
+    );
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, target],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        try {
+          const rows = await tools.callValue("fake_policy_block", {});
+          return rows.map((row) => row.id);
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toContain("was blocked before execution: blocked by orchard policy");
   });
 
   it("exposes MCP tools only through the MCP namespace", async () => {
