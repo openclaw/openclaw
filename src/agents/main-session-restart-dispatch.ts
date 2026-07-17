@@ -239,7 +239,7 @@ async function settleRestartRecoveryDispatch(params: {
   });
 }
 
-export type MainSessionResumeResult = "resumed" | "skipped" | "failed";
+type MainSessionResumeResult = "resumed" | "skipped" | "failed";
 
 export async function resumeMainSession(params: {
   canonicalSessionKey?: string;

@@ -80,9 +80,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     target: { sessionKey, storePath: params.prepared.storePath },
   });
   if (claim.kind === "invalidated") {
-    throw new Error(
-      `main-session recovery owner changed during admission (${claim.reason}); retry`,
-    );
+    throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
   }
   if (claim.kind === "not_required") {
     return undefined;
