@@ -98,6 +98,12 @@ describe("MCP OAuth provider", () => {
           requiresAuthorization: true,
           scope: "docs.write",
         });
+        await expect(
+          readMcpOAuthCredentialsStatus({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).resolves.toMatchObject({ hasTokens: true, requiresAuthorization: true });
 
         const storeKey = resolveMcpOAuthStoreKey("Remote Docs", "https://mcp.example.com/mcp");
         updateMcpOAuthStore(storeKey, (store) => ({ ...store, tokenExpiresAt: 0 }));
@@ -547,6 +553,7 @@ describe("MCP OAuth provider", () => {
           }),
         ).resolves.toEqual({
           hasTokens: false,
+          requiresAuthorization: false,
           hasClientInformation: false,
           hasCodeVerifier: false,
           hasDiscoveryState: false,

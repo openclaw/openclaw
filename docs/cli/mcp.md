@@ -416,7 +416,7 @@ Notes:
 
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
-- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details.
+- `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
 - `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
@@ -540,6 +540,7 @@ Use `--json` for scripts and dashboards. Field sets can grow over time, so consu
           "auth": "oauth",
           "authStatus": {
             "hasTokens": true,
+            "requiresAuthorization": false,
             "hasClientInformation": true,
             "hasCodeVerifier": false,
             "hasDiscoveryState": true,
@@ -743,7 +744,7 @@ When a remote MCP service is already backed by a separate OpenClaw refresh-capab
 
   </Step>
   <Step title="Check authorization">
-    Use status or doctor to confirm that tokens are present.
+    Use status or doctor to confirm that tokens are present and do not require additional authorization. If status reports `authorization-required` or doctor asks for additional authorization, run `openclaw mcp login <name>` again.
 
     ```bash
     openclaw mcp status --verbose

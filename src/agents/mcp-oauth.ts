@@ -23,9 +23,10 @@ import {
 
 export type { McpOAuthConfig } from "./mcp-oauth-provider.js";
 
-/** Persisted OAuth credential presence flags for one MCP server. */
+/** Persisted OAuth credential presence and authorization state for one MCP server. */
 export type McpOAuthCredentialsStatus = {
   hasTokens: boolean;
+  requiresAuthorization: boolean;
   hasClientInformation: boolean;
   hasCodeVerifier: boolean;
   hasDiscoveryState: boolean;
@@ -277,6 +278,7 @@ export async function readMcpOAuthCredentialsStatus(params: {
   );
   return {
     hasTokens: Boolean(store.tokens),
+    requiresAuthorization: store.pendingAuthorizationChallenge?.requiresAuthorization === true,
     hasClientInformation: Boolean(store.clientInformation),
     hasCodeVerifier: Boolean(store.codeVerifier),
     hasDiscoveryState: Boolean(store.discoveryState),
