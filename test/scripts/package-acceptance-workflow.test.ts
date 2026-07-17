@@ -3619,7 +3619,6 @@ describe("package artifact reuse", () => {
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
-    const workflow = readWorkflow(OPENCLAW_NPM_RELEASE_WORKFLOW);
     const preflight = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "preflight_openclaw_npm");
     const metadata = workflowStep(preflight, "Validate release metadata");
 
