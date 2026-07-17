@@ -172,14 +172,26 @@ type WebSearchOutput =
         provider?: string;
       };
       cached?: true;
+    }
+  | {
+      kind: "raw";
+      provider: string;
+      data: unknown;
     };
 ```
 
 Structured providers use `kind: "results"`; synthesized providers use
-`kind: "answer"`. Provider-specific fields such as raw scores, excerpts,
-related searches, inline-citation offsets, model ids, or session metadata are
-not passed through. Use a provider's dedicated tool when its richer response is
-part of your workflow.
+`kind: "answer"`. External plugin providers whose payloads match neither shape
+pass through verbatim as `kind: "raw"` for compatibility. Provider-specific
+fields such as raw scores, excerpts, related searches, inline-citation
+offsets, model ids, or session metadata are not passed through on normalized
+branches. Use a provider's dedicated tool when its richer response is part of
+your workflow.
+
+`externalContent.wrapped: true` is a trust marker, not decoration: when a
+provider did not wrap its own strings in untrusted-content markers, the core
+boundary wraps `title`, `snippet`, `content`, and citation titles itself before
+stamping. Raw passthrough payloads keep whatever markers the provider set.
 
 ## Auto-detection
 

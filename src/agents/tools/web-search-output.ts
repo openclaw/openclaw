@@ -1,14 +1,15 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Normalized `web_search` output contract.
  *
  * Every bundled or external provider payload is normalized at the core tool
- * boundary into one of three closed branches (error / results / answer), so
- * transport-specific extras never reach the model and the declared contract
+ * boundary into one of four closed branches (error / results / answer / raw),
+ * so transport-specific extras never reach the model and the declared contract
  * cannot drift per provider.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { wrapWebContent } from "../../security/external-content.js";
 
 const WebSearchExternalContentSchema = Type.Object(
   {
@@ -78,12 +79,31 @@ export const WebSearchOutputSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  // Compatibility branch: external SDK providers may return payloads that fit
+  // none of the branches above. Their data passes through verbatim, as shipped
+  // behavior always did, instead of being converted into a synthetic error.
+  Type.Object(
+    {
+      kind: Type.Literal("raw"),
+      provider: Type.String(),
+      data: Type.Unknown(),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 
 export type WebSearchOutput = Static<typeof WebSearchOutputSchema>;
 
 function readFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+// externalContent.wrapped is a downstream trust signal: it must only be true
+// when the untrusted strings really carry security markers. Providers that
+// wrapped their own output pass through; for everything else the normalizer
+// wraps here before stamping.
+function providerAlreadyWrapped(raw: Record<string, unknown>): boolean {
+  return isRecord(raw.externalContent) && raw.externalContent.wrapped === true;
 }
 
 function normalizeExternalContent(raw: Record<string, unknown>): WebSearchExternalContent {
@@ -98,7 +118,10 @@ function normalizeExternalContent(raw: Record<string, unknown>): WebSearchExtern
   };
 }
 
-function normalizeCitations(value: unknown): Array<{ url: string; title?: string }> | undefined {
+function normalizeCitations(
+  value: unknown,
+  wrapText: (value: string) => string,
+): Array<{ url: string; title?: string }> | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -112,7 +135,7 @@ function normalizeCitations(value: unknown): Array<{ url: string; title?: string
     return [
       {
         url: entry.url,
-        ...(typeof entry.title === "string" ? { title: entry.title } : {}),
+        ...(typeof entry.title === "string" ? { title: wrapText(entry.title) } : {}),
       },
     ];
   });
@@ -125,6 +148,9 @@ export function normalizeWebSearchOutput(params: {
   query: string;
 }): WebSearchOutput {
   const { result, provider } = params;
+  const alreadyWrapped = providerAlreadyWrapped(result);
+  const wrapText = (value: string): string =>
+    alreadyWrapped || value.length === 0 ? value : wrapWebContent(value, "web_search");
   const tookMs = readFiniteNumber(result.tookMs);
   const cached = result.cached === true ? true : undefined;
   const queryTerms = Array.isArray(result.searchQueries)
@@ -149,9 +175,9 @@ export function normalizeWebSearchOutput(params: {
               ? row.snippets.find((value): value is string => typeof value === "string")
               : undefined;
       return {
-        title: typeof row.title === "string" ? row.title : "",
+        title: typeof row.title === "string" ? wrapText(row.title) : "",
         url: typeof row.url === "string" ? row.url : "",
-        ...(snippet !== undefined ? { snippet } : {}),
+        ...(snippet !== undefined ? { snippet: wrapText(snippet) } : {}),
         ...(typeof row.published === "string" ? { published: row.published } : {}),
         ...(typeof row.siteName === "string" ? { siteName: row.siteName } : {}),
       };
@@ -170,13 +196,13 @@ export function normalizeWebSearchOutput(params: {
   }
 
   if (typeof result.content === "string") {
-    const citations = normalizeCitations(result.citations);
+    const citations = normalizeCitations(result.citations, wrapText);
     return {
       kind: "answer",
       provider,
       query,
       ...(tookMs !== undefined ? { tookMs } : {}),
-      content: result.content,
+      content: wrapText(result.content),
       ...(citations !== undefined ? { citations } : {}),
       externalContent: normalizeExternalContent(result),
       ...(cached ? { cached } : {}),
@@ -194,10 +220,5 @@ export function normalizeWebSearchOutput(params: {
     };
   }
 
-  return {
-    kind: "error",
-    provider,
-    error: "unrecognized_provider_result",
-    message: `Web search provider "${provider}" returned an unrecognized result.`,
-  };
+  return { kind: "raw", provider, data: result };
 }

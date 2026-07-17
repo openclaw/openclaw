@@ -37,7 +37,7 @@ describe("web_search tool schema", () => {
 
     expect(tool?.outputSchema).toBe(WebSearchOutputSchema);
     expect(compactToolOutputHint(tool?.outputSchema)).toBe(
-      '{ error: string; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; queryTerms?: Array<string>; tookMs?: number } | { content: string; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number }',
+      '{ error: string; kind: "error"; message: string; provider: string; docs?: string } | { count: number; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "results"; provider: string; query: string; results: Array<{ title: string; url: string; published?: string; siteName?: string; snippet?: string }>; cached?: true; queryTerms?: Array<string>; tookMs?: number } | { content: string; externalContent: { source: "web_search"; untrusted: true; wrapped: true; provider?: string }; kind: "answer"; provider: string; query: string; cached?: true; citations?: Array<{ url: string; title?: string }>; tookMs?: number } | { data: unknown; kind: "raw"; provider: string }',
     );
   });
 });
@@ -573,13 +573,35 @@ const normalizedProviderFixtures: Array<{
       providerSpecificFlag: true,
     },
     expected: {
-      kind: "error",
+      kind: "raw",
       provider: "external-demo",
-      error: "unrecognized_provider_result",
-      message: 'Web search provider "external-demo" returned an unrecognized result.',
+      data: {
+        arbitrary: { nested: "value" },
+        providerSpecificFlag: true,
+      },
     },
   },
 ];
+
+const WRAP_MARKER_RE =
+  /\n?<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT id="[0-9a-f]+">>>\n?(?:Source: Web Search\n---\n)?/gu;
+
+// Wrap envelopes carry random ids, so fixtures compare against the unwrapped
+// text while dedicated tests below pin the wrapping behavior itself.
+function stripWrapMarkers<T>(value: T): T {
+  if (typeof value === "string") {
+    return value.replace(WRAP_MARKER_RE, "") as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripWrapMarkers(entry)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, stripWrapMarkers(entry)]),
+    ) as T;
+  }
+  return value;
+}
 
 describe("web_search normalized output contract", () => {
   it.each(normalizedProviderFixtures)(
@@ -587,10 +609,69 @@ describe("web_search normalized output contract", () => {
     ({ provider, query, result, expected }) => {
       const normalized = normalizeWebSearchOutput({ provider, query, result });
 
-      expect(normalized).toEqual(expected);
+      expect(stripWrapMarkers(normalized)).toEqual(expected);
       expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
     },
   );
+
+  it("wraps untrusted text before stamping wrapped for providers that did not wrap", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "qa-lab-search",
+      query: "wrap check",
+      result: {
+        results: [
+          { title: "Fixture title", url: "https://example.com", snippet: "Fixture snippet" },
+        ],
+      },
+    });
+
+    if (normalized.kind !== "results") {
+      throw new Error("expected results branch");
+    }
+    expect(normalized.externalContent.wrapped).toBe(true);
+    expect(normalized.results[0]?.title).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(normalized.results[0]?.snippet).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  });
+
+  it("keeps provider-wrapped text untouched instead of double wrapping", () => {
+    const wrappedSnippet = "already wrapped snippet";
+    const normalized = normalizeWebSearchOutput({
+      provider: "brave",
+      query: "wrap check",
+      result: {
+        externalContent: {
+          untrusted: true,
+          source: "web_search",
+          wrapped: true,
+          provider: "brave",
+        },
+        results: [{ title: "Wrapped title", url: "https://example.com", snippet: wrappedSnippet }],
+      },
+    });
+
+    if (normalized.kind !== "results") {
+      throw new Error("expected results branch");
+    }
+    expect(normalized.results[0]?.snippet).toBe(wrappedSnippet);
+    expect(normalized.results[0]?.title).toBe("Wrapped title");
+  });
+
+  it("wraps answer content and citation titles for unwrapped providers", () => {
+    const normalized = normalizeWebSearchOutput({
+      provider: "external-answer",
+      query: "wrap check",
+      result: {
+        content: "answer body",
+        citations: [{ url: "https://example.com", title: "cite title" }],
+      },
+    });
+
+    if (normalized.kind !== "answer") {
+      throw new Error("expected answer branch");
+    }
+    expect(normalized.content).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(normalized.citations?.[0]?.title).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  });
 });
 
 describe("web_search freshness normalization", () => {
