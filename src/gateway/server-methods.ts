@@ -500,6 +500,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "plugins.install",
       "plugins.setEnabled",
       "plugins.uninstall",
+      "plugins.refresh",
     ],
     loadHandlers: loadPluginsHandlers,
   }),
