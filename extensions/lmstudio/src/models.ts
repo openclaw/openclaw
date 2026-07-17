@@ -350,6 +350,12 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
   const supportedReasoningEfforts = normalizeReasoningOptions(record.supportedReasoningEfforts);
   const reasoningEffortMap = normalizeConfiguredReasoningEffortMap(record.reasoningEffortMap);
   const compat: NonNullable<ModelDefinitionConfig["compat"]> = {};
+  // Keep configured/native tool capability through setup → augmentModelCatalog.
+  // Dynamic discovery already spreads supportsTools; dropping it here makes the
+  // two catalog paths disagree for the same LM Studio model metadata.
+  if (typeof record.supportsTools === "boolean") {
+    compat.supportsTools = record.supportsTools;
+  }
   if (typeof record.supportsUsageInStreaming === "boolean") {
     compat.supportsUsageInStreaming = record.supportsUsageInStreaming;
   }

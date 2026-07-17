@@ -185,6 +185,30 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("preserves configured catalog supportsTools through normalization", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "native-tools",
+        compat: { supportsTools: true, supportsUsageInStreaming: true },
+      })?.compat,
+    ).toEqual({ supportsTools: true, supportsUsageInStreaming: true });
+
+    // Explicit false remains a valid configured opt-out (unlike discovery mapping).
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "tools-disabled",
+        compat: { supportsTools: false },
+      })?.compat,
+    ).toEqual({ supportsTools: false });
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "tools-unknown",
+        compat: { supportsUsageInStreaming: true },
+      })?.compat,
+    ).toEqual({ supportsUsageInStreaming: true });
+  });
+
   it("drops malformed configured catalog token metadata", () => {
     expect(
       normalizeLmstudioConfiguredCatalogEntry({
