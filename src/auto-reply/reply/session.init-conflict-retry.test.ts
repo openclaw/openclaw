@@ -90,6 +90,21 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(state.calls).toBe(2);
   });
 
+  it("executes an attempt after every caller-provided retry delay", async () => {
+    const { attempt, state } = conflictingAttempt(3);
+    const delays: number[] = [];
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        retryDelaysMs: [1, 2, 3],
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }),
+    ).resolves.toBe("ok");
+    expect(state.calls).toBe(4);
+    expect(delays).toEqual([1, 2, 3]);
+  });
+
   it("does not retry non-conflict errors", async () => {
     let calls = 0;
     const attempt = async () => {

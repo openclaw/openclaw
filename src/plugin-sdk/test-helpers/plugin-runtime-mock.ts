@@ -254,6 +254,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       };
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"];
+  const dispatchChannelTurnPlanMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) =>
+      await dispatchAssembledChannelTurnMock({
+        ...params,
+        agentId: params.route.agentId,
+        routeSessionKey: params.route.sessionKey,
+        storePath: sessionRuntime.resolveStorePath(params.cfg.session?.store, {
+          agentId: params.route.agentId,
+        }),
+        recordInboundSession: sessionRuntime.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          base.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      }),
+  ) as unknown as PluginRuntime["channel"]["inbound"]["dispatch"];
   const runChannelTurnMock = vi.fn(
     async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
       const input = await params.adapter.ingest(params.raw);
@@ -296,7 +310,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           ? await runPreparedChannelTurnMock({
               ...resolved,
               admission,
-            })
+            } as unknown as Parameters<PluginRuntime["channel"]["inbound"]["runPreparedReply"]>[0])
           : await dispatchAssembledChannelTurnMock({
               ...resolved,
               admission,
@@ -767,6 +781,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       inbound: {
         run: runChannelTurnMock,
+        dispatch: dispatchChannelTurnPlanMock,
         dispatchReply:
           dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
         buildContext: buildChannelInboundEventContextMock,

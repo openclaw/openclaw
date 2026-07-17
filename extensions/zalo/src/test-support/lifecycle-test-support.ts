@@ -190,6 +190,7 @@ export function createImageLifecycleCore() {
   }));
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
+  const dispatchReplyWithBufferedBlockDispatcherMock = vi.fn(async () => undefined);
   const core = {
     logging: {
       shouldLogVerbose: vi.fn(
@@ -242,9 +243,8 @@ export function createImageLifecycleCore() {
         formatAgentEnvelope: vi.fn(
           (opts: { body: string }) => opts.body,
         ) as unknown as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(
-          async () => undefined,
-        ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
+        dispatchReplyWithBufferedBlockDispatcher:
+          dispatchReplyWithBufferedBlockDispatcherMock as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
       inbound: {
         run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
@@ -263,9 +263,17 @@ export function createImageLifecycleCore() {
             },
             {},
           );
-          await resolved.recordInboundSession({
-            storePath: resolved.storePath,
-            sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
+          const routeSessionKey =
+            "route" in resolved ? resolved.route.sessionKey : resolved.routeSessionKey;
+          const storePath =
+            "storePath" in resolved ? resolved.storePath : "/tmp/zalo-sessions.json";
+          const recordInboundSession =
+            "recordInboundSession" in resolved
+              ? resolved.recordInboundSession
+              : recordInboundSessionMock;
+          await recordInboundSession({
+            storePath,
+            sessionKey: resolved.ctxPayload.SessionKey ?? routeSessionKey,
             ctx: resolved.ctxPayload,
             groupResolution: resolved.record?.groupResolution,
             createIfMissing: resolved.record?.createIfMissing,
@@ -278,11 +286,15 @@ export function createImageLifecycleCore() {
               admission: { kind: "dispatch" as const },
               dispatched: true,
               ctxPayload: resolved.ctxPayload,
-              routeSessionKey: resolved.routeSessionKey,
+              routeSessionKey,
               dispatchResult,
             };
           }
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
+          const dispatchReplyWithBufferedBlockDispatcher =
+            "dispatchReplyWithBufferedBlockDispatcher" in resolved
+              ? resolved.dispatchReplyWithBufferedBlockDispatcher
+              : dispatchReplyWithBufferedBlockDispatcherMock;
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
@@ -299,7 +311,7 @@ export function createImageLifecycleCore() {
             admission: { kind: "dispatch" as const },
             dispatched: true,
             ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
+            routeSessionKey,
             dispatchResult,
           };
         }) as unknown as PluginRuntime["channel"]["inbound"]["run"],

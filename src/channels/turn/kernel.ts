@@ -1,9 +1,10 @@
 // Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryWithMedia,
+  clearChannelHistoryIfEnabled,
+  recordChannelHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import { runWithSessionInitConflictRetry } from "../../auto-reply/reply/session-init-conflict-retry.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   createDiagnosticTraceContextFromActiveScope,
@@ -24,6 +25,7 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
+import { assembleChannelTurnPlan, assembleResolvedChannelTurn } from "./planner.js";
 
 export { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 
@@ -42,12 +44,12 @@ export type {
 } from "./durable-delivery.js";
 import type {
   AssembledChannelTurn,
+  ChannelTurnPlan,
   ChannelEventClass,
   ChannelTurnAdmission,
   ChannelEventDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
-  ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
@@ -115,7 +117,7 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
   if (!params?.isGroup || !params.historyKey || !params.historyMap || params.limit === undefined) {
     return;
   }
-  clearHistoryEntriesIfEnabled({
+  clearChannelHistoryIfEnabled({
     historyMap: params.historyMap,
     historyKey: params.historyKey,
     limit: params.limit,
@@ -170,7 +172,7 @@ async function recordDroppedChannelTurnHistory(params: {
         }
       : null;
   const media = params.preflight.media;
-  await recordPendingHistoryEntryWithMedia({
+  await recordChannelHistoryEntryWithMedia({
     historyMap: history.historyMap,
     historyKey: history.key,
     limit: history.limit,
@@ -384,56 +386,66 @@ export async function dispatchAssembledChannelTurn(
       log: params.log,
       messageId: params.messageId,
       runDispatch: async () =>
-        await params.dispatchReplyWithBufferedBlockDispatcher({
-          ctx: params.ctxPayload,
-          cfg: params.cfg,
-          dispatcherOptions: {
-            ...replyPipeline.dispatcherOptions,
-            deliver: async (payload: ReplyPayload, info) => {
-              const preparedPayload = params.delivery.preparePayload
-                ? await params.delivery.preparePayload(payload, info)
-                : payload;
-              const durableOptions =
-                typeof params.delivery.durable === "function"
-                  ? await params.delivery.durable(preparedPayload, info)
-                  : params.delivery.durable;
-              if (durableOptions) {
-                const durable = await deliverInboundReplyWithMessageSendContext({
-                  cfg: params.cfg,
-                  channel: params.channel,
-                  accountId: params.accountId,
-                  agentId: params.agentId,
-                  ctxPayload: params.ctxPayload,
-                  payload: preparedPayload,
-                  info,
-                  ...durableOptions,
-                });
-                throwIfDurableInboundReplyDeliveryFailed(durable);
-                if (isDurableInboundReplyDeliveryHandled(durable)) {
+        await runWithSessionInitConflictRetry(
+          () =>
+            params.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: params.ctxPayload,
+              cfg: params.cfg,
+              dispatcherOptions: {
+                ...replyPipeline.dispatcherOptions,
+                deliver: async (payload: ReplyPayload, info) => {
+                  const preparedPayload = params.delivery.preparePayload
+                    ? await params.delivery.preparePayload(payload, info)
+                    : payload;
+                  const durableOptions =
+                    typeof params.delivery.durable === "function"
+                      ? await params.delivery.durable(preparedPayload, info)
+                      : params.delivery.durable;
+                  if (durableOptions) {
+                    const durable = await deliverInboundReplyWithMessageSendContext({
+                      cfg: params.cfg,
+                      channel: params.channel,
+                      accountId: params.accountId,
+                      agentId: params.agentId,
+                      ctxPayload: params.ctxPayload,
+                      payload: preparedPayload,
+                      info,
+                      ...durableOptions,
+                    });
+                    throwIfDurableInboundReplyDeliveryFailed(durable);
+                    if (isDurableInboundReplyDeliveryHandled(durable)) {
+                      await runChannelDeliveryObserver({
+                        onDelivered: params.delivery.onDelivered,
+                        payload: preparedPayload,
+                        info,
+                        result: durable.delivery,
+                      });
+                      return durable.delivery;
+                    }
+                  }
+                  const result = await params.delivery.deliver(preparedPayload, info);
                   await runChannelDeliveryObserver({
                     onDelivered: params.delivery.onDelivered,
                     payload: preparedPayload,
                     info,
-                    result: durable.delivery,
+                    result,
                   });
-                  return durable.delivery;
-                }
+                  return result;
+                },
+                onError: params.delivery.onError,
+              },
+              toolsAllow: params.toolsAllow,
+              replyOptions: replyPipeline.replyOptions,
+              replyResolver: params.replyResolver,
+            }),
+          params.sessionInitRetry
+            ? {
+                retryDelaysMs: params.sessionInitRetry.delaysMs,
+                signal: params.sessionInitRetry.signal,
+                sleep: params.sessionInitRetry.sleep,
               }
-              const result = await params.delivery.deliver(preparedPayload, info);
-              await runChannelDeliveryObserver({
-                onDelivered: params.delivery.onDelivered,
-                payload: preparedPayload,
-                info,
-                result,
-              });
-              return result;
-            },
-            onError: params.delivery.onError,
-          },
-          toolsAllow: params.toolsAllow,
-          replyOptions: replyPipeline.replyOptions,
-          replyResolver: params.replyResolver,
-        }),
+            : undefined,
+        ),
     },
     { suppressObserveOnlyDispatch: false },
   );
@@ -441,8 +453,23 @@ export async function dispatchAssembledChannelTurn(
 
 export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
 
+export function dispatchChannelInboundTurn(
+  plan: ChannelTurnPlan & {
+    botLoopProtection: NonNullable<ChannelTurnPlan["botLoopProtection"]>;
+  },
+): Promise<ChannelTurnResult>;
+export function dispatchChannelInboundTurn(
+  plan: Omit<ChannelTurnPlan, "botLoopProtection"> & { botLoopProtection?: undefined },
+): Promise<DispatchedChannelTurnResult>;
+export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult>;
+export async function dispatchChannelInboundTurn(
+  plan: ChannelTurnPlan,
+): Promise<ChannelTurnResult> {
+  return await dispatchAssembledChannelTurn(assembleChannelTurnPlan(plan));
+}
+
 function isPreparedChannelTurn<TDispatchResult>(
-  value: ChannelTurnResolved<TDispatchResult>,
+  value: AssembledChannelTurn | PreparedChannelTurn<TDispatchResult>,
 ): value is PreparedChannelTurn<TDispatchResult> & {
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
 } {
@@ -450,7 +477,7 @@ function isPreparedChannelTurn<TDispatchResult>(
 }
 
 async function dispatchResolvedChannelTurn<TDispatchResult>(
-  params: ChannelTurnResolved<TDispatchResult> & {
+  params: (AssembledChannelTurn | PreparedChannelTurn<TDispatchResult>) & {
     admission: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
     log?: (event: ChannelTurnLogEvent) => void;
     messageId?: string;
@@ -696,7 +723,9 @@ async function runChannelTurn<
     return { admission: preflightAdmission, dispatched: false };
   }
 
-  const resolved = await params.adapter.resolveTurn(input, eventClass, preflight);
+  const resolved = assembleResolvedChannelTurn(
+    await params.adapter.resolveTurn(input, eventClass, preflight),
+  );
   emit({
     ...params,
     accountId: resolved.accountId ?? params.accountId,

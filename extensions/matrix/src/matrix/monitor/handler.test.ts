@@ -527,6 +527,10 @@ describe("matrix monitor handler pairing account scope", () => {
       getMemberDisplayName: async () => "sender",
       dropPreStartupMessages: true,
       needsRoomAliasesForConfig: false,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
     });
 
     await handler(
@@ -580,12 +584,12 @@ describe("matrix monitor handler pairing account scope", () => {
   });
 
   it("does not enqueue delivered text messages into system events", async () => {
-    const dispatchReplyFromConfig = vi.fn(async () => ({
+    const dispatchInboundMessage = vi.fn(async () => ({
       queuedFinal: true,
       counts: { final: 1, block: 0, tool: 0 },
     }));
     const { handler, enqueueSystemEvent } = createMatrixHandlerTestHarness({
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       isDirectMessage: true,
       getMemberDisplayName: async () => "sender",
     });
@@ -599,7 +603,7 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalled();
+    expect(dispatchInboundMessage).toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
@@ -1275,7 +1279,7 @@ describe("matrix monitor handler pairing account scope", () => {
       resolveNotice = resolve;
     });
     const sendNotice = vi.fn(() => noticeSent);
-    const dispatchReplyFromConfig = vi.fn(async () => ({
+    const dispatchInboundMessage = vi.fn(async () => ({
       counts: { block: 0, final: 0, tool: 0 },
       queuedFinal: false,
     }));
@@ -1289,7 +1293,7 @@ describe("matrix monitor handler pairing account scope", () => {
       });
 
       const { handler } = createMatrixHandlerTestHarness({
-        dispatchReplyFromConfig,
+        dispatchInboundMessage,
         isDirectMessage: true,
         resolveStorePath: () => storePath,
         client: {
@@ -1308,12 +1312,12 @@ describe("matrix monitor handler pairing account scope", () => {
       await vi.waitFor(() => {
         expect(sendNotice).toHaveBeenCalledTimes(1);
       });
-      expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
       resolveNotice?.("$notice");
       await handled;
 
-      expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1613,7 +1617,7 @@ describe("matrix monitor handler pairing account scope", () => {
         altAliases: ["#alt:example.org"],
       }),
       getMemberDisplayName: async () => "sender",
-      dispatchReplyFromConfig: async () => ({
+      dispatchInboundMessage: async () => ({
         queuedFinal: false,
         counts: { final: 0, block: 0, tool: 0 },
       }),
@@ -1755,121 +1759,13 @@ describe("matrix monitor handler pairing account scope", () => {
 
   it("does not enqueue system events for delivered text replies", async () => {
     const enqueueSystemEvent = vi.fn();
-
-    const handler = createMatrixRoomMessageHandler({
-      client: {
-        getUserId: async () => "@bot:example.org",
-      } as never,
-      core: {
-        channel: {
-          pairing: {
-            readAllowFromStore: async () => [] as string[],
-            upsertPairingRequest: async () => ({ code: "ABCDEFGH", created: false }),
-            buildPairingReply: () => "pairing",
-          },
-          commands: {
-            shouldHandleTextCommands: () => false,
-          },
-          text: {
-            hasControlCommand: () => false,
-            resolveMarkdownTableMode: () => "preserve",
-          },
-          routing: {
-            resolveAgentRoute: () => ({
-              agentId: "ops",
-              channel: "matrix",
-              accountId: "ops",
-              sessionKey: "agent:ops:main",
-              mainSessionKey: "agent:ops:main",
-              matchedBy: "binding.account",
-            }),
-          },
-          mentions: {
-            buildMentionRegexes: () => [],
-          },
-          session: {
-            resolveStorePath: () => "/tmp/session-store",
-            readSessionUpdatedAt: () => undefined,
-            recordInboundSession: vi.fn(async () => {}),
-          },
-          reply: {
-            resolveEnvelopeFormatOptions: () => ({}),
-            formatAgentEnvelope: ({ body }: { body: string }) => body,
-            finalizeInboundContext: (ctx: unknown) => ctx,
-            createReplyDispatcherWithTyping: () => ({
-              dispatcher: {},
-              replyOptions: {},
-              markDispatchIdle: () => {},
-              markRunComplete: () => {},
-            }),
-            resolveHumanDelayConfig: () => undefined,
-            dispatchReplyFromConfig: async () => ({
-              queuedFinal: true,
-              counts: { final: 1, block: 0, tool: 0 },
-            }),
-            withReplyDispatcher: async <T>({
-              dispatcher,
-              run,
-              onSettled,
-            }: {
-              dispatcher: {
-                markComplete?: () => void;
-                waitForIdle?: () => Promise<void>;
-              };
-              run: () => Promise<T>;
-              onSettled?: () => void | Promise<void>;
-            }) => {
-              try {
-                return await run();
-              } finally {
-                dispatcher.markComplete?.();
-                try {
-                  await dispatcher.waitForIdle?.();
-                } finally {
-                  await onSettled?.();
-                }
-              }
-            },
-          },
-          reactions: {
-            shouldAckReaction: () => false,
-          },
-        },
-        system: {
-          enqueueSystemEvent,
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "ops",
-      runtime: {
-        error: () => {},
-      } as never,
-      logger: {
-        info: () => {},
-        warn: () => {},
-      } as never,
-      logVerboseMessage: () => {},
-      allowFrom: [],
-      groupPolicy: "open",
-      replyToMode: "off",
-      threadReplies: "inbound",
-      streaming: "off",
-      previewToolProgressEnabled: false,
-      blockStreamingEnabled: false,
-      dmEnabled: true,
-      dmPolicy: "open",
-      textLimit: 8_000,
-      mediaMaxBytes: 10_000_000,
-      historyLimit: 0,
-      startupMs: 0,
-      startupGraceMs: 0,
-      directTracker: {
-        isDirectMessage: async () => false,
-      },
-      dropPreStartupMessages: true,
-      getRoomInfo: async () => ({ altAliases: [] }),
-      getMemberDisplayName: async () => "sender",
-      needsRoomAliasesForConfig: false,
+    const { handler } = createMatrixHandlerTestHarness({
+      enqueueSystemEvent,
+      isDirectMessage: false,
+      dispatchInboundMessage: async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      }),
     });
 
     await handler(
@@ -2177,7 +2073,7 @@ describe("matrix monitor handler pairing account scope", () => {
 describe("matrix monitor handler live allowlist reload", () => {
   type MatrixHandler = ReturnType<typeof createMatrixHandlerTestHarness>["handler"];
 
-  const createDispatchReplyFromConfig = () =>
+  const createDispatchInboundMessage = () =>
     vi.fn(async () => ({
       queuedFinal: false,
       counts: { final: 0, block: 0, tool: 0 },
@@ -2222,7 +2118,7 @@ describe("matrix monitor handler live allowlist reload", () => {
     ).length;
 
   it("accepts a DM sender added to live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2236,7 +2132,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2244,7 +2140,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dm.allowFrom = ["@alice:example.org"];
     await sendLiveAllowlistMessage(handler, {
@@ -2253,11 +2149,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a DM sender removed from live dm.allowFrom", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2271,7 +2167,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2279,7 +2175,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2288,11 +2184,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a DM sender after live wildcard removal", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2306,7 +2202,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["*"],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2314,7 +2210,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2323,11 +2219,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("uses account-scoped live dm.allowFrom overrides", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2347,7 +2243,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "@alice:example.org", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2355,7 +2251,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.accounts.ops.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2364,11 +2260,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("keeps startup-resolved display names only while the raw input remains configured", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2383,7 +2279,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: ["@alice:example.org"],
       allowFromResolvedEntries: [{ input: "Alice", id: "@alice:example.org" }],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2391,7 +2287,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dm.allowFrom = [];
     await sendLiveAllowlistMessage(handler, {
@@ -2400,11 +2296,11 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "hello again",
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a DM sender added as a live-resolved display name", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(
       async (params: { entries?: ReadonlyArray<string | number> }) => {
         const entries = (params.entries ?? []).map(String);
@@ -2425,7 +2321,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2434,7 +2330,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dm.allowFrom = ["Alice"];
     await sendLiveAllowlistMessage(handler, {
@@ -2449,11 +2345,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     );
     expect(liveAllowlistRequest.accountId).toBe("ops");
     expect(liveAllowlistRequest.entries).toEqual(["Alice"]);
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes cached live display-name allowlists when name matching is disabled", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
@@ -2471,7 +2367,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2480,7 +2376,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.dangerouslyAllowNameMatching = false;
     await sendLiveAllowlistMessage(handler, {
@@ -2492,11 +2388,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
       2,
     );
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes cached live display-name allowlists when name matching is enabled", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const resolveLiveUserAllowlist = vi.fn(async (params: LiveNameMatchingResolveParams) =>
       isLiveNameMatchingEnabled(params.cfg) ? ["@alice:example.org"] : [],
     );
@@ -2514,7 +2410,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       isDirectMessage: true,
       allowFrom: [],
       allowFromResolvedEntries: [],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       resolveLiveUserAllowlist,
     });
 
@@ -2523,7 +2419,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       sender: "@alice:example.org",
       body: "hello",
     });
-    expect(dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
 
     cfg.channels.matrix.dangerouslyAllowNameMatching = true;
     await sendLiveAllowlistMessage(handler, {
@@ -2535,11 +2431,11 @@ describe("matrix monitor handler live allowlist reload", () => {
     expect(countLiveAllowlistCallsForEntries(resolveLiveUserAllowlist.mock.calls, ["Alice"])).toBe(
       2,
     );
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 
   it("blocks a room sender removed from live groupAllowFrom while the group list remains configured", async () => {
-    const dispatchReplyFromConfig = createDispatchReplyFromConfig();
+    const dispatchInboundMessage = createDispatchInboundMessage();
     const cfg = {
       channels: {
         matrix: {
@@ -2557,7 +2453,7 @@ describe("matrix monitor handler live allowlist reload", () => {
         { input: "@alice:example.org", id: "@alice:example.org" },
         { input: "@bob:example.org", id: "@bob:example.org" },
       ],
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
     });
 
     await sendLiveAllowlistMessage(handler, {
@@ -2567,7 +2463,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       body: "@room hello",
       mentions: { room: true },
     });
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
 
     cfg.channels.matrix.groupAllowFrom = ["@bob:example.org"];
     await sendLiveAllowlistMessage(handler, {
@@ -2578,7 +2474,7 @@ describe("matrix monitor handler live allowlist reload", () => {
       mentions: { room: true },
     });
 
-    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2589,7 +2485,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     };
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       inboundDeduper,
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2631,7 +2527,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const recordInboundSession = vi.fn(async () => {
       callOrder.push("record");
     });
-    const dispatchReplyFromConfig = vi.fn(async () => {
+    const dispatchInboundMessage = vi.fn(async () => {
       callOrder.push("dispatch");
       return {
         queuedFinal: true,
@@ -2641,7 +2537,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const { handler } = createMatrixHandlerTestHarness({
       inboundDeduper,
       recordInboundSession,
-      dispatchReplyFromConfig,
+      dispatchInboundMessage,
       createReplyDispatcherWithTyping: () => ({
         dispatcher: {
           markComplete: () => {
@@ -2673,9 +2569,9 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       "claim",
       "record",
       "dispatch",
-      "run-complete",
       "mark-complete",
       "wait-for-idle",
+      "run-complete",
       "dispatch-idle",
       "commit",
     ]);
@@ -2742,7 +2638,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       recordInboundSession: vi.fn(async () => {
         throw new Error("disk failed");
       }),
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2776,7 +2672,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     const { handler } = createMatrixHandlerTestHarness({
       inboundDeduper,
       runtime: runtime as never,
-      dispatchReplyFromConfig: vi.fn(async () => ({
+      dispatchInboundMessage: vi.fn(async () => ({
         queuedFinal: true,
         counts: { final: 1, block: 0, tool: 0 },
       })),
@@ -2823,7 +2719,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       const { handler } = createMatrixHandlerTestHarness({
         inboundDeduper,
         runtime: runtime as never,
-        dispatchReplyFromConfig: vi.fn(async () => ({
+        dispatchInboundMessage: vi.fn(async () => ({
           queuedFinal: false,
           counts: {
             final: 0,
@@ -2881,7 +2777,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
       recordInboundSession: vi.fn(async () => {
         callOrder.push("record");
       }),
-      dispatchReplyFromConfig: vi.fn(async () => {
+      dispatchInboundMessage: vi.fn(async () => {
         callOrder.push("dispatch");
         return {
           queuedFinal: false,
@@ -3031,22 +2927,13 @@ describe("matrix monitor handler draft streaming", () => {
           markRunComplete: () => {},
         };
       },
-      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
         capturedReplyOpts = args?.replyOptions;
         notifyCaptured();
         // Block until the test is done exercising callbacks.
         await runGate;
         return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
       }) as never,
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        await params.onSettled?.();
-        return result;
-      },
     });
 
     const dispatch = async () => {
@@ -4098,7 +3985,7 @@ describe("matrix monitor handler draft streaming", () => {
           markDispatchIdle: () => {},
           markRunComplete: () => {},
         }),
-        dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+        dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
           capturedReplyOpts = args?.replyOptions;
           // Simulate streaming then model error.
           capturedReplyOpts?.onPartialReply?.({ text: "partial" });
@@ -4107,15 +3994,6 @@ describe("matrix monitor handler draft streaming", () => {
           });
           throw new Error("model timeout");
         }) as never,
-        withReplyDispatcher: async <T>(params: {
-          dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-          run: () => Promise<T>;
-          onSettled?: () => void | Promise<void>;
-        }) => {
-          const result = await params.run();
-          await params.onSettled?.();
-          return result;
-        },
       });
 
       // Handler should not throw (outer catch absorbs it).
@@ -4156,7 +4034,7 @@ describe("matrix monitor handler draft streaming", () => {
         markDispatchIdle: () => {},
         markRunComplete: () => {},
       }),
-      dispatchReplyFromConfig: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
+      dispatchInboundMessage: vi.fn(async (args: { replyOptions?: ReplyOpts }) => {
         capturedReplyOpts = args?.replyOptions;
         capturedReplyOpts?.onPartialReply?.({ text: "partial" });
         await vi.waitFor(() => {
@@ -4164,15 +4042,6 @@ describe("matrix monitor handler draft streaming", () => {
         });
         throw new Error("model timeout");
       }) as never,
-      withReplyDispatcher: async <T>(params: {
-        dispatcher: { markComplete?: () => void; waitForIdle?: () => Promise<void> };
-        run: () => Promise<T>;
-        onSettled?: () => void | Promise<void>;
-      }) => {
-        const result = await params.run();
-        await params.onSettled?.();
-        return result;
-      },
     });
 
     await handler(
@@ -4448,7 +4317,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "off",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4469,7 +4338,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "partial",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4490,7 +4359,7 @@ describe("matrix monitor handler block streaming config", () => {
 
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "quiet",
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4512,7 +4381,7 @@ describe("matrix monitor handler block streaming config", () => {
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "partial",
       blockStreamingEnabled: true,
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };
@@ -4534,7 +4403,7 @@ describe("matrix monitor handler block streaming config", () => {
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "off",
       blockStreamingEnabled: true,
-      dispatchReplyFromConfig: vi.fn(
+      dispatchInboundMessage: vi.fn(
         async (args: { replyOptions?: { disableBlockStreaming?: boolean } }) => {
           capturedDisableBlockStreaming = args.replyOptions?.disableBlockStreaming;
           return { queuedFinal: false, counts: { final: 0, block: 0, tool: 0 } };

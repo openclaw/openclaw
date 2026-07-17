@@ -2,11 +2,20 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveZalouserDmSessionScope } from "./src/session-scope.js";
 import {
   isZaloCredentialRevocation,
   normalizeStoredZaloCredentials,
@@ -25,6 +34,14 @@ export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-co
 type LegacyZalouserCredentialSource = {
   filePath: string;
   profile: string;
+};
+
+type LegacyZalouserDmEntry = {
+  agentId: string;
+  canonicalKey: string;
+  entry: ReturnType<typeof listSessionEntries>[number]["entry"];
+  legacyKeys: string[];
+  storePath: string;
 };
 
 async function collectLegacyZalouserCredentialSources(
@@ -60,6 +77,69 @@ async function collectLegacyZalouserCredentialSources(
         : [];
     })
     .toSorted((left, right) => left.profile.localeCompare(right.profile));
+}
+
+function listAgentIds(config: OpenClawConfig): string[] {
+  const ids = new Set(["main"]);
+  for (const agent of config.agents?.list ?? []) {
+    if (agent.id?.trim()) {
+      ids.add(agent.id.trim());
+    }
+  }
+  return [...ids];
+}
+
+function collectLegacyZalouserDmEntries(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): LegacyZalouserDmEntry[] {
+  const entries = new Map<string, LegacyZalouserDmEntry>();
+  const fallbackAccountId = config.channels?.zalouser?.defaultAccount?.trim() || "default";
+  for (const agentId of listAgentIds(config)) {
+    const storePath = resolveStorePath(config.session?.store, { agentId, env });
+    const storedEntries = listSessionEntries({ agentId, storePath });
+    const entryByKey = new Map(storedEntries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    for (const { sessionKey, entry } of storedEntries) {
+      const parsed = parseAgentSessionKey(sessionKey);
+      const legacyPrefix = "zalouser:group:";
+      if (entry.chatType !== "direct" || !parsed?.rest.startsWith(legacyPrefix)) {
+        continue;
+      }
+      const peerId = parsed.rest.slice(legacyPrefix.length);
+      if (!peerId) {
+        continue;
+      }
+      const canonicalKey = buildAgentSessionKey({
+        agentId: parsed.agentId,
+        channel: "zalouser",
+        accountId: entry.lastAccountId?.trim() || fallbackAccountId,
+        peer: { kind: "direct", id: peerId },
+        dmScope: resolveZalouserDmSessionScope(config),
+        identityLinks: config.session?.identityLinks,
+      });
+      const groupKey = `${storePath}\0${canonicalKey}`;
+      const pending = entries.get(groupKey);
+      if (pending) {
+        pending.legacyKeys.push(sessionKey);
+        if (entry.updatedAt > pending.entry.updatedAt) {
+          pending.entry = entry;
+        }
+        continue;
+      }
+      const canonicalEntry = entryByKey.get(canonicalKey);
+      entries.set(groupKey, {
+        agentId: parsed.agentId,
+        canonicalKey,
+        // Identity links can collapse several legacy peers. Preserve the freshest
+        // session, preferring an existing canonical row when timestamps tie.
+        entry:
+          canonicalEntry && canonicalEntry.updatedAt >= entry.updatedAt ? canonicalEntry : entry,
+        legacyKeys: [sessionKey],
+        storePath,
+      });
+    }
+  }
+  return [...entries.values()];
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
@@ -152,6 +232,55 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         });
       }
       return { changes, warnings };
+    },
+  },
+  {
+    id: "zalouser-direct-session-keys",
+    label: "Zalo Personal direct-message sessions",
+    detectLegacyState({ config, env }) {
+      const count = collectLegacyZalouserDmEntries(config, env).reduce(
+        (total, entry) => total + entry.legacyKeys.length,
+        0,
+      );
+      return count > 0
+        ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
+        : null;
+    },
+    async migrateLegacyState({ config, env }) {
+      const pending = collectLegacyZalouserDmEntries(config, env);
+      const warnings: string[] = [];
+      let migrated = 0;
+      for (const entry of pending) {
+        try {
+          await upsertSessionEntry({
+            agentId: entry.agentId,
+            env,
+            storePath: entry.storePath,
+            sessionKey: entry.canonicalKey,
+            entry: entry.entry,
+          });
+        } catch (error) {
+          warnings.push(`Failed writing ${entry.canonicalKey}: ${String(error)}`);
+          continue;
+        }
+        for (const legacyKey of entry.legacyKeys) {
+          try {
+            await deleteSessionEntry({
+              agentId: entry.agentId,
+              env,
+              storePath: entry.storePath,
+              sessionKey: legacyKey,
+            });
+            migrated++;
+          } catch (error) {
+            warnings.push(`Failed removing ${legacyKey}: ${String(error)}`);
+          }
+        }
+      }
+      return {
+        changes: migrated > 0 ? [`Migrated ${migrated} Zalo Personal DM session key(s)`] : [],
+        warnings,
+      };
     },
   },
 ];

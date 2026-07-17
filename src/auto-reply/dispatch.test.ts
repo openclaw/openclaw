@@ -157,10 +157,13 @@ describe("withReplyDispatcher", () => {
       ctx: buildTestCtx(),
       cfg: {} as OpenClawConfig,
       dispatcher,
+      onSettled: () => {
+        order.push("onSettled");
+      },
       replyResolver: async () => ({ text: "ok" }),
     });
 
-    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+    expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle", "onSettled"]);
   });
 
   it("emits message.received diagnostics before dispatch", async () => {
