@@ -47,20 +47,19 @@ function resolveConversationScope(params: {
 }
 
 function resultForCompletedOperation(params: {
-  conversation: ConversationRecord;
   operation: ReturnType<ConversationDeliveryDeps["beginOperation"]>["record"];
 }): ConversationTurnResult | undefined {
-  const { conversation, operation } = params;
+  const { operation } = params;
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
     return {
       status: "replied",
-      conversationRef: conversation.conversationRef,
-      channel: conversation.channel,
+      conversationRef: operation.conversationRef,
+      channel: operation.channel,
       messageId,
       correlationPersisted: true,
       reply: {
-        conversationRef: conversation.conversationRef,
+        conversationRef: operation.conversationRef,
         messageId: operation.reply.messageId,
         ...(operation.reply.replyToId ? { replyToId: operation.reply.replyToId } : {}),
         ...(operation.reply.threadId ? { threadId: operation.reply.threadId } : {}),
@@ -73,8 +72,8 @@ function resultForCompletedOperation(params: {
     return undefined;
   }
   const base = {
-    conversationRef: conversation.conversationRef,
-    channel: conversation.channel,
+    conversationRef: operation.conversationRef,
+    channel: operation.channel,
     ...(messageId ? { messageId } : {}),
   };
   switch (operation.status) {
@@ -171,41 +170,62 @@ export async function runGatewayConversationTurn(
   deps: ConversationTurnDeps = defaultDeps,
 ): Promise<ConversationTurnResult> {
   const scope = resolveConversationScope(params);
-  const conversation = deps.resolveConversation(scope, params.conversationRef);
-  if (!conversation) {
-    throw new ConversationInputError(
-      `Conversation not found: ${params.conversationRef} (use conversations_list)`,
-    );
-  }
-
   const prior = deps.getOperation(scope, params.turnId);
-  const candidatePreparedMessageId =
-    prior?.preparedMessageId ??
-    prepareConversationMessageId({
-      deps,
-      config: params.config,
-      conversation,
-      message: params.message,
-    });
-  let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]>;
+  let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]> | undefined;
   try {
-    begun = deps.beginOperation(scope, {
-      operationId: params.turnId,
-      operationKind: "turn",
-      conversationRef: conversation.conversationRef,
-      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-      message: params.message,
-      preparedMessageId: candidatePreparedMessageId,
-    });
+    if (prior) {
+      begun = deps.beginOperation(scope, {
+        operationId: params.turnId,
+        operationKind: "turn",
+        conversationRef: params.conversationRef,
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        message: params.message,
+        ...(prior.preparedMessageId ? { preparedMessageId: prior.preparedMessageId } : {}),
+      });
+      const completed = resultForCompletedOperation({ operation: begun.record });
+      if (completed) {
+        return completed;
+      }
+    }
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
       throw new ConversationOperationConflictError(error.message);
     }
     throw error;
   }
-  const completed = resultForCompletedOperation({ conversation, operation: begun.record });
-  if (completed) {
-    return completed;
+
+  const conversation = deps.resolveConversation(scope, params.conversationRef);
+  if (!conversation) {
+    throw new ConversationInputError(
+      `Conversation not found: ${params.conversationRef} (use conversations_list)`,
+    );
+  }
+  if (!begun) {
+    const candidatePreparedMessageId = prepareConversationMessageId({
+      deps,
+      config: params.config,
+      conversation,
+      message: params.message,
+    });
+    try {
+      begun = deps.beginOperation(scope, {
+        operationId: params.turnId,
+        operationKind: "turn",
+        conversationRef: conversation.conversationRef,
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        message: params.message,
+        preparedMessageId: candidatePreparedMessageId,
+      });
+    } catch (error) {
+      if (error instanceof ConversationDeliveryInputError) {
+        throw new ConversationOperationConflictError(error.message);
+      }
+      throw error;
+    }
+    const completed = resultForCompletedOperation({ operation: begun.record });
+    if (completed) {
+      return completed;
+    }
   }
   // Another process may have created the operation after our initial read.
   // Its durable reservation owns correlation; never send with our stale candidate.
@@ -245,7 +265,7 @@ export async function runGatewayConversationTurn(
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();
-      return resultForCompletedOperation({ conversation, operation: sent.operation })!;
+      return resultForCompletedOperation({ operation: sent.operation })!;
     }
     const exactMessageId = sent.messageId === preparedMessageId;
     if (!exactMessageId) {

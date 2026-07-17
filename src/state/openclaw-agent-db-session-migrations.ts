@@ -106,6 +106,9 @@ function migratedConversation(
   if (!channel || !peerId) {
     return undefined;
   }
+  // Stable threaded identity hashes the routed peer plus thread id. Parent
+  // refs are transient correlation hints; persisting one would diverge from
+  // live ingress identity for the same thread.
   return {
     conversationRef: buildConversationRef({ channel, accountId, kind, peerId, threadId }),
     channel,

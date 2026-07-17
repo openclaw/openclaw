@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { buildConversationRef } from "../routing/conversation-ref.js";
 import {
   backfillSessionConversations,
   migrateConversationDeliveryTargetColumn,
@@ -150,6 +151,22 @@ describe("agent DB conversation migration", () => {
       }),
       500,
     );
+    insertSession.run("thread-case", "agent:main:discord:channel:ops-room:thread", "channel", null);
+    insertEntry.run(
+      "agent:main:discord:channel:ops-room:thread",
+      "thread-case",
+      JSON.stringify({
+        chatType: "channel",
+        groupId: "ops-room",
+        deliveryContext: {
+          channel: "discord",
+          accountId: "default",
+          to: "channel:ops-room",
+          threadId: "user-context",
+        },
+      }),
+      600,
+    );
 
     backfillSessionConversations(database);
 
@@ -205,7 +222,34 @@ describe("agent DB conversation migration", () => {
         peer_id: "shared-ops",
         delivery_target: "channel:shared-ops",
       },
+      {
+        session_id: "thread-case",
+        role: "primary",
+        kind: "channel",
+        peer_id: "ops-room",
+        delivery_target: "channel:ops-room",
+      },
     ]);
+    expect(
+      database
+        .prepare(
+          `SELECT c.conversation_id, c.parent_conversation_id, c.thread_id
+           FROM session_conversations sc
+           JOIN conversations c ON c.conversation_id = sc.conversation_id
+           WHERE sc.session_id = 'thread-case'`,
+        )
+        .get(),
+    ).toEqual({
+      conversation_id: buildConversationRef({
+        channel: "discord",
+        accountId: "default",
+        kind: "channel",
+        peerId: "ops-room",
+        threadId: "user-context",
+      }),
+      parent_conversation_id: null,
+      thread_id: "user-context",
+    });
     expect(
       database
         .prepare("SELECT primary_conversation_id FROM sessions WHERE session_id = 'shared'")

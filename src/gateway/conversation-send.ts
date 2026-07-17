@@ -1,5 +1,8 @@
 import type { ConversationSendResult } from "../../packages/gateway-protocol/src/schema/agent.js";
-import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
+import {
+  ConversationDeliveryInputError,
+  type ConversationDeliveryRecord,
+} from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
   type ConversationRegistryScope,
@@ -39,6 +42,44 @@ function resolveConversationScope(params: {
   };
 }
 
+function resultForCompletedOperation(
+  operation: ConversationDeliveryRecord,
+): ConversationSendResult | undefined {
+  const base = {
+    conversationRef: operation.conversationRef,
+    channel: operation.channel,
+    ...(operation.queueId ? { queueId: operation.queueId } : {}),
+  };
+  switch (operation.status) {
+    case "sent":
+    case "replied":
+      return {
+        ...base,
+        status: "sent",
+        ...(operation.platformMessageId || operation.preparedMessageId
+          ? { messageId: operation.platformMessageId ?? operation.preparedMessageId }
+          : {}),
+      };
+    case "queued":
+      return {
+        ...base,
+        status: "queued",
+        ...(operation.preparedMessageId ? { messageId: operation.preparedMessageId } : {}),
+      };
+    case "suppressed":
+      return { ...base, status: "suppressed" };
+    case "rejected":
+      throw new ConversationDeliveryRejectedError(
+        operation.rejectionError ?? "Conversation delivery was permanently rejected",
+      );
+    case "unknown":
+      return { ...base, status: "unknown" };
+    case "created":
+      return undefined;
+  }
+  return operation.status satisfies never;
+}
+
 /** Performs one durable conversation send inside the Gateway channel owner. */
 export async function runGatewayConversationSend(
   params: {
@@ -53,16 +94,30 @@ export async function runGatewayConversationSend(
   },
   deps: ConversationSendDeps = defaultDeps,
 ): Promise<ConversationSendResult> {
-  const conversation = deps.resolveConversation(
-    resolveConversationScope(params),
-    params.conversationRef,
-  );
-  if (!conversation) {
-    throw new ConversationInputError(
-      `Conversation not found: ${params.conversationRef} (use conversations_list)`,
-    );
-  }
+  const scope = resolveConversationScope(params);
   try {
+    const prior = deps.getOperation(scope, params.operationId);
+    let operation: ConversationDeliveryRecord | undefined;
+    if (prior) {
+      operation = deps.beginOperation(scope, {
+        operationId: params.operationId,
+        operationKind: "send",
+        conversationRef: params.conversationRef,
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        message: params.message,
+      }).record;
+      const completed = resultForCompletedOperation(operation);
+      if (completed) {
+        return completed;
+      }
+    }
+
+    const conversation = deps.resolveConversation(scope, params.conversationRef);
+    if (!conversation) {
+      throw new ConversationInputError(
+        `Conversation not found: ${params.conversationRef} (use conversations_list)`,
+      );
+    }
     const sent = await sendGatewayConversationMessage({
       deps,
       context: {
@@ -75,6 +130,7 @@ export async function runGatewayConversationSend(
       message: params.message,
       operationId: params.operationId,
       operationKind: "send",
+      ...(operation ? { operation } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
     });
     return {

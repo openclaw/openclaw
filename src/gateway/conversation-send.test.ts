@@ -86,12 +86,23 @@ function createDeps() {
       ) => {
         const existing = operations.get(params.operationId);
         if (existing) {
+          if (
+            existing.operationKind !== params.operationKind ||
+            existing.conversationRef !== params.conversationRef ||
+            existing.sourceSessionKey !== params.sourceSessionKey ||
+            existing.messageHash !== params.message
+          ) {
+            throw new ConversationDeliveryInputError(
+              `Conversation delivery operation was reused with different input: ${params.operationId}`,
+            );
+          }
           return { created: false, record: existing };
         }
         const record: ConversationDeliveryRecord = {
           operationId: params.operationId,
           operationKind: params.operationKind,
           conversationRef: params.conversationRef,
+          channel: conversation.channel,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           messageHash: params.message,
           status: "created",
@@ -169,6 +180,7 @@ describe("runGatewayConversationSend", () => {
       operationId: "send-replayed",
       operationKind: "send",
       conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
       messageHash: "hello",
       status: "sent",
       platformMessageId: "reef-existing",
@@ -176,6 +188,7 @@ describe("runGatewayConversationSend", () => {
       createdAt: 100,
       updatedAt: 200,
     });
+    deps.resolveConversation.mockReturnValue(undefined);
 
     await expect(
       runGatewayConversationSend(
@@ -190,6 +203,7 @@ describe("runGatewayConversationSend", () => {
         deps,
       ),
     ).resolves.toMatchObject({ status: "sent", messageId: "reef-existing" });
+    expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
@@ -250,11 +264,17 @@ describe("runGatewayConversationSend", () => {
 
   it("preserves durable operation conflicts for Gateway identity recovery", async () => {
     const deps = createDeps();
-    deps.beginOperation.mockImplementationOnce(() => {
-      throw new ConversationDeliveryInputError(
-        "Conversation delivery operation was reused with different input: send-reused",
-      );
+    deps.operations.set("send-reused", {
+      operationId: "send-reused",
+      operationKind: "send",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "original",
+      status: "sent",
+      createdAt: 100,
+      updatedAt: 200,
     });
+    deps.resolveConversation.mockReturnValue(undefined);
 
     await expect(
       runGatewayConversationSend(
@@ -269,6 +289,7 @@ describe("runGatewayConversationSend", () => {
         deps,
       ),
     ).rejects.toBeInstanceOf(ConversationOperationConflictError);
+    expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 });

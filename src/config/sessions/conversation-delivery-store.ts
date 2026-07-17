@@ -23,6 +23,7 @@ export type ConversationDeliveryRecord = {
   operationId: string;
   operationKind: "send" | "turn";
   conversationRef: string;
+  channel: string;
   sourceSessionKey?: string;
   messageHash: string;
   status: ConversationDeliveryStatus;
@@ -48,6 +49,7 @@ export type ConversationDeliveryStoreScope = {
 };
 
 type ConversationDeliveryRow = {
+  channel: string;
   conversation_id: string;
   created_at: number;
   message_hash: string;
@@ -126,6 +128,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
     operationId: row.operation_id,
     operationKind: normalizeOperationKind(row.operation_kind),
     conversationRef: row.conversation_id,
+    channel: row.channel,
     ...(row.source_session_key ? { sourceSessionKey: row.source_session_key } : {}),
     messageHash: row.message_hash,
     status: normalizeStatus(row.status),
@@ -153,7 +156,19 @@ function selectOperation(
   const db = getSessionKysely(database.db);
   const row = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("conversation_deliveries").selectAll().where("operation_id", "=", operationId),
+    // Session pruning removes only session_conversations. The canonical
+    // conversation row owns this delivery by foreign key and retains channel
+    // identity even when no local session remains linked.
+    db
+      .selectFrom("conversation_deliveries as delivery")
+      .innerJoin(
+        "conversations as conversation",
+        "conversation.conversation_id",
+        "delivery.conversation_id",
+      )
+      .selectAll("delivery")
+      .select("conversation.channel as channel")
+      .where("delivery.operation_id", "=", operationId),
   ).rows[0] as ConversationDeliveryRow | undefined;
   return row ? mapRow(row) : undefined;
 }
@@ -383,18 +398,24 @@ export function findConversationTurnDeliveryByReplyTarget(
   const row = executeSqliteQuerySync(
     database.db,
     db
-      .selectFrom("conversation_deliveries")
-      .selectAll()
-      .where("conversation_id", "=", params.conversationRef)
-      .where("operation_kind", "=", "turn")
+      .selectFrom("conversation_deliveries as delivery")
+      .innerJoin(
+        "conversations as conversation",
+        "conversation.conversation_id",
+        "delivery.conversation_id",
+      )
+      .selectAll("delivery")
+      .select("conversation.channel as channel")
+      .where("delivery.conversation_id", "=", params.conversationRef)
+      .where("delivery.operation_kind", "=", "turn")
       .where((eb) =>
         eb.or([
-          eb("platform_message_id", "=", params.replyToId),
-          eb("prepared_message_id", "=", params.replyToId),
+          eb("delivery.platform_message_id", "=", params.replyToId),
+          eb("delivery.prepared_message_id", "=", params.replyToId),
         ]),
       )
-      .where("status", "in", ["queued", "sent", "replied"])
-      .orderBy("updated_at", "desc")
+      .where("delivery.status", "in", ["queued", "sent", "replied"])
+      .orderBy("delivery.updated_at", "desc")
       .limit(1),
   ).rows[0] as ConversationDeliveryRow | undefined;
   return row ? mapRow(row) : undefined;

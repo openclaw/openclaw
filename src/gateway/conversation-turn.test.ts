@@ -70,18 +70,31 @@ function createDeps() {
           operationId: string;
           operationKind: "send" | "turn";
           conversationRef: string;
+          sourceSessionKey?: string;
           message: string;
           preparedMessageId?: string;
         },
       ) => {
         const existing = operations.get(params.operationId);
         if (existing) {
+          if (
+            existing.operationKind !== params.operationKind ||
+            existing.conversationRef !== params.conversationRef ||
+            existing.sourceSessionKey !== params.sourceSessionKey ||
+            existing.messageHash !== params.message
+          ) {
+            throw new ConversationDeliveryInputError(
+              `Conversation delivery operation was reused with different input: ${params.operationId}`,
+            );
+          }
           return { created: false, record: existing };
         }
         const record: ConversationDeliveryRecord = {
           operationId: params.operationId,
           operationKind: params.operationKind,
           conversationRef: params.conversationRef,
+          channel: conversation.channel,
+          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           messageHash: params.message,
           status: "created",
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
@@ -109,7 +122,7 @@ function createDeps() {
       update(operationId, { status: "unknown" }),
     ),
     registerPendingConversationTurn: vi.fn(registerPendingConversationTurn),
-    resolveConversation: vi.fn(() => conversation),
+    resolveConversation: vi.fn((): typeof conversation | undefined => conversation),
     resolveOutboundChannelPlugin: vi.fn(
       () =>
         ({
@@ -198,6 +211,7 @@ describe("runGatewayConversationTurn", () => {
             operationId: "turn-raced",
             operationKind: "turn",
             conversationRef: conversation.conversationRef,
+            channel: conversation.channel,
             messageHash: "hello molty",
             status: "created",
             preparedMessageId: "reef-authoritative-a",
@@ -250,6 +264,7 @@ describe("runGatewayConversationTurn", () => {
       operationId: "turn-replied",
       operationKind: "turn",
       conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
       messageHash: "hello",
       status: "replied",
       preparedMessageId: "reef-outbound-1",
@@ -258,6 +273,7 @@ describe("runGatewayConversationTurn", () => {
       createdAt: 100,
       updatedAt: 300,
     });
+    deps.resolveConversation.mockReturnValue(undefined);
 
     await expect(
       runGatewayConversationTurn(
@@ -273,6 +289,7 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).resolves.toMatchObject({ status: "replied", reply: { text: "ack" } });
+    expect(deps.resolveConversation).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
   });
@@ -283,6 +300,7 @@ describe("runGatewayConversationTurn", () => {
       operationId: "turn-queued",
       operationKind: "turn",
       conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
       messageHash: "hello",
       status: "queued",
       preparedMessageId: "reef-outbound-1",
@@ -314,6 +332,7 @@ describe("runGatewayConversationTurn", () => {
       operationId: "turn-rejected",
       operationKind: "turn",
       conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
       messageHash: "hello",
       status: "rejected",
       preparedMessageId: "reef-outbound-1",
@@ -346,11 +365,18 @@ describe("runGatewayConversationTurn", () => {
 
   it("classifies durable operation-id input reuse as invalid input", async () => {
     const deps = createDeps();
-    deps.beginOperation.mockImplementationOnce(() => {
-      throw new ConversationDeliveryInputError(
-        "Conversation delivery operation was reused with different input: turn-reused",
-      );
+    deps.operations.set("turn-reused", {
+      operationId: "turn-reused",
+      operationKind: "turn",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "original",
+      status: "sent",
+      preparedMessageId: "reef-outbound-reused",
+      createdAt: 100,
+      updatedAt: 200,
     });
+    deps.resolveConversation.mockReturnValue(undefined);
 
     await expect(
       runGatewayConversationTurn(
@@ -369,6 +395,41 @@ describe("runGatewayConversationTurn", () => {
       name: "ConversationOperationConflictError",
       message: expect.stringContaining("reused with different input"),
     });
+    expect(deps.resolveConversation).not.toHaveBeenCalled();
+    expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("requires a live binding before resuming an unfinished durable turn", async () => {
+    const deps = createDeps();
+    deps.operations.set("turn-created", {
+      operationId: "turn-created",
+      operationKind: "turn",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "created",
+      preparedMessageId: "reef-outbound-created",
+      createdAt: 100,
+      updatedAt: 100,
+    });
+    deps.resolveConversation.mockReturnValue(undefined);
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-created",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });

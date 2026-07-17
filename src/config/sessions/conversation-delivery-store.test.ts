@@ -13,7 +13,8 @@ import {
   markConversationDeliverySent,
   markConversationDeliveryUnknown,
 } from "./conversation-delivery-store.js";
-import { upsertSessionEntry } from "./session-accessor.js";
+import { resolveConversation } from "./conversation-registry.js";
+import { deleteSessionEntryLifecycle, upsertSessionEntry } from "./session-accessor.js";
 
 async function withConversationStore(
   run: (params: {
@@ -75,6 +76,7 @@ describe("conversation delivery store", () => {
       });
 
       expect(first.created).toBe(true);
+      expect(first.record.channel).toBe("reef");
       expect(first.record.sourceSessionKey).toBe("agent:main:telegram:direct:operator");
       expect(repeated).toEqual({ created: false, record: first.record });
       expect(() =>
@@ -190,6 +192,36 @@ describe("conversation delivery store", () => {
       expect(markConversationDeliverySent(scope, "operation-rejected", "platform-late")).toEqual(
         rejected,
       );
+    });
+  });
+
+  it("retains terminal delivery evidence after its local session binding is pruned", async () => {
+    await withConversationStore(async ({ scope, conversationRef }) => {
+      beginConversationDeliveryOperation(scope, {
+        operationId: "operation-pruned-session",
+        operationKind: "send",
+        conversationRef,
+        message: "hello",
+      });
+      markConversationDeliverySent(scope, "operation-pruned-session", "platform-pruned");
+
+      await deleteSessionEntryLifecycle({
+        agentId: scope.agentId,
+        archiveTranscript: false,
+        storePath: scope.storePath,
+        target: {
+          canonicalKey: "agent:main:reef:direct:peer-agent",
+          storeKeys: ["agent:main:reef:direct:peer-agent"],
+        },
+      });
+
+      expect(resolveConversation(scope, conversationRef)).toBeUndefined();
+      expect(getConversationDeliveryOperation(scope, "operation-pruned-session")).toMatchObject({
+        channel: "reef",
+        conversationRef,
+        platformMessageId: "platform-pruned",
+        status: "sent",
+      });
     });
   });
 
