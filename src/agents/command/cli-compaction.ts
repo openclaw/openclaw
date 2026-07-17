@@ -178,6 +178,11 @@ function getSessionBranchMessages(sessionManager: SessionManagerLike): AgentMess
     );
 }
 
+function isSessionAlreadyCompacted(sessionManager: SessionManagerLike): boolean {
+  const branch = sessionManager.getBranch();
+  return branch[branch.length - 1]?.type === "compaction";
+}
+
 function resolveSessionTokenSnapshot(sessionEntry: SessionEntry | undefined): number | undefined {
   return resolvePositiveInteger(
     sessionEntry?.totalTokensFresh === false ? undefined : sessionEntry?.totalTokens,
@@ -642,6 +647,10 @@ export async function runCliTurnCompactionLifecycle(params: {
     !preemptiveCompaction.shouldCompact &&
     currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
   ) {
+    return params.sessionEntry;
+  }
+
+  if (isSessionAlreadyCompacted(sessionManager)) {
     return params.sessionEntry;
   }
 
