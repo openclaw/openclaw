@@ -95,6 +95,12 @@ struct OpenClawChatComposer: View {
                 self.attachmentsStrip
             }
 
+            if let replyTarget = self.viewModel.replyTarget {
+                ChatReplyPreview(target: replyTarget) {
+                    self.viewModel.clearReplyTarget()
+                }
+            }
+
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
                 OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
                     .padding(self.editorPadding)
@@ -702,8 +708,8 @@ struct OpenClawChatComposer: View {
                     guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 },
-                onKeyCommand: { command in
-                    self.handleComposerKeyCommand(command)
+                onKeyCommand: { command, context in
+                    self.handleComposerKeyCommand(command, context: context)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
                 .padding(.horizontal, 4)
@@ -960,28 +966,46 @@ extension OpenClawChatComposer {
     /// Keyboard routing while the slash panel is open: arrows move the
     /// highlight, Tab/Return accept, Escape dismisses. Returning false hands
     /// the key back to the text view (typing, send-on-return).
-    private func handleComposerKeyCommand(_ command: ChatComposerKeyCommand) -> Bool {
-        guard self.isSlashPopoverPresented else { return false }
-        let matches = self.viewModel.slashCommandMatches(query: self.slashQuery ?? "", filter: .all)
+    private func handleComposerKeyCommand(
+        _ command: ChatComposerKeyCommand,
+        context: ChatComposerKeyCommandContext) -> Bool
+    {
+        if self.isSlashPopoverPresented {
+            let matches = self.viewModel.slashCommandMatches(query: self.slashQuery ?? "", filter: .all)
+            switch command {
+            case .escape:
+                self.setSlashPanelPresented(false)
+                return true
+            case .moveUp:
+                guard !matches.isEmpty else { return true }
+                self.slashHighlightIndex = (self.slashHighlightIndex - 1 + matches.count) % matches.count
+                return true
+            case .moveDown:
+                guard !matches.isEmpty else { return true }
+                self.slashHighlightIndex = (self.slashHighlightIndex + 1) % matches.count
+                return true
+            case .tab, .returnKey:
+                guard matches.indices.contains(self.slashHighlightIndex) else {
+                    self.setSlashPanelPresented(false)
+                    return command == .tab
+                }
+                self.selectSlashCommand(matches[self.slashHighlightIndex])
+                return true
+            }
+        }
+
         switch command {
-        case .escape:
-            self.setSlashPanelPresented(false)
-            return true
         case .moveUp:
-            guard !matches.isEmpty else { return true }
-            self.slashHighlightIndex = (self.slashHighlightIndex - 1 + matches.count) % matches.count
-            return true
+            return self.viewModel.recallPreviousInput(caretOnFirstLine: context.caretOnFirstLine)
         case .moveDown:
-            guard !matches.isEmpty else { return true }
-            self.slashHighlightIndex = (self.slashHighlightIndex + 1) % matches.count
+            return self.viewModel.recallNextInput()
+        case .escape:
+            if self.viewModel.cancelInputRecall() { return true }
+            guard self.viewModel.replyTarget != nil else { return false }
+            self.viewModel.clearReplyTarget()
             return true
         case .tab, .returnKey:
-            guard matches.indices.contains(self.slashHighlightIndex) else {
-                self.setSlashPanelPresented(false)
-                return command == .tab
-            }
-            self.selectSlashCommand(matches[self.slashHighlightIndex])
-            return true
+            return false
         }
     }
     #endif
@@ -1266,6 +1290,20 @@ enum ChatComposerKeyCommand: Equatable {
     case returnKey
 }
 
+struct ChatComposerKeyCommandContext: Equatable {
+    let caretOnFirstLine: Bool
+
+    static func resolve(text: String, selectedRange: NSRange) -> Self {
+        let utf16Length = (text as NSString).length
+        guard selectedRange.location != NSNotFound,
+              selectedRange.length == 0,
+              selectedRange.location <= utf16Length
+        else { return Self(caretOnFirstLine: false) }
+        let prefix = (text as NSString).substring(to: selectedRange.location)
+        return Self(caretOnFirstLine: !prefix.contains("\n") && !prefix.contains("\r"))
+    }
+}
+
 enum ChatComposerKeyRouting {
     /// Maps a key event to an interceptable command. Modified keys (except
     /// plain Shift on arrows) stay with the text view so shortcuts keep
@@ -1295,7 +1333,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
     var isEnabled: Bool
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
-    var onKeyCommand: (_ command: ChatComposerKeyCommand) -> Bool = { _ in false }
+    var onKeyCommand: (_ command: ChatComposerKeyCommand, _ context: ChatComposerKeyCommandContext) -> Bool = {
+        _, _ in false
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -1412,7 +1452,7 @@ enum ChatComposerTextViewFactory {
 private final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
-    var onKeyCommand: ((_ command: ChatComposerKeyCommand) -> Bool)?
+    var onKeyCommand: ((_ command: ChatComposerKeyCommand, _ context: ChatComposerKeyCommandContext) -> Bool)?
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -1427,7 +1467,9 @@ private final class ChatComposerNSTextView: NSTextView {
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
             hasMarkedText: hasMarkedText()),
-            self.onKeyCommand?(command) == true
+            self.onKeyCommand?(
+                command,
+                ChatComposerKeyCommandContext.resolve(text: self.string, selectedRange: self.selectedRange())) == true
         {
             return
         }

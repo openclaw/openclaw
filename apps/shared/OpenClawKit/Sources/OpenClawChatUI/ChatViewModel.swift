@@ -14,7 +14,26 @@ public final class OpenClawChatViewModel {
 
     public internal(set) var messages: [OpenClawChatMessage] = []
 
-    public var input: String = ""
+    public var input: String = "" {
+        didSet {
+            guard self.input != oldValue else { return }
+            self.noteComposerInputChanged()
+        }
+    }
+
+    public internal(set) var replyTarget: OpenClawChatReplyTarget?
+    @ObservationIgnored
+    var inputHistoriesBySession: [String: ChatInputHistory] = [:]
+    /// Unlike web persistence, native drafts stay in memory. Attachments are excluded because
+    /// the staging guard prevents session switches while they are being prepared.
+    @ObservationIgnored
+    var draftsBySession: [String: String] = [:]
+    @ObservationIgnored
+    var composerRevisionsBySession: [String: UInt64] = [:]
+    @ObservationIgnored
+    var savedDraftRevisionsBySession: [String: UInt64] = [:]
+    @ObservationIgnored
+    var isApplyingRecalledInput = false
     /// Setter is module-internal for the thinking-level extension only.
     public internal(set) var thinkingLevel: String
     /// User intent stays stable while `thinkingLevel` follows the selected model's advertised levels.
@@ -1186,8 +1205,10 @@ extension OpenClawChatViewModel {
             return
         }
         self.deferredExternalSessionKey = nil
+        self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
         self.sessionKey = next
+        self.restoreComposerAfterSessionSwitch()
         if intent == .userInitiated {
             self.onSessionChanged?(next)
         }
@@ -1240,8 +1261,10 @@ extension OpenClawChatViewModel {
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
             return
         }
+        self.prepareComposerForSessionSwitch(to: next)
         self.advanceSessionGeneration()
         self.sessionKey = next
+        self.restoreComposerAfterSessionSwitch()
         self.onSessionChanged?(next)
         self.clearSessionOwnedState()
         self.errorText = nil
@@ -1286,6 +1309,7 @@ extension OpenClawChatViewModel {
             return
         }
 
+        self.replyTarget = nil
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
         self.startBootstrap()
