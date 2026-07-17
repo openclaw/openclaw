@@ -60,7 +60,12 @@ function parseSlugListJson(raw: string | null): Set<string> {
   if (!raw) {
     return new Set();
   }
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return new Set();
+  }
   if (!Array.isArray(parsed)) {
     return new Set();
   }
