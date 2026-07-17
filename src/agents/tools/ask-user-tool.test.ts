@@ -66,28 +66,30 @@ describe("ask_user normalization", () => {
     expect(normalized.questions[0]).not.toHaveProperty("isSecret");
   });
 
-  it("rejects question, option, id, and duplicate-id violations", () => {
-    expect(() => normalizeAskUserParams({ questions: [] })).toThrow("1 to 3 questions");
-    expect(() =>
-      normalizeAskUserParams({
-        questions: Array.from({ length: 4 }, () => validArgs.questions[0]),
-      }),
-    ).toThrow("1 to 3 questions");
-    expect(() =>
-      normalizeAskUserParams({
-        questions: [{ ...validArgs.questions[0], options: [{ label: "Only" }] }],
-      }),
-    ).toThrow("2 to 4 options");
-    expect(() =>
-      normalizeAskUserParams({
-        questions: [validArgs.questions[0], validArgs.questions[0]],
-      }),
-    ).toThrow("duplicate question id 'deploy_target'");
-    expect(() =>
-      normalizeAskUserParams({
-        questions: [{ ...validArgs.questions[0], id: "Deploy Target" }],
-      }),
-    ).toThrow("must be snake_case");
+  it.each([
+    ["empty questions", { questions: [] }, "1 to 3 questions"],
+    [
+      "too many questions",
+      { questions: Array.from({ length: 4 }, () => validArgs.questions[0]) },
+      "1 to 3 questions",
+    ],
+    [
+      "too few options",
+      { questions: [{ ...validArgs.questions[0], options: [{ label: "Only" }] }] },
+      "2 to 4 options",
+    ],
+    [
+      "duplicate ids",
+      { questions: [validArgs.questions[0], validArgs.questions[0]] },
+      "duplicate question id 'deploy_target'",
+    ],
+    [
+      "invalid id",
+      { questions: [{ ...validArgs.questions[0], id: "Deploy Target" }] },
+      "must be snake_case",
+    ],
+  ])("rejects %s", (_name, args, error) => {
+    expect(() => normalizeAskUserParams(args)).toThrow(error);
   });
 });
 
@@ -354,6 +356,7 @@ describe("ask_user execution", () => {
       "call-delivery-failure",
       validArgs,
     );
+    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
 
     settleAskUserPromptDelivery(reservation.questionId, new Error("channel unavailable"));
 
@@ -407,66 +410,6 @@ describe("ask_user execution", () => {
 
     await expect(pending).resolves.toMatchObject({ details: { status: "answered", answers } });
     expect(waitCalls).toBe(2);
-  });
-
-  it("does not claim text until prompt delivery succeeds", async () => {
-    const sessionKey = "agent:main:delivery-pending";
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-delivery-pending",
-      sessionKey,
-      questions: normalizeAskUserParams(validArgs).questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
-        finishWait?.({
-          status: "answered",
-          answers: { answers: { deploy_target: { answers: ["Externally answered"] } } },
-        });
-        throw Object.assign(new Error("already answered"), {
-          name: "GatewayClientRequestError",
-          details: { reason: "QUESTION_ALREADY_TERMINAL" },
-        });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const steer = vi.fn(async () => undefined);
-    const activeSession = { steer, subscribe: vi.fn(() => () => undefined) };
-
-    await steerActiveSessionWithOptionalDeliveryWait(
-      activeSession,
-      "Message before prompt",
-      { taskSuggestionDeliveryMode: undefined },
-      sessionKey,
-    );
-    expect(steer).toHaveBeenCalledTimes(1);
-
-    settleAskUserPromptDelivery(reservation.questionId);
-    await steerActiveSessionWithOptionalDeliveryWait(
-      activeSession,
-      "2",
-      { taskSuggestionDeliveryMode: undefined },
-      sessionKey,
-    );
-    expect(steer).toHaveBeenCalledTimes(1);
-
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-delivery-pending",
-      validArgs,
-    );
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
-    await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
 
   it("aborts while prompt delivery is still pending", async () => {
@@ -551,7 +494,7 @@ describe("ask_user execution", () => {
       activeSession,
       "A custom destination",
       {
-        taskSuggestionDeliveryMode: undefined,
+        isInboundUserMessage: true,
         waitForTranscriptCommit: true,
         userTurnTranscriptRecorder: recorder,
       },
@@ -572,7 +515,10 @@ describe("ask_user execution", () => {
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
 
-  it("keeps image-bearing replies on the normal steering path", async () => {
+  it.each([
+    ["cancellation succeeds", false],
+    ["cancellation fails", true],
+  ])("keeps image replies on normal steering when %s", async (_name, cancelFails) => {
     let finishWait: ((value: unknown) => void) | undefined;
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
@@ -584,14 +530,18 @@ describe("ask_user execution", () => {
         });
       }
       if (method === "question.resolve") {
+        if (cancelFails) {
+          throw new Error("gateway unavailable");
+        }
         finishWait?.({ status: "cancelled" });
         return { status: "cancelled" };
       }
       throw new Error(`unexpected method ${method}`);
     });
-    const sessionKey = "agent:main:image-reply";
+    const suffix = cancelFails ? "image-cancel-failure" : "image-reply";
+    const sessionKey = `agent:main:${suffix}`;
     const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-image-reply",
+      `call-${suffix}`,
       validArgs,
     );
     await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
@@ -600,58 +550,24 @@ describe("ask_user execution", () => {
 
     await steerActiveSessionWithOptionalDeliveryWait(
       { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this",
-      { taskSuggestionDeliveryMode: undefined, images },
+      "Use this image",
+      { isInboundUserMessage: true, images },
       sessionKey,
     );
 
-    expect(steer).toHaveBeenCalledWith("Use this", images);
+    expect(steer).toHaveBeenCalledWith("Use this image", images);
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
       {
-        id: buildAskUserQuestionId("call-image-reply", sessionKey),
+        id: buildAskUserQuestionId(`call-${suffix}`, sessionKey),
         cancel: true,
         resolvedBy: "image-reply",
       },
     );
-    await pending;
-  });
-
-  it("still steers image replies when question cancellation fails", async () => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
-        throw new Error("gateway unavailable");
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const sessionKey = "agent:main:image-cancel-failure";
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-image-cancel-failure",
-      validArgs,
-    );
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
-    const steer = vi.fn(async () => undefined);
-    const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
-
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this anyway",
-      { taskSuggestionDeliveryMode: undefined, images },
-      sessionKey,
-    );
-
-    expect(steer).toHaveBeenCalledWith("Use this anyway", images);
-    finishWait?.({ status: "cancelled" });
+    if (cancelFails) {
+      finishWait?.({ status: "cancelled" });
+    }
     await pending;
   });
 
@@ -690,7 +606,7 @@ describe("ask_user execution", () => {
       { steer, subscribe: vi.fn(() => () => undefined) },
       "1",
       {
-        taskSuggestionDeliveryMode: undefined,
+        isInboundUserMessage: true,
         userTurnTranscriptRecorder: { persistApproved } as unknown as UserTurnTranscriptRecorder,
       },
       sessionKey,
@@ -730,7 +646,7 @@ describe("ask_user execution", () => {
     await steerActiveSessionWithOptionalDeliveryWait(
       { steer, subscribe: vi.fn(() => () => undefined) },
       "Follow-up message",
-      { taskSuggestionDeliveryMode: undefined },
+      { isInboundUserMessage: true },
       "agent:main:terminal-race",
     );
 

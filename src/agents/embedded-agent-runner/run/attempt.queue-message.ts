@@ -238,9 +238,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   options: EmbeddedAgentQueueMessageOptions | undefined,
   sessionKey?: string,
 ): Promise<void> {
-  // User turns carry this field even when disabled; internal steering omits it.
-  const isInboundUserMessage =
-    options !== undefined && Object.hasOwn(options, "taskSuggestionDeliveryMode");
+  const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !options?.images?.length;
   if (isInboundUserMessage && !isPlainTextAnswer) {
     try {

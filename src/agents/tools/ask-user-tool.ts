@@ -71,32 +71,25 @@ type AskUserGatewayCall = (
   extra?: { signal?: AbortSignal },
 ) => Promise<unknown>;
 
-type AskUserCancellationOutcome = "cancelled" | "terminal" | "failed";
+type AskUserQuestionPhase =
+  | { kind: "reserved" }
+  | { kind: "registering" }
+  | { kind: "prompting" }
+  | { kind: "answerable" }
+  | { kind: "resolving" }
+  | { kind: "prompt-failed"; error: unknown };
 
-type PendingAskUserQuestion = {
+type AskUserQuestionState = {
   questionId: string;
+  sessionKey: string;
   questions: QuestionRequestQuestion[];
-  registration: Promise<unknown>;
-  gatewayCall: AskUserGatewayCall;
-  claimable: boolean;
-  claimed: boolean;
+  phase: AskUserQuestionPhase;
+  gatewayCall?: AskUserGatewayCall;
+  answer?: Promise<QuestionWaitAnswerResult>;
+  waiters: Set<() => void>;
 };
 
-type AskUserPromptDelivery = {
-  questionId: string;
-  questions: QuestionRequestQuestion[];
-  result: Promise<{ error?: unknown }>;
-  settle: (result: { error?: unknown }) => void;
-  ready: Promise<QuestionRequestQuestion[] | undefined>;
-  settleReady: (questions: QuestionRequestQuestion[] | undefined) => void;
-  delivered: boolean;
-  claimed: boolean;
-  bufferedText?: string;
-};
-
-const pendingQuestionsBySession = new Map<string, PendingAskUserQuestion>();
-const promptDeliveriesByQuestionId = new Map<string, AskUserPromptDelivery>();
-const promptQuestionIdBySession = new Map<string, string>();
+const askUserQuestions = new Map<string, AskUserQuestionState>();
 
 export type NormalizedAskUserParams = {
   questions: QuestionRequestQuestion[];
@@ -201,8 +194,56 @@ export function buildAskUserQuestionId(toolCallId: string, sessionKey?: string):
   return `ask_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
-function promptSessionKey(sessionKey: string | undefined): string {
-  return sessionKey?.trim() || "session:unknown";
+function askUserSessionKey(sessionKey: string | undefined, agentId?: string): string {
+  return sessionKey?.trim() || (agentId?.trim() ? `agent:${agentId.trim()}` : "session:unknown");
+}
+
+function findAskUserQuestionForSession(sessionKey: string): AskUserQuestionState | undefined {
+  for (const question of askUserQuestions.values()) {
+    if (question.sessionKey === sessionKey) {
+      return question;
+    }
+  }
+  return undefined;
+}
+
+function transitionAskUserQuestion(state: AskUserQuestionState, phase: AskUserQuestionPhase): void {
+  state.phase = phase;
+  for (const wake of state.waiters) {
+    wake();
+  }
+  state.waiters.clear();
+}
+
+function releaseAskUserQuestion(questionId: string): void {
+  const state = askUserQuestions.get(questionId);
+  if (!state) {
+    return;
+  }
+  askUserQuestions.delete(questionId);
+  for (const wake of state.waiters) {
+    wake();
+  }
+  state.waiters.clear();
+}
+
+async function waitForQuestionChange(
+  state: AskUserQuestionState,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  await new Promise<void>((resolve, reject) => {
+    const wake = () => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = () => {
+      state.waiters.delete(wake);
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("ask_user aborted"));
+    };
+    state.waiters.add(wake);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Reserves one visible ask_user prompt slot before subscriber delivery. */
@@ -211,30 +252,21 @@ export function reserveAskUserPromptDelivery(params: {
   sessionKey?: string;
   questions: QuestionRequestQuestion[];
 }): { questionId: string } | undefined {
-  const sessionKey = promptSessionKey(params.sessionKey);
-  if (promptQuestionIdBySession.has(sessionKey)) {
+  const sessionKey = askUserSessionKey(params.sessionKey);
+  if (findAskUserQuestionForSession(sessionKey)) {
     return undefined;
   }
   const questionId = buildAskUserQuestionId(params.toolCallId, params.sessionKey);
-  let settle!: AskUserPromptDelivery["settle"];
-  let settleReady!: AskUserPromptDelivery["settleReady"];
-  const result = new Promise<{ error?: unknown }>((resolve) => {
-    settle = resolve;
-  });
-  const ready = new Promise<QuestionRequestQuestion[] | undefined>((resolve) => {
-    settleReady = resolve;
-  });
-  promptDeliveriesByQuestionId.set(questionId, {
+  if (askUserQuestions.has(questionId)) {
+    return undefined;
+  }
+  askUserQuestions.set(questionId, {
     questionId,
+    sessionKey,
     questions: params.questions,
-    result,
-    settle,
-    ready,
-    settleReady,
-    delivered: false,
-    claimed: false,
+    phase: { kind: "reserved" },
+    waiters: new Set(),
   });
-  promptQuestionIdBySession.set(sessionKey, questionId);
   return { questionId };
 }
 
@@ -242,8 +274,22 @@ export function reserveAskUserPromptDelivery(params: {
 export async function waitForAskUserPromptReady(
   questionId: string,
 ): Promise<QuestionRequestQuestion[] | undefined> {
-  const delivery = promptDeliveriesByQuestionId.get(questionId);
-  return delivery ? await delivery.ready : undefined;
+  const state = askUserQuestions.get(questionId);
+  if (!state) {
+    return undefined;
+  }
+  while (askUserQuestions.get(questionId) === state) {
+    if (
+      state.phase.kind === "prompting" ||
+      state.phase.kind === "answerable" ||
+      state.phase.kind === "resolving" ||
+      state.phase.kind === "prompt-failed"
+    ) {
+      return state.questions;
+    }
+    await waitForQuestionChange(state);
+  }
+  return undefined;
 }
 
 /** Opens prompt delivery after question.request succeeds. */
@@ -251,47 +297,34 @@ export function markAskUserPromptReady(
   questionId: string,
   questions: QuestionRequestQuestion[],
 ): void {
-  const delivery = promptDeliveriesByQuestionId.get(questionId);
-  if (!delivery) {
+  const state = askUserQuestions.get(questionId);
+  if (!state || (state.phase.kind !== "reserved" && state.phase.kind !== "registering")) {
     return;
   }
-  delivery.questions = questions;
-  delivery.settleReady(questions);
+  state.questions = questions;
+  transitionAskUserQuestion(state, { kind: "prompting" });
 }
 
 /** Records whether the originating-conversation prompt reached its delivery callback. */
 export function settleAskUserPromptDelivery(questionId: string, error?: unknown): void {
-  const delivery = promptDeliveriesByQuestionId.get(questionId);
-  if (!delivery) {
+  const state = askUserQuestions.get(questionId);
+  if (!state || state.phase.kind !== "prompting") {
     return;
   }
-  delivery.delivered = error === undefined;
-  delivery.settle(error === undefined ? {} : { error });
+  transitionAskUserQuestion(
+    state,
+    error === undefined ? { kind: "answerable" } : { kind: "prompt-failed", error },
+  );
 }
 
 /** Returns whether a question-associated prompt still belongs to a blocking ask_user call. */
 export function isAskUserPromptActive(questionId: string): boolean {
-  return promptDeliveriesByQuestionId.has(questionId);
-}
-
-function releaseAskUserPromptDelivery(questionId: string, sessionKey: string | undefined): void {
-  const delivery = promptDeliveriesByQuestionId.get(questionId);
-  delivery?.settleReady(undefined);
-  delivery?.settle({ error: new Error("ask_user prompt is no longer active") });
-  promptDeliveriesByQuestionId.delete(questionId);
-  const key = promptSessionKey(sessionKey);
-  if (promptQuestionIdBySession.get(key) === questionId) {
-    promptQuestionIdBySession.delete(key);
-  }
+  return askUserQuestions.has(questionId);
 }
 
 /** Releases a tool-start reservation when policy rejects execution. */
 export function cancelAskUserPromptDelivery(toolCallId: string, sessionKey?: string): void {
-  releaseAskUserPromptDelivery(buildAskUserQuestionId(toolCallId, sessionKey), sessionKey);
-}
-
-function pendingSessionKey(sessionKey: string | undefined, agentId: string | undefined): string {
-  return sessionKey?.trim() || `agent:${agentId?.trim() || "unknown"}`;
+  releaseAskUserQuestion(buildAskUserQuestionId(toolCallId, sessionKey));
 }
 
 function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
@@ -313,26 +346,19 @@ function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "ans
 }
 
 async function waitForPromptDelivery(
-  result: Promise<{ error?: unknown }>,
+  state: AskUserQuestionState,
   signal?: AbortSignal,
 ): Promise<{ error?: unknown }> {
-  if (!signal) {
-    return await result;
-  }
-  signal.throwIfAborted();
-  let onAbort: (() => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    onAbort = () =>
-      reject(signal.reason instanceof Error ? signal.reason : new Error("ask_user aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([result, aborted]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
+  while (askUserQuestions.get(state.questionId) === state) {
+    if (state.phase.kind === "answerable" || state.phase.kind === "resolving") {
+      return {};
     }
+    if (state.phase.kind === "prompt-failed") {
+      return { error: state.phase.error };
+    }
+    await waitForQuestionChange(state, signal);
   }
+  return { error: new Error("ask_user prompt is no longer active") };
 }
 
 function readQuestionErrorReason(error: unknown): string | undefined {
@@ -356,22 +382,28 @@ function isTerminalQuestionResolveError(error: unknown): boolean {
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
-async function didGatewayCommitClaimedAnswer(
-  pending: PendingAskUserQuestion,
-  expectedAnswers: QuestionAnswers,
+async function observeCommittedAnswer(
+  answer: Promise<QuestionWaitAnswerResult> | undefined,
 ): Promise<boolean> {
+  if (!answer) {
+    return false;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const result = (await pending.gatewayCall(
-      "question.waitAnswer",
-      { timeoutMs: ASK_USER_RPC_GRACE_MS },
-      { id: pending.questionId, timeoutMs: 1_000 },
-    )) as QuestionWaitAnswerResult;
-    return (
-      result.status === "answered" &&
-      JSON.stringify(result.answers) === JSON.stringify(expectedAnswers)
-    );
+    const result = await Promise.race([
+      answer,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), 1_000);
+        timer.unref?.();
+      }),
+    ]);
+    return result?.status === "answered";
   } catch {
     return false;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -385,64 +417,38 @@ export async function claimPendingAskUserAnswer(params: {
   if (!sessionKey) {
     return false;
   }
-  const pending = pendingQuestionsBySession.get(sessionKey);
-  const promptQuestionId = promptQuestionIdBySession.get(promptSessionKey(sessionKey));
-  const promptDelivery = promptQuestionId
-    ? promptDeliveriesByQuestionId.get(promptQuestionId)
-    : undefined;
-  if (!pending) {
-    if (!promptDelivery?.delivered || promptDelivery.claimed) {
-      return false;
-    }
-    promptDelivery.claimed = true;
-    try {
-      await params.persist?.();
-      promptDelivery.bufferedText = params.text;
-      return true;
-    } catch (error) {
-      promptDelivery.claimed = false;
-      throw error;
-    }
-  }
-  if ((!pending.claimable && !promptDelivery?.delivered) || pending.claimed) {
+  const state = findAskUserQuestionForSession(sessionKey);
+  if (!state || state.phase.kind !== "answerable" || !state.gatewayCall) {
     return false;
   }
-  pending.claimed = true;
-  if (promptDelivery) {
-    promptDelivery.claimed = true;
-  }
-  const resetClaim = () => {
-    pending.claimed = false;
-    if (promptDelivery) {
-      promptDelivery.claimed = false;
-    }
-  };
+  transitionAskUserQuestion(state, { kind: "resolving" });
   try {
     await params.persist?.();
-    await pending.registration;
   } catch (error) {
-    resetClaim();
+    transitionAskUserQuestion(state, { kind: "answerable" });
     throw error;
   }
   const answers = buildAgentHarnessUserInputAnswers(
-    pending.questions as AgentHarnessUserInputQuestion[],
+    state.questions as AgentHarnessUserInputQuestion[],
     params.text,
   );
   try {
-    await pending.gatewayCall(
+    await state.gatewayCall(
       "question.resolve",
       {},
-      { id: pending.questionId, answers, resolvedBy: "plain-text" },
+      { id: state.questionId, answers, resolvedBy: "plain-text" },
     );
     return true;
   } catch (error) {
     if (isTerminalQuestionResolveError(error)) {
       return false;
     }
-    if (await didGatewayCommitClaimedAnswer(pending, answers)) {
+    // The long-lived wait observes a resolve that committed even when its response was lost.
+    // Reusing it avoids a second gateway read and answer-shape comparison.
+    if (await observeCommittedAnswer(state.answer)) {
       return true;
     }
-    resetClaim();
+    transitionAskUserQuestion(state, { kind: "answerable" });
     throw error;
   }
 }
@@ -456,33 +462,42 @@ export async function cancelPendingAskUserForSession(params: {
   if (!sessionKey) {
     return false;
   }
-  const pending = pendingQuestionsBySession.get(sessionKey);
-  if (!pending) {
+  const state = findAskUserQuestionForSession(sessionKey);
+  if (!state || state.phase.kind === "reserved" || !state.gatewayCall) {
     return false;
   }
-  pending.claimed = true;
+  while (state.phase.kind === "registering") {
+    await waitForQuestionChange(state);
+    if (askUserQuestions.get(state.questionId) !== state) {
+      return false;
+    }
+  }
+  if (state.phase.kind === "resolving" || state.phase.kind === "prompt-failed") {
+    return false;
+  }
+  const previousPhase = state.phase;
+  transitionAskUserQuestion(state, { kind: "resolving" });
   try {
-    await pending.registration;
-    await pending.gatewayCall(
+    await state.gatewayCall(
       "question.resolve",
       { timeoutMs: ASK_USER_RPC_GRACE_MS },
-      { id: pending.questionId, cancel: true, resolvedBy: params.resolvedBy },
+      { id: state.questionId, cancel: true, resolvedBy: params.resolvedBy },
     );
     return true;
   } catch (error) {
     if (isTerminalQuestionResolveError(error)) {
       return true;
     }
-    pending.claimed = false;
+    transitionAskUserQuestion(state, previousPhase);
     throw error;
   }
 }
 
 /** Test-only reset for process-local pending question state. */
 export function resetPendingAskUserQuestionsForTest(): void {
-  pendingQuestionsBySession.clear();
-  promptDeliveriesByQuestionId.clear();
-  promptQuestionIdBySession.clear();
+  for (const questionId of askUserQuestions.keys()) {
+    releaseAskUserQuestion(questionId);
+  }
 }
 
 /** Creates the main-session-only blocking ask_user tool. */
@@ -505,156 +520,76 @@ export function createAskUserTool(params: {
         signal?.throwIfAborted();
         normalized = normalizeAskUserParams(args);
       } catch (error) {
-        releaseAskUserPromptDelivery(questionId, params.sessionKey);
+        releaseAskUserQuestion(questionId);
         throw error;
       }
-      const sessionKey = pendingSessionKey(params.sessionKey, params.agentId);
-      const reservedQuestionId = promptQuestionIdBySession.get(promptSessionKey(params.sessionKey));
-      if (
-        pendingQuestionsBySession.has(sessionKey) ||
-        (reservedQuestionId !== undefined && reservedQuestionId !== questionId)
-      ) {
+      const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
+      const reserved = askUserQuestions.get(questionId);
+      const existing = findAskUserQuestionForSession(sessionKey);
+      if ((reserved && reserved.phase.kind !== "reserved") || (existing && existing !== reserved)) {
         throw new ToolInputError(
           "ask_user already has a pending question for this session; wait for it to resolve before asking another",
         );
       }
 
       const timeoutMs = normalized.timeoutSeconds * 1_000;
-      const registration = Promise.resolve().then(() =>
-        gatewayCall(
-          "question.request",
-          {},
-          {
-            id: questionId,
-            questions: normalized.questions,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-            timeoutMs,
-          },
-          signal ? { signal } : undefined,
-        ),
-      );
-      const pending: PendingAskUserQuestion = {
-        questionId,
-        questions: normalized.questions,
-        registration,
-        gatewayCall,
-        claimable: false,
-        claimed: promptDeliveriesByQuestionId.get(questionId)?.claimed ?? false,
-      };
-      pendingQuestionsBySession.set(sessionKey, pending);
+      const deliverPrompt = reserved?.phase.kind === "reserved";
+      const state: AskUserQuestionState =
+        reserved ??
+        ({
+          questionId,
+          sessionKey,
+          questions: normalized.questions,
+          phase: { kind: "registering" },
+          gatewayCall,
+          waiters: new Set(),
+        } satisfies AskUserQuestionState);
+      state.sessionKey = sessionKey;
+      state.questions = normalized.questions;
+      state.gatewayCall = gatewayCall;
+      transitionAskUserQuestion(state, { kind: "registering" });
+      askUserQuestions.set(questionId, state);
 
-      let cancellation: Promise<AskUserCancellationOutcome> | undefined;
+      let cancellation:
+        | Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined>
+        | undefined;
       let registered = false;
       const cancelPendingQuestion = (resolvedBy: string) => {
-        cancellation ??= gatewayCall(
-          "question.resolve",
-          { timeoutMs: ASK_USER_RPC_GRACE_MS },
-          { id: questionId, cancel: true, resolvedBy },
-        ).then(
-          () => "cancelled" as const,
-          (error: unknown) => (isTerminalQuestionResolveError(error) ? "terminal" : "failed"),
-        );
+        cancellation ??= (async () => {
+          try {
+            await gatewayCall(
+              "question.resolve",
+              { timeoutMs: ASK_USER_RPC_GRACE_MS },
+              { id: questionId, cancel: true, resolvedBy },
+            );
+            return undefined;
+          } catch (error) {
+            if (!isTerminalQuestionResolveError(error)) {
+              return undefined;
+            }
+            try {
+              const result = (await gatewayCall(
+                "question.waitAnswer",
+                { timeoutMs: ASK_USER_RPC_GRACE_MS },
+                { id: questionId, timeoutMs: 1_000 },
+              )) as QuestionWaitAnswerResult;
+              return result.status === "answered" ? result : undefined;
+            } catch {
+              return undefined;
+            }
+          }
+        })();
         return cancellation;
       };
-      const recoverAnsweredAfterCancellation = async () => {
-        if ((await cancellation) !== "terminal") {
-          return undefined;
-        }
-        try {
-          const result = (await gatewayCall(
-            "question.waitAnswer",
-            { timeoutMs: ASK_USER_RPC_GRACE_MS },
-            { id: questionId, timeoutMs: 1_000 },
-          )) as QuestionWaitAnswerResult;
-          return result.status === "answered" ? result : undefined;
-        } catch {
-          return undefined;
-        }
-      };
       const cancelOnAbort = () => {
-        releaseAskUserPromptDelivery(questionId, params.sessionKey);
+        if (askUserQuestions.get(questionId) === state) {
+          releaseAskUserQuestion(questionId);
+        }
         void cancelPendingQuestion("run-abort");
       };
-
-      try {
-        const requestResult = (await registration) as { id?: unknown };
-        registered = true;
-        if (requestResult.id !== questionId) {
-          throw new Error("question.request returned an unexpected question id");
-        }
-        if (signal) {
-          signal?.addEventListener("abort", cancelOnAbort, { once: true });
-          if (signal.aborted) {
-            cancelOnAbort();
-            signal.throwIfAborted();
-          }
-        }
-        markAskUserPromptReady(questionId, normalized.questions);
-        const promptDelivery = promptDeliveriesByQuestionId.get(questionId);
-        const promptDeliveryPromise = promptDelivery
-          ? waitForPromptDelivery(promptDelivery.result, signal)
-          : undefined;
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + ASK_USER_RPC_GRACE_MS },
-          { id: questionId, timeoutMs },
-          signal ? { signal } : undefined,
-        ) as Promise<QuestionWaitAnswerResult>;
-        if (promptDelivery && promptDeliveryPromise) {
-          const first = await Promise.race([
-            promptDeliveryPromise.then((result) => ({
-              kind: "delivery" as const,
-              result,
-            })),
-            answerPromise.then((result) => ({ kind: "answer" as const, result })),
-          ]);
-          signal?.throwIfAborted();
-          if (first.kind === "answer") {
-            if (first.result.status === "pending") {
-              void cancelPendingQuestion("wait-timeout");
-              const answered = await recoverAnsweredAfterCancellation();
-              if (answered) {
-                return answeredResult(normalized.questions, answered.answers);
-              }
-            }
-            return first.result.status === "answered"
-              ? answeredResult(normalized.questions, first.result.answers)
-              : noAnswerResult(first.result.status);
-          }
-          const deliveryResult = first.result;
-          if (deliveryResult.error !== undefined) {
-            void cancelPendingQuestion("prompt-delivery-failed");
-            const answered = await recoverAnsweredAfterCancellation();
-            if (answered) {
-              return answeredResult(normalized.questions, answered.answers);
-            }
-            throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
-          }
-          if (promptDelivery.bufferedText !== undefined) {
-            const answers = buildAgentHarnessUserInputAnswers(
-              promptDelivery.questions as AgentHarnessUserInputQuestion[],
-              promptDelivery.bufferedText,
-            );
-            try {
-              await gatewayCall(
-                "question.resolve",
-                {},
-                { id: questionId, answers, resolvedBy: "plain-text" },
-              );
-            } catch (error) {
-              if (!isTerminalQuestionResolveError(error)) {
-                throw error;
-              }
-            }
-          }
-        }
-        pending.claimable = true;
-        const result = await answerPromise;
-        signal?.throwIfAborted();
+      const finishWait = async (result: QuestionWaitAnswerResult) => {
         if (result.status === "pending") {
-          void cancelPendingQuestion("wait-timeout");
-          const answered = await recoverAnsweredAfterCancellation();
+          const answered = await cancelPendingQuestion("wait-timeout");
           if (answered) {
             return answeredResult(normalized.questions, answered.answers);
           }
@@ -670,30 +605,82 @@ export function createAskUserTool(params: {
           return noAnswerResult(result.status);
         }
         throw new Error("question.waitAnswer returned an invalid status");
-      } catch (error) {
-        if (registered || readQuestionErrorReason(error) !== "QUESTION_ID_IN_USE") {
-          void cancelPendingQuestion(
-            signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
-          );
-          await cancellation;
-          if (!signal?.aborted) {
-            const answered = await recoverAnsweredAfterCancellation();
+      };
+
+      try {
+        const requestResult = (await gatewayCall(
+          "question.request",
+          {},
+          {
+            id: questionId,
+            questions: normalized.questions,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            timeoutMs,
+          },
+          signal ? { signal } : undefined,
+        )) as { id?: unknown };
+        registered = true;
+        if (requestResult.id !== questionId) {
+          throw new Error("question.request returned an unexpected question id");
+        }
+        signal?.addEventListener("abort", cancelOnAbort, { once: true });
+        if (signal?.aborted) {
+          cancelOnAbort();
+          signal.throwIfAborted();
+        }
+        const answerPromise = gatewayCall(
+          "question.waitAnswer",
+          { timeoutMs: timeoutMs + ASK_USER_RPC_GRACE_MS },
+          { id: questionId, timeoutMs },
+          signal ? { signal } : undefined,
+        ) as Promise<QuestionWaitAnswerResult>;
+        state.answer = answerPromise;
+        if (deliverPrompt) {
+          // Tool-start reserves the prompt, but only a committed Gateway record opens delivery.
+          // This prevents channels from exposing a question ID that cannot accept an answer.
+          markAskUserPromptReady(questionId, normalized.questions);
+          const promptDeliveryPromise = waitForPromptDelivery(state, signal);
+          const first = await Promise.race([
+            promptDeliveryPromise.then((result) => ({
+              kind: "delivery" as const,
+              result,
+            })),
+            answerPromise.then((result) => ({ kind: "answer" as const, result })),
+          ]);
+          signal?.throwIfAborted();
+          if (first.kind === "answer") {
+            return await finishWait(first.result);
+          }
+          const deliveryResult = first.result;
+          if (deliveryResult.error !== undefined) {
+            const answered = await cancelPendingQuestion("prompt-delivery-failed");
             if (answered) {
               return answeredResult(normalized.questions, answered.answers);
             }
+            throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
+          }
+        } else {
+          transitionAskUserQuestion(state, { kind: "answerable" });
+        }
+        const result = await state.answer;
+        signal?.throwIfAborted();
+        return await finishWait(result);
+      } catch (error) {
+        if (registered || readQuestionErrorReason(error) !== "QUESTION_ID_IN_USE") {
+          const answered = await cancelPendingQuestion(
+            signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
+          );
+          if (!signal?.aborted && answered) {
+            return answeredResult(normalized.questions, answered.answers);
           }
         }
         throw error;
       } finally {
         signal?.removeEventListener("abort", cancelOnAbort);
-        if (signal?.aborted) {
-          cancelOnAbort();
-          await cancellation;
+        if (askUserQuestions.get(questionId) === state) {
+          releaseAskUserQuestion(questionId);
         }
-        if (pendingQuestionsBySession.get(sessionKey) === pending) {
-          pendingQuestionsBySession.delete(sessionKey);
-        }
-        releaseAskUserPromptDelivery(questionId, params.sessionKey);
       }
     },
   };
