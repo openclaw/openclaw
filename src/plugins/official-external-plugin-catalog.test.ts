@@ -125,14 +125,12 @@ function signedHostedCatalogFeed(params: {
   ]);
   return {
     body: JSON.stringify({
-      schemaVersion: 1,
       payloadType: HOSTED_CATALOG_PAYLOAD_TYPE,
       payload: payloadBytes.toString("base64url"),
       signatures: [
         {
-          keyId: "acme-root",
-          algorithm: "ed25519",
-          signature: crypto
+          keyid: "acme-root",
+          sig: crypto
             .sign(null, signingInput, crypto.createPrivateKey(keys.privateKeyPem))
             .toString("base64url"),
         },
