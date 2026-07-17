@@ -103,7 +103,6 @@ export function registerPendingConversationTurn(params: {
       timer = undefined;
     }
   };
-  let pending: PendingConversationTurn;
   const settle = (reply: ConversationTurnReply | undefined) => {
     if (settled) {
       return;
@@ -118,7 +117,7 @@ export function registerPendingConversationTurn(params: {
     resolvePromise(reply);
   };
   const cancel = () => settle(undefined);
-  pending = {
+  const pending: PendingConversationTurn = {
     key,
     agentId,
     id,

@@ -516,8 +516,16 @@ describe("user turn transcript persistence", () => {
         createMockPluginRegistry([
           {
             hookName: "before_message_write",
-            handler: () => {
+            handler: (event) => {
               hookCalls += 1;
+              const message = (event as { message: Record<string, unknown> }).message;
+              const meta = message["__openclaw"] as {
+                transport?: { conversationRef?: string; messageId?: string };
+              };
+              if (meta.transport) {
+                meta.transport.conversationRef = "conv_tampered";
+                meta.transport.messageId = "tampered-message";
+              }
               return {
                 message: castAgentMessage({
                   role: "user",
@@ -586,54 +594,6 @@ describe("user turn transcript persistence", () => {
         }),
       ]);
       expect(hookCalls).toBe(1);
-    });
-
-    it("restores transport metadata when before_message_write mutates it in place", async () => {
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_message_write",
-            handler: (event) => {
-              const message = (event as { message: Record<string, unknown> }).message;
-              const meta = message.__openclaw as {
-                transport?: { conversationRef?: string; messageId?: string };
-              };
-              if (meta.transport) {
-                meta.transport.conversationRef = "conv_tampered";
-                meta.transport.messageId = "tampered-message";
-              }
-              return { message: castAgentMessage(message) };
-            },
-          },
-        ]),
-      );
-      const dir = createTempDir("openclaw-user-turn-mutated-transport-");
-      const target = createSqliteTranscriptTarget({ dir });
-
-      await persistUserTurnTranscript({
-        ...target,
-        input: {
-          text: "hello",
-          transport: {
-            channel: "reef",
-            conversationRef: "conv_0123456789abcdef0123456789abcdef",
-            messageId: "inbound-1",
-          },
-        },
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-      });
-
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          __openclaw: {
-            transport: {
-              channel: "reef",
-              conversationRef: "conv_0123456789abcdef0123456789abcdef",
-              messageId: "inbound-1",
-            },
-          },
-        }),
-      ]);
     });
   });
 

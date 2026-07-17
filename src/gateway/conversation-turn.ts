@@ -176,7 +176,7 @@ export async function runGatewayConversationTurn(
   }
 
   const prior = deps.getOperation(scope, params.turnId);
-  const preparedMessageId =
+  const candidatePreparedMessageId =
     prior?.preparedMessageId ??
     prepareConversationMessageId({
       deps,
@@ -192,7 +192,7 @@ export async function runGatewayConversationTurn(
       conversationRef: conversation.conversationRef,
       ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
       message: params.message,
-      preparedMessageId,
+      preparedMessageId: candidatePreparedMessageId,
     });
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
@@ -203,6 +203,14 @@ export async function runGatewayConversationTurn(
   const completed = resultForCompletedOperation({ conversation, operation: begun.record });
   if (completed) {
     return completed;
+  }
+  // Another process may have created the operation after our initial read.
+  // Its durable reservation owns correlation; never send with our stale candidate.
+  const preparedMessageId = begun.record.preparedMessageId;
+  if (!preparedMessageId) {
+    throw new ConversationInputError(
+      `Conversation turn ${params.turnId} is missing its prepared message id`,
+    );
   }
 
   const pending = deps.registerPendingConversationTurn({

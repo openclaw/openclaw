@@ -188,6 +188,62 @@ describe("runGatewayConversationTurn", () => {
     );
   });
 
+  it("uses the durable prepared id when another process creates the operation during preflight", async () => {
+    const deps = createDeps();
+    let capture: Promise<void> | undefined;
+    deps.resolveOutboundChannelPlugin.mockReturnValueOnce({
+      outbound: {
+        prepareConversationTurnMessageId: () => {
+          deps.operations.set("turn-raced", {
+            operationId: "turn-raced",
+            operationKind: "turn",
+            conversationRef: conversation.conversationRef,
+            messageHash: "hello molty",
+            status: "created",
+            preparedMessageId: "reef-authoritative-a",
+            createdAt: 100,
+            updatedAt: 100,
+          });
+          return "reef-candidate-b";
+        },
+      },
+    } as never);
+    deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
+      expect(input).toMatchObject({ preparedMessageId: "reef-authoritative-a" });
+      persistIntent(input);
+      capture = claimPendingConversationTurnReply({
+        agentId: "main",
+        conversationRef: conversation.conversationRef,
+        sessionId: conversation.sessionId,
+        messageId: "reef-inbound-race",
+        replyToId: "reef-authoritative-a",
+        text: "durable id acknowledged",
+        timestamp: 300,
+      }).then((claim) => claim?.complete());
+      return sentResult("reef-authoritative-a");
+    }) as never;
+
+    const result = await runGatewayConversationTurn(
+      {
+        config: {},
+        agentId: "main",
+        senderIsOwner: true,
+        turnId: "turn-raced",
+        conversationRef: conversation.conversationRef,
+        message: "hello molty",
+        timeoutMs: 1_000,
+      },
+      deps,
+    );
+    await capture;
+
+    expect(result).toMatchObject({
+      status: "replied",
+      messageId: "reef-authoritative-a",
+      reply: { text: "durable id acknowledged", replyToId: "reef-authoritative-a" },
+    });
+  });
+
   it("returns a prior durable reply without sending again", async () => {
     const deps = createDeps();
     deps.operations.set("turn-replied", {

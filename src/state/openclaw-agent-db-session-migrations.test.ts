@@ -113,7 +113,7 @@ describe("agent DB conversation migration", () => {
       200,
     );
     insertEntry.run(
-      "agent:main:reef:direct:peer-a",
+      "agent:main:reef:direct:peer-a:related",
       "dedicated",
       JSON.stringify({
         chatType: "direct",
@@ -122,12 +122,11 @@ describe("agent DB conversation migration", () => {
       }),
       300,
     );
-    insertSession.run("channel-case", "agent:main:discord:channel:ops-room", "channel", "channel");
+    insertSession.run("channel-case", "agent:main:legacy-room", "channel", null);
     insertEntry.run(
-      "agent:main:discord:channel:ops-room",
+      "agent:main:legacy-room",
       "channel-case",
       JSON.stringify({
-        chatType: " CHANNEL ",
         groupId: "ops-room",
         deliveryContext: {
           channel: "discord",
@@ -136,6 +135,20 @@ describe("agent DB conversation migration", () => {
         },
       }),
       400,
+    );
+    insertSession.run("group-case", "agent:main:legacy-group", "channel", null);
+    insertEntry.run(
+      "agent:main:legacy-group",
+      "group-case",
+      JSON.stringify({
+        groupId: "crew-room",
+        deliveryContext: {
+          channel: "telegram",
+          accountId: "default",
+          to: "-100123",
+        },
+      }),
+      500,
     );
 
     backfillSessionConversations(database);
@@ -170,6 +183,13 @@ describe("agent DB conversation migration", () => {
         kind: "direct",
         peer_id: "peer-b",
         delivery_target: "reef:peer-b",
+      },
+      {
+        session_id: "group-case",
+        role: "primary",
+        kind: "group",
+        peer_id: "-100123",
+        delivery_target: "-100123",
       },
       {
         session_id: "shared",

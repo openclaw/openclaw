@@ -1,7 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeChatType } from "../channels/chat-type.js";
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
@@ -33,14 +34,46 @@ function parseConversationEntry(value: unknown): MigratedConversationEntry | und
   }
 }
 
-function migratedConversation(entry: MigratedConversationEntry, persistedChatType?: string) {
+function inferMigratedChatType(params: {
+  entry: MigratedConversationEntry;
+  persistedChatType?: string;
+  sessionKey?: string;
+  deliveryTarget?: string;
+}): ChatType {
+  const explicit =
+    normalizeChatType(migratedText(params.entry.chatType)) ??
+    normalizeChatType(migratedText(params.persistedChatType));
+  if (explicit) {
+    return explicit;
+  }
+  const keyType = deriveSessionChatTypeFromKey(params.sessionKey);
+  if (keyType !== "unknown") {
+    return keyType;
+  }
+  const target = params.deliveryTarget?.toLowerCase();
+  if (target?.startsWith("channel:") || /^[^:]+:channel:/u.test(target ?? "")) {
+    return "channel";
+  }
+  if (/^(?:[^:]+:)?(?:group|room):/u.test(target ?? "") || migratedText(params.entry.groupId)) {
+    return "group";
+  }
+  return "direct";
+}
+
+function migratedConversation(
+  entry: MigratedConversationEntry,
+  persistedChatType?: string,
+  sessionKey?: string,
+) {
   const delivery = migratedObject(entry, "deliveryContext");
   const origin = migratedObject(entry, "origin");
-  const kind =
-    normalizeChatType(migratedText(entry.chatType)) ??
-    normalizeChatType(migratedText(persistedChatType)) ??
-    "direct";
   const deliveryRouteTarget = migratedText(delivery?.to);
+  const kind = inferMigratedChatType({
+    entry,
+    persistedChatType,
+    sessionKey,
+    deliveryTarget: deliveryRouteTarget ?? migratedText(origin?.from),
+  });
   const deliveryTarget =
     deliveryRouteTarget ?? (kind === "direct" ? migratedText(origin?.from) : undefined);
   if (!deliveryTarget) {
@@ -113,6 +146,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
         SELECT
           se.session_id,
           se.entry_json,
+          se.session_key,
           se.updated_at,
           s.session_scope,
           CASE WHEN se.session_key = s.session_key THEN s.chat_type END AS persisted_chat_type
@@ -124,6 +158,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
     .all() as Array<{
     entry_json?: unknown;
     persisted_chat_type?: unknown;
+    session_key?: unknown;
     session_id?: unknown;
     session_scope?: unknown;
     updated_at?: unknown;
@@ -169,7 +204,11 @@ export function backfillSessionConversations(db: DatabaseSync): void {
     const entry = parseConversationEntry(row.entry_json);
     const updatedAt = typeof row.updated_at === "number" ? row.updated_at : Date.now();
     const conversation = entry
-      ? migratedConversation(entry, migratedText(row.persisted_chat_type))
+      ? migratedConversation(
+          entry,
+          migratedText(row.persisted_chat_type),
+          migratedText(row.session_key),
+        )
       : undefined;
     if (!sessionId || !conversation) {
       continue;
