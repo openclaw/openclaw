@@ -281,6 +281,7 @@ jobs:
 
       - name: Validate release publish approval run
         env:
+          ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
