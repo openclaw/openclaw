@@ -1,6 +1,7 @@
 // Memory Wiki compiled cache tests cover compile, prepare, query, restart, and owner cleanup.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -30,10 +31,12 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const { createVault } = createMemoryWikiTestHarness();
+let blobStateDir = "";
+let blobStoreEnv: NodeJS.ProcessEnv = {};
 
 function createCacheStore() {
   return createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
-    createPluginBlobStoreForTests<T>("memory-wiki", options),
+    createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv),
   );
 }
 
@@ -98,16 +101,21 @@ async function preparePrompt(config: ReturnType<typeof resolveMemoryWikiConfig>)
 }
 
 describe("Memory Wiki compiled cache lifecycle", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetPluginBlobStoreForTests();
     resetMemoryWikiCompiledCacheOwnersForTests();
+    blobStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compiled-cache-state-"));
+    blobStoreEnv = { ...process.env, OPENCLAW_STATE_DIR: blobStateDir };
     configureMemoryWikiCompiledCacheStore(createCacheStore());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
     resetMemoryWikiCompiledCacheOwnersForTests();
     resetPluginBlobStoreForTests();
+    await fs.rm(blobStateDir, { recursive: true, force: true });
+    blobStateDir = "";
+    blobStoreEnv = {};
   });
 
   it("round-trips compile through async preparation and claim query after restart", async () => {
@@ -216,7 +224,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   it("reads the stable owner row directly without enumerating stale metadata", async () => {
     const { config } = await createPersistentVault({ initialize: true });
     const reader = createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) => {
-      const store = createPluginBlobStoreForTests<T>("memory-wiki", options);
+      const store = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
       return {
         ...store,
         async entries() {
@@ -278,7 +286,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     let failNextRead = false;
     const store = createMemoryWikiCompiledCacheStore(
       <T>(options: OpenBlobStoreOptions) => {
-        const blobStore = createPluginBlobStoreForTests<T>("memory-wiki", options);
+        const blobStore = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
         return {
           ...blobStore,
           async lookup(key) {
