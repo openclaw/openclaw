@@ -1673,12 +1673,11 @@ describe("ci workflow guards", () => {
   it("downloads the opengrep installer completely before execution", () => {
     for (const workflowPath of [OPENGREP_PR_DIFF_WORKFLOW, OPENGREP_FULL_WORKFLOW]) {
       const workflow = parse(readFileSync(workflowPath, "utf8"));
-      const installStep = workflow.jobs.scan.steps.find(
-        (step: WorkflowStep) => step.name === "Install opengrep",
+      const run = expectDefined(
+        workflow.jobs.scan.steps.find((step: WorkflowStep) => step.name === "Install opengrep")
+          ?.run,
+        `Install opengrep step in ${workflowPath}`,
       );
-
-      expect(installStep, workflowPath).toBeDefined();
-      const run = installStep.run as string;
 
       expect(run, workflowPath).toContain(
         'installer="$(mktemp "${RUNNER_TEMP}/opengrep-install.XXXXXX")"',
@@ -1690,7 +1689,7 @@ describe("ci workflow guards", () => {
       expect(run.indexOf('-o "$installer"'), workflowPath).toBeLessThan(
         run.indexOf('bash "$installer"'),
       );
-      expect(run, workflowPath).not.toMatch(/curl[^\n]+\|\s*bash/u);
+      expect(run, workflowPath).not.toMatch(/\|\s*bash/u);
     }
   });
 
@@ -4303,5 +4302,4 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'call.getFile().getRelativePath() = "extensions/codex/src/app-server/transport-websocket.ts"',
     );
   });
-
 });
