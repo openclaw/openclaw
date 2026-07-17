@@ -162,6 +162,40 @@ describe("MeetingSessionRuntime failed joins", () => {
     expect(runtime.list()).toEqual([]);
   });
 
+  it("retries transport cleanup for an unpublished failed join", async () => {
+    const joinError = new Error("transport setup failed");
+    const stopError = new Error("transport stop failed");
+    const stop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(stopError)
+      .mockResolvedValueOnce();
+    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+      if (session.browser) {
+        session.browser.tab = undefined;
+      }
+      return true;
+    });
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab,
+      joinTransport: async ({ session, context }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "partial-tab", openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        throw joinError;
+      },
+    });
+
+    await expect(
+      runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
+    ).rejects.toBe(joinError);
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+    expect(runtime.list()).toEqual([]);
+  });
+
   it("retries unprocessed retained tabs after settlement rejects", async () => {
     const settlementError = new Error("retained release rejected");
     const oldStop = vi.fn(async () => {});
@@ -246,5 +280,77 @@ describe("MeetingSessionRuntime failed joins", () => {
     expect(oldStop).toHaveBeenCalledOnce();
     expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
     expect(createdSessions[0]).toMatchObject({ state: "ended", browser: { tab: undefined } });
+  });
+});
+
+describe("MeetingSessionRuntime leave cleanup", () => {
+  it("retries a failed transport stop without repeating settled browser cleanup", async () => {
+    const stopError = new Error("transport stop failed");
+    const stop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(stopError)
+      .mockResolvedValueOnce();
+    const releaseBrowserTab = vi.fn(async (session: TestSession) => {
+      if (session.browser) {
+        session.browser.tab = undefined;
+      }
+      return true;
+    });
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab,
+      joinTransport: async ({ session, context }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "leave-tab", openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    await expect(runtime.leave(session.id)).rejects.toBe(stopError);
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+    });
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(releaseBrowserTab).toHaveBeenCalledOnce();
+  });
+
+  it("retries browser cleanup that reported an unsuccessful leave", async () => {
+    const stop = vi.fn(async () => {});
+    const releaseBrowserTab = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { runtime } = createTestRuntime({
+      releaseBrowserTab,
+      joinTransport: async ({ session, context }) => {
+        session.browser = {
+          launched: true,
+          tab: { targetId: "retry-tab", openedByPlugin: true },
+        };
+        context.attachRuntimeHandles(session, { stop });
+        return {};
+      },
+    });
+    const { session } = await runtime.join({
+      url: "https://meeting.example/room",
+      agentId: "main",
+    });
+
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: false,
+    });
+    await expect(runtime.leave(session.id)).resolves.toMatchObject({
+      found: true,
+      browserLeft: true,
+    });
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(releaseBrowserTab).toHaveBeenCalledTimes(2);
   });
 });

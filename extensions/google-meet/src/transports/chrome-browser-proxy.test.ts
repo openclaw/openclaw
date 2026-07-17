@@ -1,8 +1,10 @@
+import { runInNewContext } from "node:vm";
 // Google Meet tests cover chrome browser proxy plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { callBrowserProxyOnNode } from "./chrome-browser-proxy.js";
+import { meetLeaveScript } from "./google-meet-page-scripts.js";
 import {
   forceMeetEnglishUi,
   isEnglishMeetTab,
@@ -49,6 +51,32 @@ describe("normalizeMeetUrlForReuse", () => {
     expect(normalizeMeetUrlForReuse("https://meet.google.com/abc-defg-hij?authuser=1")).toBe(
       "https://meet.google.com/abc-defg-hij",
     );
+  });
+});
+
+describe("meetLeaveScript", () => {
+  it("requires the resolved canonical room before leaving a /new tab", () => {
+    const context = {
+      URL,
+      location: { href: "https://meet.google.com/abc-defg-hij?authuser=1" },
+      document: { querySelectorAll: () => [] },
+    };
+    expect(
+      JSON.parse(
+        runInNewContext(
+          "(" + meetLeaveScript("https://meet.google.com/new") + ")()",
+          context,
+        ) as string,
+      ),
+    ).toEqual({ departed: false });
+    expect(
+      JSON.parse(
+        runInNewContext(
+          "(" + meetLeaveScript("https://meet.google.com/abc-defg-hij") + ")()",
+          context,
+        ) as string,
+      ),
+    ).toEqual({ departed: false, urlMatched: true });
   });
 });
 

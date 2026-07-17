@@ -426,7 +426,10 @@ export function meetLeaveScript(meetingUrl: string) {
   } catch {
     return JSON.stringify({ departed: false });
   }
-  if (!expectedMeetingUrl || currentMeetingUrl !== expectedMeetingUrl) {
+  if (!expectedMeetingUrl) {
+    return JSON.stringify({ departed: false });
+  }
+  if (currentMeetingUrl !== expectedMeetingUrl) {
     return JSON.stringify({ departed: true, urlMatched: false });
   }
   const text = (node) => (node?.innerText || node?.textContent || "").trim();

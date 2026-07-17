@@ -381,6 +381,168 @@ describe("local Meet realtime transport process stream errors", () => {
   });
 });
 
+describe("Google Meet bidi realtime engine cleanup", () => {
+  it("disposes the audio transport when provider connection fails", async () => {
+    const connectError = new Error("voice bridge connect failed");
+    const stopError = new Error("transport stop failed");
+    const bridge = {
+      connect: vi.fn(async () => {
+        throw connectError;
+      }),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => false),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: () => bridge,
+    };
+    const stop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(stopError)
+      .mockResolvedValueOnce();
+    const dispose = vi.fn(async () => {});
+    const transport: MeetingRealtimeAudioTransport = {
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop,
+      writeOutput: vi.fn(async () => {}),
+      clearOutput: vi.fn(async () => {}),
+      dispose,
+    };
+
+    await expect(
+      startMeetingRealtimeEngine({
+        config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        ...GOOGLE_MEET_ENGINE_BINDINGS,
+        meetingSessionId: "meet-connect-failure",
+        logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        providers: [provider],
+        transport,
+      }),
+    ).rejects.toBe(connectError);
+
+    expect(bridge.close).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("stops the audio transport when the provider bridge closes unexpectedly", async () => {
+    let closeBridge: ((reason: "completed" | "error") => void) | undefined;
+    const bridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: (params) => {
+        closeBridge = params.onClose;
+        return bridge;
+      },
+    };
+    const stop = vi.fn(async () => {});
+    const dispose = vi.fn(async () => {});
+    const transport: MeetingRealtimeAudioTransport = {
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop,
+      writeOutput: vi.fn(async () => {}),
+      clearOutput: vi.fn(async () => {}),
+      dispose,
+    };
+    const handle = await startMeetingRealtimeEngine({
+      config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      ...GOOGLE_MEET_ENGINE_BINDINGS,
+      meetingSessionId: "meet-unexpected-close",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      providers: [provider],
+      transport,
+    });
+
+    closeBridge?.("completed");
+    await vi.waitFor(() => {
+      expect(stop).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+    });
+    expect(handle.getHealth().bridgeClosed).toBe(true);
+  });
+
+  it("retries only the unsettled transport teardown phase", async () => {
+    const stopError = new Error("transport stop failed");
+    let closeBridge: ((reason: "completed" | "error") => void) | undefined;
+    const bridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(() => closeBridge?.("completed")),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      isConfigured: () => true,
+      createBridge: (params) => {
+        closeBridge = params.onClose;
+        return bridge;
+      },
+    };
+    const stop = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(stopError)
+      .mockResolvedValueOnce();
+    const dispose = vi.fn(async () => {});
+    const transport: MeetingRealtimeAudioTransport = {
+      onFatal: vi.fn(),
+      startInput: vi.fn(),
+      stop,
+      writeOutput: vi.fn(async () => {}),
+      clearOutput: vi.fn(async () => {}),
+      dispose,
+    };
+    const handle = await startMeetingRealtimeEngine({
+      config: resolveGoogleMeetConfig({ realtime: { strategy: "bidi", provider: "openai" } }),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      ...GOOGLE_MEET_ENGINE_BINDINGS,
+      meetingSessionId: "meet-stop-retry",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      providers: [provider],
+      transport,
+    });
+
+    await expect(handle.stop()).rejects.toBe(stopError);
+    await expect(handle.stop()).resolves.toBeUndefined();
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(bridge.close).toHaveBeenCalledOnce();
+  });
+});
+
 describe("Google Meet realtime model logs", () => {
   it("keeps a whole code point when a provider id crosses the log boundary", async () => {
     const prefix = "a".repeat(179);

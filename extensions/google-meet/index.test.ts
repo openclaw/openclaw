@@ -7710,7 +7710,9 @@ describe("google-meet plugin", () => {
       "[google-meet] audio input command stdout failed: EPIPE",
     );
     expect(handle.getHealth().bridgeClosed).toBe(true);
-    expect(bridge.close).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(bridge.close).toHaveBeenCalled();
+    });
     expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGTERM");
   });

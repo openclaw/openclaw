@@ -67,7 +67,8 @@ export function createMeetingVoiceCallGateway(params: {
           timeoutMs: params.config.requestTimeoutMs,
         })) as T;
       } finally {
-        await client.stopAndWait({ timeoutMs: 1_000 });
+        // Connection teardown must not replace an already-settled RPC result or error.
+        await client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
       }
     },
   };

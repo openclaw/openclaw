@@ -1,4 +1,5 @@
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import { MeetingSessionCleanupTracker } from "./session-cleanup-tracker.js";
 import { MeetingSessionJoinLock } from "./session-join-lock.js";
 import { MeetingSessionTranscriptStore } from "./session-transcript-store.js";
 import type {
@@ -142,6 +143,7 @@ export class MeetingSessionRuntime<
 > {
   readonly #sessions = new Map<string, TSession>();
   readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
+  readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new MeetingSessionJoinLock();
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
@@ -504,7 +506,7 @@ export class MeetingSessionRuntime<
     if (!session) {
       return { found: false };
     }
-    if (session.state === "ended") {
+    if (session.state === "ended" && !this.#sessionCleanup.isPending(sessionId)) {
       return {
         found: true,
         session,
@@ -526,7 +528,8 @@ export class MeetingSessionRuntime<
     session: TSession,
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
-    if (this.options.isTranscribeMode(session.mode)) {
+    const firstAttempt = this.#sessionCleanup.begin(session.id, session.browserLeft);
+    if (firstAttempt && this.options.isTranscribeMode(session.mode)) {
       this.#transcriptStore.startFinalizing(session.id);
       await this.#transcriptStore.capture(session, { finalize: true }).catch((error: unknown) => {
         this.options.logger.debug?.(
@@ -536,23 +539,34 @@ export class MeetingSessionRuntime<
     }
     session.state = "ended";
     session.updatedAt = nowIso();
+    this.#sessionSpeakers.delete(session.id);
+    this.#sessionHealth.delete(session.id);
     const stop = this.#sessionStops.get(session.id);
-    this.#dropRuntimeHandles(session.id);
-    let browserLeft: boolean | undefined;
     try {
-      await stop?.();
+      const cleanup = await this.#sessionCleanup.cleanup({
+        sessionId: session.id,
+        stop,
+        keepBrowserTab: options?.keepBrowserTab === true,
+        releaseBrowser: async () => await this.options.releaseBrowserTab(session),
+      });
+      session.browserLeft = cleanup.browserLeft;
+      if (cleanup.stopSettled && stop && this.#sessionStops.get(session.id) === stop) {
+        this.#sessionStops.delete(session.id);
+      }
+      if (cleanup.complete) {
+        this.#dropRuntimeHandles(session.id);
+      }
+      return {
+        found: true,
+        session,
+        ...(cleanup.browserLeft === undefined ? {} : { browserLeft: cleanup.browserLeft }),
+      };
     } finally {
-      try {
-        if (!options?.keepBrowserTab) {
-          browserLeft = await this.options.releaseBrowserTab(session);
-          session.browserLeft = browserLeft;
-        }
-      } finally {
+      if (firstAttempt) {
         this.#transcriptStore.retire(session.id);
         this.#transcriptStore.finishFinalizing(session.id);
       }
     }
-    return { found: true, session, ...(browserLeft === undefined ? {} : { browserLeft }) };
   }
 
   #meetingKey(transport: TTransport, url: string): string {
@@ -618,30 +632,17 @@ export class MeetingSessionRuntime<
   }
 
   async #rollbackFailedJoinSession(session: TSession): Promise<void> {
-    try {
-      await this.#leaveSession(session);
-    } catch (error) {
-      this.options.logger.warn(
-        `${this.options.logScope} replacement cleanup failed: ${this.options.formatError(error)}`,
-      );
-    }
-    if (!this.options.getBrowser(session)?.tab) {
-      return;
-    }
-    // The unpublished replacement has no later leave caller. Retry a failed tab release
-    // once after transport teardown so a transient browser error cannot orphan it.
-    try {
-      session.browserLeft = await this.options.releaseBrowserTab(session);
-    } catch (error) {
-      this.options.logger.warn(
-        `${this.options.logScope} replacement browser cleanup retry failed: ${this.options.formatError(error)}`,
-      );
-    }
-    if (this.options.getBrowser(session)?.tab) {
-      this.options.logger.warn(
-        `${this.options.logScope} replacement browser cleanup incomplete after failed join`,
-      );
-    }
+    await this.#sessionCleanup.rollbackFailedJoin({
+      sessionId: session.id,
+      browserLeft: session.browserLeft,
+      leave: async () => await this.#leaveSession(session),
+      hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
+      releaseBrowser: async () => await this.options.releaseBrowserTab(session),
+      formatError: (error) => this.options.formatError(error),
+      warn: (message) => this.options.logger.warn(`${this.options.logScope} ${message}`),
+      onBrowserResult: (left) => (session.browserLeft = left),
+      onComplete: () => this.#dropRuntimeHandles(session.id),
+    });
   }
 
   async #settleRetainedBrowserTabsAfterFailure(

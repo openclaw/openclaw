@@ -291,6 +291,10 @@ export async function startMeetingRealtimeEngine(params: {
   handleToolCall: (params: MeetingRealtimeToolCallParams) => Promise<void>;
 }): Promise<MeetingRealtimeAudioEngineHandle> {
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+  let bridgeClosed = false;
+  let transportStopped = false;
+  let transportDisposed = false;
   // Not const: the synchronous onFatal replay can run stop() (and its bridge?.close())
   // before createBridge() below executes; a later `const` would throw at that read.
   let bridge: RealtimeVoiceBridgeSession | undefined = undefined;
@@ -300,20 +304,54 @@ export async function startMeetingRealtimeEngine(params: {
   const realtimeLogScope = params.logPrefix ? `${params.logPrefix} realtime` : "realtime";
 
   const stop = async () => {
-    if (stopped) {
+    stopped = true;
+    if (stopPromise) {
+      await stopPromise;
       return;
     }
-    stopped = true;
-    harness.close();
+    const cleanup = Promise.resolve().then(async () => {
+      if (!bridgeClosed) {
+        bridgeClosed = true;
+        harness.close();
+        try {
+          bridge?.close();
+        } catch (error) {
+          params.logger.debug?.(
+            `${params.platform.logScope} ${realtimeLogScope}${params.logPrefix ? "" : " voice"} bridge close ignored: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+      let cleanupError: unknown;
+      if (!transportStopped) {
+        try {
+          await params.transport.stop();
+          transportStopped = true;
+        } catch (error) {
+          cleanupError = error;
+        }
+      }
+      if (!transportDisposed) {
+        try {
+          await params.transport.dispose();
+          transportDisposed = true;
+        } catch (error) {
+          cleanupError ??= error;
+        }
+      }
+      if (cleanupError) {
+        throw cleanupError instanceof Error
+          ? cleanupError
+          : new Error("Meeting realtime transport cleanup failed", { cause: cleanupError });
+      }
+    });
+    stopPromise = cleanup;
     try {
-      bridge?.close();
-    } catch (error) {
-      params.logger.debug?.(
-        `${params.platform.logScope} ${realtimeLogScope}${params.logPrefix ? "" : " voice"} bridge close ignored: ${formatErrorMessage(error)}`,
-      );
+      await cleanup;
+    } finally {
+      if (stopPromise === cleanup) {
+        stopPromise = undefined;
+      }
     }
-    await params.transport.stop();
-    await params.transport.dispose();
   };
   const stopAfterFailure = (source: string) => {
     void stop().catch((error: unknown) => {
@@ -445,186 +483,202 @@ export async function startMeetingRealtimeEngine(params: {
       `${params.platform.displayName} audio transport failed before realtime provider setup`,
     );
   }
-  bridge = harness.createBridge({
-    provider: resolved.provider,
-    cfg: params.fullConfig,
-    providerConfig: resolved.providerConfig,
-    audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
-    instructions: params.config.realtime.instructions,
-    initialGreetingInstructions: params.config.realtime.introMessage,
-    autoRespondToAudio: strategy === "bidi",
-    triggerGreetingOnReady: false,
-    markStrategy: "ack-immediately",
-    tools: strategy === "bidi" ? params.tools : [],
-    audioSink: {
-      isOpen: () => !stopped,
-      sendAudio: (audio) => {
-        harness.outputActivity.markPlaybackStarted();
-        harness.recordOutputAudio(audio);
-        writeOutputAudio(audio);
+  try {
+    bridge = harness.createBridge({
+      provider: resolved.provider,
+      cfg: params.fullConfig,
+      providerConfig: resolved.providerConfig,
+      audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
+      instructions: params.config.realtime.instructions,
+      initialGreetingInstructions: params.config.realtime.introMessage,
+      autoRespondToAudio: strategy === "bidi",
+      triggerGreetingOnReady: false,
+      markStrategy: "ack-immediately",
+      tools: strategy === "bidi" ? params.tools : [],
+      audioSink: {
+        isOpen: () => !stopped,
+        sendAudio: (audio) => {
+          harness.outputActivity.markPlaybackStarted();
+          harness.recordOutputAudio(audio);
+          writeOutputAudio(audio);
+        },
+        clearAudio: () => {
+          harness.flushOutput(clearOutputPlayback);
+          harness.finishOutputAudio("clear");
+        },
       },
-      clearAudio: () => {
-        harness.flushOutput(clearOutputPlayback);
-        harness.finishOutputAudio("clear");
-      },
-    },
-    onTranscript: (role, text, isFinal) => {
-      const turnId = harness.ensureTurn();
-      const eventType =
-        role === "assistant"
-          ? isFinal
-            ? "output.text.done"
-            : "output.text.delta"
-          : isFinal
-            ? "transcript.done"
-            : "transcript.delta";
-      const payload = role === "assistant" ? { text } : { role, text };
-      harness.emit({
-        type: eventType,
-        turnId,
-        payload,
-        final: isFinal,
-      });
-      if (role === "user" && isFinal) {
+      onTranscript: (role, text, isFinal) => {
+        const turnId = harness.ensureTurn();
+        const eventType =
+          role === "assistant"
+            ? isFinal
+              ? "output.text.done"
+              : "output.text.delta"
+            : isFinal
+              ? "transcript.done"
+              : "transcript.delta";
+        const payload = role === "assistant" ? { text } : { role, text };
         harness.emit({
-          type: "input.audio.committed",
+          type: eventType,
           turnId,
-          payload: outputTalkPayload,
-          final: true,
+          payload,
+          final: isFinal,
         });
-      }
-      if (isFinal) {
-        params.logger.info(
-          formatMeetingTranscriptSummaryLog(
-            params.platform.logScope,
-            `${realtimeLogScope} ${role}`,
-            text,
-          ),
-        );
-        if (role === "user" && strategy === "agent") {
-          if (harness.isLikelyAssistantEchoTranscript(text)) {
-            params.logger.info(
-              formatMeetingTranscriptSummaryLog(
-                params.platform.logScope,
-                `${realtimeLogScope} ignored assistant echo transcript`,
-                text,
-              ),
-            );
+        if (role === "user" && isFinal) {
+          harness.emit({
+            type: "input.audio.committed",
+            turnId,
+            payload: outputTalkPayload,
+            final: true,
+          });
+        }
+        if (isFinal) {
+          params.logger.info(
+            formatMeetingTranscriptSummaryLog(
+              params.platform.logScope,
+              `${realtimeLogScope} ${role}`,
+              text,
+            ),
+          );
+          if (role === "user" && strategy === "agent") {
+            if (harness.isLikelyAssistantEchoTranscript(text)) {
+              params.logger.info(
+                formatMeetingTranscriptSummaryLog(
+                  params.platform.logScope,
+                  `${realtimeLogScope} ignored assistant echo transcript`,
+                  text,
+                ),
+              );
+              return;
+            }
+            harness.talkback?.enqueue(text);
+          }
+        }
+      },
+      onEvent: (event) => {
+        if (event.type === "input_audio_buffer.speech_started") {
+          harness.ensureTurn();
+        } else if (event.type === "input_audio_buffer.speech_stopped") {
+          const turnId = harness.talk.activeTurnId;
+          if (!turnId) {
             return;
           }
-          harness.talkback?.enqueue(text);
+          harness.emit({
+            type: "input.audio.committed",
+            turnId,
+            payload: { ...outputTalkPayload, source: event.type },
+            final: true,
+          });
+        } else if (event.type === "response.done") {
+          harness.finishOutputAudio("response.done");
+          harness.endTurn("response.done");
+        } else if (event.type === "error") {
+          harness.emit({
+            type: "session.error",
+            payload: { message: event.detail ?? "Realtime provider error" },
+            final: true,
+          });
         }
-      }
-    },
-    onEvent: (event) => {
-      if (event.type === "input_audio_buffer.speech_started") {
-        harness.ensureTurn();
-      } else if (event.type === "input_audio_buffer.speech_stopped") {
-        const turnId = harness.talk.activeTurnId;
-        if (!turnId) {
-          return;
+        if (
+          event.type === "error" ||
+          event.type === "response.done" ||
+          event.type === "input_audio_buffer.speech_started" ||
+          event.type === "input_audio_buffer.speech_stopped" ||
+          event.type === "conversation.item.input_audio_transcription.completed" ||
+          event.type === "conversation.item.input_audio_transcription.failed"
+        ) {
+          const detail = event.detail ? ` ${event.detail}` : "";
+          params.logger.info(
+            `${params.platform.logScope} ${realtimeLogScope} ${event.direction}:${event.type}${detail}`,
+          );
         }
+      },
+      onToolCall: (event, session) => {
         harness.emit({
-          type: "input.audio.committed",
-          turnId,
-          payload: { ...outputTalkPayload, source: event.type },
-          final: true,
+          type: "tool.call",
+          turnId: harness.ensureTurn(),
+          itemId: event.itemId,
+          callId: event.callId,
+          payload: { name: event.name, args: event.args },
         });
-      } else if (event.type === "response.done") {
-        harness.finishOutputAudio("response.done");
-        harness.endTurn("response.done");
-      } else if (event.type === "error") {
+        const turnId = harness.ensureTurn();
+        return params.handleToolCall({
+          strategy,
+          session,
+          event,
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          transcript: harness.transcript,
+          onTalkEvent: (inputLocal) =>
+            harness.emit({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
+        });
+      },
+      onError: (error) => {
         harness.emit({
           type: "session.error",
-          payload: { message: event.detail ?? "Realtime provider error" },
+          payload: { message: formatErrorMessage(error) },
           final: true,
         });
+        params.logger.warn(
+          `${params.platform.logScope} ${realtimeLogScope} voice bridge failed: ${formatErrorMessage(error)}`,
+        );
+        stopAfterFailure("voice bridge");
+      },
+      onClose: (reason) => {
+        realtimeReady = false;
+        harness.finishOutputAudio(reason);
+        harness.emit({
+          type: "session.closed",
+          payload: { reason },
+          final: true,
+        });
+        stopAfterFailure("voice bridge close");
+      },
+      onReady: () => {
+        realtimeReady = true;
+        harness.emit({
+          type: "session.ready",
+          payload: outputTalkPayload,
+        });
+      },
+    });
+    startHumanBargeInMonitor();
+
+    // Drain transport input while connect() is pending so the capture pipe never backpressures.
+    // Pre-connect audio is forwarded; the voice bridge owns buffering, matching the previous
+    // local command-pair behavior.
+    params.transport.startInput((audio) => {
+      if (stopped || audio.byteLength === 0) {
+        return;
       }
-      if (
-        event.type === "error" ||
-        event.type === "response.done" ||
-        event.type === "input_audio_buffer.speech_started" ||
-        event.type === "input_audio_buffer.speech_stopped" ||
-        event.type === "conversation.item.input_audio_transcription.completed" ||
-        event.type === "conversation.item.input_audio_transcription.failed"
-      ) {
-        const detail = event.detail ? ` ${event.detail}` : "";
-        params.logger.info(
-          `${params.platform.logScope} ${realtimeLogScope} ${event.direction}:${event.type}${detail}`,
+      if (!harness.recordInputAudio(audio)) {
+        return;
+      }
+      bridge?.sendAudio(audio);
+    });
+
+    await bridge.connect();
+    if (stopped) {
+      throw new Error(
+        `${params.platform.displayName} audio transport stopped during realtime provider setup`,
+      );
+    }
+  } catch (error) {
+    try {
+      await stop();
+    } catch (cleanupError) {
+      params.logger.debug?.(
+        `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup ignored: ${formatErrorMessage(cleanupError)}`,
+      );
+      try {
+        await stop();
+      } catch (retryError) {
+        params.logger.debug?.(
+          `${params.platform.logScope} ${realtimeLogScope} failed-start cleanup retry ignored: ${formatErrorMessage(retryError)}`,
         );
       }
-    },
-    onToolCall: (event, session) => {
-      harness.emit({
-        type: "tool.call",
-        turnId: harness.ensureTurn(),
-        itemId: event.itemId,
-        callId: event.callId,
-        payload: { name: event.name, args: event.args },
-      });
-      const turnId = harness.ensureTurn();
-      return params.handleToolCall({
-        strategy,
-        session,
-        event,
-        meetingSessionId: params.meetingSessionId,
-        requesterSessionKey: params.requesterSessionKey,
-        transcript: harness.transcript,
-        onTalkEvent: (inputLocal) =>
-          harness.emit({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
-      });
-    },
-    onError: (error) => {
-      harness.emit({
-        type: "session.error",
-        payload: { message: formatErrorMessage(error) },
-        final: true,
-      });
-      params.logger.warn(
-        `${params.platform.logScope} ${realtimeLogScope} voice bridge failed: ${formatErrorMessage(error)}`,
-      );
-      stopAfterFailure("voice bridge");
-    },
-    onClose: (reason) => {
-      realtimeReady = false;
-      harness.finishOutputAudio(reason);
-      harness.emit({
-        type: "session.closed",
-        payload: { reason },
-        final: true,
-      });
-      if (reason === "error") {
-        stopAfterFailure("voice bridge close");
-      }
-    },
-    onReady: () => {
-      realtimeReady = true;
-      harness.emit({
-        type: "session.ready",
-        payload: outputTalkPayload,
-      });
-    },
-  });
-  startHumanBargeInMonitor();
-
-  // Drain transport input while connect() is pending so the capture pipe never backpressures.
-  // Pre-connect audio is forwarded; the voice bridge owns buffering, matching the previous
-  // local command-pair behavior.
-  params.transport.startInput((audio) => {
-    if (stopped || audio.byteLength === 0) {
-      return;
     }
-    if (!harness.recordInputAudio(audio)) {
-      return;
-    }
-    bridge?.sendAudio(audio);
-  });
-
-  await bridge.connect();
-  if (stopped) {
-    throw new Error(
-      `${params.platform.displayName} audio transport stopped during realtime provider setup`,
-    );
+    throw error;
   }
 
   return {
