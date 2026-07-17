@@ -517,47 +517,56 @@ describe("monitorSignalProvider tool results", () => {
   });
 
   it("keeps durable conversation events separate in batched reply mode", async () => {
-    setSignalToolResultTestConfig({
-      ...createSignalToolResultConfig({
+    vi.useFakeTimers();
+    try {
+      setSignalToolResultTestConfig({
+        ...createSignalToolResultConfig({
+          autoStart: false,
+          replyToMode: "batched",
+        }),
+        messages: { inbound: { debounceMs: 10 } },
+      });
+      replyMock.mockResolvedValue({ text: "reply" });
+      const abortController = new AbortController();
+      streamMock.mockImplementation(async ({ onEvent }) => {
+        for (const [timestamp, message] of [
+          [1700000000001, "first message"],
+          [1700000000002, "second message"],
+        ] as const) {
+          await onEvent({
+            event: "receive",
+            data: JSON.stringify({
+              envelope: {
+                sourceNumber: "+15550001111",
+                sourceName: "Ada",
+                timestamp,
+                dataMessage: { message },
+              },
+            }),
+          });
+        }
+        try {
+          await vi.advanceTimersByTimeAsync(2_000);
+          expect(replyMock).toHaveBeenCalledTimes(2);
+        } finally {
+          abortController.abort();
+        }
+      });
+
+      await runMonitorWithMocks({
         autoStart: false,
-        replyToMode: "batched",
-      }),
-      messages: { inbound: { debounceMs: 10 } },
-    });
-    replyMock.mockResolvedValue({ text: "reply" });
-    const abortController = new AbortController();
-    streamMock.mockImplementation(async ({ onEvent }) => {
-      for (const [timestamp, message] of [
-        [1700000000001, "first message"],
-        [1700000000002, "second message"],
-      ] as const) {
-        await onEvent({
-          event: "receive",
-          data: JSON.stringify({
-            envelope: {
-              sourceNumber: "+15550001111",
-              sourceName: "Ada",
-              timestamp,
-              dataMessage: { message },
-            },
-          }),
-        });
+        baseUrl: SIGNAL_BASE_URL,
+        abortSignal: abortController.signal,
+      });
+
+      expect(sendMock).toHaveBeenCalledTimes(2);
+      for (const call of sendMock.mock.calls) {
+        expect(call[2]).not.toHaveProperty("replyToId");
+        expect(call[2]).not.toHaveProperty("replyToAuthor");
+        expect(call[2]).not.toHaveProperty("replyToBody");
       }
-      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(2));
-      abortController.abort();
-    });
-
-    await runMonitorWithMocks({
-      autoStart: false,
-      baseUrl: SIGNAL_BASE_URL,
-      abortSignal: abortController.signal,
-    });
-
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    for (const call of sendMock.mock.calls) {
-      expect(call[2]).not.toHaveProperty("replyToId");
-      expect(call[2]).not.toHaveProperty("replyToAuthor");
-      expect(call[2]).not.toHaveProperty("replyToBody");
+    } finally {
+      vi.useRealTimers();
     }
   });
 
