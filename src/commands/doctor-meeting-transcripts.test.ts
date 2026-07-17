@@ -1,25 +1,23 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorMeetingTranscripts } from "./doctor-meeting-transcripts.js";
 
 describe("doctor meeting transcript migration", () => {
-  let root: string;
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let transcriptsDir: string;
 
-  beforeEach(async () => {
-    root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-meeting-"));
-    transcriptsDir = path.join(root, "transcripts");
-  });
-
-  afterEach(async () => {
-    await fs.promises.rm(root, { force: true, recursive: true });
+  beforeEach(() => {
+    transcriptsDir = path.join(tempDirs.make("openclaw-doctor-meeting-"), "transcripts");
   });
 
   it("reports zero sessions when the transcript directory does not exist", async () => {
     const report = await runDoctorMeetingTranscripts({
-      transcriptsDir: path.join(root, "nonexistent"),
+      transcriptsDir: path.join(
+        tempDirs.make("openclaw-doctor-meeting-nonexistent-"),
+        "nonexistent",
+      ),
     });
     expect(report.foundSessions).toBe(0);
     expect(report.scannedDirs).toBe(0);
