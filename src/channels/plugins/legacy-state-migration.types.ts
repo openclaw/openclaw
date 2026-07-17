@@ -26,7 +26,8 @@ export type ChannelLegacyStateMigrationPlan =
         existingValue: unknown;
         incomingValue: unknown;
       }) => boolean | Promise<boolean>;
+      /** `timestamp` (epoch ms) and `ttlMs` order entries newest-first when capacity forces a partial import. */
       readEntries: () =>
-        | Array<{ key: string; value: unknown; ttlMs?: number }>
-        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
+        | Array<{ key: string; value: unknown; ttlMs?: number; timestamp?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number; timestamp?: number }>>;
     };

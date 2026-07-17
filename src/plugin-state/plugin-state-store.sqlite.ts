@@ -469,7 +469,7 @@ function assertCanInsertPluginStateEntry(params: {
   }
 }
 
-function resolveMaxPluginStateEntriesPerPlugin(): number {
+export function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 

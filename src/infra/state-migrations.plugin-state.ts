@@ -4,7 +4,7 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import {
   countPluginStateLiveEntries,
   createPluginStateKeyedStore,
-  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  resolveMaxPluginStateEntriesPerPlugin,
 } from "../plugin-state/plugin-state-store.js";
 import {
   readPersistedInstalledPluginIndexSync,
@@ -242,6 +242,20 @@ function findMissingKey(expected: Set<string>, actual: Set<string>): string | un
   return undefined;
 }
 
+function compareImportEntriesNewestFirst(
+  a: { ttlMs?: number; timestamp?: number },
+  b: { ttlMs?: number; timestamp?: number },
+): number {
+  if (a.timestamp !== undefined && b.timestamp !== undefined) {
+    return b.timestamp - a.timestamp;
+  }
+  // Remaining TTL is monotone with recency for fixed-TTL caches.
+  if (a.ttlMs !== undefined && b.ttlMs !== undefined) {
+    return b.ttlMs - a.ttlMs;
+  }
+  return 0;
+}
+
 async function withPluginStateImportEnv<T>(
   plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
   run: () => Promise<T>,
@@ -297,15 +311,17 @@ export async function runLegacyMigrationPlans(
           warnings.push(`Failed reading ${plan.label} legacy source: ${String(err)}`);
           return;
         }
-        const candidateEntries: Array<{
+        type CandidateEntry = {
           key: string;
           targetKey: string;
           value: unknown;
           ttlMs?: number;
+          timestamp?: number;
           existedBefore: boolean;
-        }> = [];
+        };
+        const replacementEntries: CandidateEntry[] = [];
+        let newEntries: CandidateEntry[] = [];
         const failedTargetKeys = new Set<string>();
-        let missingEntryCount = 0;
         for (const entry of entries) {
           const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
           const existingValue = existingValuesByKey.get(targetKey);
@@ -318,32 +334,36 @@ export async function runLegacyMigrationPlans(
                 incomingValue: entry.value,
               }));
             if (shouldReplace) {
-              candidateEntries.push({ ...entry, targetKey, existedBefore: true });
+              replacementEntries.push({ ...entry, targetKey, existedBefore: true });
             }
             continue;
           }
-          candidateEntries.push({ ...entry, targetKey, existedBefore: false });
-          missingEntryCount++;
+          newEntries.push({ ...entry, targetKey, existedBefore: false });
         }
-        if (missingEntryCount > namespaceRemainingCapacity) {
-          warnings.push(
-            `Skipped migrating ${plan.label} because plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
-          );
-          return;
-        }
+        const missingEntryCount = newEntries.length;
         const pluginRemainingCapacity = Math.max(
           0,
-          MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - pluginEntryCount,
+          resolveMaxPluginStateEntriesPerPlugin() - pluginEntryCount,
         );
-        if (missingEntryCount > pluginRemainingCapacity) {
+        // Capacity limits must never turn the import into a permanent no-op: import the
+        // newest entries that fit and defer the rest to a later startup (the legacy source
+        // stays in place until every entry is covered).
+        const importBudget = Math.min(namespaceRemainingCapacity, pluginRemainingCapacity);
+        if (missingEntryCount > importBudget) {
+          newEntries = newEntries.toSorted(compareImportEntriesNewestFirst).slice(0, importBudget);
+          const constraint =
+            namespaceRemainingCapacity <= pluginRemainingCapacity
+              ? `plugin state namespace ${plan.namespace} has room for ${namespaceRemainingCapacity}`
+              : `plugin state has room for ${pluginRemainingCapacity}`;
           warnings.push(
-            `Skipped migrating ${plan.label} because plugin state has room for ${pluginRemainingCapacity} of ${missingEntryCount} missing entries; left legacy source in place`,
+            newEntries.length > 0
+              ? `Partially migrating ${plan.label} because ${constraint} of ${missingEntryCount} missing entries; importing the newest ${newEntries.length} and deferring the rest in the legacy source`
+              : `Deferring ${plan.label} migration because ${constraint} of ${missingEntryCount} missing entries; left legacy source in place to retry when capacity frees`,
           );
-          return;
         }
         let imported = 0;
-        const changedKeys: string[] = [];
-        for (const entry of candidateEntries) {
+        const changedKeys = new Set<string>();
+        for (const entry of [...replacementEntries, ...newEntries]) {
           try {
             await store.register(
               entry.targetKey,
@@ -355,26 +375,37 @@ export async function runLegacyMigrationPlans(
             const liveKeys = new Set((await store.entries()).map(({ key }) => key));
             const missingKey = findMissingKey(nextExpectedKeys, liveKeys);
             if (missingKey) {
-              for (const changedKey of changedKeys.toReversed()) {
-                if (existingValuesByKey.has(changedKey)) {
-                  await store.register(changedKey, existingValuesByKey.get(changedKey));
-                } else {
-                  await store.delete(changedKey);
-                }
-              }
+              // A concurrent write pushed the store over a cap and evicted a row. Roll back
+              // only the entry whose write triggered the eviction, restore the evicted live
+              // row when we still hold its value, and keep everything imported so far —
+              // deferred entries stay in the legacy source for the next startup.
               if (existingValuesByKey.has(entry.targetKey)) {
                 await store.register(entry.targetKey, existingValuesByKey.get(entry.targetKey));
               } else {
                 await store.delete(entry.targetKey);
               }
+              if (changedKeys.has(missingKey)) {
+                changedKeys.delete(missingKey);
+                expectedKeys.delete(missingKey);
+                existingKeys.delete(missingKey);
+                imported = Math.max(0, imported - 1);
+              } else if (existingValuesByKey.has(missingKey)) {
+                try {
+                  await store.register(missingKey, existingValuesByKey.get(missingKey));
+                } catch (restoreErr) {
+                  warnings.push(
+                    `Failed restoring ${plan.label} entry ${missingKey} after cap eviction: ${String(restoreErr)}`,
+                  );
+                }
+              }
               warnings.push(
-                `Stopped migrating ${plan.label} because plugin state cap evicted ${missingKey}; left legacy source in place`,
+                `Paused migrating ${plan.label} because plugin state cap evicted ${missingKey}; imported ${imported} of ${missingEntryCount} missing entries and deferred the rest in the legacy source`,
               );
-              return;
+              break;
             }
             expectedKeys.add(entry.targetKey);
             existingKeys.add(entry.targetKey);
-            changedKeys.push(entry.targetKey);
+            changedKeys.add(entry.targetKey);
             imported++;
           } catch (err) {
             failedTargetKeys.add(entry.targetKey);

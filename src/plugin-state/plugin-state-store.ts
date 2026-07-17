@@ -46,6 +46,7 @@ export {
   countPluginStateLiveEntries,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
