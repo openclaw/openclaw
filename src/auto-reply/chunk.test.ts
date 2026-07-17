@@ -232,33 +232,33 @@ describe("chunkText", () => {
 });
 
 describe("chunkByParagraph Unicode line/paragraph separators", () => {
-  it("treats lone U+2029 as a standalone paragraph boundary", () => {
-    // PARAGRAPH SEPARATOR is the semantic equivalent of a blank line.
-    // Use a limit small enough to force the split (normalized text is 40 chars).
-    const result = chunkByParagraph("paragraph one\u2029paragraph two starts here", 39);
-    const expected = chunkByParagraph("paragraph one\n\nparagraph two starts here", 39);
+  it.each([
+    {
+      name: "treats lone U+2029 as a standalone paragraph boundary",
+      text: "paragraph one\u2029paragraph two starts here",
+      normalized: "paragraph one\n\nparagraph two starts here",
+      limit: 39,
+      expected: ["paragraph one", "paragraph two starts here"],
+    },
+    {
+      name: "treats lone U+2028 as a line break within one paragraph",
+      text: "paragraph one line\u2028still same paragraph",
+      normalized: "paragraph one line\nstill same paragraph",
+      limit: 50,
+      expected: ["paragraph one line\nstill same paragraph"],
+    },
+    {
+      name: "treats consecutive U+2028 and U+2029 as a paragraph boundary",
+      text: "paragraph one line\u2028\u2029paragraph two starts here",
+      normalized: "paragraph one line\n\nparagraph two starts here",
+      limit: 40,
+      expected: ["paragraph one line", "paragraph two starts here"],
+    },
+  ] as const)("$name", ({ text, normalized, limit, expected }) => {
+    const chunks = chunkByParagraph(text, limit);
 
-    expect(result).toEqual(["paragraph one", "paragraph two starts here"]);
-    // Output is identical to \n\n (blank-line) input.
-    expect(result).toEqual(expected);
-  });
-
-  it("treats lone U+2028 as a single line break within one paragraph", () => {
-    // LINE SEPARATOR is a single newline \u2014 no blank line, so the paragraph stays intact.
-    const result = chunkByParagraph("paragraph one line\u2028still same paragraph", 50);
-    const expected = chunkByParagraph("paragraph one line\nstill same paragraph", 50);
-
-    expect(result).toEqual(["paragraph one line\nstill same paragraph"]);
-    expect(result).toEqual(expected);
-  });
-
-  it("treats consecutive U+2028 and U+2029 as a paragraph boundary", () => {
-    // U+2029 \u2192 \n\n, U+2028 \u2192 \n \u2192 combined they form a blank line.
-    const result = chunkByParagraph("paragraph one line\u2028\u2029paragraph two starts here", 40);
-    const expected = chunkByParagraph("paragraph one line\n\nparagraph two starts here", 40);
-
-    expect(result).toEqual(["paragraph one line", "paragraph two starts here"]);
-    expect(result).toEqual(expected);
+    expect(chunks).toEqual(expected);
+    expect(chunks).toEqual(chunkByParagraph(normalized, limit));
   });
 });
 
