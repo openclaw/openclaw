@@ -124,12 +124,10 @@ runs:
       if: inputs.sticky-disk == 'true'
       uses: useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f # v1.4.0
       with:
-        # One stable disk per node-version. The v2 per-PR/per-manifest-hash
-        # keys minted a new backing disk for every PR and dependency change
-        # and saturated Blacksmith's installation-wide sticky-disk budget,
-        # 429-failing every mount. Install inputs live in the runtime
-        # fingerprint marker below instead of the key, so dependency changes
-        # refresh this disk in place rather than allocating a new one.
+        # One stable disk per Node line. The v2 per-PR/per-manifest-hash keys
+        # saturated Blacksmith's installation-wide sticky-disk budget. Install
+        # inputs, runner platform, and the exact Node patch live in the runtime
+        # marker below, so changes refresh this disk in place.
         key: ${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-deps
         # Single semantic writer: only the designated trusted-push job may
@@ -273,7 +271,7 @@ runs:
         # the '**/package.json' glob only sees checkout manifests. Recomputing
         # this hash any later would sweep snapshot-internal package.json files
         # into the fingerprint and permanently miss the warm path.
-        DEPS_FINGERPRINT: node-${{ inputs.node-version }}-frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
+        DEPS_INPUT_FINGERPRINT: frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
       run: |
         set -euo pipefail
         sticky_root=/var/tmp/openclaw-node-deps
@@ -289,9 +287,10 @@ runs:
           exit 1
         fi
         findmnt --target "$workspace_modules"
+        deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${DEPS_INPUT_FINGERPRINT:?}"
         # zizmor: ignore[github-env] static trusted path defined in this composite action.
         echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
-        echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$DEPS_FINGERPRINT" >> "$GITHUB_ENV"
+        echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$deps_fingerprint" >> "$GITHUB_ENV"
         # pnpm exec may reconcile a restored workspace before nested builds.
         # Sticky jobs already have every build tool, so invoke their Node entrypoints directly.
         echo "OPENCLAW_BUILD_ALL_NO_PNPM=1" >> "$GITHUB_ENV"
