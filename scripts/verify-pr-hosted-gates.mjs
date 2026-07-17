@@ -230,17 +230,27 @@ function successfulRunOrThrow(
     if (isGateProvenInProgressRun(run, ciGateJobs, nowMs)) {
       return run;
     }
-    // A terminal non-success stays blocking unless a pending SCHEDULED rerun
-    // on the same head has already passed its own gate — the gate needs every
-    // selected lane, so that attempt is authoritative proof the failure is
-    // re-resolved. Manual runs can never mask an unresolved failure this way.
+    // A terminal non-success stays blocking unless a NEWER pending SCHEDULED
+    // rerun on the same head has already passed its own gate — the gate needs
+    // every selected lane, so that attempt is authoritative proof the failure
+    // is re-resolved. The newer-than bound stops a stalled older run's gate
+    // from masking a later failure, and manual runs can never mask one.
     if (run?.status === "completed" && run.conclusion !== "success") {
-      const gateProvenRerun = matchingRuns.find(
-        (candidate) =>
-          candidate !== run &&
-          candidate.event === "pull_request" &&
-          isGateProvenInProgressRun(candidate, ciGateJobs, nowMs),
-      );
+      const failedRunCreatedAtMs = Date.parse(String(run?.created_at ?? ""));
+      const gateProvenRerun = matchingRuns.find((candidate) => {
+        if (candidate === run || candidate.event !== "pull_request") {
+          return false;
+        }
+        const candidateCreatedAtMs = Date.parse(String(candidate?.created_at ?? ""));
+        if (
+          !Number.isFinite(candidateCreatedAtMs) ||
+          !Number.isFinite(failedRunCreatedAtMs) ||
+          candidateCreatedAtMs <= failedRunCreatedAtMs
+        ) {
+          return false;
+        }
+        return isGateProvenInProgressRun(candidate, ciGateJobs, nowMs);
+      });
       if (gateProvenRerun) {
         return gateProvenRerun;
       }

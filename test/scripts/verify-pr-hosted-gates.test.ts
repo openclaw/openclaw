@@ -139,6 +139,7 @@ describe("verify-pr-hosted-gates", () => {
       status: "in_progress",
       conclusion: null,
       run_attempt: 1,
+      created_at: "2026-06-17T10:50:00Z",
     };
     const gateJob = {
       name: "openclaw/ci-gate",
@@ -165,6 +166,16 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow(/Missing successful recent CI workflow/);
     expect(() =>
       collectHostedGateEvidence({ sha, workflowRuns: [failedRun], ciGateJobs: [gateJob] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A stalled OLDER run's gate must not mask a newer terminal failure.
+    const stalledOlderRun = { ...pendingRerun, created_at: "2026-06-17T10:40:00Z" };
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [failedRun, stalledOlderRun],
+        ciGateJobs: [gateJob],
+      }),
     ).toThrow(/Missing successful recent CI workflow/);
   });
 
