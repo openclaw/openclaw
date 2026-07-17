@@ -18,10 +18,9 @@ on:
       root_image_transport:
         description: Root Dockerfile image transport
         required: false
-        default: registry
+        default: no-push-artifact
         type: choice
         options:
-          - registry
           - no-push-artifact
   workflow_call:
     inputs:
@@ -42,7 +41,7 @@ on:
       root_image_transport:
         description: Root Dockerfile image transport
         required: false
-        default: registry
+        default: no-push-artifact
         type: string
 
 permissions:
@@ -409,51 +408,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  push_root_dockerfile_image:
-    needs: [preflight, root_dockerfile_image]
-    if: needs.preflight.outputs.root_image_transport == 'registry' && needs.root_dockerfile_image.outputs.image_exists != 'true'
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout CLI
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
-
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
-        with:
-          max-cache-size-mb: 800000
-
-      # The registry path publishes one matrix-extension image by target SHA.
-      # A direct buildx command keeps progress visible and fails on timeout.
-      - name: Build and push root Dockerfile smoke image
-        env:
-          IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: |
-          timeout --kill-after=30s 45m docker buildx build \
-            --progress=plain \
-            --push \
-            --build-arg OPENCLAW_EXTENSIONS=matrix \
-            -t "$IMAGE_REF" \
-            -f ./Dockerfile \
-            .
-
   root_dockerfile_image_ready:
-    needs: [preflight, root_dockerfile_image, push_root_dockerfile_image]
+    needs: [preflight, root_dockerfile_image]
     if: always() && needs.preflight.result == 'success' && needs.preflight.outputs.run_full_install_smoke == 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -461,23 +417,11 @@ jobs:
     steps:
       - name: Verify root Dockerfile image preparation
         env:
-          IMAGE_EXISTS: ${{ needs.root_dockerfile_image.outputs.image_exists }}
           PREPARE_RESULT: ${{ needs.root_dockerfile_image.result }}
-          PUSH_RESULT: ${{ needs.push_root_dockerfile_image.result }}
-          ROOT_IMAGE_TRANSPORT: ${{ needs.preflight.outputs.root_image_transport }}
         run: |
           set -euo pipefail
           if [[ "$PREPARE_RESULT" != "success" ]]; then
             echo "Root Dockerfile image preparation ended with ${PREPARE_RESULT}." >&2
-            exit 1
-          fi
-          if [[ "$ROOT_IMAGE_TRANSPORT" == "registry" && "$IMAGE_EXISTS" != "true" ]]; then
-            if [[ "$PUSH_RESULT" != "success" ]]; then
-              echo "Root Dockerfile registry image publication ended with ${PUSH_RESULT}." >&2
-              exit 1
-            fi
-          elif [[ "$PUSH_RESULT" != "skipped" ]]; then
-            echo "Unexpected root Dockerfile registry publication result: ${PUSH_RESULT}." >&2
             exit 1
           fi
 

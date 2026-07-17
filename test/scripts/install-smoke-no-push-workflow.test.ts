@@ -52,17 +52,17 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
 }
 
 describe("install smoke no-push root image transport", () => {
-  it("keeps registry transport as the default and validates the selected mode", () => {
+  it("defaults every caller to artifact-only transport", () => {
     const workflow = readWorkflow(INSTALL_SMOKE);
     const dispatchInput = workflow.on?.workflow_dispatch?.inputs?.root_image_transport;
     const callInput = workflow.on?.workflow_call?.inputs?.root_image_transport;
     expect(dispatchInput).toMatchObject({
-      default: "registry",
-      options: ["registry", "no-push-artifact"],
+      default: "no-push-artifact",
+      options: ["no-push-artifact"],
       type: "choice",
     });
     expect(callInput).toMatchObject({
-      default: "registry",
+      default: "no-push-artifact",
       type: "string",
     });
     expect(workflow.permissions).toMatchObject({
@@ -205,41 +205,18 @@ describe("install smoke no-push root image transport", () => {
       path: "${{ steps.image_artifact.outputs.artifact_path }}",
     });
 
-    const registryPublisher = job(workflow, "push_root_dockerfile_image");
-    expect(registryPublisher.permissions).toEqual({
-      contents: "read",
-      packages: "write",
-    });
-    expect(registryPublisher.if).toBe(
-      "needs.preflight.outputs.root_image_transport == 'registry' && needs.root_dockerfile_image.outputs.image_exists != 'true'",
-    );
-    expect(step(registryPublisher, "Checkout CLI").with).toMatchObject({
-      ref: "${{ needs.preflight.outputs.target_sha }}",
-      "persist-credentials": false,
-    });
-    expect(step(registryPublisher, "Log in to GHCR").if).toBeUndefined();
-    const registryBuild = step(registryPublisher, "Build and push root Dockerfile smoke image");
-    expect(registryBuild.run).toContain("--push");
-    expect(registryBuild.run).not.toContain("--load");
-
     const writeScopedJobs = Object.entries(workflow.jobs)
       .filter(([, candidate]) => candidate.permissions?.packages === "write")
       .map(([name]) => name);
-    expect(writeScopedJobs).toEqual(["push_root_dockerfile_image"]);
+    expect(writeScopedJobs).toEqual([]);
+    expect(workflow.jobs.push_root_dockerfile_image).toBeUndefined();
 
     const ready = job(workflow, "root_dockerfile_image_ready");
-    expect(ready.needs).toEqual([
-      "preflight",
-      "root_dockerfile_image",
-      "push_root_dockerfile_image",
-    ]);
+    expect(ready.needs).toEqual(["preflight", "root_dockerfile_image"]);
     expect(ready.if).toContain("always()");
     const verify = step(ready, "Verify root Dockerfile image preparation");
     expect(verify.run).toContain('if [[ "$PREPARE_RESULT" != "success" ]]');
-    expect(verify.run).toContain(
-      'if [[ "$ROOT_IMAGE_TRANSPORT" == "registry" && "$IMAGE_EXISTS" != "true" ]]',
-    );
-    expect(verify.run).toContain('elif [[ "$PUSH_RESULT" != "skipped" ]]');
+    expect(verify.run).not.toContain("PUSH_RESULT");
   });
 
   it("verifies and loads the artifact in every consumer without registry fallback", () => {
