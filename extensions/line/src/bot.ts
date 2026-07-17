@@ -12,10 +12,7 @@ import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
 import type { LineInboundContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";
-import {
-  createLineWebhookSpool,
-  type LineWebhookTurnAdoptionLifecycle,
-} from "./webhook-spool.js";
+import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 interface LineBotOptions {
   channelAccessToken: string;
