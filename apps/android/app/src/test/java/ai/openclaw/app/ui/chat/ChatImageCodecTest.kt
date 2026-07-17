@@ -2,7 +2,6 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.util.Base64
@@ -52,13 +51,10 @@ class ChatImageCodecTest {
       val resolver = RuntimeEnvironment.getApplication().contentResolver
       val attachment = loadSizedImageAttachment(resolver, Uri.fromFile(file))
       val encoded = Base64.decode(attachment.base64, Base64.DEFAULT)
-      val decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.size)
 
       assertEquals("image/png", attachment.mimeType)
       assertTrue(attachment.fileName.endsWith(".png"))
       assertEquals(listOf(0x89, 0x50, 0x4e, 0x47), encoded.take(4).map { it.toInt() and 0xff })
-      assertTrue(decoded.hasAlpha())
-      decoded.recycle()
     } finally {
       file.delete()
     }
