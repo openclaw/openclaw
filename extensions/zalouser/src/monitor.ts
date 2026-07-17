@@ -710,18 +710,16 @@ async function deliverZalouserReply(params: {
     payload,
     text: reply.text,
     sendText: async (chunk) => {
-      try {
-        await sendMessageZalouser(chatId, chunk, {
-          profile,
-          isGroup,
-          textMode: "markdown",
-          textChunkMode: chunkMode,
-          textChunkLimit,
-        });
-        visibleReplySent = true;
-      } catch (err) {
-        runtime.error(`Zalouser message send failed: ${String(err)}`);
-      }
+      // Failures must throw so the core dispatcher records the reply as failed
+      // instead of delivered; sendMedia below already propagates the same way.
+      await sendMessageZalouser(chatId, chunk, {
+        profile,
+        isGroup,
+        textMode: "markdown",
+        textChunkMode: chunkMode,
+        textChunkLimit,
+      });
+      visibleReplySent = true;
     },
     sendMedia: async ({ mediaUrl, caption }) => {
       logVerbose(core, runtime, `Sending media to ${chatId}`);
