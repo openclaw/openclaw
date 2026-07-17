@@ -376,3 +376,16 @@ export function isSubagentSessionKey(sessionKey: string | undefined | null): boo
   const parsed = parseAgentSessionKey(raw);
   return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("subagent:");
 }
+
+/** ACP-backed sessions (`agent:<id>:acp:<uuid>`) belong to the Coding zone, not chat threads. */
+export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
+  const raw = normalizeOptionalString(sessionKey) ?? "";
+  if (!raw) {
+    return false;
+  }
+  if (normalizeLowercaseStringOrEmpty(raw).startsWith("acp:")) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(raw);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest).startsWith("acp:");
+}

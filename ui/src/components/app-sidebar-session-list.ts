@@ -2,17 +2,14 @@ import { html, nothing, type TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
-import { channelDisplayLabel } from "../lib/session-display.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { writeSessionDragData, writeSessionGroupDragData } from "../lib/sessions/drag.ts";
-import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
+import { groupSidebarSessionRows, sidebarSectionHasHeader } from "../lib/sessions/grouping.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { AppSidebarMenusElement } from "./app-sidebar-menus.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import {
   type CatalogBackingSessionDisplay,
   renderSessionCatalogGroups,
@@ -261,30 +258,43 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     section: {
       id: string;
       category?: string;
-      channel?: string;
+      groups?: boolean;
       work?: boolean;
       rows: SidebarRecentSession[];
     },
-    showFallback = false,
+    trailing: TemplateResult | typeof nothing = nothing,
   ) {
     const group = section.category;
     const isPinned = section.id === "pinned";
-    const showHeader = isPinned || this.sessionsGrouping === "category";
+    const showHeader = sidebarSectionHasHeader(section.id, this.sessionsGrouping);
     const collapsed = showHeader && this.collapsedSessionSections.has(section.id);
     const label = isPinned
       ? t("sessionsView.pinned")
-      : section.channel
-        ? channelDisplayLabel(section.channel)
+      : section.groups
+        ? t("chat.sidebar.groups")
         : section.work
-          ? t("chat.sidebar.workSessions")
+          ? t("chat.sidebar.coding")
           : group
             ? group
-            : t("chat.sidebar.chats");
+            : t("chat.sidebar.threads");
+    const zone = isPinned
+      ? "pinned"
+      : section.groups
+        ? "groups"
+        : section.work
+          ? "coding"
+          : group
+            ? "category"
+            : "threads";
+    // Collapsed Coding still signals live runs so background work stays visible.
+    const collapsedRunningDot =
+      collapsed && section.work && section.rows.some((row) => row.hasActiveRun);
     const acceptsSessions =
       isPinned ||
       (this.sessionsGrouping === "category" && (section.id === "ungrouped" || Boolean(group)));
     const sectionClass = [
       "sidebar-recent-sessions__group",
+      `sidebar-recent-sessions__group--zone-${zone}`,
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
       group && this.draggingSessionGroup === group
         ? "sidebar-recent-sessions__group--dragging"
@@ -353,6 +363,14 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                   >
                   <span class="sidebar-recent-sessions__label-text">${label}</span>
                   <span class="sidebar-session-group-count">${section.rows.length}</span>
+                  ${collapsedRunningDot
+                    ? html`<span
+                        class="session-run-spinner sidebar-session-group-running"
+                        role="img"
+                        aria-label=${t("sessionsView.activeRun")}
+                        title=${t("sessionsView.activeRun")}
+                      ></span>`
+                    : nothing}
                 </button>
                 ${group
                   ? html`
@@ -381,9 +399,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
           ? nothing
           : html`
               <div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                ${showFallback
-                  ? this.renderChatFallback()
-                  : section.rows.map((session) => this.renderSessionTree(session))}
+                ${section.rows.map((session) => this.renderSessionTree(session))} ${trailing}
               </div>
             `}
       </div>
@@ -404,7 +420,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
 
   private renderSessionListBody(
     rows: SidebarRecentSession[],
-    options: { showDraft: boolean; showFallback: boolean },
+    options: {
+      showDraft: boolean;
+      codingTrailing?: TemplateResult | typeof nothing;
+      codingTrailingPresent?: boolean;
+    },
   ) {
     const visibleRows = limitSidebarSessionRows(rows, this.visibleSessionLimit);
     const sections = groupSidebarSessionRows(visibleRows, {
@@ -413,12 +433,17 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     });
     return html`
       ${options.showDraft ? this.renderDraftSessionRow() : nothing}
-      ${sections.map((section) =>
-        this.renderSessionSection(
-          section,
-          options.showFallback && rows.length === 0 && section.id === "ungrouped",
-        ),
-      )}
+      ${sections.map((section) => {
+        if (section.id === "work") {
+          // Coding hosts live work/ACP rows plus the CLI catalogs; hide the
+          // whole zone when both are empty.
+          if (section.rows.length === 0 && options.codingTrailingPresent !== true) {
+            return nothing;
+          }
+          return this.renderSessionSection(section, options.codingTrailing ?? nothing);
+        }
+        return this.renderSessionSection(section);
+      })}
       ${this.renderSessionPagination(rows, visibleRows.length)}
     `;
   }
@@ -510,9 +535,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             showDraft:
               Boolean(this.draftSessionAgentId) &&
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
-            showFallback: true,
+            codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
+            codingTrailingPresent: this.sessionCatalogs.length > 0,
           })}
-          ${this.renderSessionCatalogs(navigationState)}
         </div>
       </section>
     `;
@@ -550,32 +575,5 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       onOpenTerminal: (key) => openCatalogSessionInTerminal(key),
       onOpenMenu: (request, x, y, trigger) => this.catalogMenu.open(request, x, y, trigger),
     });
-  }
-
-  private renderChatFallback() {
-    const active = this.activeRouteId === "chat";
-    return html`
-      <div
-        class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
-        role="listitem"
-      >
-        <a
-          href=${pathForRoute("chat", this.basePath)}
-          class="sidebar-recent-session__link"
-          aria-current=${active ? "page" : nothing}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.onNavigate?.("chat");
-          }}
-        >
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
-          </span>
-        </a>
-      </div>
-    `;
   }
 }

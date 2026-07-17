@@ -3660,7 +3660,9 @@ export const en: TranslationMap = {
       updateMacAndGateway: "Update Mac app + Gateway",
       updateGateway: "Update Gateway",
       allSessions: "All sessions",
-      chats: "Chats",
+      threads: "Threads",
+      groups: "Groups",
+      coding: "Coding",
       groupCatalogSessionsByProject: "Group by project",
       openSessionMenu: "Open session menu",
       sortBy: "Sort by",
@@ -3669,7 +3671,6 @@ export const en: TranslationMap = {
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
       sessionMenuMany: "Actions for {count} sessions",
-      workSessions: "Work",
     },
     welcome: {
       hintBeforeShortcut: "Type a message below ·",

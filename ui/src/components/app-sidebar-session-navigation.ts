@@ -7,7 +7,11 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
-import { groupSidebarSessionRows, type SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
+import {
+  groupSidebarSessionRows,
+  sidebarSectionHasHeader,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
   filterVisibleSessionRows,
@@ -15,7 +19,9 @@ import {
   searchForSession,
 } from "../lib/sessions/index.ts";
 import {
+  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
+  isAcpSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
@@ -80,6 +86,18 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       ) {
         void this.loadChildSessions(session.key);
       }
+    }
+    // The main session hides behind the identity card, so nothing in the list
+    // triggers its child fetch; load eagerly or its threads never surface.
+    const mainRow = this.mainSessionRow();
+    if (
+      mainRow &&
+      (mainRow.childSessions?.length ?? 0) > 0 &&
+      !this.loadedChildSessionKeys.has(mainRow.key) &&
+      !this.failedChildSessionKeys.has(mainRow.key) &&
+      !this.loadingChildSessionKeys.has(mainRow.key)
+    ) {
+      void this.loadChildSessions(mainRow.key);
     }
   }
 
@@ -154,6 +172,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         channel: channelInfo.channel,
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
+        acpSession: isAcpSessionKey(row.key),
         worktreeId: row.worktree?.id,
         placementState: row.placement?.state,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
@@ -209,7 +228,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     );
     return sections.flatMap((section) => {
       // Mirrors renderSessionSection: only headered sections can collapse.
-      const showHeader = section.id === "pinned" || this.sessionsGrouping === "category";
+      const showHeader = sidebarSectionHasHeader(section.id, this.sessionsGrouping);
       return showHeader && this.collapsedSessionSections.has(section.id) ? [] : section.rows;
     });
   }
@@ -454,7 +473,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
             filterByAgent: true,
             showCron: this.sessionsShowCron,
           }).toSorted(this.compareSidebarSessionRows);
-    const scopedRootRows = [...rootRows];
+    // The identity card is the main session's entry point; its row leaves the
+    // list and its spawned children surface as top-level threads instead.
+    const mainSessionKey = this.selectedAgentMainSessionKey(selected);
+    const scopedRootRows = rootRows.filter(
+      (row) => !areUiSessionKeysEquivalent(row.key, mainSessionKey),
+    );
     const lineageRoot = this.activeSessionLineageRoot;
     const lineageAgentId = normalizeAgentId(
       parseAgentSessionKey(lineageRoot?.key ?? "")?.agentId ?? "",
@@ -466,6 +490,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       lineageRoot &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&
       !adopted.has(lineageRoot.key) &&
+      !areUiSessionKeysEquivalent(lineageRoot.key, mainSessionKey) &&
       !scopedRootRows.some((row) => row.key === lineageRoot.key)
     ) {
       scopedRootRows.push(lineageRoot);
@@ -474,8 +499,41 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       scopedRootRows.filter((row) => !adopted.has(row.key)),
       rows,
       navigationState.toSidebarSession,
+      new Set([mainSessionKey]),
     );
   }
+
+  /** Canonical main-session key for the selected (or given) agent. */
+  protected selectedAgentMainSessionKey(agentId?: string): string {
+    return buildAgentMainSessionKey({
+      agentId: agentId ?? this.expandedAgentId(),
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+    });
+  }
+
+  /** Gateway row backing the identity card (unread/running state), if loaded. */
+  protected mainSessionRow(agentId?: string): GatewaySessionRow | null {
+    const normalized = normalizeAgentId(agentId ?? this.expandedAgentId());
+    const mainKey = this.selectedAgentMainSessionKey(normalized);
+    const rows =
+      normalized === normalizeAgentId(this.sessionsAgentId ?? "")
+        ? (this.sessionsResult?.sessions ?? [])
+        : (this.sessionRowsByAgent[normalized] ?? []);
+    return rows.find((row) => areUiSessionKeysEquivalent(row.key, mainKey)) ?? null;
+  }
+
+  /** Identity-card click: the agent's rolling main session, or Settings offline. */
+  protected readonly openMainSession = (agentId: string) => {
+    if (!this.connected) {
+      this.onNavigate?.("config");
+      return;
+    }
+    this.clearSessionSelection();
+    this.selectSession(this.selectedAgentMainSessionKey(normalizeAgentId(agentId)));
+  };
 
   protected isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
     return (
@@ -518,6 +576,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     roots: readonly GatewaySessionRow[],
     agentRows: readonly GatewaySessionRow[],
     toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession,
+    promoteChildrenOf?: ReadonlySet<string>,
   ): SidebarRecentSession[] {
     const rowsByKey = new Map<string, GatewaySessionRow>();
     for (const rows of Object.values(this.childSessionRowsByParent)) {
@@ -592,8 +651,22 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       };
     };
 
-    const rootKeys = new Set(roots.map((row) => row.key));
-    return roots
+    // Children of hidden parents (the main session behind the identity card)
+    // are promoted to top-level threads so the subtree stays reachable.
+    const promotedRoots: GatewaySessionRow[] = [];
+    const rootKeySet = new Set(roots.map((row) => row.key));
+    for (const parentKey of promoteChildrenOf ?? []) {
+      for (const childKey of childKeysByParent.get(parentKey) ?? []) {
+        const child = rowsByKey.get(childKey);
+        if (child && !rootKeySet.has(childKey)) {
+          promotedRoots.push(child);
+          rootKeySet.add(childKey);
+        }
+      }
+    }
+    const allRoots = [...roots, ...promotedRoots];
+    const rootKeys = new Set(allRoots.map((row) => row.key));
+    return allRoots
       .filter((row) => {
         const parentKey = row.spawnedBy ?? row.parentSessionKey;
         return !parentKey || !rootKeys.has(parentKey);

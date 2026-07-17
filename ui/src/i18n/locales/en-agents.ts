@@ -2,6 +2,8 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  openChat: "Chat with {name}",
+  switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",
   whatCanAgentDo: "What can {name} do?",
