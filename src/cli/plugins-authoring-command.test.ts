@@ -298,6 +298,24 @@ describe("plugin authoring commands", () => {
     ).rejects.toThrow("plugin entry not found: ./dist/index.js");
   });
 
+  it("throws a user-friendly error when package.json is malformed JSON", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-bad-json-"));
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-bad-json",
+      pluginId: "bad-json",
+      toolName: "bad_json_echo",
+    });
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{invalid json");
+    try {
+      await expect(runPluginsBuildCommand({ root: tmpDir, entry: entryPath })).rejects.toThrow(
+        /Malformed JSON in /,
+      );
+    } finally {
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
+  });
+
   it("loads source entries that import the OpenClaw plugin SDK package subpath", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
     const entryPath = writeSourceToolPluginProject({
