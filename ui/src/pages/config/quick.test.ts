@@ -216,6 +216,43 @@ describe("renderQuickSettings", () => {
     expect(onChannelConfigure).toHaveBeenCalledWith("telegram");
   });
 
+  it("renders automation counts from props", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          automation: { cronJobCount: 3, skillCount: 5, mcpServerCount: 2 },
+        }),
+      ),
+      container,
+    );
+
+    const cronRow = expectRowByTitle(container, "3 scheduled tasks");
+    expect(cronRow.querySelector("button")?.textContent?.trim()).toMatch(/Manage/);
+    const skillRow = expectRowByTitle(container, "5 skills installed");
+    expect(skillRow.querySelector("button")?.textContent?.trim()).toMatch(/Browse/);
+    const mcpRow = expectRowByTitle(container, "2 MCP servers");
+    expect(mcpRow.querySelector("button")?.textContent?.trim()).toMatch(/Configure/);
+  });
+
+  it("renders singular automation labels for count of 1", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          automation: { cronJobCount: 1, skillCount: 1, mcpServerCount: 1 },
+        }),
+      ),
+      container,
+    );
+
+    expectRowByTitle(container, "1 scheduled task");
+    expectRowByTitle(container, "1 skill installed");
+    expectRowByTitle(container, "1 MCP server");
+  });
+
   it("renders Gateway host identity and resources", () => {
     const container = document.createElement("div");
 
