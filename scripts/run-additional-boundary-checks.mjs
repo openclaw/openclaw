@@ -3,7 +3,6 @@
 // timeout handling, and grouped CI output.
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
-import { StringDecoder } from "node:string_decoder";
 import pMap from "p-map";
 import prettyMilliseconds from "pretty-ms";
 
@@ -189,7 +188,8 @@ function decodeUtf8Tail(buffer) {
   while (start < buffer.length && (buffer[start] & 0b1100_0000) === 0b1000_0000) {
     start += 1;
   }
-  return new StringDecoder("utf8").write(buffer.subarray(start));
+  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
+  return buffer.subarray(start).toString("utf8");
 }
 
 /**

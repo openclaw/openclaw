@@ -295,6 +295,30 @@ describe("run-additional-boundary-checks", () => {
     expect(result.output).toContain("timed out after 50ms");
   });
 
+  it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
+    const script = [
+      'const bytes = Buffer.from("old😀new");',
+      "process.stdout.write(bytes.subarray(0, 5));",
+      "setTimeout(() => process.stdout.end(bytes.subarray(5)), 20);",
+    ].join("");
+    const result = await runSingleCheck(
+      {
+        label: "split-utf8",
+        command: process.execPath,
+        args: ["-e", script],
+      },
+      {
+        checkTimeoutMs: 2_000,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 5,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
   it("clamps oversized check timers before scheduling", async () => {
     const result = await runSingleCheck(
       {
