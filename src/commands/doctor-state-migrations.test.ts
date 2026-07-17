@@ -1740,7 +1740,7 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
   });
 
-  it("skips plugin-state imports when the namespace lacks room for every missing entry", async () => {
+  it("imports the newest entries first when the namespace lacks room for every missing entry", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "legacy-cache.json");
     fs.writeFileSync(sourcePath, "legacy", "utf-8");
@@ -1756,8 +1756,8 @@ describe("doctor legacy state migrations", () => {
         scopeKey: "",
         cleanupSource: "rename",
         readEntries: () => [
-          { key: "legacy-first", value: { body: "first" } },
-          { key: "legacy-second", value: { body: "second" } },
+          { key: "legacy-old", value: { body: "old" }, timestamp: 1_000 },
+          { key: "legacy-new", value: { body: "new" }, timestamp: 2_000 },
         ],
       },
     ];
@@ -1777,9 +1777,11 @@ describe("doctor legacy state migrations", () => {
     });
     const result = await runLegacyStateMigrations({ detected });
 
-    expect(result.changes).toStrictEqual([]);
+    expect(result.changes).toStrictEqual([
+      "Migrated 1 Test namespace-capped cache entry → plugin state",
+    ]);
     expect(result.warnings).toStrictEqual([
-      "Skipped migrating Test namespace-capped cache because plugin state namespace test.namespace-capped-cache has room for 1 of 2 missing entries; left legacy source in place",
+      "Partially migrating Test namespace-capped cache because plugin state namespace test.namespace-capped-cache has room for 1 of 2 missing entries; importing the newest 1 and deferring the rest in the legacy source",
     ]);
     expect(fs.existsSync(sourcePath)).toBe(true);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
@@ -1790,8 +1792,186 @@ describe("doctor legacy state migrations", () => {
         maxEntries: 2,
       });
       expect(await store.lookup("current")).toStrictEqual({ body: "current" });
-      expect(await store.lookup("legacy-first")).toBeUndefined();
-      expect(await store.lookup("legacy-second")).toBeUndefined();
+      expect(await store.lookup("legacy-new")).toStrictEqual({ body: "new" });
+      expect(await store.lookup("legacy-old")).toBeUndefined();
+    });
+  });
+
+  it("preserves legacy creation times so later live writes evict migrated rows before fresher existing rows", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test recency cache",
+        sourcePath,
+        targetPath: "plugin state:test.recency-cache",
+        pluginId: "telegram",
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "legacy-old", value: { body: "old" }, timestamp: 1_000 },
+          { key: "legacy-new", value: { body: "new" }, timestamp: 2_000 },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+    expect(result.changes).toStrictEqual(["Migrated 1 Test recency cache entry → plugin state"]);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.recency-cache",
+        maxEntries: 2,
+      });
+      const migrated = (await store.entries()).find(({ key }) => key === "legacy-new");
+      expect(migrated?.createdAt).toBe(2_000);
+
+      // The next live write must evict the oldest logical entry (the migrated
+      // legacy row), never the fresher pre-existing row.
+      await store.register("after", { body: "after" });
+      expect(await store.lookup("current")).toStrictEqual({ body: "current" });
+      expect(await store.lookup("after")).toStrictEqual({ body: "after" });
+      expect(await store.lookup("legacy-new")).toBeUndefined();
+    });
+  });
+
+  it("imports deferred entries on a later run once the namespace frees capacity", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test deferred cache",
+        sourcePath,
+        targetPath: "plugin state:test.deferred-cache",
+        pluginId: "telegram",
+        namespace: "test.deferred-cache",
+        maxEntries: 2,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [
+          { key: "legacy-old", value: { body: "old" }, timestamp: 1_000 },
+          { key: "legacy-new", value: { body: "new" }, timestamp: 2_000 },
+        ],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.deferred-cache",
+        maxEntries: 2,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const firstDetected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const firstResult = await runLegacyStateMigrations({ detected: firstDetected });
+    expect(firstResult.changes).toContain("Migrated 1 Test deferred cache entry → plugin state");
+    expect(fs.existsSync(sourcePath)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.deferred-cache",
+        maxEntries: 2,
+      });
+      await store.delete("current");
+    });
+    resetPluginStateStoreForTests();
+
+    const secondDetected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const secondResult = await runLegacyStateMigrations({ detected: secondDetected });
+
+    expect(secondResult.warnings).toStrictEqual([]);
+    expect(secondResult.changes).toContain("Migrated 1 Test deferred cache entry → plugin state");
+    expect(secondResult.changes).toContain(
+      `Archived Test deferred cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.deferred-cache",
+        maxEntries: 2,
+      });
+      expect(await store.lookup("legacy-new")).toStrictEqual({ body: "new" });
+      expect(await store.lookup("legacy-old")).toStrictEqual({ body: "old" });
+    });
+  });
+
+  it("defers every entry without blocking startup when the namespace has no capacity", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test full cache",
+        sourcePath,
+        targetPath: "plugin state:test.full-cache",
+        pluginId: "telegram",
+        namespace: "test.full-cache",
+        maxEntries: 1,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "legacy-only", value: { body: "legacy" }, timestamp: 1_000 }],
+      },
+    ];
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.full-cache",
+        maxEntries: 1,
+      });
+      await store.register("current", { body: "current" });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toStrictEqual([
+      "Deferring Test full cache migration because plugin state namespace test.full-cache has room for 0 of 1 missing entries; left legacy source in place to retry when capacity frees",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.full-cache",
+        maxEntries: 1,
+      });
+      expect(await store.lookup("current")).toStrictEqual({ body: "current" });
+      expect(await store.lookup("legacy-only")).toBeUndefined();
     });
   });
 
@@ -1837,7 +2017,7 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
   });
 
-  it("keeps plugin-state import source when plugin cap eviction drops an imported row", async () => {
+  it("imports up to the per-plugin cap and defers the rest instead of skipping", async () => {
     const root = await makeTempRoot();
     const maxPluginStateEntries = 40;
     setMaxPluginStateEntriesPerPluginForTests(maxPluginStateEntries);
@@ -1855,8 +2035,8 @@ describe("doctor legacy state migrations", () => {
         scopeKey: "scope",
         cleanupSource: "rename",
         readEntries: () => [
-          { key: "first", value: { body: "first" } },
-          { key: "second", value: { body: "second" } },
+          { key: "first", value: { body: "first" }, timestamp: 1_000 },
+          { key: "second", value: { body: "second" }, timestamp: 2_000 },
         ],
       },
     ];
@@ -1880,9 +2060,9 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
 
     expect(result.warnings).toStrictEqual([
-      "Stopped migrating Test capped cache because plugin state cap evicted scope:first; left legacy source in place",
+      "Partially migrating Test capped cache because plugin state has room for 1 of 2 missing entries; importing the newest 1 and deferring the rest in the legacy source",
     ]);
-    expect(result.changes).not.toContain("Migrated 2 Test capped cache entries → plugin state");
+    expect(result.changes).toContain("Migrated 1 Test capped cache entry → plugin state");
     expect(result.changes).not.toContain(
       `Archived Test capped cache legacy source → ${sourcePath}.migrated`,
     );
@@ -1898,7 +2078,74 @@ describe("doctor legacy state migrations", () => {
         (await store.entries()).map(({ key, value }) => [key, value.body]),
       );
       expect(valuesByKey.has("scope:first")).toBe(false);
-      expect(valuesByKey.has("scope:second")).toBe(false);
+      expect(valuesByKey.get("scope:second")).toBe("second");
+    });
+  });
+
+  it("keeps already-imported entries when a mid-import cap eviction interrupts the run", async () => {
+    const root = await makeTempRoot();
+    const maxPluginStateEntries = 41;
+    setMaxPluginStateEntriesPerPluginForTests(maxPluginStateEntries);
+    const sourcePath = path.join(root, "legacy-cache.json");
+    fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    mockedChannelMigrationPlans.plans = [
+      {
+        kind: "plugin-state-import",
+        label: "Test evicted cache",
+        sourcePath,
+        targetPath: "plugin state:test.evicted-cache",
+        pluginId: "telegram",
+        namespace: "test.evicted-cache",
+        maxEntries: maxPluginStateEntries,
+        scopeKey: "scope",
+        cleanupSource: "rename",
+        // Seeding inside readEntries lands after the preflight capacity check, which
+        // simulates concurrent live writes filling the plugin between preflight and import.
+        readEntries: () => {
+          seedPluginStateEntriesForTests(
+            Array.from({ length: maxPluginStateEntries - 2 }, (_, index) => ({
+              pluginId: "telegram",
+              namespace: "test.sibling-cache",
+              key: `sibling-${index}`,
+              value: { body: "sibling" },
+            })),
+          );
+          return [
+            { key: "first", value: { body: "first" }, timestamp: 1_000 },
+            { key: "second", value: { body: "second" }, timestamp: 2_000 },
+            { key: "third", value: { body: "third" }, timestamp: 3_000 },
+          ];
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([
+      "Paused migrating Test evicted cache because plugin state cap evicted scope:first; imported 1 of 3 missing entries and deferred the rest in the legacy source",
+    ]);
+    expect(result.changes).toContain("Migrated 1 Test evicted cache entry → plugin state");
+    expect(result.changes).not.toContain(
+      `Archived Test evicted cache legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.evicted-cache",
+        maxEntries: maxPluginStateEntries,
+      });
+      const valuesByKey = new Map(
+        (await store.entries()).map(({ key, value }) => [key, value.body]),
+      );
+      expect(valuesByKey.has("scope:first")).toBe(false);
+      expect(valuesByKey.get("scope:second")).toBe("second");
+      expect(valuesByKey.has("scope:third")).toBe(false);
     });
   });
 

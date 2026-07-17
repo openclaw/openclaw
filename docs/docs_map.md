@@ -7360,6 +7360,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What your plugin owns
   - H2: Message adapter
   - H3: Inbound ingress (experimental)
+  - H3: Durable ingress and replay dedupe
   - H3: Typing indicators
   - H3: Media source params
   - H3: Native payload shaping
@@ -9321,6 +9322,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: macOS app onboarding
   - H2: Custom or unlisted providers
   - H2: Related
+
+## start/onboarding-redesign.md
+
+- Route: /start/onboarding-redesign
+- Headings:
+  - H1: Onboarding redesign — implementation plan
+  - H2: North star
+  - H2: Phases
+  - H2: Implementation notes per phase
+  - H3: Phase 1 — app recommendations (PR #109668)
+  - H3: Phase 2 — CLI custodian spine (PR #109841)
+  - H3: Phase 3 — browser-first handoff (planned)
+  - H3: Phase 4 — web custodian surface (planned)
+  - H3: Phase 5 — hatch and bootstrap (planned)
+  - H3: Phase 6 — custodian presence (planned)
+  - H3: Phase 7 — resilience (follow-up)
+  - H2: Decision log
 
 ## start/onboarding.md
 
