@@ -66,14 +66,17 @@ describe("compaction staged fallback circuit breaker", () => {
     expect(result.text.match(/Summary unavailable due to size limits\./g)).toHaveLength(1);
   });
 
-  it("resets after a successful split and completes the merge", async () => {
+  it("resets after a successful split, completes the merge, and remains degraded", async () => {
     agentSessionMocks.generateSummary
       .mockRejectedValueOnce(new Error("fetch failed"))
       .mockResolvedValueOnce("middle summary")
       .mockRejectedValueOnce(new Error("fetch failed"))
       .mockResolvedValueOnce("merged summary");
 
-    await expect(summarize()).resolves.toEqual({ kind: "summary", text: "merged summary" });
+    await expect(summarize()).resolves.toEqual({
+      kind: "generic-fallback",
+      text: "merged summary",
+    });
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(4);
   });
 });

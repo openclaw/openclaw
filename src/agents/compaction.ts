@@ -411,6 +411,7 @@ export async function summarizeInStages(params: {
 
   const partialSummaries: string[] = [];
   let consecutiveGenericFallbacks = 0;
+  let usedGenericFallback = false;
   for (const [index, chunk] of plan.chunks.entries()) {
     const result = await summarizeWithFallbackResult({
       ...params,
@@ -419,6 +420,7 @@ export async function summarizeInStages(params: {
     });
     consecutiveGenericFallbacks =
       result.kind === "generic-fallback" ? consecutiveGenericFallbacks + 1 : 0;
+    usedGenericFallback ||= result.kind === "generic-fallback";
 
     // Keep one placeholder to mark the missing split, but stop before repeated
     // placeholders trigger more split requests or a doomed merge request.
@@ -441,7 +443,10 @@ export async function summarizeInStages(params: {
     if (summary === undefined) {
       throw new Error("Compaction summary plan produced no summary");
     }
-    return { kind: "summary", text: summary };
+    return {
+      kind: usedGenericFallback ? "generic-fallback" : "summary",
+      text: summary,
+    };
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -475,11 +480,14 @@ export async function summarizeInStages(params: {
     ? `${MERGE_SUMMARIES_INSTRUCTIONS}\n\n${custom}`
     : MERGE_SUMMARIES_INSTRUCTIONS;
 
-  return summarizeWithFallbackResult({
+  const mergedResult = await summarizeWithFallbackResult({
     ...params,
     messages: summaryMessages,
     customInstructions: mergeInstructions,
   });
+  return usedGenericFallback && mergedResult.kind === "summary"
+    ? { kind: "generic-fallback", text: mergedResult.text }
+    : mergedResult;
 }
 
 /** Resolves a positive context-window token count from model metadata. */
