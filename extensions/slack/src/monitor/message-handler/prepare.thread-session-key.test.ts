@@ -51,8 +51,6 @@ function buildAccount(replyToMode: "all" | "first" | "off" | "batched"): Resolve
     identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
-    sessionTokenSource: "none",
-    sessionCookieSource: "none",
     userTokenSource: "none",
     config: { replyToMode },
     replyToMode,

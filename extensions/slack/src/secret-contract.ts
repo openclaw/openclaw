@@ -12,24 +12,8 @@ import {
 
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "slack",
-  account: [
-    "appToken",
-    "relay.authToken",
-    "botToken",
-    "sessionCookie",
-    "sessionToken",
-    "signingSecret",
-    "userToken",
-  ],
-  channel: [
-    "appToken",
-    "botToken",
-    "relay.authToken",
-    "sessionCookie",
-    "sessionToken",
-    "signingSecret",
-    "userToken",
-  ],
+  account: ["appToken", "relay.authToken", "botToken", "signingSecret", "userToken"],
+  channel: ["appToken", "botToken", "relay.authToken", "signingSecret", "userToken"],
 });
 
 export function collectRuntimeConfigAssignments(params: {
@@ -56,27 +40,6 @@ export function collectRuntimeConfigAssignments(params: {
       context: params.context,
       topInactiveReason: `no enabled account inherits this top-level Slack ${field}.`,
       accountInactiveReason: "Slack account is disabled.",
-    });
-  }
-  const resolveIdentity = (value: unknown) => (value === "user" ? "user" : "bot");
-  const baseIdentity = resolveIdentity(slack.identity);
-  for (const field of ["sessionToken", "sessionCookie"] as const) {
-    collectConditionalChannelFieldAssignments({
-      channelKey: "slack",
-      field,
-      channel: slack,
-      surface,
-      defaults: params.defaults,
-      context: params.context,
-      topLevelActiveWithoutAccounts: baseIdentity === "user",
-      topLevelInheritedAccountActive: ({ account, enabled }) =>
-        enabled &&
-        !hasOwnProperty(account, field) &&
-        resolveIdentity(account.identity ?? baseIdentity) === "user",
-      accountActive: ({ account, enabled }) =>
-        enabled && resolveIdentity(account.identity ?? baseIdentity) === "user",
-      topInactiveReason: `no enabled Slack user-identity surface inherits this top-level ${field}.`,
-      accountInactiveReason: "Slack account is disabled or not using user identity.",
     });
   }
   const resolveAccountMode = (account: Record<string, unknown>) =>

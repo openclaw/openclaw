@@ -148,7 +148,7 @@ describe("resolveSlackChannelType", () => {
     expect(conversationsInfoMock).not.toHaveBeenCalled();
   });
 
-  it("uses the session token to open native IMs for user identity", async () => {
+  it("uses the user token to open native IMs for user identity", async () => {
     conversationsOpenMock.mockResolvedValueOnce({
       channel: {
         id: "D0AEWSDHAQH",
@@ -163,8 +163,7 @@ describe("resolveSlackChannelType", () => {
           channels: {
             slack: {
               identity: "user",
-              sessionToken: "test-session-token",
-              sessionCookie: "test-session-cookie",
+              userToken: "test-user-token",
             },
           },
         } as never,
@@ -175,7 +174,7 @@ describe("resolveSlackChannelType", () => {
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-session-token");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token");
     expect(conversationsOpenMock).toHaveBeenCalledWith({
       channel: "D0AEWSDHAQH",
       prevent_creation: true,

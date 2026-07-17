@@ -75,8 +75,6 @@ export function createSlackTestAccount(
     identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
-    sessionTokenSource: "none",
-    sessionCookieSource: "none",
     userTokenSource: "none",
     config,
     replyToMode: config.replyToMode,

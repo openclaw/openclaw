@@ -18,13 +18,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
-import {
-  resolveSlackAppToken,
-  resolveSlackBotToken,
-  resolveSlackSessionCookie,
-  resolveSlackSessionToken,
-  resolveSlackUserToken,
-} from "./token.js";
+import { resolveSlackAppToken, resolveSlackBotToken, resolveSlackUserToken } from "./token.js";
 
 export { resolveSlackReplyToMode } from "./account-reply-mode.js";
 
@@ -37,13 +31,9 @@ export type ResolvedSlackAccount = {
   name?: string;
   botToken?: string;
   appToken?: string;
-  sessionToken?: string;
-  sessionCookie?: string;
   userToken?: string;
   botTokenSource: SlackTokenSource;
   appTokenSource: SlackTokenSource;
-  sessionTokenSource: SlackTokenSource;
-  sessionCookieSource: SlackTokenSource;
   userTokenSource: SlackTokenSource;
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
@@ -58,11 +48,9 @@ export function resolveSlackOperationToken(
   operation: "read" | "write",
 ): string | undefined {
   if (account.identity === "user") {
-    // User identity authenticates with the browser-session token; its required
-    // companion `sessionCookie` is attached at client construction (session RTM
-    // transport, later phase). The user path is not wired end-to-end until then,
-    // so returning the token alone here is intentional, not a missing credential.
-    return normalizeOptionalString(account.sessionToken);
+    // User identity acts as the authorizing human through the xoxp user token;
+    // the companion Slack app carries events through the selected transport.
+    return normalizeOptionalString(account.userToken);
   }
   const userToken = normalizeOptionalString(account.userToken);
   const botToken = normalizeOptionalString(account.botToken);
@@ -76,13 +64,26 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
   hasImplicitDefaultAccount: (cfg) => {
     const slack = cfg.channels?.slack;
     if (slack?.identity === "user") {
-      const hasSessionToken =
-        hasConfiguredAccountValue(slack.sessionToken) ||
-        hasConfiguredAccountValue(process.env.SLACK_SESSION_TOKEN);
-      const hasSessionCookie =
-        hasConfiguredAccountValue(slack.sessionCookie) ||
-        hasConfiguredAccountValue(process.env.SLACK_SESSION_COOKIE);
-      return hasSessionToken && hasSessionCookie;
+      const hasUserToken =
+        hasConfiguredAccountValue(slack.userToken) ||
+        hasConfiguredAccountValue(process.env.SLACK_USER_TOKEN);
+      if (!hasUserToken) {
+        return false;
+      }
+      if (slack.mode === "http") {
+        return hasConfiguredAccountValue(slack.signingSecret);
+      }
+      if (slack.mode === "relay") {
+        return (
+          hasConfiguredAccountValue(slack.relay?.url) &&
+          hasConfiguredAccountValue(slack.relay?.authToken) &&
+          hasConfiguredAccountValue(slack.relay?.gatewayId)
+        );
+      }
+      return (
+        hasConfiguredAccountValue(slack.appToken) ||
+        hasConfiguredAccountValue(process.env.SLACK_APP_TOKEN)
+      );
     }
     const hasBotToken =
       hasConfiguredAccountValue(slack?.botToken) ||
@@ -254,23 +255,14 @@ export function resolveSlackAccount(params: {
   const mode = merged.mode ?? "socket";
   const baseAllowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const botActive = enabled;
-  const appActive = enabled && mode === "socket" && identity === "bot";
+  const appActive = enabled && mode === "socket";
   const userActive = enabled;
-  const sessionActive = enabled && identity === "user";
   const envBot =
     botActive && baseAllowEnv ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN) : undefined;
   const envApp =
     appActive && baseAllowEnv ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN) : undefined;
   const envUser =
     userActive && baseAllowEnv ? resolveSlackUserToken(process.env.SLACK_USER_TOKEN) : undefined;
-  const envSessionToken =
-    sessionActive && baseAllowEnv
-      ? resolveSlackSessionToken(process.env.SLACK_SESSION_TOKEN)
-      : undefined;
-  const envSessionCookie =
-    sessionActive && baseAllowEnv
-      ? resolveSlackSessionCookie(process.env.SLACK_SESSION_COOKIE)
-      : undefined;
   const configBot = botActive
     ? resolveSlackBotToken(merged.botToken, `channels.slack.accounts.${accountId}.botToken`)
     : undefined;
@@ -280,35 +272,11 @@ export function resolveSlackAccount(params: {
   const configUser = userActive
     ? resolveSlackUserToken(merged.userToken, `channels.slack.accounts.${accountId}.userToken`)
     : undefined;
-  const configSessionToken = sessionActive
-    ? resolveSlackSessionToken(
-        merged.sessionToken,
-        `channels.slack.accounts.${accountId}.sessionToken`,
-      )
-    : undefined;
-  const configSessionCookie = sessionActive
-    ? resolveSlackSessionCookie(
-        merged.sessionCookie,
-        `channels.slack.accounts.${accountId}.sessionCookie`,
-      )
-    : undefined;
   const botToken = configBot ?? envBot;
   const appToken = configApp ?? envApp;
   const userToken = configUser ?? envUser;
-  const sessionToken = configSessionToken ?? envSessionToken;
-  const sessionCookie = configSessionCookie ?? envSessionCookie;
   const botTokenSource: SlackTokenSource = configBot ? "config" : envBot ? "env" : "none";
   const appTokenSource: SlackTokenSource = configApp ? "config" : envApp ? "env" : "none";
-  const sessionTokenSource: SlackTokenSource = configSessionToken
-    ? "config"
-    : envSessionToken
-      ? "env"
-      : "none";
-  const sessionCookieSource: SlackTokenSource = configSessionCookie
-    ? "config"
-    : envSessionCookie
-      ? "env"
-      : "none";
   const userTokenSource: SlackTokenSource = configUser ? "config" : envUser ? "env" : "none";
 
   return {
@@ -318,13 +286,9 @@ export function resolveSlackAccount(params: {
     name: normalizeOptionalString(merged.name),
     botToken,
     appToken,
-    sessionToken,
-    sessionCookie,
     userToken,
     botTokenSource,
     appTokenSource,
-    sessionTokenSource,
-    sessionCookieSource,
     userTokenSource,
     config: merged,
     groupPolicy: merged.groupPolicy,

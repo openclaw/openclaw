@@ -61,31 +61,30 @@ describe("resolveSlackOperationToken", () => {
   });
 
   it.each(["read", "write"] as const)(
-    "uses the session token for %s operations with user identity",
+    "uses the user token for %s operations with user identity",
     (operation) => {
       const account = resolveSlackAccount({
         cfg: {
           channels: {
             slack: {
               identity: "user",
-              sessionToken: "test-session-token",
-              sessionCookie: "test-session-cookie",
+              userToken: "test-user-token",
+              userTokenReadOnly: true,
             },
           },
         } as OpenClawConfig,
       });
 
-      expect(resolveSlackOperationToken(account, operation)).toBe("test-session-token");
+      expect(resolveSlackOperationToken(account, operation)).toBe("test-user-token");
     },
   );
 
-  it("does not fall back when a user identity has no session token", () => {
+  it("does not fall back when a user identity has no user token", () => {
     const account = resolveSlackAccount({
       cfg: {
         channels: {
           slack: {
             identity: "user",
-            userToken: "test-user-token",
             botToken: "test-bot-token",
           },
         },

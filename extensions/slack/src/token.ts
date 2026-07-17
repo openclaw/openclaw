@@ -35,20 +35,6 @@ export function resolveSlackAppToken(
   return normalizeResolvedSecretInputString({ value: raw, path });
 }
 
-export function resolveSlackSessionToken(
-  raw?: unknown,
-  path = "channels.slack.sessionToken",
-): string | undefined {
-  return normalizeResolvedSecretInputString({ value: raw, path });
-}
-
-export function resolveSlackSessionCookie(
-  raw?: unknown,
-  path = "channels.slack.sessionCookie",
-): string | undefined {
-  return normalizeResolvedSecretInputString({ value: raw, path });
-}
-
 export function resolveSlackUserToken(
   raw?: unknown,
   path = "channels.slack.userToken",

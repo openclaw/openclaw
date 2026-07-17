@@ -13,7 +13,7 @@ export const slackChannelConfigUiHints = {
   },
   identity: {
     label: "Slack Identity",
-    help: 'Select "bot" (default) for Slack app credentials or "user" for the unsupported, opt-in browser-session credential path.',
+    help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
   },
   ...createChannelConfigUiHints({
     channelLabel: "Slack",
@@ -90,14 +90,6 @@ export const slackChannelConfigUiHints = {
   appToken: {
     label: "Slack App Token",
     help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
-  },
-  sessionToken: {
-    label: "Slack Session Token",
-    help: "Slack browser-session bearer credential extracted from the web client (paired with the session cookie). Browser-session credentials rotate or expire; this is an unsupported, opt-in, ToS-gray path.",
-  },
-  sessionCookie: {
-    label: "Slack Session Cookie",
-    help: "Slack browser-session `d` cookie credential extracted from the web client (paired with the session token). Browser-session credentials rotate or expire; this is an unsupported, opt-in, ToS-gray path.",
   },
   userToken: {
     label: "Slack User Token",

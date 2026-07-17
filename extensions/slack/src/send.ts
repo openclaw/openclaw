@@ -990,7 +990,7 @@ export async function sendMessageSlack(
         accountId: account.accountId,
         fallbackToken: resolveSlackOperationToken(account, "write"),
         fallbackSource:
-          account.identity === "user" ? account.sessionTokenSource : account.botTokenSource,
+          account.identity === "user" ? account.userTokenSource : account.botTokenSource,
       });
   const recipient = enterpriseDelivery ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   const queueKey = createSlackSendQueueKey({

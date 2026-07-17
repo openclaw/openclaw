@@ -193,8 +193,6 @@ export type SlackAccountConfig = {
   enabled?: boolean;
   botToken?: SecretInput;
   appToken?: SecretInput;
-  sessionToken?: SecretInput;
-  sessionCookie?: SecretInput;
   userToken?: SecretInput;
   /** If true, restrict user token to read operations only. Default: true. */
   userTokenReadOnly?: boolean;

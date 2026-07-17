@@ -984,8 +984,6 @@ const SlackAccountSchema = z
     configWrites: z.boolean().optional(),
     botToken: SecretInputSchema.optional().register(sensitive),
     appToken: SecretInputSchema.optional().register(sensitive),
-    sessionToken: SecretInputSchema.optional().register(sensitive),
-    sessionCookie: SecretInputSchema.optional().register(sensitive),
     userToken: SecretInputSchema.optional().register(sensitive),
     userTokenReadOnly: z.boolean().optional().default(true),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
@@ -1111,58 +1109,8 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
     }
   };
 
-  const validateUserIdentity = (
-    account: {
-      identity?: "bot" | "user";
-      mode?: "socket" | "http" | "relay";
-      appToken?: unknown;
-      signingSecret?: unknown;
-      relay?: { url?: unknown; authToken?: unknown; gatewayId?: unknown };
-    },
-    path: (string | number)[],
-  ) => {
-    if (account.identity !== "user") {
-      return;
-    }
-    // Session credential presence is enforced at runtime, like bot/app tokens, not in schema.
-    if (account.appToken !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.identity="user" does not support appToken',
-        path: [...path, "appToken"],
-      });
-    }
-    if (account.signingSecret !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.identity="user" does not support signingSecret',
-        path: [...path, "signingSecret"],
-      });
-    }
-    if (account.mode !== undefined && account.mode !== "socket") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'channels.slack.identity="user" does not support non-default mode',
-        path: [...path, "mode"],
-      });
-    }
-    for (const field of ["url", "authToken", "gatewayId"] as const) {
-      if (account.relay?.[field] === undefined) {
-        continue;
-      }
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `channels.slack.identity="user" does not support relay.${field}`,
-        path: [...path, "relay", field],
-      });
-    }
-  };
-
   const baseMode = value.mode ?? "socket";
   const accountIds = value.accounts ? Object.keys(value.accounts) : [];
-  if (accountIds.length === 0) {
-    validateUserIdentity(value, []);
-  }
   if (!value.accounts) {
     if (baseMode === "relay") {
       requireRelayConfig(value.relay, ["relay"]);
@@ -1183,17 +1131,6 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       ...value.relay,
       ...account.relay,
     };
-    validateUserIdentity(
-      {
-        ...account,
-        identity: account.identity ?? value.identity,
-        mode: account.mode ?? baseMode,
-        appToken: account.appToken ?? value.appToken,
-        signingSecret: account.signingSecret ?? value.signingSecret,
-        relay: effectiveRelay,
-      },
-      ["accounts", accountId],
-    );
     const effectivePolicy =
       account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
     const effectiveAllowFrom =

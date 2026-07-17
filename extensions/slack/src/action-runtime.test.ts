@@ -1635,21 +1635,20 @@ describe("handleSlackAction", () => {
     expect(token).toBe("xoxp-user");
   });
 
-  it("uses the session token for user-identity writes", async () => {
+  it("uses the user token for user-identity writes", async () => {
     const token = await resolveSendToken({
       channels: {
         slack: {
           identity: "user",
-          sessionToken: "test-session-token",
-          sessionCookie: "test-session-cookie",
+          userToken: "test-user-token",
         },
       },
     } as OpenClawConfig);
 
-    expect(token).toBe("test-session-token");
+    expect(token).toBe("test-user-token");
   });
 
-  it("does not fall back to a bot token when a user identity has no session token", async () => {
+  it("does not fall back to a bot token when a user identity has no user token", async () => {
     await expect(
       resolveSendToken({
         channels: {

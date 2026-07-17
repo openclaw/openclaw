@@ -301,15 +301,14 @@ describe("reconcileSlackUnknownSend", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
-  it("uses the user-identity session token to open a durable DM target", async () => {
+  it("uses the user-identity user token to open a durable DM target", async () => {
     const client = createSlackReconcileTestClient();
     slackClientMocks.getSlackWriteClient.mockReturnValue(client);
     const userIdentityCfg = {
       channels: {
         slack: {
           identity: "user",
-          sessionToken: "test-session-token",
-          sessionCookie: "test-session-cookie",
+          userToken: "test-user-token",
         },
       },
     } as OpenClawConfig;
@@ -319,7 +318,7 @@ describe("reconcileSlackUnknownSend", () => {
       deliveryQueueId: "test-queue-id",
     });
 
-    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("test-session-token");
+    expect(slackClientMocks.getSlackWriteClient).toHaveBeenCalledWith("test-user-token");
     expect(client.conversations.open).toHaveBeenCalledWith({ users: "U123" });
   });
 

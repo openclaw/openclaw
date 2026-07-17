@@ -46,151 +46,87 @@ describe("slack config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.identity).toBe("bot");
+      expect(res.data.accounts?.work?.identity).toBeUndefined();
       expect(res.data.accounts?.work?.identity ?? res.data.identity).toBe("bot");
     }
   });
 
-  it('accepts identity="user" with both browser-session credentials', () => {
+  it('accepts identity="user" with a user token and socket companion app', () => {
     expectSlackConfigValid({
       identity: "user",
-      sessionToken: "test-session-token",
-      sessionCookie: "test-session-cookie",
-    });
-    expectSlackConfigValid({
-      accounts: {
-        work: {
-          identity: "user",
-          sessionToken: "test-session-token",
-          sessionCookie: "test-session-cookie",
-        },
-      },
+      userToken: "test-user-token",
+      appToken: "test-app-token",
     });
   });
 
-  it("allows per-account credentials for an inherited user identity", () => {
+  it('accepts identity="user" with a user token and HTTP companion app', () => {
     expectSlackConfigValid({
       identity: "user",
-      accounts: {
-        matty: {
-          sessionToken: "test-session-token-x",
-          sessionCookie: "test-session-cookie-y",
+      mode: "http",
+      userToken: "test-user-token",
+      signingSecret: "test-signing-secret",
+    });
+  });
+
+  it("allows account entries to inherit the top-level user identity", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          identity: "user" as const,
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+          accounts: { work: {} },
         },
+      },
+    } satisfies OpenClawConfig;
+
+    expectSlackConfigValid(cfg.channels.slack);
+    expect(resolveSlackAccount({ cfg, accountId: "work" }).identity).toBe("user");
+  });
+
+  it("keeps user tokens and companion app tokens active for user identity", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          identity: "user" as const,
+          userToken: "test-user-token",
+          appToken: "test-app-token",
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const account = resolveSlackAccount({ cfg });
+
+    expect(listSlackAccountIds(cfg)).toEqual(["default"]);
+    expect(account.userToken).toBe("test-user-token");
+    expect(account.userTokenSource).toBe("config");
+    expect(account.appToken).toBe("test-app-token");
+    expect(account.appTokenSource).toBe("config");
+  });
+
+  it("accepts inherited and relay companion-app transports for user identity", () => {
+    expectSlackConfigValid({
+      identity: "user",
+      userToken: "test-user-token",
+      appToken: "test-app-token",
+      accounts: {
+        work: {},
+      },
+    });
+    expectSlackConfigValid({
+      identity: "user",
+      mode: "relay",
+      userToken: "test-user-token",
+      relay: {
+        url: "test-relay-url",
+        authToken: "test-relay-auth-token",
+        gatewayId: "test-gateway-id",
       },
     });
   });
 
-  it("rejects an app token for an inherited user identity", () => {
-    expectSlackConfigIssue(
-      {
-        identity: "user",
-        accounts: {
-          matty: {
-            sessionToken: "test-session-token-x",
-            sessionCookie: "test-session-cookie-y",
-            appToken: "test-app-token",
-          },
-        },
-      },
-      "accounts.matty.appToken",
-    );
-  });
-
-  it("defers user-identity session credential presence to runtime", () => {
+  it("defers user-identity user-token presence to runtime", () => {
     expectSlackConfigValid({ identity: "user" });
-    expectSlackConfigValid({ identity: "user", sessionToken: "test-session-token" });
-  });
-
-  it('rejects app transports and credentials for identity="user"', () => {
-    const credentials = {
-      identity: "user" as const,
-      sessionToken: "test-session-token",
-      sessionCookie: "test-session-cookie",
-    };
-
-    expectSlackConfigIssue({ ...credentials, appToken: "test-app-token" }, "appToken");
-    expectSlackConfigIssue(
-      { ...credentials, signingSecret: "test-signing-secret" },
-      "signingSecret",
-    );
-    expectSlackConfigIssue(
-      { ...credentials, relay: { url: "wss://router.example.com/gateway/ws" } },
-      "relay.url",
-    );
-    expectSlackConfigIssue({ ...credentials, mode: "http" }, "mode");
-    expectSlackConfigIssue({ ...credentials, mode: "relay" }, "mode");
-    expectSlackConfigIssue(
-      {
-        accounts: {
-          work: {
-            ...credentials,
-            appToken: "test-app-token",
-          },
-        },
-      },
-      "accounts.work.appToken",
-    );
-  });
-
-  it("validates user identity structure when accounts is empty", () => {
-    expectSlackConfigIssue(
-      { identity: "user", accounts: {}, appToken: "test-app-token" },
-      "appToken",
-    );
-  });
-
-  it("uses session env fallback for the default account only", () => {
-    const previousSessionToken = process.env.SLACK_SESSION_TOKEN;
-    const previousSessionCookie = process.env.SLACK_SESSION_COOKIE;
-    process.env.SLACK_SESSION_TOKEN = "test-session-token-env";
-    process.env.SLACK_SESSION_COOKIE = "test-session-cookie-env";
-    try {
-      const cfg = {
-        channels: {
-          slack: {
-            accounts: {
-              default: { identity: "user" },
-              work: { identity: "user" },
-              configured: {
-                identity: "user",
-                sessionToken: "test-session-token-config",
-                sessionCookie: "test-session-cookie-config",
-              },
-            },
-          },
-        },
-      } satisfies OpenClawConfig;
-
-      const defaultAccount = resolveSlackAccount({ cfg, accountId: "default" });
-      const workAccount = resolveSlackAccount({ cfg, accountId: "work" });
-      const configuredAccount = resolveSlackAccount({ cfg, accountId: "configured" });
-      const implicitCfg = {
-        channels: { slack: { identity: "user" as const } },
-      } satisfies OpenClawConfig;
-
-      expect(defaultAccount.sessionToken).toBe("test-session-token-env");
-      expect(defaultAccount.sessionCookie).toBe("test-session-cookie-env");
-      expect(defaultAccount.sessionTokenSource).toBe("env");
-      expect(defaultAccount.sessionCookieSource).toBe("env");
-      expect(workAccount.sessionToken).toBeUndefined();
-      expect(workAccount.sessionCookie).toBeUndefined();
-      expect(workAccount.sessionTokenSource).toBe("none");
-      expect(workAccount.sessionCookieSource).toBe("none");
-      expect(configuredAccount.sessionTokenSource).toBe("config");
-      expect(configuredAccount.sessionCookieSource).toBe("config");
-      expect(SlackConfigSchema.safeParse({ identity: "user" }).success).toBe(true);
-      expect(listSlackAccountIds(implicitCfg)).toEqual(["default"]);
-    } finally {
-      if (previousSessionToken === undefined) {
-        delete process.env.SLACK_SESSION_TOKEN;
-      } else {
-        process.env.SLACK_SESSION_TOKEN = previousSessionToken;
-      }
-      if (previousSessionCookie === undefined) {
-        delete process.env.SLACK_SESSION_COOKIE;
-      } else {
-        process.env.SLACK_SESSION_COOKIE = previousSessionCookie;
-      }
-    }
   });
 
   it("keeps presence events off by default and accepts account/channel modes", () => {
