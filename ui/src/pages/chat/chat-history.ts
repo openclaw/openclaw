@@ -404,7 +404,7 @@ function reconcileHistoryPlanStatus(params: {
   const run = params.inFlightRun;
   const runId = run?.runId?.trim();
   if (run && runId) {
-    if (Object.prototype.hasOwnProperty.call(run, "plan")) {
+    if (Object.hasOwn(run, "plan")) {
       return run.plan ? normalizePlanSnapshot(run.plan, runId) : null;
     }
     return params.retainedPlan?.runId === runId ? params.retainedPlan : null;
