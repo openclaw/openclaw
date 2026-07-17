@@ -30,7 +30,7 @@ const WINDOWS_NLS_CODEPAGE_KEY = "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\
 
 const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
-  // DBCS locales pair identical ANSI and OEM pages; labels match the ANSI map.
+  // These locales use the same ANSI/OEM identifier; labels match the ANSI map.
   874: "windows-874",
   932: "shift_jis",
   936: "gbk",
