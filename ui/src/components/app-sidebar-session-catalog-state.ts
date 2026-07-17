@@ -16,7 +16,7 @@ export function sessionCatalogRequestError(error: unknown): SessionCatalogError 
   };
 }
 
-export function mergeCatalogSessionRows(
+function mergeCatalogSessionRows(
   first: readonly SessionCatalogSession[],
   second: readonly SessionCatalogSession[],
 ): SessionCatalogSession[] {

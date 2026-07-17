@@ -8,7 +8,10 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { preserveExpandedCatalogHost } from "./app-sidebar-session-catalog-state.ts";
+import {
+  preserveExpandedCatalogHost,
+  refetchExpandedSessionCatalogPages,
+} from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 export const SESSION_CATALOG_CHANGED_REFRESH_MS = 5_000;
@@ -410,5 +413,82 @@ export class SessionCatalogLiveState {
       this.activationTimer = null;
       refresh();
     }, 50);
+  }
+}
+
+/** Runs one progressive list/reconciliation cycle without binding it to a Lit element. */
+export async function refreshSessionCatalogsLive(params: {
+  live: SessionCatalogLiveState;
+  client: GatewayBrowserClient;
+  agentId: string;
+  generation: number;
+  revision: number;
+  currentGeneration: () => number;
+  currentRevision: () => number;
+  currentClient: () => GatewayBrowserClient | null;
+  catalogs: () => SessionCatalog[];
+  pageDepths: ReadonlyMap<string, number>;
+  connected: () => boolean;
+  applyFinal: (catalogs: SessionCatalog[], revisedCatalogIds: ReadonlySet<string>) => void;
+  refresh: () => void;
+}) {
+  const { live, client, generation, revision } = params;
+  if (live.requestGeneration === generation) {
+    return;
+  }
+  const { progressId, progressSequence, requestOwner } = live.beginRequest(generation);
+  const hadCatalogs = params.catalogs().length > 0;
+  const previousSnapshot = sessionCatalogSnapshot(params.catalogs());
+  let refetchOwner: symbol | null = null;
+  const requestIsCurrent = () =>
+    live.ownsRequest(requestOwner) &&
+    generation === params.currentGeneration() &&
+    client === params.currentClient();
+  const revisionIsCurrent = () => requestIsCurrent() && revision === params.currentRevision();
+  try {
+    const result = await live.requestList(client, params.agentId, progressId);
+    if (!requestIsCurrent()) {
+      return;
+    }
+    refetchOwner = live.beginRefetch(params.pageDepths.size > 0);
+    const previousCatalogs = params.catalogs();
+    const catalogs = await refetchExpandedSessionCatalogPages({
+      catalogs: live.mergeFinal(result.catalogs, previousCatalogs),
+      previousCatalogs,
+      client,
+      agentId: params.agentId,
+      pageDepths: params.pageDepths,
+      isCurrent: revisionIsCurrent,
+    });
+    if (!revisionIsCurrent()) {
+      return;
+    }
+    const revisedCatalogIds = new Set([
+      ...params.catalogs().map((catalog) => catalog.id),
+      ...catalogs.map((catalog) => catalog.id),
+    ]);
+    params.applyFinal(catalogs, revisedCatalogIds);
+    live.markFinal({ catalogs, hadCatalogs, previousSnapshot, progressSequence });
+  } catch {
+    // A transient poll failure must not collapse already visible or expanded pages.
+  } finally {
+    live.endRefetch(refetchOwner);
+    const ownsRequest = live.ownsRequest(requestOwner);
+    if (ownsRequest) {
+      live.requestGeneration = null;
+    }
+    if (ownsRequest && requestIsCurrent() && params.connected()) {
+      const pending = live.refreshPending;
+      live.refreshPending = false;
+      live.schedule(
+        pending
+          ? 0
+          : live.sawChange
+            ? SESSION_CATALOG_CHANGED_REFRESH_MS
+            : SESSION_CATALOG_STABLE_REFRESH_MS,
+        params.connected(),
+        params.refresh,
+      );
+    }
   }
 }

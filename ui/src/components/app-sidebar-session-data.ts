@@ -22,15 +22,12 @@ import {
   mergeChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
 import {
-  SESSION_CATALOG_CHANGED_REFRESH_MS,
-  SESSION_CATALOG_STABLE_REFRESH_MS,
+  refreshSessionCatalogsLive,
   SessionCatalogLiveState,
   sessionCatalogListClient,
-  sessionCatalogSnapshot,
 } from "./app-sidebar-session-catalog-live.ts";
 import {
   mergeSessionCatalogPage,
-  refetchExpandedSessionCatalogPages,
   sessionCatalogRequestError,
 } from "./app-sidebar-session-catalog-state.ts";
 import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
@@ -269,89 +266,30 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
     const generation = this.sessionCatalogGeneration;
     const revision = this.sessionCatalogRevision;
     const agentId = this.sessionCatalogAgentId ?? this.expandedAgentId();
-    if (this.sessionCatalogLive.requestGeneration === generation) {
-      return;
-    }
-    const { progressId, progressSequence, requestOwner } =
-      this.sessionCatalogLive.beginRequest(generation);
-    const hadCatalogs = this.sessionCatalogs.length > 0;
-    let refetchOwner: symbol | null = null;
-    try {
-      const before = sessionCatalogSnapshot(this.sessionCatalogs);
-      const result = await this.sessionCatalogLive.requestList(client, agentId, progressId);
-      if (
-        !this.sessionCatalogLive.ownsRequest(requestOwner) ||
-        generation !== this.sessionCatalogGeneration ||
-        client !== this.gatewayClient
-      ) {
-        return;
-      }
-      refetchOwner = this.sessionCatalogLive.beginRefetch(this.sessionCatalogPageDepths.size > 0);
-      const catalogs = await refetchExpandedSessionCatalogPages({
-        catalogs: this.sessionCatalogLive.mergeFinal(result.catalogs, this.sessionCatalogs),
-        previousCatalogs: this.sessionCatalogs,
-        client,
-        agentId,
-        pageDepths: this.sessionCatalogPageDepths,
-        isCurrent: () =>
-          this.sessionCatalogLive.ownsRequest(requestOwner) &&
-          generation === this.sessionCatalogGeneration &&
-          revision === this.sessionCatalogRevision &&
-          client === this.gatewayClient,
-      });
-      if (
-        !this.sessionCatalogLive.ownsRequest(requestOwner) ||
-        generation !== this.sessionCatalogGeneration ||
-        revision !== this.sessionCatalogRevision ||
-        client !== this.gatewayClient
-      ) {
-        return;
-      }
-      const revisedCatalogIds = new Set([
-        ...this.sessionCatalogs.map((catalog) => catalog.id),
-        ...catalogs.map((catalog) => catalog.id),
-      ]);
-      this.sessionCatalogs = catalogs;
-      this.sessionCatalogLive.markFinal({
-        catalogs,
-        hadCatalogs,
-        previousSnapshot: before,
-        progressSequence,
-      });
-      for (const catalogId of revisedCatalogIds) {
-        this.sessionCatalogRevisions.set(
-          catalogId,
-          (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
-        );
-      }
-      this.sessionCatalogRevision += 1;
-    } catch {
-      // A transient poll failure must not collapse already visible or expanded pages.
-    } finally {
-      this.sessionCatalogLive.endRefetch(refetchOwner);
-      const ownsRequest = this.sessionCatalogLive.ownsRequest(requestOwner);
-      if (ownsRequest) {
-        this.sessionCatalogLive.requestGeneration = null;
-      }
-      if (
-        ownsRequest &&
-        generation === this.sessionCatalogGeneration &&
-        client === this.gatewayClient &&
-        this.isConnected
-      ) {
-        const pending = this.sessionCatalogLive.refreshPending;
-        this.sessionCatalogLive.refreshPending = false;
-        this.sessionCatalogLive.schedule(
-          pending
-            ? 0
-            : this.sessionCatalogLive.sawChange
-              ? SESSION_CATALOG_CHANGED_REFRESH_MS
-              : SESSION_CATALOG_STABLE_REFRESH_MS,
-          this.isConnected,
-          () => void this.refreshSessionCatalogs(),
-        );
-      }
-    }
+    await refreshSessionCatalogsLive({
+      live: this.sessionCatalogLive,
+      client,
+      agentId,
+      generation,
+      revision,
+      currentGeneration: () => this.sessionCatalogGeneration,
+      currentRevision: () => this.sessionCatalogRevision,
+      currentClient: () => this.gatewayClient,
+      catalogs: () => this.sessionCatalogs,
+      pageDepths: this.sessionCatalogPageDepths,
+      connected: () => this.isConnected,
+      applyFinal: (catalogs, revisedCatalogIds) => {
+        this.sessionCatalogs = catalogs;
+        for (const catalogId of revisedCatalogIds) {
+          this.sessionCatalogRevisions.set(
+            catalogId,
+            (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
+          );
+        }
+        this.sessionCatalogRevision += 1;
+      },
+      refresh: () => void this.refreshSessionCatalogs(),
+    });
   }
 
   protected async loadMoreSessionCatalog(catalogId: string) {
