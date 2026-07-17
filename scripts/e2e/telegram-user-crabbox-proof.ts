@@ -578,18 +578,21 @@ function shellQuote(value: string) {
 
 type AppendCommandStdoutResult = { ok: true; value: string } | { ok: false; message: string };
 
-function appendCommandText(current: string, chunk: Buffer): string {
-  return current + chunk.toString("utf8");
+// runCommand decodes child pipes with setEncoding("utf8"), so chunks arrive as
+// statefully decoded strings; a multibyte code point split across two stream
+// chunks stays intact instead of degrading into U+FFFD before tail slicing.
+function appendCommandText(current: string, chunk: string): string {
+  return current + chunk;
 }
 
-function appendCommandTextTail(current: string, chunk: Buffer, maxChars: number): string {
+function appendCommandTextTail(current: string, chunk: string, maxChars: number): string {
   const next = appendCommandText(current, chunk);
   return next.length > maxChars ? sliceUtf16Safe(next, -maxChars) : next;
 }
 
 function appendCommandStdout(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDOUT_MAX_CHARS,
 ): AppendCommandStdoutResult {
   const next = appendCommandText(current, chunk);
@@ -601,7 +604,7 @@ function appendCommandStdout(
 
 function appendCommandStderrTail(
   current: string,
-  chunk: Buffer,
+  chunk: string,
   maxChars = COMMAND_STDERR_TAIL_CHARS,
 ): string {
   return appendCommandTextTail(current, chunk, maxChars);
@@ -803,8 +806,10 @@ export function runCommand(params: {
       killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
-    child.stdout.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      const text = chunk;
       if (params.outputFile) {
         fs.appendFileSync(params.outputFile, text);
         stdout = appendCommandTextTail(stdout, chunk, COMMAND_FAILURE_STDOUT_TAIL_CHARS);
@@ -823,8 +828,8 @@ export function runCommand(params: {
         process.stdout.write(text);
       }
     });
-    child.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+    child.stderr.on("data", (chunk: string) => {
+      const text = chunk;
       if (params.outputFile) {
         fs.appendFileSync(params.outputFile, text);
       }

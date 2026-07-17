@@ -435,6 +435,38 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
     );
   });
 
+  it("decodes command output statefully when a code point splits across stream chunks", async () => {
+    // Two writes separated by a delay arrive as separate pipe chunks; a
+    // chunk-naive toString("utf8") would turn both emoji halves into U+FFFD.
+    const script = [
+      'const emoji = Buffer.from("😀", "utf8");',
+      "process.stdout.write(emoji.subarray(0, 2));",
+      "process.stderr.write(emoji.subarray(0, 2));",
+      "setTimeout(() => {",
+      "  process.stdout.write(emoji.subarray(2));",
+      "  process.stderr.write(emoji.subarray(2));",
+      "  process.exit(2);",
+      "}, 100);",
+    ].join("\n");
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", script],
+        command: process.execPath,
+        cwd: makeTempDir(),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("failed with exit code 2");
+    // The command line itself echoes the script's literal emoji; only the
+    // captured stdout/stderr portion below it must decode statefully.
+    const output = message.split("failed with exit code 2\n").at(-1) ?? "";
+    expect(output.match(/😀/g)).toHaveLength(2);
+    expect(output).not.toContain("�");
+  });
+
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
     const root = makeTempDir();
     const scriptPath = path.join(root, "trap-term.mjs");
