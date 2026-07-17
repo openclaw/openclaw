@@ -33,4 +33,30 @@ describe("Discord Activity API", () => {
     ).resolves.toEqual({ ok: false, status: 401 });
     expect(lifecycle).toEqual(["cancel", "release"]);
   });
+
+  it("preserves the HTTP status when response cancellation fails", async () => {
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          throw new Error("cancel failed");
+        },
+      }),
+      { status: 429 },
+    );
+    const release = vi.fn(async () => undefined);
+    const fetchGuard = vi.fn(async () => ({
+      response,
+      release,
+    })) as unknown as typeof fetchWithSsrFGuard;
+
+    await expect(
+      fetchDiscordJson({
+        fetchGuard,
+        url: "https://discord.com/api/v10/users/@me",
+        init: { headers: { Authorization: "Bearer test-token" } },
+        auditContext: "discord.activities.oauth.user",
+      }),
+    ).resolves.toEqual({ ok: false, status: 429 });
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
