@@ -133,9 +133,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
           state.requestUpdate();
         },
       },
-      options.video
-        ? { provider: "openai", transport: "webrtc", capabilities: ["camera-frame"] }
-        : {},
+      options.video ? { capabilities: ["camera-frame"] } : {},
       { inputDeviceId, videoEnabled: options.video },
     );
     state.realtimeTalkSession = session;
