@@ -142,7 +142,15 @@ function isMonotonicRollback(params: {
   if (params.candidate.sequence > params.current.sequence) {
     return false;
   }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
+  const candidateTime = Date.parse(params.candidate.generatedAt);
+  const currentTime = Date.parse(params.current.generatedAt);
+  if (Number.isNaN(candidateTime)) {
+    return true;
+  }
+  if (Number.isNaN(currentTime)) {
+    return false;
+  }
+  return candidateTime < currentTime;
 }
 
 function assertSignedSnapshotWriteIsMonotonic(params: {
@@ -285,3 +293,6 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
     },
   };
 }
+
+const testing = { isMonotonicRollback };
+export { testing as __testing };

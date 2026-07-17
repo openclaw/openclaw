@@ -6,8 +6,10 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
+import { __testing as snapshotTesting } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type HostedOfficialExternalPluginCatalogSnapshot,
+  type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
@@ -1283,6 +1285,66 @@ describe("isHostedCatalogSignedFeedRollback", () => {
       isHostedCatalogSignedFeedRollback({
         candidate: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
         current: feed({ sequence: 10, generatedAt: "not-a-date" }),
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isMonotonicRollback", () => {
+  const { isMonotonicRollback } = snapshotTesting;
+
+  function state(
+    overrides: Partial<HostedOfficialExternalPluginCatalogSnapshotMonotonicState>,
+  ): HostedOfficialExternalPluginCatalogSnapshotMonotonicState {
+    return {
+      mode: "signed-feed",
+      sequence: 10,
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  it("returns false when candidate is newer by sequence", () => {
+    expect(
+      isMonotonicRollback({
+        candidate: state({ sequence: 11, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: state({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when candidate is older by sequence", () => {
+    expect(
+      isMonotonicRollback({
+        candidate: state({ sequence: 9, generatedAt: "2026-01-02T00:00:00.000Z" }),
+        current: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("compares generatedAt when sequences are equal", () => {
+    expect(
+      isMonotonicRollback({
+        candidate: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: state({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("treats candidate with invalid generatedAt as a rollback", () => {
+    expect(
+      isMonotonicRollback({
+        candidate: state({ sequence: 10, generatedAt: "not-a-date" }),
+        current: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat current with invalid generatedAt as a rollback", () => {
+    expect(
+      isMonotonicRollback({
+        candidate: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
+        current: state({ sequence: 10, generatedAt: "not-a-date" }),
       }),
     ).toBe(false);
   });
