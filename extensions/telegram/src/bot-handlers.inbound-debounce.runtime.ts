@@ -136,12 +136,14 @@ export function createTelegramInboundDebounceRuntime(
         }
         // Single entries return above with their original message and structured forward metadata.
         const first = expectDefined(entries.at(0), "multi-entry Telegram debounce batch");
-        const syntheticMessage = buildSyntheticTextMessage({
-          base: first.msg,
-          text: combinedText,
-          date: last.msg.date ?? first.msg.date,
-          stripForwardOrigin: true,
-        });
+        const syntheticMessage = {
+          ...buildSyntheticTextMessage({
+            base: first.msg,
+            text: combinedText,
+            date: last.msg.date ?? first.msg.date,
+          }),
+          forward_origin: undefined,
+        };
         const result = await processMessageWithReplyChain({
           ctx: buildSyntheticContext(first.ctx, syntheticMessage),
           msg: syntheticMessage,

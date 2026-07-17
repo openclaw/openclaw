@@ -143,7 +143,6 @@ export function createTelegramMessageLifecycleRuntime({
     text: string;
     date?: number;
     from?: Message["from"];
-    stripForwardOrigin?: boolean;
   }): Message => ({
     ...params.base,
     ...(params.from ? { from: params.from } : {}),
@@ -151,7 +150,6 @@ export function createTelegramMessageLifecycleRuntime({
     caption: undefined,
     caption_entities: undefined,
     entities: undefined,
-    ...(params.stripForwardOrigin ? { forward_origin: undefined } : {}),
     ...(params.date != null ? { date: params.date } : {}),
   });
   const buildSyntheticContext = (

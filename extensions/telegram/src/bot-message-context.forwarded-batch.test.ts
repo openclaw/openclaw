@@ -112,7 +112,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
     expect(payload?.ForwardedFrom).toBeUndefined();
   });
 
-  it("attributes forwarded media-only segments", async () => {
+  it("keeps mixed text and forwarded media segments ordered", async () => {
     const chat = { id: 999, type: "private" as const, first_name: "Alice" };
     const sender = { id: 42, first_name: "Alice", is_bot: false };
     const photo = [{ file_id: "photo-1", file_unique_id: "unique-1", width: 1, height: 1 }];
@@ -121,13 +121,9 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
         message_id: 2,
         chat,
         from: sender,
-        text: "",
-        photo,
+        text: "ordinary note",
       },
-      allMedia: [
-        { path: "/tmp/photo-1.jpg", contentType: "image/jpeg" },
-        { path: "/tmp/photo-2.jpg", contentType: "image/jpeg" },
-      ],
+      allMedia: [{ path: "/tmp/photo-1.jpg", contentType: "image/jpeg" }],
       options: {
         inboundDebounceMessages: [
           {
@@ -135,12 +131,7 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
             date: 1_700_000_000,
             chat,
             from: sender,
-            photo,
-            forward_origin: {
-              type: "hidden_user",
-              sender_user_name: "Original A",
-              date: 500,
-            },
+            text: "ordinary note",
           },
           {
             message_id: 2,
@@ -151,16 +142,16 @@ describe("buildTelegramMessageContext forwarded debounce batches", () => {
             forward_origin: {
               type: "hidden_user",
               sender_user_name: "Original B",
-              date: 501,
+              date: 500,
             },
           },
         ],
       },
     });
 
-    const expectedBody =
-      /\[Forwarded from Original A[^\]]*\]\n<media:image>\n\[Forwarded from Original B[^\]]*\]\n<media:image>/;
+    const expectedBody = /ordinary note\n\[Forwarded from Original B[^\]]*\]\n<media:image>/;
     expect(context?.ctxPayload.Body).toMatch(expectedBody);
     expect(context?.ctxPayload.BodyForAgent).toMatch(expectedBody);
+    expect(context?.ctxPayload.CommandBody).toBe("ordinary note");
   });
 });
