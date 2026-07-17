@@ -49,6 +49,18 @@ struct ChatInlineWidgetTests {
             target: "/__openclaw__/canvas/documents/%2525252525252525252525252525252525/index.html") == nil)
     }
 
+    @Test func `resource equality ignores internal recovery metadata`() throws {
+        let url = try #require(URL(string: "https://gateway.example/widget"))
+        let publicResource = OpenClawChatWidgetResource(url: url)
+        let trackedResource = OpenClawChatWidgetResource(
+            url: url,
+            tlsFingerprintSHA256: nil,
+            surfaceRole: .node,
+            attemptedSurfaceRoles: [.node])
+
+        #expect(publicResource == trackedResource)
+    }
+
     @Test func `uses replacement route after capability refresh loses its lease`() async throws {
         let target = "/__openclaw__/canvas/documents/widget-1/index.html"
         let oldSurface = "https://gateway.example/__openclaw__/cap/old"
@@ -72,22 +84,26 @@ struct ChatInlineWidgetTests {
         #expect(await probe.refreshCount == 1)
     }
 
-    @Test func `accepts a same URL widget route when its TLS pin changed`() async throws {
+    @Test func `accepts a same URL widget route when it acquires a TLS pin`() async throws {
         let target = "/__openclaw__/canvas/documents/widget-1/index.html"
         let surface = "https://gateway.example/__openclaw__/cap/token"
-        let oldPin = String(repeating: "aa", count: 32)
         let newPin = String(repeating: "bb", count: 32)
         let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
             surfaceURL: surface,
             target: target))
-        let failedResource = OpenClawChatWidgetResource(url: failedURL, tlsFingerprintSHA256: oldPin)
         let probe = ChatWidgetRouteReconnectProbe(
-            route: GatewayCanvasHostRoute(url: surface, tlsFingerprintSHA256: oldPin),
+            route: GatewayCanvasHostRoute(url: surface, tlsFingerprintSHA256: nil),
             replacement: GatewayCanvasHostRoute(url: surface, tlsFingerprintSHA256: newPin))
+        let initialResource = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: nil,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { _ in nil },
+            refreshOperatorSurfaceRoute: { _ in nil })
 
         let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
             target: target,
-            replacing: failedResource,
+            replacing: initialResource,
             currentSurfaceRoutes: { await probe.current() },
             refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
             refreshOperatorSurfaceRoute: { _ in nil })
@@ -97,28 +113,41 @@ struct ChatInlineWidgetTests {
         #expect(await probe.refreshCount == 1)
     }
 
-    @Test func `refreshes node before trying the operator fallback`() async throws {
+    @Test func `refreshes node once before trying the operator fallback`() async {
         let target = "/__openclaw__/canvas/documents/widget-1/index.html"
         let oldSurface = "https://gateway.example/__openclaw__/cap/old"
         let newSurface = "https://gateway.example/__openclaw__/cap/new"
         let fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
-        let failedURL = try #require(OpenClawChatWidgetURLResolver.resolve(
-            surfaceURL: oldSurface,
-            target: target))
-        let failedResource = OpenClawChatWidgetResource(url: failedURL)
         let probe = ChatWidgetRouteReconnectProbe(
             route: GatewayCanvasHostRoute(url: oldSurface, tlsFingerprintSHA256: nil),
             replacement: GatewayCanvasHostRoute(url: newSurface, tlsFingerprintSHA256: nil),
             operatorRoute: GatewayCanvasHostRoute(url: fallbackSurface, tlsFingerprintSHA256: nil))
-
-        let resolved = await OpenClawChatWidgetURLResolver.resolveResource(
+        let initialNode = await OpenClawChatWidgetURLResolver.resolveResource(
             target: target,
-            replacing: failedResource,
+            replacing: nil,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { _ in nil },
+            refreshOperatorSurfaceRoute: { _ in nil })
+
+        let refreshedNode = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: initialNode,
             currentSurfaceRoutes: { await probe.current() },
             refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
             refreshOperatorSurfaceRoute: { _ in nil })
 
-        #expect(resolved?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+        #expect(refreshedNode?.url == OpenClawChatWidgetURLResolver.resolve(surfaceURL: newSurface, target: target))
+
+        let fallback = await OpenClawChatWidgetURLResolver.resolveResource(
+            target: target,
+            replacing: refreshedNode,
+            currentSurfaceRoutes: { await probe.current() },
+            refreshNodeSurfaceRoute: { observed in await probe.reconnect(observed: observed) },
+            refreshOperatorSurfaceRoute: { _ in nil })
+
+        #expect(fallback?.url == OpenClawChatWidgetURLResolver.resolve(
+            surfaceURL: fallbackSurface,
+            target: target))
         #expect(await probe.refreshCount == 1)
     }
 

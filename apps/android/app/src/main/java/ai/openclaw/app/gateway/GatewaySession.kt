@@ -406,7 +406,16 @@ class GatewaySession(
           ?.effectiveFingerprintSha256
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.length == 64 }
-      GatewayCanvasHostRoute(url = url, tlsFingerprintSha256 = fingerprint)
+      GatewayCanvasHostRoute(
+        url = url,
+        tlsFingerprintSha256 =
+          gatewayTlsFingerprintForCanvasSurface(
+            fingerprint = fingerprint,
+            surfaceUrl = url,
+            endpoint = connection.endpoint,
+            isTlsConnection = connection.tlsConfig != null,
+          ),
+      )
     }
 
   internal suspend fun refreshCanvasHostUrl(): String? = refreshCanvasHostUrl(observedSurfaceUrl = null, requireObservedMatch = false)
@@ -1817,6 +1826,23 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
 }
 
 /** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
+internal fun gatewayTlsFingerprintForCanvasSurface(
+  fingerprint: String?,
+  surfaceUrl: String,
+  endpoint: GatewayEndpoint,
+  isTlsConnection: Boolean,
+): String? {
+  if (!isTlsConnection || fingerprint == null) return null
+  val surface = runCatching { java.net.URI(surfaceUrl) }.getOrNull() ?: return null
+  if (!surface.scheme.equals("https", ignoreCase = true)) return null
+  val surfaceHost = surface.host?.trim()?.trimEnd('.') ?: return null
+  val gatewayHost = endpoint.host.trim().trimEnd('.')
+  val surfacePort = surface.port.takeIf { it > 0 } ?: 443
+  return fingerprint.takeIf {
+    surfaceHost.equals(gatewayHost, ignoreCase = true) && surfacePort == endpoint.port
+  }
+}
+
 internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,

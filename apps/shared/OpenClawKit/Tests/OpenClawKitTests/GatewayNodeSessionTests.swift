@@ -685,7 +685,7 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: false)
 
         try await gateway.connect(
-            url: #require(URL(string: "ws://gateway.example.invalid")),
+            url: #require(URL(string: "wss://gateway.example.invalid")),
             connectOptions: options,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
@@ -3373,6 +3373,25 @@ struct GatewayNodeSessionTests {
             against: URL(string: "wss://gateway.example.com:7443"))
 
         #expect(normalized == "https://gateway.example.com:7443/__openclaw__/cap/token")
+    }
+
+    @Test
+    func `gateway TLS pin applies only to the same canvas endpoint`() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let gateway = URL(string: "wss://gateway.example.com:7443")
+
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://gateway.example.com:7443/__openclaw__/cap/token",
+            gatewayURL: gateway) == fingerprint)
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://canvas.example.com:7443/__openclaw__/cap/token",
+            gatewayURL: gateway) == nil)
+        #expect(GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+            fingerprint,
+            surfaceURL: "https://gateway.example.com:9443/__openclaw__/cap/token",
+            gatewayURL: gateway) == nil)
     }
 
     @Test

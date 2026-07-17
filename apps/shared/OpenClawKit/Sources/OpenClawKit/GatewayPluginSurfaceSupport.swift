@@ -32,4 +32,26 @@ public enum GatewayPluginSurfaceURL {
         parsed.port = ((isTLS && fallbackPort == 443) || (!isTLS && fallbackPort == 80)) ? nil : fallbackPort
         return parsed.string ?? trimmed
     }
+
+    static func tlsFingerprintForSurface(
+        _ fingerprint: String?,
+        surfaceURL: String,
+        gatewayURL: URL?) -> String?
+    {
+        guard let fingerprint,
+              let gatewayURL,
+              gatewayURL.scheme?.lowercased() == "wss",
+              let surface = URLComponents(string: surfaceURL),
+              surface.scheme?.lowercased() == "https",
+              self.normalizedEndpointHost(surface.host) == self.normalizedEndpointHost(gatewayURL.host),
+              (surface.port ?? 443) == (gatewayURL.port ?? 443)
+        else { return nil }
+        return fingerprint
+    }
+
+    private static func normalizedEndpointHost(_ raw: String?) -> String? {
+        let host = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let normalized = host.hasSuffix(".") ? String(host.dropLast()) : host
+        return normalized.isEmpty ? nil : normalized
+    }
 }

@@ -614,7 +614,10 @@ public actor GatewayNodeSession {
         guard let url = currentCanvasHostUrl() else { return nil }
         return GatewayCanvasHostRoute(
             url: url,
-            tlsFingerprintSHA256: self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
+            tlsFingerprintSHA256: GatewayPluginSurfaceURL.tlsFingerprintForSurface(
+                self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256,
+                surfaceURL: url,
+                gatewayURL: self.activeURL))
     }
 
     @discardableResult

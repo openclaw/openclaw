@@ -8,13 +8,39 @@ import Security
 import WebKit
 #endif
 
+enum OpenClawChatWidgetSurfaceRole: Sendable, Hashable {
+    case node
+    case operatorSurface
+    case legacy
+}
+
 public struct OpenClawChatWidgetResource: Sendable, Equatable {
     public let url: URL
     public let tlsFingerprintSHA256: String?
+    let surfaceRole: OpenClawChatWidgetSurfaceRole
+    let attemptedSurfaceRoles: Set<OpenClawChatWidgetSurfaceRole>
 
     public init(url: URL, tlsFingerprintSHA256: String? = nil) {
         self.url = url
         self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+        self.surfaceRole = .legacy
+        self.attemptedSurfaceRoles = []
+    }
+
+    init(
+        url: URL,
+        tlsFingerprintSHA256: String?,
+        surfaceRole: OpenClawChatWidgetSurfaceRole,
+        attemptedSurfaceRoles: Set<OpenClawChatWidgetSurfaceRole>)
+    {
+        self.url = url
+        self.tlsFingerprintSHA256 = tlsFingerprintSHA256
+        self.surfaceRole = surfaceRole
+        self.attemptedSurfaceRoles = attemptedSurfaceRoles
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.url == rhs.url && lhs.tlsFingerprintSHA256 == rhs.tlsFingerprintSHA256
     }
 }
 
@@ -52,17 +78,39 @@ public enum OpenClawChatWidgetURLResolver {
     {
         let observed = await currentSurfaceRoutes()
         guard let failedResource else {
-            return self.resolvePreferred(surfaces: observed, target: target, excluding: nil)
+            return self.resolvePreferred(
+                surfaces: observed,
+                target: target,
+                excluding: nil,
+                blockedRoles: [],
+                attemptedRoles: [])
         }
-        if let nodeSurface = observed.node,
-           let currentNode = self.resolve(surface: nodeSurface, target: target),
+        let blockedRoles = failedResource.attemptedSurfaceRoles
+        if failedResource.surfaceRole == .legacy,
+           blockedRoles.contains(.legacy)
+        {
+            return nil
+        }
+        let attemptedRoles = blockedRoles.union([failedResource.surfaceRole])
+        if !blockedRoles.contains(.node),
+           let nodeSurface = observed.node,
+           let currentNode = self.resolve(
+               surface: nodeSurface,
+               role: .node,
+               target: target,
+               attemptedRoles: attemptedRoles),
            self.isReplacement(currentNode, for: failedResource)
         {
             return currentNode
         }
 
-        if let refreshedSurface = await refreshNodeSurfaceRoute(observed.node),
-           let refreshed = resolve(surface: refreshedSurface, target: target),
+        if !blockedRoles.contains(.node),
+           let refreshedSurface = await refreshNodeSurfaceRoute(observed.node),
+           let refreshed = resolve(
+               surface: refreshedSurface,
+               role: .node,
+               target: target,
+               attemptedRoles: attemptedRoles),
            self.isReplacement(refreshed, for: failedResource)
         {
             return refreshed
@@ -74,13 +122,20 @@ public enum OpenClawChatWidgetURLResolver {
         if let replacement = self.resolvePreferred(
             surfaces: afterNodeRefresh,
             target: target,
-            excluding: failedResource)
+            excluding: failedResource,
+            blockedRoles: blockedRoles,
+            attemptedRoles: attemptedRoles)
         {
             return replacement
         }
 
-        if let refreshedSurface = await refreshOperatorSurfaceRoute(afterNodeRefresh.operatorSurface),
-           let refreshed = resolve(surface: refreshedSurface, target: target),
+        if !blockedRoles.contains(.operatorSurface),
+           let refreshedSurface = await refreshOperatorSurfaceRoute(afterNodeRefresh.operatorSurface),
+           let refreshed = resolve(
+               surface: refreshedSurface,
+               role: .operatorSurface,
+               target: target,
+               attemptedRoles: attemptedRoles),
            self.isReplacement(refreshed, for: failedResource)
         {
             return refreshed
@@ -89,7 +144,9 @@ public enum OpenClawChatWidgetURLResolver {
         return await self.resolvePreferred(
             surfaces: currentSurfaceRoutes(),
             target: target,
-            excluding: failedResource)
+            excluding: failedResource,
+            blockedRoles: blockedRoles,
+            attemptedRoles: attemptedRoles)
     }
 
     private static func relativeWidgetTarget(_ rawTarget: String) -> URLComponents? {
@@ -129,23 +186,41 @@ public enum OpenClawChatWidgetURLResolver {
 
     private static func resolve(
         surface: GatewayCanvasHostRoute,
-        target: String) -> OpenClawChatWidgetResource?
+        role: OpenClawChatWidgetSurfaceRole,
+        target: String,
+        attemptedRoles: Set<OpenClawChatWidgetSurfaceRole>) -> OpenClawChatWidgetResource?
     {
         guard let url = resolve(surfaceURL: surface.url, target: target) else { return nil }
         let resource = OpenClawChatWidgetResource(
             url: url,
-            tlsFingerprintSHA256: surface.tlsFingerprintSHA256)
+            tlsFingerprintSHA256: surface.tlsFingerprintSHA256,
+            surfaceRole: role,
+            attemptedSurfaceRoles: attemptedRoles)
         return resource.hasValidTLSBinding ? resource : nil
     }
 
     private static func resolvePreferred(
         surfaces: (node: GatewayCanvasHostRoute?, operatorSurface: GatewayCanvasHostRoute?),
         target: String,
-        excluding failedResource: OpenClawChatWidgetResource?) -> OpenClawChatWidgetResource?
+        excluding failedResource: OpenClawChatWidgetResource?,
+        blockedRoles: Set<OpenClawChatWidgetSurfaceRole>,
+        attemptedRoles: Set<OpenClawChatWidgetSurfaceRole>) -> OpenClawChatWidgetResource?
     {
-        [surfaces.node, surfaces.operatorSurface]
+        [
+            (role: OpenClawChatWidgetSurfaceRole.node, surface: surfaces.node),
+            (role: OpenClawChatWidgetSurfaceRole.operatorSurface, surface: surfaces.operatorSurface),
+        ]
             .lazy
-            .compactMap { $0.flatMap { self.resolve(surface: $0, target: target) } }
+            .filter { !blockedRoles.contains($0.role) }
+            .compactMap { candidate in
+                candidate.surface.flatMap {
+                    self.resolve(
+                        surface: $0,
+                        role: candidate.role,
+                        target: target,
+                        attemptedRoles: attemptedRoles)
+                }
+            }
             .first { self.isReplacement($0, for: failedResource) }
     }
 
@@ -156,10 +231,13 @@ public enum OpenClawChatWidgetURLResolver {
         guard let failedResource else { return true }
         // Legacy URL-only callers cannot express trust identity, so retain
         // their URL-only exclusion while resource-aware callers compare both.
-        if failedResource.tlsFingerprintSHA256 == nil {
+        if failedResource.surfaceRole == .legacy,
+           failedResource.tlsFingerprintSHA256 == nil
+        {
             return candidate.url != failedResource.url
         }
-        return candidate != failedResource
+        return candidate.url != failedResource.url ||
+            candidate.tlsFingerprintSHA256 != failedResource.tlsFingerprintSHA256
     }
 
     private static func isWebURL(_ components: URLComponents) -> Bool {
@@ -203,7 +281,7 @@ struct ChatInlineWidgetView: View {
         OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
 
     @State private var resolvedResource: OpenClawChatWidgetResource?
-    @State private var didRefresh = false
+    @State private var recoveryAttempts = 0
     @State private var refreshInFlight = false
     @State private var unavailable = false
     @State private var activePath: String?
@@ -276,7 +354,7 @@ struct ChatInlineWidgetView: View {
         self.loadGeneration = UUID()
         self.activePath = path
         self.resolvedResource = nil
-        self.didRefresh = false
+        self.recoveryAttempts = 0
         self.refreshInFlight = false
         self.unavailable = false
     }
@@ -301,12 +379,12 @@ struct ChatInlineWidgetView: View {
               let path = self.activePath,
               !self.refreshInFlight
         else { return }
-        guard !self.didRefresh else {
+        guard self.recoveryAttempts < 3 else {
             self.resolvedResource = nil
             self.unavailable = true
             return
         }
-        self.didRefresh = true
+        self.recoveryAttempts += 1
         self.refreshInFlight = true
         let generation = self.loadGeneration
         Task { @MainActor in

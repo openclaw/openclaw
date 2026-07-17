@@ -93,6 +93,38 @@ private data class InvokeScenarioResult(
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
   @Test
+  fun canvasRoutePinsOnlyTheConnectedTlsEndpoint() {
+    val fingerprint = "ab".repeat(32)
+    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 7443)
+
+    assertEquals(
+      fingerprint,
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://gateway.example:7443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+    assertNull(
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://canvas.example:7443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+    assertNull(
+      gatewayTlsFingerprintForCanvasSurface(
+        fingerprint = fingerprint,
+        surfaceUrl = "https://gateway.example:9443/__openclaw__/cap/token",
+        endpoint = endpoint,
+        isTlsConnection = true,
+      ),
+    )
+  }
+
+  @Test
   fun refreshCanvasHostUrl_usesNodeRefreshMethod() =
     runBlocking {
       assertCanvasHostRefreshMethod(role = "node", expectedMethod = "node.pluginSurface.refresh")

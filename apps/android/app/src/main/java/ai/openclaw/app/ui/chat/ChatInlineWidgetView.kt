@@ -2,6 +2,7 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatWidgetPreview
 import ai.openclaw.app.chat.ChatWidgetResource
+import ai.openclaw.app.chat.ChatWidgetSurfaceRole
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.buildGatewayTlsConfig
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
@@ -67,7 +68,7 @@ internal fun ChatInlineWidget(
 ) {
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
-  var didRefresh by remember(preview.path) { mutableStateOf(false) }
+  var recoveryAttempts by remember(preview.path) { mutableStateOf(0) }
   var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
   var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
   val scope = rememberCoroutineScope()
@@ -85,14 +86,14 @@ internal fun ChatInlineWidget(
       unavailable = false
     }
     if (refreshInFlight) return
-    if (didRefresh) {
+    if (recoveryAttempts >= ChatWidgetSurfaceRole.entries.size) {
       refreshRequestId = null
       resolvedResource = null
       unavailable = true
       return
     }
 
-    didRefresh = true
+    recoveryAttempts += 1
     refreshInFlight = true
     val requestId = UUID.randomUUID()
     refreshRequestId = requestId
@@ -112,7 +113,7 @@ internal fun ChatInlineWidget(
     if (!resolverReady) return@LaunchedEffect
     resolvedResource = resolveResource(preview.path, null)
     unavailable = resolvedResource == null
-    didRefresh = false
+    recoveryAttempts = 0
   }
 
   Column(modifier = Modifier.fillMaxWidth()) {

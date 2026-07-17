@@ -194,25 +194,24 @@ class ChatMessageContentParsingTest {
     }
 
   @Test
-  fun refreshesNodeBeforeTryingOperatorFallback() =
+  fun refreshesNodeOnceBeforeTryingOperatorFallback() =
     runTest {
       val target = "/__openclaw__/canvas/documents/widget-1/index.html"
       val oldSurface = "https://gateway.example/__openclaw__/cap/old"
       val newSurface = "https://gateway.example/__openclaw__/cap/new"
       val fallbackSurface = "https://operator.example/__openclaw__/cap/fallback"
-      val failedUrl = requireNotNull(ChatWidgetUrlResolver.resolve(oldSurface, target))
-      val failedResource = ChatWidgetResource(url = failedUrl, tlsFingerprintSha256 = null)
       var refreshCount = 0
       var current =
         ChatWidgetSurfaceUrls(
           node = ChatWidgetSurface(url = oldSurface, tlsFingerprintSha256 = null),
           operator = ChatWidgetSurface(url = fallbackSurface, tlsFingerprintSha256 = null),
         )
+      val initialNode = ChatWidgetUrlResolver.resolvePreferred(current, target, excluding = null)
 
-      val resolved =
+      val refreshedNode =
         ChatWidgetUrlResolver.resolveAfterFailure(
           target = target,
-          failedResource = failedResource,
+          failedResource = requireNotNull(initialNode),
           currentSurfaceUrls = { current },
           refreshNodeSurface = {
             refreshCount += 1
@@ -222,7 +221,21 @@ class ChatMessageContentParsingTest {
           refreshOperatorSurface = { null },
         )
 
-      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), resolved?.url)
+      assertEquals(ChatWidgetUrlResolver.resolve(newSurface, target), refreshedNode?.url)
+
+      val fallback =
+        ChatWidgetUrlResolver.resolveAfterFailure(
+          target = target,
+          failedResource = requireNotNull(refreshedNode),
+          currentSurfaceUrls = { current },
+          refreshNodeSurface = {
+            refreshCount += 1
+            null
+          },
+          refreshOperatorSurface = { null },
+        )
+
+      assertEquals(ChatWidgetUrlResolver.resolve(fallbackSurface, target), fallback?.url)
       assertEquals(1, refreshCount)
     }
 
