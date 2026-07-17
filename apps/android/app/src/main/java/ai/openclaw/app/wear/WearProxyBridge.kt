@@ -101,7 +101,13 @@ internal class WearProxyBridge(
     scope.launch {
       var lastDeliveredSequence = 0L
       for (operation in operations) {
-        lastDeliveredSequence = processOperation(operation, lastDeliveredSequence)
+        try {
+          lastDeliveredSequence = processOperation(operation, lastDeliveredSequence)
+        } catch (err: CancellationException) {
+          // A transport implementation may surface cancellation as its failure result. Keep the
+          // shared actor alive unless its owning scope was actually canceled.
+          currentCoroutineContext().ensureActive()
+        }
       }
     }
   }
@@ -146,6 +152,10 @@ internal class WearProxyBridge(
           deliveredSequence = resync.sequence
         }
         deliveredSequence
+      }
+      is WearBridgeOperation.Barrier -> {
+        operation.completion.complete(Unit)
+        lastDeliveredSequence
       }
     }
 
@@ -192,6 +202,13 @@ internal class WearProxyBridge(
         )
       }
     }
+  }
+
+  /** Test-only actor barrier; proves every operation queued before this call has settled. */
+  internal suspend fun awaitIdleForTests() {
+    val completion = CompletableDeferred<Unit>()
+    operations.send(WearBridgeOperation.Barrier(completion))
+    completion.await()
   }
 
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
@@ -265,6 +282,10 @@ internal class WearProxyBridge(
     ) : WearBridgeOperation
 
     data object Overflow : WearBridgeOperation
+
+    data class Barrier(
+      val completion: CompletableDeferred<Unit>,
+    ) : WearBridgeOperation
   }
 
   private data class WearOverflowSnapshot(

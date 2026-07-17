@@ -12,7 +12,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -120,7 +119,7 @@ class WearProxyBridgeTest {
         )
 
       bridge.publishConnection(connected = true, status = "Connected")
-      runCurrent()
+      bridge.awaitIdleForTests()
       bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
 
       assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.RESPONSE_PATH), sent.map { it.path })
@@ -148,7 +147,7 @@ class WearProxyBridgeTest {
 
       bridge.publishConnection(connected = true, status = "first")
       bridge.publishConnection(connected = true, status = "second")
-      runCurrent()
+      bridge.awaitIdleForTests()
 
       assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.EVENT_PATH), sent.map { it.path })
     }
@@ -480,7 +479,7 @@ class WearProxyBridgeTest {
           put("state", "final")
         },
       )
-      runCurrent()
+      bridge.awaitIdleForTests()
 
       assertEquals(1, resolutions)
       assertEquals(listOf("watch-1", "watch-2"), sent.map { it.nodeId })
@@ -519,9 +518,11 @@ class WearProxyBridgeTest {
           put("state", "final")
         },
       )
-      runCurrent()
+      bridge.awaitIdleForTests()
 
-      assertEquals(1, resolutions)
+      // Terminal delivery refreshes before sending; the stale failure then forces a second
+      // discovery so a watch that appeared during that send still receives the terminal state.
+      assertEquals(2, resolutions)
       assertEquals(listOf("watch-stale", "watch-current"), attempts.map { it.nodeId })
       assertTrue(attempts.all { it.path == WearProtocol.EVENT_PATH })
     }
@@ -607,7 +608,7 @@ class WearProxyBridgeTest {
       )
       finishRequest.complete(Unit)
       requestJob.await()
-      advanceUntilIdle()
+      bridge.awaitIdleForTests()
 
       val events =
         sent
@@ -725,10 +726,10 @@ class WearProxyBridgeTest {
       runCurrent()
       releaseEvent.complete(Unit)
       assertTrue(refreshed.await())
-      runCurrent()
+      bridge.awaitIdleForTests()
 
       bridge.publishConnection(connected = false, status = "Offline")
-      runCurrent()
+      bridge.awaitIdleForTests()
 
       assertEquals(1, bridge.peerCountForTests())
       assertEquals(1, sent.count { it.path == WearProtocol.EVENT_PATH })
