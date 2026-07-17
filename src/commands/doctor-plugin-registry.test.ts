@@ -447,6 +447,113 @@ describe("maybeRepairPluginRegistryState", () => {
     });
   });
 
+  it("maps missing install record paths to structured findings", async () => {
+    const stateDir = makeTempDir();
+    const missingDir = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "openclaw-codex-old",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        packageDir: missingDir,
+        version: "2026.6.11",
+      }),
+      { stateDir },
+    );
+
+    const issues = await detectPluginRegistryHealthIssues({
+      stateDir,
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["codex"],
+          entries: {
+            codex: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: false },
+    });
+
+    const missingIssue = issues.find(
+      (issue) => issue.kind === "missing-plugin-install-record-path",
+    );
+    expect(missingIssue).toEqual({
+      kind: "missing-plugin-install-record-path",
+      pluginId: "codex",
+      recordPathField: "installPath",
+      missingPath: missingDir,
+    });
+    expect(pluginRegistryIssueToHealthFinding(missingIssue!)).toMatchObject({
+      checkId: "core/doctor/plugin-registry",
+      severity: "warning",
+      path: missingDir,
+      target: "codex",
+    });
+    expect(pluginRegistryIssueToRepairEffect(missingIssue!)).toEqual({
+      kind: "state",
+      action: "would-remove-missing-plugin-install-record",
+      target: "codex",
+      dryRunSafe: false,
+    });
+  });
+
+  it("removes missing install record paths during repair", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "demo");
+    const missingDir = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "openclaw-codex-old",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        packageDir: missingDir,
+        version: "2026.6.11",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [createCandidate(pluginDir)],
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords).toStrictEqual({});
+    expect(persisted.refreshReason).toBe("migration");
+    expect(persisted.plugins).toStrictEqual([
+      expectedPluginIndexRecord({
+        pluginId: "demo",
+        rootDir: pluginDir,
+        origin: "global",
+      }),
+    ]);
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Removed plugin install record(s) with missing paths",
+    );
+  });
+
   it("refreshes an existing registry during repair", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
