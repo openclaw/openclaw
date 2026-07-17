@@ -132,9 +132,12 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     degradedOwners: (snapshot.degradedOwners ?? []).map((owner) => ({
-      ...owner,
+      ownerKind: owner.ownerKind,
+      ownerId: owner.ownerId,
+      state: owner.state,
       paths: [...owner.paths],
       refKeys: [...owner.refKeys],
+      reason: owner.reason,
     })),
     webTools: structuredClone(snapshot.webTools),
   };

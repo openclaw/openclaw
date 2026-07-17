@@ -94,6 +94,7 @@ export function describeSecretResolutionError(value: unknown): string | undefine
     case "SECRET_REF_INVALID":
       return undefined;
   }
+  return undefined;
 }
 
 export function providerResolutionError(params: {
