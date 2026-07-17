@@ -492,6 +492,57 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a finalized preview post when a later tool-error warning falls back", async () => {
+    // Regression for #109471: a turn can emit a successful assistant final followed
+    // by a trailing isError tool-warning payload on the same draft. The first final
+    // finalizes the preview in place; the warning cannot, so it falls back to a
+    // normal send. That fallback must not clear (delete) the finalized answer post.
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    const previewState = { finalizedViaPreviewPost: false };
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Chrome is open at the Amazon KDP login page." } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState,
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    // The successful final landed by editing the preview post, making it the answer.
+    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+      message: "Chrome is open at the Amazon KDP login page.",
+    });
+    expect(previewState.finalizedViaPreviewPost).toBe(true);
+    expect(deliverFinal).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: {
+        text: "⚠️ Bash failed: openclaw browser (agent)",
+        isError: true,
+      } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState,
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    });
+
+    // The warning is delivered as its own post; the finalized answer post survives.
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("finalizes the preview in place when the final targets the same thread", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});

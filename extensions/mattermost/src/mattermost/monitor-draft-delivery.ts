@@ -50,7 +50,16 @@ export async function deliverMattermostReplyWithDraftPreview(
     adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
       draft: {
         flush: params.draftStream.flush,
-        clear: params.draftStream.clear,
+        clear: async () => {
+          // Once an earlier payload on this same draft finalized the preview post
+          // in place as the durable answer, a later non-terminal payload's fallback
+          // cleanup (for example a trailing tool-error warning) must not delete it.
+          // The warning is still delivered as a separate post by deliverNormally.
+          if (params.previewState.finalizedViaPreviewPost) {
+            return;
+          }
+          await params.draftStream.clear();
+        },
         discardPending: params.draftStream.discardPending,
         seal: params.draftStream.seal,
         id: params.draftStream.postId,
