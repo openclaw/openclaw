@@ -24,19 +24,20 @@ function bootstrapRecommendations(
   if (record?.acceptedAt != null) {
     return [];
   }
-  return (record?.matches ?? []).flatMap((match) => {
+  const byInstall = new Map<string, BootstrapRecommendation>();
+  for (const match of record?.matches ?? []) {
     const id = match.candidate.id;
     if (!SAFE_INSTALL_ID_RE.test(id)) {
-      return [];
+      continue;
     }
-    return [
-      {
-        id,
-        source: match.candidate.source === "clawhub-skill" ? "clawhub-skill" : "official-plugin",
-        tier: match.tier,
-      },
-    ];
-  });
+    const source = match.candidate.source === "clawhub-skill" ? "clawhub-skill" : "official-plugin";
+    const key = `${source}:${id.toLocaleLowerCase("en-US")}`;
+    const existing = byInstall.get(key);
+    if (!existing || (existing.tier === "optional" && match.tier === "recommended")) {
+      byInstall.set(key, { id, source, tier: match.tier });
+    }
+  }
+  return [...byInstall.values()];
 }
 
 export function onboardRecommendationsCommand(

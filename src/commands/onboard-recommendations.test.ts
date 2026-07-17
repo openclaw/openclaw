@@ -130,4 +130,43 @@ describe("onboard recommendations command", () => {
 
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
+
+  it("deduplicates shared candidates and keeps the recommended tier", () => {
+    const runtime = makeRuntime();
+    const candidate = {
+      id: "chat-plugin",
+      displayName: "Chat plugin",
+      summary: "Chat",
+      source: "official-channel" as const,
+    };
+
+    onboardRecommendationsCommand({ json: true }, runtime, {
+      read: () => ({
+        inventoryHash: "hash",
+        offeredAt: 1,
+        acceptedAt: null,
+        updatedAt: 1,
+        matches: [
+          {
+            appLabel: "Chat",
+            candidateId: candidate.id,
+            tier: "optional" as const,
+            reason: "Connects conversations",
+            candidate,
+          },
+          {
+            appLabel: "Work Chat",
+            candidateId: candidate.id,
+            tier: "recommended" as const,
+            reason: "Connects work conversations",
+            candidate,
+          },
+        ],
+      }),
+    });
+
+    expect(JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string)).toEqual([
+      { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
+    ]);
+  });
 });
