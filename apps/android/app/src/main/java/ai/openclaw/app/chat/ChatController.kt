@@ -428,7 +428,8 @@ class ChatController internal constructor(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
-    clearPlanSteps()
+    // Older gateways cannot restate plan state, so reconnect retains it until
+    // recovery proves another run, a terminal state, or an explicit empty snapshot.
     _historyLoading.value = false
     _sessionId.value = null
     // Failed connect attempts pass through onGatewayScopeChanging, which empties the published
@@ -534,8 +535,8 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
-        clearPlanSteps()
       }
+      clearPlanSteps()
       appliedMainSessionKey = "main"
       beginHistoryLoad(
         key = "main",
@@ -2042,7 +2043,6 @@ class ChatController internal constructor(
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
-        clearPlanSteps()
         refreshHistoryForRecovery()
       }
       "chat" -> {
@@ -2174,6 +2174,7 @@ class ChatController internal constructor(
     runIdsToReconcile: Set<String> = emptySet(),
   ): HistoryRefreshResult {
     val requestSequence = historyRequestSequence.incrementAndGet()
+    val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
     val requestModelSelectionGeneration = modelSelectionGeneration.get()
     val requestCacheScope = currentCacheScope()
     val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(sessionKey)
@@ -2229,6 +2230,10 @@ class ChatController internal constructor(
         ) {
           return@synchronized false
         }
+        val runIdsOwnedAfterRequest =
+          synchronized(pendingRuns) {
+            pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
+          }
         latestAppliedHistoryRequest = requestSequence
         if (updateSessionInfo) {
           updateSessionFromHistory(history)
@@ -2277,11 +2282,11 @@ class ChatController internal constructor(
               unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
             }.forEach(::clearPendingRun)
         }
-        clearTransientRunUiIfIdle()
+        clearTransientRunUiIfIdle(preservePlan = true)
         // All live history paths (bootstrap, reconnect recovery, cache-first
         // replace) adopt the gateway's in-flight run snapshot so restored
         // runs keep their pending state and streaming text.
-        adoptInFlightRun(history.inFlightRun)
+        adoptInFlightRun(history, runIdsOwnedAfterRequest)
         history.thinkingLevel
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
@@ -3690,14 +3695,30 @@ class ChatController internal constructor(
 
   /**
    * Adopts the run the gateway reports still streaming for this session so reconnect,
-   * cold start, and seq-gap recovery restore pending/streaming UI state. Snapshot absence
-   * never clears local state: live terminal events and the pending-run timeout own
-   * completion, and a snapshot fetched before our own send must not cancel that run.
+   * cold start, and seq-gap recovery restore pending/streaming UI state.
    */
-  private fun adoptInFlightRun(run: ChatInFlightRun?) {
-    if (run == null) return
-    val runId = run.runId.trim()
-    if (runId.isEmpty()) return
+  private fun adoptInFlightRun(
+    history: ChatHistory,
+    runIdsOwnedAfterRequest: Set<String>,
+  ) {
+    // Plan reconciliation shares run adoption: rejected history cannot clobber newer live state.
+    // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
+    // Snapshots predating a locally owned run are rejected unless they name that newer run.
+    val run = history.inFlightRun
+    val runId = run?.runId?.trim()?.takeIf { it.isNotEmpty() }
+    if (runIdsOwnedAfterRequest.isNotEmpty() && (runId == null || runId !in runIdsOwnedAfterRequest)) return
+    if (run == null) {
+      val retainedRunId = planRunId ?: return
+      val activeRunIds = history.sessionInfo?.activeRunIds
+      if (
+        history.sessionInfo?.hasActiveRun == false ||
+        (activeRunIds != null && retainedRunId !in activeRunIds)
+      ) {
+        clearPlanSteps()
+      }
+      return
+    }
+    if (runId == null) return
     synchronized(pendingRuns) {
       // A different locally-owned run means this snapshot predates it; ignore.
       if (pendingRuns.isNotEmpty() && runId !in pendingRuns) return
@@ -3708,6 +3729,15 @@ class ChatController internal constructor(
     armPendingRunTimeout(runId)
     if (run.text.isNotEmpty()) {
       _streamingAssistantText.value = run.text
+    }
+    val plan = run.plan
+    if (plan == null) {
+      if (planRunId != null && planRunId != runId) clearPlanSteps()
+    } else if (plan.steps.isEmpty()) {
+      clearPlanSteps()
+    } else {
+      planRunId = runId
+      _planSteps.value = plan.steps
     }
   }
 
@@ -3795,12 +3825,12 @@ class ChatController internal constructor(
     }
   }
 
-  private fun clearTransientRunUiIfIdle() {
+  private fun clearTransientRunUiIfIdle(preservePlan: Boolean = false) {
     if (synchronized(pendingRuns) { pendingRuns.isNotEmpty() }) return
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
-    clearPlanSteps()
+    if (!preservePlan) clearPlanSteps()
   }
 
   private fun clearPendingRuns(
@@ -4059,7 +4089,18 @@ class ChatController internal constructor(
   private fun parseInFlightRun(root: JsonObject): ChatInFlightRun? {
     val obj = root["inFlightRun"].asObjectOrNull() ?: return null
     val runId = obj["runId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    return ChatInFlightRun(runId = runId, text = obj["text"].asStringOrNull().orEmpty())
+    val plan =
+      obj["plan"].asObjectOrNull()?.let { plan ->
+        ChatPlanSnapshot(
+          steps = parseChatPlanSteps(plan["steps"]),
+          explanation = plan["explanation"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        )
+      }
+    return ChatInFlightRun(
+      runId = runId,
+      text = obj["text"].asStringOrNull().orEmpty(),
+      plan = plan,
+    )
   }
 
   private data class SessionListResult(
@@ -4131,6 +4172,11 @@ class ChatController internal constructor(
         "totalTokens" in obj ||
           "totalTokensFresh" in obj ||
           "contextTokens" in obj,
+      hasActiveRun = obj["hasActiveRun"].asBooleanOrNull(),
+      activeRunIds =
+        obj["activeRunIds"]
+          .asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
     )
   }
 
