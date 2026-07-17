@@ -9,10 +9,29 @@ export {
   type SessionPlacementState,
 } from "./session-placement-state.js";
 
-/** Durable gateway ownership states for one session execution placement. */
-export const SessionPlacementStateSchema = Type.Union(
-  SESSION_PLACEMENT_STATES.map((state) => Type.Literal(state)),
-);
+/** Durable gateway ownership states for one session execution placement.
+ * The literal list stays explicit because Type.Union needs a tuple for
+ * Static inference (a mapped array collapses Static to never); the guard
+ * below keeps it in lockstep with SESSION_PLACEMENT_STATES. */
+export const SessionPlacementStateSchema = Type.Union([
+  Type.Literal("local"),
+  Type.Literal("requested"),
+  Type.Literal("provisioning"),
+  Type.Literal("syncing"),
+  Type.Literal("starting"),
+  Type.Literal("active"),
+  Type.Literal("draining"),
+  Type.Literal("reconciling"),
+  Type.Literal("reclaimed"),
+  Type.Literal("failed"),
+]);
+
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const placementStateVocabularyInSync: MutuallyAssignable<
+  Static<typeof SessionPlacementStateSchema>,
+  (typeof SESSION_PLACEMENT_STATES)[number]
+> = true;
+void placementStateVocabularyInSync;
 
 const SessionPlacementTimingProperties = {
   generation: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
