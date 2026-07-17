@@ -108,7 +108,7 @@ async function fetchLiveGroups(
       }
       return entry.id.toLowerCase().includes(query) || entry.name?.toLowerCase().includes(query);
     })
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .toSorted((left, right) => left.id.localeCompare(right.id));
   return limit ? entries.slice(0, limit) : entries;
 }
 
@@ -191,6 +191,26 @@ function retainStandaloneCleanup(cleanup: ManagedStandaloneCleanup): void {
   scheduleStandaloneCleanupRetry(cleanup);
 }
 
+async function finishStandaloneCleanupOrThrow(
+  cleanup: ManagedStandaloneCleanup,
+  operationError?: unknown,
+): Promise<void> {
+  try {
+    await runStandaloneCleanup(cleanup);
+  } catch (cleanupError) {
+    retainStandaloneCleanup(cleanup);
+    const cause =
+      operationError === undefined
+        ? cleanupError
+        : new AggregateError(
+            [operationError, cleanupError],
+            "WhatsApp live group lookup and cleanup failed",
+            { cause: operationError },
+          );
+    throw cleanupUnavailable(cause);
+  }
+}
+
 function cleanupUnavailable(error: unknown): WhatsAppDirectoryUnavailableError {
   return unavailable(
     "cleanup_failed",
@@ -247,6 +267,7 @@ async function listGroupsThroughStandaloneOwner(
     sock: null,
     socketClosed: true,
   };
+  let groups: ChannelDirectoryEntry[];
   try {
     let authState: Awaited<ReturnType<typeof readWebAuthExistsForDecision>>;
     try {
@@ -284,18 +305,16 @@ async function listGroupsThroughStandaloneOwner(
     }
 
     try {
-      return await fetchLiveGroups(cleanup.sock, params);
+      groups = await fetchLiveGroups(cleanup.sock, params);
     } catch (error) {
       throw unavailable("lookup_failed", "WhatsApp live group lookup failed.", error);
     }
-  } finally {
-    try {
-      await runStandaloneCleanup(cleanup);
-    } catch (error) {
-      retainStandaloneCleanup(cleanup);
-      throw cleanupUnavailable(error);
-    }
+  } catch (error) {
+    await finishStandaloneCleanupOrThrow(cleanup, error);
+    throw error;
   }
+  await finishStandaloneCleanupOrThrow(cleanup);
+  return groups;
 }
 
 export async function listWhatsAppDirectoryGroupsLive(

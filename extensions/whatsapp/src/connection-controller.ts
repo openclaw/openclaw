@@ -738,7 +738,12 @@ export class WhatsAppConnectionController {
         if (sock && (!connection || this.current !== connection)) {
           this.pendingSocketCleanup = connection ?? { sock, socketClosed: false };
         }
-        throw new AggregateError([err, closeError], "WhatsApp connection setup and close failed");
+        const aggregateError = new AggregateError(
+          [err, closeError],
+          "WhatsApp connection setup and close failed",
+          { cause: err },
+        );
+        throw aggregateError;
       }
       throw err;
     }
@@ -1024,10 +1029,12 @@ export class WhatsAppConnectionController {
             await ownerLease.release();
           } catch (releaseError) {
             this.retainedOwnerReleaseLease = ownerLease;
-            throw new AggregateError(
+            const aggregateError = new AggregateError(
               [error, releaseError],
               "WhatsApp connection ownership setup and release failed",
+              { cause: error },
             );
+            throw aggregateError;
           }
           throw error;
         }

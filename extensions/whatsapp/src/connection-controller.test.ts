@@ -233,7 +233,9 @@ describe("WhatsAppConnectionController", () => {
     };
 
     closeWaSocket(sock);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     expect(sock.end).toHaveBeenCalledOnce();
     expect(sock.ws.close).toHaveBeenCalledOnce();

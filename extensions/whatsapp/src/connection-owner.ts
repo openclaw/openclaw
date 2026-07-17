@@ -35,14 +35,24 @@ type ProcessOwner = {
 
 const processOwners = new Map<string, ProcessOwner>();
 
+function ownershipCancelledError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error
+    ? reason
+    : new Error(
+        "WhatsApp connection ownership cancelled",
+        reason === undefined ? {} : { cause: reason },
+      );
+}
+
 async function waitForAbortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
-    throw signal.reason ?? new Error("WhatsApp connection ownership cancelled");
+    throw ownershipCancelledError(signal);
   }
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal?.reason ?? new Error("WhatsApp connection ownership cancelled"));
+      reject(ownershipCancelledError(signal));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -60,7 +70,7 @@ async function reserveProcessOwner(params: {
 }): Promise<ProcessOwner> {
   while (true) {
     if (params.signal?.aborted) {
-      throw params.signal.reason ?? new Error("WhatsApp connection ownership cancelled");
+      throw ownershipCancelledError(params.signal);
     }
     const current = processOwners.get(params.ownerPath);
     if (!current) {
@@ -99,7 +109,7 @@ async function reserveProcessOwner(params: {
       }
     });
     if (outcome === "aborted") {
-      throw params.signal?.reason ?? new Error("WhatsApp connection ownership cancelled");
+      throw ownershipCancelledError(params.signal);
     }
     if (outcome === "timed_out") {
       throw new WhatsAppConnectionOwnerBusyError(params.authDir);
@@ -137,7 +147,7 @@ async function acquireOwnerLease(params: {
   while (true) {
     if (params.signal?.aborted) {
       abandonProcessOwner(ownerPath, processOwner);
-      throw params.signal.reason ?? new Error("WhatsApp connection ownership cancelled");
+      throw ownershipCancelledError(params.signal);
     }
     try {
       fileLock = await acquireFileLock(ownerPath, {
@@ -163,9 +173,9 @@ async function acquireOwnerLease(params: {
       }
       const delayMs = Math.min(100 * 1.5 ** attempt, 1_000);
       attempt += 1;
-      await waitForAbortableDelay(delayMs, params.signal).catch((error) => {
+      await waitForAbortableDelay(delayMs, params.signal).catch((delayError: unknown) => {
         abandonProcessOwner(ownerPath, processOwner);
-        throw error;
+        throw delayError;
       });
     }
   }
@@ -178,9 +188,9 @@ async function acquireOwnerLease(params: {
           .then(() => {
             abandonProcessOwner(ownerPath, processOwner);
           })
-          .catch((error) => {
+          .catch((releaseError: unknown) => {
             releasePromise = null;
-            throw error;
+            throw releaseError;
           });
       }
       await releasePromise;
