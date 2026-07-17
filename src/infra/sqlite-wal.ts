@@ -1,5 +1,4 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -188,7 +187,7 @@ function readMountEntries(): Result<MountEntry[], "timeout"> {
       ok: true,
       value: parseMountCommandEntries(
         String(
-          childProcess.execFileSync("mount", [], {
+          process.getBuiltinModule("node:child_process").execFileSync("mount", [], {
             killSignal: "SIGKILL",
             timeout: MOUNT_COMMAND_TIMEOUT_MS,
           }),
