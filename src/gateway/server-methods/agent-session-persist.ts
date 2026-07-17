@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
+import {
+  isMainSessionRecoveryExhausted,
+  transitionMainSessionRecovery,
+} from "../../agents/main-session-recovery-state.js";
 import type { MainSessionRecoveryOwnerLease } from "../../agents/main-session-recovery-store.js";
 import {
   mergeSessionEntry,
@@ -172,9 +175,12 @@ export async function persistAgentSessionPhase(params: {
               archivedDuringStoreUpdateError = archivedError;
               throw new Error(archivedError);
             }
+            const internalFreshEntry = freshEntry as InternalSessionEntry | undefined;
             if (
               !params.isRestartRecoveryResumeRun &&
-              (freshEntry as InternalSessionEntry | undefined)?.mainRestartRecovery?.tombstone
+              internalFreshEntry &&
+              (internalFreshEntry.mainRestartRecovery?.tombstone ||
+                isMainSessionRecoveryExhausted(internalFreshEntry))
             ) {
               restartRecoveryReservationConflict =
                 `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
@@ -266,6 +272,7 @@ export async function persistAgentSessionPhase(params: {
                   sessionId: merged.sessionId,
                   sessionKey: params.canonicalSessionKey,
                   claimId: mainRestartRecoveryOwnerLease?.claimId ?? randomUUID(),
+                  runId: params.runId,
                 });
             if (
               params.isRestartRecoveryResumeRun &&

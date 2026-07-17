@@ -17,6 +17,9 @@ type MainSessionRecoveryStoreTarget = {
   storePath: string;
 };
 
+const OWNER_RELEASE_RETRY_DELAY_MS = 1_000;
+const OWNER_RELEASE_RETRY_MAX_DELAY_MS = 30_000;
+
 export type MainSessionRecoveryOwnerLease = MainSessionRecoveryOwnerClaim &
   MainSessionRecoveryStoreTarget;
 
@@ -93,6 +96,7 @@ function currentGenerationRequiredBy(command: MainSessionRecoveryCommand): strin
     case "validate_recovery":
       return command.lifecycleGeneration;
     case "validate_foreground":
+    case "bind_foreground_run":
       return command.claim.lifecycleGeneration;
     default:
       return undefined;
@@ -215,6 +219,7 @@ export async function claimMainSessionRecoveryOwner(params: {
   lifecycleGeneration: string;
   replacementSessionId?: string;
   sessionId: string;
+  runId?: string;
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryOwnerClaimResult> {
   const command = {
@@ -224,6 +229,7 @@ export async function claimMainSessionRecoveryOwner(params: {
     sessionId: params.sessionId,
     sessionKey: params.target.sessionKey,
     claimId: randomUUID(),
+    ...(params.runId ? { runId: params.runId } : {}),
   };
   let claim = await commitMainSessionRecovery({
     command,
@@ -282,6 +288,21 @@ export async function claimMainSessionRecoveryOwner(params: {
   return { kind: "invalidated", reason };
 }
 
+export async function bindMainSessionRecoveryOwnerRun(
+  lease: MainSessionRecoveryOwnerLease,
+  runId: string,
+): Promise<MainSessionRecoveryOwnerLease> {
+  const result = await commitMainSessionRecovery({
+    command: { kind: "bind_foreground_run", claim: lease, runId },
+    requireWriteSuccess: true,
+    target: lease,
+  });
+  if (result.transition.kind !== "applied") {
+    throw new Error("main-session recovery owner changed before run binding");
+  }
+  return { ...lease, runId };
+}
+
 export async function inspectMainSessionRecoveryRequired(params: {
   allowMissingSession?: boolean;
   expectedSessionId: string;
@@ -324,12 +345,9 @@ export async function inspectMainSessionRecoveryRequired(params: {
   };
 }
 
-export async function releaseMainSessionRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
+async function releaseMainSessionRecoveryOwnerWithRetries(
+  lease: MainSessionRecoveryOwnerLease,
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  if (!lease) {
-    return undefined;
-  }
   // A leaked current-generation token blocks automatic recovery until restart.
   // Token-scoped release is idempotent, so transient writer failures are safe to retry.
   const released = await retryAsync(
@@ -359,4 +377,44 @@ export async function releaseMainSessionRecoveryOwner(
     return undefined;
   }
   return { sessionId: entry.sessionId, sessionKey, storePath: lease.storePath };
+}
+
+function scheduleMainSessionRecoveryOwnerRelease(
+  lease: MainSessionRecoveryOwnerLease,
+  delayMs = OWNER_RELEASE_RETRY_DELAY_MS,
+): void {
+  // A token is process-owned but durably blocks recovery. Keep exact-token
+  // cleanup alive through transient writer outages until release or restart.
+  setTimeout(() => {
+    void releaseMainSessionRecoveryOwnerWithRetries(lease).then(
+      async (pending) => {
+        if (!pending) {
+          return;
+        }
+        const { scheduleMainSessionRecoveryPendingTarget } =
+          await import("./main-session-recovery-owner-release.js");
+        scheduleMainSessionRecoveryPendingTarget(pending);
+      },
+      () => {
+        scheduleMainSessionRecoveryOwnerRelease(
+          lease,
+          Math.min(delayMs * 2, OWNER_RELEASE_RETRY_MAX_DELAY_MS),
+        );
+      },
+    );
+  }, delayMs).unref?.();
+}
+
+export async function releaseMainSessionRecoveryOwner(
+  lease: MainSessionRecoveryOwnerLease | undefined,
+): Promise<MainSessionRecoveryPendingTarget | undefined> {
+  if (!lease) {
+    return undefined;
+  }
+  try {
+    return await releaseMainSessionRecoveryOwnerWithRetries(lease);
+  } catch (error) {
+    scheduleMainSessionRecoveryOwnerRelease(lease);
+    throw error;
+  }
 }

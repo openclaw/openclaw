@@ -23,6 +23,7 @@ export type MainSessionRecoveryOwnerClaim = {
   claimId: string;
   sessionId: string;
   sessionKey: string;
+  runId?: string;
 };
 
 export type MainSessionRecoveryView =
@@ -108,7 +109,9 @@ export type MainSessionRecoveryCommand =
       sessionId: string;
       sessionKey: string;
       claimId: string;
+      runId?: string;
     }
+  | { kind: "bind_foreground_run"; claim: MainSessionRecoveryOwnerClaim; runId: string }
   | { kind: "validate_foreground"; claim: MainSessionRecoveryOwnerClaim }
   | { kind: "release_foreground"; claim: MainSessionRecoveryOwnerClaim }
   | {

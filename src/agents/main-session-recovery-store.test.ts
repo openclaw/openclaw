@@ -366,6 +366,30 @@ describe("main session recovery store", () => {
     expect(accessorSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKeys: [sessionKey] });
   });
 
+  it("binds a foreground claim to its lifecycle run", async () => {
+    await write(interruptedEntry());
+
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      runId: "foreground-run",
+      sessionId: "session-1",
+      target: { sessionKey, storePath },
+    });
+
+    if (claim.kind !== "claimed") {
+      throw new Error("expected foreground owner claim");
+    }
+    expect(read()).toMatchObject({
+      restartRecoveryRuns: [{ lifecycleGeneration, runId: "foreground-run" }],
+      mainRestartRecovery: {
+        foregroundClaims: {
+          lifecycleGeneration,
+          runIdsByClaimId: { [claim.lease.claimId]: "foreground-run" },
+        },
+      },
+    });
+  });
+
   it("releases an owner after the durable row session id rotates", async () => {
     await write(interruptedEntry());
     const claim = await claimMainSessionRecoveryOwner({
@@ -382,6 +406,47 @@ describe("main session recovery store", () => {
     await expect(releaseMainSessionRecoveryOwner(claim.lease)).resolves.toBeUndefined();
 
     expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
+  });
+
+  it("keeps retrying an exact owner release after immediate store retries fail", async () => {
+    vi.useFakeTimers();
+    try {
+      await write(interruptedEntry());
+      const claim = await claimMainSessionRecoveryOwner({
+        lifecycleGeneration,
+        sessionId: "session-1",
+        target: { sessionKey, storePath },
+      });
+      if (claim.kind !== "claimed") {
+        throw new Error("expected foreground owner claim");
+      }
+      const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+      let failures = 0;
+      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation(
+        async (params) => {
+          if (failures < 3) {
+            failures += 1;
+            throw new Error("transient session-store failure");
+          }
+          return await applySessionEntryReplacements(params);
+        },
+      );
+
+      const immediateRelease = releaseMainSessionRecoveryOwner(claim.lease);
+      const immediateReleaseRejected = expect(immediateRelease).rejects.toThrow(
+        "transient session-store failure",
+      );
+      await vi.advanceTimersByTimeAsync(100);
+      await immediateReleaseRejected;
+      expect(read().mainRestartRecovery?.foregroundClaims?.tokens).toEqual([claim.lease.claimId]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("leaves interrupted non-main rows to their specialized recovery owner", async () => {

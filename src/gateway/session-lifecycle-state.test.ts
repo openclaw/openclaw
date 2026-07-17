@@ -3,6 +3,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -319,6 +320,90 @@ describe("session lifecycle state", () => {
       { runId: "restart-run", lifecycleGeneration: "pre-restart" },
     ]);
     expect(persisted.mainRestartRecovery).toMatchObject({ cycleId: "cycle-1" });
+  });
+
+  it("applies the terminal snapshot for the foreground owner run", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration,
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration,
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      endedAt: 1_800,
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("does not settle a foreground owner from a stale lifecycle generation", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration: "pre-restart" },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration: "pre-restart",
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery: {
+        foregroundClaims: { tokens: ["owner-claim"] },
+      },
+    });
   });
 
   it("clears only the completed recovery marker", async () => {

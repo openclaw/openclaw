@@ -132,6 +132,15 @@ function formatAttemptBudgetReason(attempts: number): string {
   );
 }
 
+export function isMainSessionRecoveryExhausted(entry: SessionEntry): boolean {
+  return (
+    entry.status === "running" &&
+    entry.abortedLastRun === true &&
+    (entry.mainRestartRecovery?.chargedAttempts ?? 0) >=
+      MAIN_RESTART_RECOVERY_MAX_AUTOMATIC_ATTEMPTS
+  );
+}
+
 export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return false;
@@ -473,6 +482,19 @@ export function transitionMainSessionRecovery(
           ? state.foregroundClaims.tokens
           : [];
       const tokens = [...new Set([...currentTokens, command.claimId])].toSorted();
+      const currentRunIds =
+        state.foregroundClaims?.lifecycleGeneration === command.lifecycleGeneration
+          ? state.foregroundClaims.runIdsByClaimId
+          : undefined;
+      const runIdsByClaimId = command.runId
+        ? { ...currentRunIds, [command.claimId]: command.runId }
+        : currentRunIds;
+      if (command.runId) {
+        recordLifecycleFence(entry, {
+          lifecycleGeneration: command.lifecycleGeneration,
+          runId: command.runId,
+        });
+      }
       entry.mainRestartRecovery = {
         ...state,
         revision: nextRevision(state),
@@ -483,6 +505,7 @@ export function transitionMainSessionRecovery(
         foregroundClaims: {
           lifecycleGeneration: command.lifecycleGeneration,
           tokens,
+          ...(runIdsByClaimId ? { runIdsByClaimId } : {}),
         },
       };
       return {
@@ -493,8 +516,34 @@ export function transitionMainSessionRecovery(
           claimId: command.claimId,
           sessionId: entry.sessionId,
           sessionKey: command.sessionKey,
+          ...(command.runId ? { runId: command.runId } : {}),
         },
       };
+    }
+    case "bind_foreground_run": {
+      const state = entry.mainRestartRecovery;
+      const claims = state?.foregroundClaims;
+      if (
+        !state ||
+        state.cycleId !== command.claim.cycleId ||
+        claims?.lifecycleGeneration !== command.claim.lifecycleGeneration ||
+        !claims.tokens.includes(command.claim.claimId)
+      ) {
+        return { kind: "no_change" };
+      }
+      recordLifecycleFence(entry, {
+        lifecycleGeneration: command.claim.lifecycleGeneration,
+        runId: command.runId,
+      });
+      entry.mainRestartRecovery = {
+        ...state,
+        revision: nextRevision(state),
+        foregroundClaims: {
+          ...claims,
+          runIdsByClaimId: { ...claims.runIdsByClaimId, [command.claim.claimId]: command.runId },
+        },
+      };
+      return { kind: "applied" };
     }
     case "validate_foreground": {
       const state = entry.mainRestartRecovery;
@@ -518,6 +567,11 @@ export function transitionMainSessionRecovery(
         return { kind: "no_change" };
       }
       const tokens = claims.tokens.filter((token) => token !== command.claim.claimId);
+      const runIdsByClaimId = Object.fromEntries(
+        Object.entries(claims.runIdsByClaimId ?? {}).filter(
+          ([token]) => token !== command.claim.claimId,
+        ),
+      );
       if (tokens.length === 0 && entry.abortedLastRun !== true) {
         Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
         return { kind: "applied" };
@@ -527,7 +581,11 @@ export function transitionMainSessionRecovery(
         revision: nextRevision(state),
         foregroundClaims:
           tokens.length > 0
-            ? { lifecycleGeneration: command.claim.lifecycleGeneration, tokens }
+            ? {
+                lifecycleGeneration: command.claim.lifecycleGeneration,
+                tokens,
+                ...(Object.keys(runIdsByClaimId).length > 0 ? { runIdsByClaimId } : {}),
+              }
             : undefined,
       };
       return { kind: "applied" };

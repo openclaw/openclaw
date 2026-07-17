@@ -13,6 +13,8 @@ export type MainRestartRecoveryState = {
   foregroundClaims?: {
     lifecycleGeneration: string;
     tokens: string[];
+    /** Run identity for claims that have crossed the actual agent-run boundary. */
+    runIdsByClaimId?: Record<string, string>;
   };
   tombstone?: { reason: string };
 };

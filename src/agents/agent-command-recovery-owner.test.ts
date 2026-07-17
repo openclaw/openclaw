@@ -365,6 +365,50 @@ describe("agent command restart recovery ownership", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("binds a transferred recovery owner to the actual agent run", async () => {
+    const target = createTarget();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "running",
+      abortedLastRun: true,
+    });
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claim = await claimMainSessionRecoveryOwner({
+      lifecycleGeneration,
+      sessionId: target.sessionId,
+      target: { sessionKey, storePath: target.storePath },
+    });
+    if (claim.kind !== "claimed") {
+      throw new Error("expected recovery owner claim");
+    }
+    const run = vi.fn(async () => {
+      const entry = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+      expect(entry.restartRecoveryRuns).toContainEqual({
+        lifecycleGeneration,
+        runId: "foreground-run",
+      });
+      expect(entry.mainRestartRecovery?.foregroundClaims?.runIdsByClaimId).toEqual({
+        [claim.lease.claimId]: "foreground-run",
+      });
+      return "ran";
+    });
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "claim",
+        opts: {
+          mainRestartRecoveryOwnerLease: claim.lease,
+          runId: "foreground-run",
+        } as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("allows an explicitly requested fresh session without a predecessor", async () => {
     const target = { ...createTarget(), sessionId: "fresh-session" };
     const run = vi.fn(async () => "fresh");

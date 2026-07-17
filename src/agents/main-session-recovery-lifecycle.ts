@@ -107,9 +107,44 @@ export function projectMainSessionRecoveryLifecycle(params: {
     : runs;
   if (settlesRecovery) {
     const foregroundClaims = params.entry?.mainRestartRecovery?.foregroundClaims;
+    const foregroundOwnerClaimId =
+      runId &&
+      lifecycleGeneration &&
+      lifecycleGeneration === params.currentLifecycleGeneration &&
+      foregroundClaims?.lifecycleGeneration === lifecycleGeneration
+        ? foregroundClaims.tokens.find(
+            (claimId) => foregroundClaims.runIdsByClaimId?.[claimId] === runId,
+          )
+        : undefined;
+    const remainingForegroundClaimIds = foregroundOwnerClaimId
+      ? foregroundClaims!.tokens.filter((claimId) => claimId !== foregroundOwnerClaimId)
+      : foregroundClaims?.tokens;
+    const remainingForegroundRunIds = foregroundOwnerClaimId
+      ? Object.fromEntries(
+          Object.entries(foregroundClaims?.runIdsByClaimId ?? {}).filter(
+            ([claimId]) => claimId !== foregroundOwnerClaimId,
+          ),
+        )
+      : foregroundClaims?.runIdsByClaimId;
+    const remainingForegroundClaims = remainingForegroundClaimIds?.length
+      ? {
+          lifecycleGeneration: foregroundClaims!.lifecycleGeneration,
+          tokens: remainingForegroundClaimIds,
+          ...(remainingForegroundRunIds && Object.keys(remainingForegroundRunIds).length > 0
+            ? { runIdsByClaimId: remainingForegroundRunIds }
+            : {}),
+        }
+      : undefined;
+    const recoveryStateAfterForegroundSettlement = foregroundOwnerClaimId
+      ? {
+          ...params.entry!.mainRestartRecovery!,
+          revision: params.entry!.mainRestartRecovery!.revision + 1,
+          foregroundClaims: remainingForegroundClaims,
+        }
+      : params.entry?.mainRestartRecovery;
     const hasForegroundOwners = Boolean(
-      foregroundClaims?.lifecycleGeneration === params.currentLifecycleGeneration &&
-      foregroundClaims.tokens.length,
+      remainingForegroundClaims?.lifecycleGeneration === params.currentLifecycleGeneration &&
+      remainingForegroundClaims.tokens.length,
     );
     const reservation = params.entry?.mainRestartRecovery?.reservation;
     const hasCurrentReservation =
@@ -122,8 +157,8 @@ export function projectMainSessionRecoveryLifecycle(params: {
         : { action: "apply", patch };
     }
     if (hasCurrentOwner) {
-      // Consume this fence without applying a non-authoritative snapshot. The
-      // terminal-id record makes the one-shot completion durable and idempotent.
+      // A terminal event may consume its own claim. Another owner still keeps
+      // the aggregate live until that owner's terminal event or release.
       return {
         action: "apply",
         patch: {
@@ -132,8 +167,17 @@ export function projectMainSessionRecoveryLifecycle(params: {
             params.entry?.restartRecoveryTerminalRunIds,
             [runId],
           ),
+          ...(foregroundOwnerClaimId
+            ? { mainRestartRecovery: recoveryStateAfterForegroundSettlement }
+            : {}),
         },
       };
+    }
+    if (foregroundOwnerClaimId) {
+      // This exact foreground run completed while its release lease was still
+      // active. Its terminal snapshot is authoritative and consumes the cycle.
+      Object.assign(patch, buildMainSessionRecoveryClearPatch(params.entry));
+      return { action: "apply", patch };
     }
     if (
       !hasForegroundOwners &&

@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
 import {
+  bindMainSessionRecoveryOwnerRun,
   claimMainSessionRecoveryOwner,
   inspectMainSessionRecoveryRequired,
   releaseMainSessionRecoveryOwner,
@@ -45,7 +46,9 @@ async function claimAgentCommandRecoveryOwner(params: {
       // session resolution so rollover or rerouting cannot execute under another row's lease.
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }
-    return transferredLease;
+    return params.opts.runId
+      ? await bindMainSessionRecoveryOwnerRun(transferredLease, params.opts.runId)
+      : transferredLease;
   }
   if (params.opts.sessionEffects === "internal") {
     return undefined;
@@ -85,6 +88,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     lifecycleGeneration: params.lifecycleGeneration,
     sessionId: params.prepared.previousSessionId ?? params.prepared.sessionId,
     replacementSessionId: params.prepared.isNewSession ? params.prepared.sessionId : undefined,
+    runId: params.opts.runId,
     target: { sessionKey, storePath: params.prepared.storePath },
   });
   if (claim.kind === "invalidated") {
