@@ -54,6 +54,18 @@ const expressControl = vi.hoisted(() => ({
 }));
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
+const keepHttpServerTaskAliveMock = vi.hoisted(() =>
+  vi.fn(async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
+    await new Promise<void>((resolve) => {
+      if (params.abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+      params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await params.onAbort?.();
+  }),
+);
 
 vi.mock("../runtime-api.js", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
@@ -64,18 +76,7 @@ vi.mock("../runtime-api.js", () => ({
     typeof value === "string" && value.trim().length > 0,
   normalizeResolvedSecretInputString: (params: { value?: unknown }) =>
     typeof params?.value === "string" && params.value.trim() ? params.value.trim() : undefined,
-  keepHttpServerTaskAlive: vi.fn(
-    async (params: { abortSignal?: AbortSignal; onAbort?: () => Promise<void> | void }) => {
-      await new Promise<void>((resolve) => {
-        if (params.abortSignal?.aborted) {
-          resolve();
-          return;
-        }
-        params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      await params.onAbort?.();
-    },
-  ),
+  keepHttpServerTaskAlive: keepHttpServerTaskAliveMock,
   mergeAllowlist: (params: { existing?: string[]; additions?: string[] }) =>
     Array.from(new Set([...(params.existing ?? []), ...(params.additions ?? [])])),
   summarizeMapping: vi.fn(),
@@ -221,6 +222,10 @@ vi.mock("./sso-token-store.js", () => ({
 
 import { monitorMSTeamsProvider } from "./monitor.js";
 
+async function waitForMSTeamsTestState(assertion: () => void | Promise<void>): Promise<void> {
+  await vi.waitFor(assertion, { interval: 1 });
+}
+
 function createConfig(port: number): OpenClawConfig {
   return {
     channels: {
@@ -308,13 +313,20 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: stores.pollStore,
     });
 
-    const early = await Promise.race([
-      task.then(() => "resolved"),
-      new Promise<"pending">((resolve) => {
-        setTimeout(() => resolve("pending"), 50);
-      }),
-    ]);
-    expect(early).toBe("pending");
+    let taskSettled = false;
+    void task.then(
+      () => {
+        taskSettled = true;
+      },
+      () => {
+        taskSettled = true;
+      },
+    );
+    await waitForMSTeamsTestState(() => {
+      expect(keepHttpServerTaskAliveMock).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(taskSettled).toBe(false);
 
     abort.abort();
     const result = await task;
@@ -347,7 +359,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -396,7 +408,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -435,7 +447,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(expressControl.apps.length).toBeGreaterThan(0);
     });
 
@@ -476,7 +488,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -524,7 +536,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(2);
       expect(ssoTokenStore.save).toHaveBeenCalledTimes(2);
     });
@@ -565,7 +577,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -590,7 +602,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       },
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(isSigninInvokeAuthorized).toHaveBeenCalledTimes(1);
     });
     expect(ssoTokenStore.save).not.toHaveBeenCalled();
@@ -615,7 +627,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -654,7 +666,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -722,7 +734,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -759,7 +771,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -827,7 +839,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -887,7 +899,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -956,7 +968,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -1014,7 +1026,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
@@ -1068,7 +1080,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       pollStore: createStores().pollStore,
     });
 
-    await vi.waitFor(() => {
+    await waitForMSTeamsTestState(() => {
       expect(registerMSTeamsHandlers).toHaveBeenCalled();
     });
 
