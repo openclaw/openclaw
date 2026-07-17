@@ -264,6 +264,20 @@ describe("pickAsset", () => {
 });
 
 describe("downloadToFile", () => {
+  it("cancels non-success response bodies before rejecting", async () => {
+    const response = new Response("service unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+
+    await withTempFile(async (filePath) => {
+      await expect(downloadToFile("https://example.com/signal-cli.tgz", filePath)).rejects.toThrow(
+        "HTTP 503",
+      );
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("downloads through the SSRF guard with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse("archive");
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
