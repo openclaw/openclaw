@@ -32,7 +32,7 @@ type BundledPluginTabView = {
       embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
       allowExternalEmbedUrls: boolean;
     };
-    onRequestUpdate?: () => void;
+    onRequestUpdate: () => void;
     // L5: custom widgets need the gateway HTTP base (iframe src) and the session
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;

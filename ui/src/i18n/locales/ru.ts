@@ -2528,6 +2528,19 @@ export const ru: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "У этого предпросмотра пока нет URL.",
+        blockedExternal: "Внешний предпросмотр отключён политикой вашего Gateway.",
+        blockedScheme: "URL этого предпросмотра использует неподдерживаемую схему.",
+        toolbar: "Элементы управления предпросмотром",
+        reload: "Перезагрузить предпросмотр",
+        viewport: {
+          label: "Область просмотра предпросмотра",
+          desktop: "Компьютер",
+          tablet: "Планшет",
+          mobile: "Телефон",
+        },
+      },
     },
   },
   workboard: {

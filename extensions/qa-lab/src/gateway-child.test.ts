@@ -206,6 +206,18 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
     expect(message).not.toContain("s".repeat(100));
     expect(message).not.toContain(prefix);
   });
+
+  it("preserves complete Unicode code points at the retained log-tail boundary", () => {
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `P😀${"z".repeat(8_191)}`,
+    );
+
+    expect(message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
+  });
 });
 
 describe("Gateway child fixture helpers", () => {

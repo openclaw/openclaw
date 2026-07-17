@@ -2,7 +2,7 @@
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { EngineAdapters } from "../adapter/index.js";
 import type { QQBotGroupCommandLevel } from "../config/group.js";
-import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";
+import type { GroupActivationMode } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import type { GroupMessageGateResult } from "../group/message-gating.js";
 import type { QueuedMessage } from "./message-queue.js";
@@ -77,7 +77,6 @@ export interface InboundPipelineDeps {
     keepAlive: TypingKeepAlive | null;
   }>;
   groupHistories?: Map<string, HistoryEntry[]>;
-  sessionStoreReader?: SessionStoreReader;
   allowTextCommands?: boolean;
   isControlCommand?: (content: string) => boolean;
   resolveGroupIntroHint?: (params: {

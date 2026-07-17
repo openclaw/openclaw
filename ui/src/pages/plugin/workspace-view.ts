@@ -64,6 +64,7 @@ import type {
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
+import type { PreviewViewport } from "../../lib/workspace/widgets/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import "../../styles/workspace.css";
 import { pluginTabRefFromSearch } from "./route.ts";
@@ -72,9 +73,9 @@ type WorkspaceProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
-  /** Control UI embed policy for the iframe-embed builtin (defaults to strict). */
+  /** Control UI embed policy for iframe-based builtins (defaults to strict). */
   embed?: BuiltinWidgetContext["embed"];
-  onRequestUpdate?: () => void;
+  onRequestUpdate: () => void;
   /** Gateway HTTP base path for custom-widget iframe sources (L5). */
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
@@ -91,6 +92,8 @@ const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
 type WorkspaceViewState = {
   openMenuWidgetId: string | null;
   drag: WorkspaceDragState | null;
+  /** Per-host preview viewport choices; intentionally not persisted in workspace data. */
+  previewViewports: Map<string, PreviewViewport>;
   /** Resolved binding cache keyed by widgetId; refreshed when the doc changes. */
   bindingResults: Map<string, WorkspaceBindingResult>;
   bindingLoads: Set<string>;
@@ -219,6 +222,7 @@ function getViewState(host: object): WorkspaceViewState {
     state = {
       openMenuWidgetId: null,
       drag: null,
+      previewViewports: new Map(),
       bindingResults: new Map(),
       bindingLoads: new Set(),
       bindingVersion: -1,
@@ -475,7 +479,7 @@ function ensureManifests(
       viewState.manifestLoads.delete(name);
       if (manifest) {
         viewState.manifestCache.set(name, manifest);
-        props.onRequestUpdate?.();
+        props.onRequestUpdate();
       }
     });
   }
@@ -533,6 +537,13 @@ function renderGrid(
   const builtinContext: BuiltinWidgetContext = {
     basePath: props.basePath ?? "",
     embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    preview: {
+      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
+      setViewport: (widgetId, viewport) => {
+        viewState.previewViewports.set(widgetId, viewport);
+        props.onRequestUpdate?.();
+      },
+    },
   };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
@@ -680,6 +691,7 @@ function makeCallbacks(
     },
     onRemove: (widget) => {
       viewState.openMenuWidgetId = null;
+      viewState.previewViewports.delete(widget.id);
       void removeWidgetFromTab(state, props.client, { slug: tab.slug, widgetId: widget.id });
     },
     onEditTitle: (widget) => {

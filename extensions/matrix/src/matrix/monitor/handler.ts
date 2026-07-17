@@ -1,6 +1,7 @@
 // Matrix plugin module implements handler behavior.
 import {
   buildChannelInboundEventContext,
+  resolveInboundMentionDecision,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
@@ -1156,16 +1157,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
-        const shouldBypassMention =
-          allowTextCommands &&
-          isRoom &&
-          shouldRequireMention &&
-          !wasMentioned &&
-          !hasExplicitMention &&
-          commandAuthorized &&
-          hasControlCommandInMessage;
+        const mentionDecision = resolveInboundMentionDecision({
+          facts: {
+            // Matrix native mention metadata lets us reliably decide absence even
+            // when no custom mention regex is configured.
+            canDetectMention: true,
+            wasMentioned,
+            hasAnyMention: hasExplicitMention,
+          },
+          policy: {
+            isGroup: isRoom,
+            requireMention: shouldRequireMention,
+            allowTextCommands,
+            hasControlCommand: hasControlCommandInMessage,
+            commandAuthorized,
+          },
+        });
+        const { effectiveWasMentioned, shouldBypassMention } = mentionDecision;
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
-        if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
+        if (mentionDecision.shouldSkip) {
           const pendingHistoryBody = preflightAudioTranscript
             ? formatMatrixAudioTranscript(preflightAudioTranscript)
             : pendingHistoryText || pendingHistoryPollText;
@@ -1368,6 +1378,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
           shouldRequireMention,
           wasMentioned,
+          effectiveWasMentioned,
           shouldBypassMention,
           canDetectMention,
           commandAuthorized,
@@ -1438,6 +1449,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isRoom,
         shouldRequireMention,
         wasMentioned,
+        effectiveWasMentioned,
         shouldBypassMention,
         canDetectMention,
         commandAuthorized,
@@ -1680,7 +1692,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             isMentionableGroup: isRoom,
             requireMention: shouldRequireMention,
             canDetectMention,
-            effectiveWasMentioned: wasMentioned || shouldBypassMention,
+            effectiveWasMentioned,
             shouldBypassMention,
           }),
         );

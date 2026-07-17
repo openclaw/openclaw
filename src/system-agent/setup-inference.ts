@@ -2036,7 +2036,9 @@ async function activateSetupInferenceUnredacted(
           base: "source",
           // The transform stays side-effect free so a config conflict can retry
           // without replaying credential writes in another agent directory.
-          afterWrite: { mode: "none", reason: "OpenClaw activates verified inference" },
+          // Setup changes only hot-reloadable model, agent, and plugin-entry surfaces.
+          // Publish the verified route now so the next turn cannot reuse the old harness.
+          afterWrite: { mode: "auto" },
           transform: async (current, context) => {
             const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
             // Validate that the candidate is still admissible before reporting

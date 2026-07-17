@@ -664,6 +664,7 @@ export function createSubagentRunManager(params: {
       browserCleanupDispatchedAt: undefined,
       deleteCleanupDispatchedAt: undefined,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       outcome: undefined,
       execution: {
         status: "running",
@@ -786,6 +787,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       cleanupHandled: false,
       wakeOnDescendantSettle: undefined,
+      requesterSettleWake: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,

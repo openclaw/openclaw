@@ -256,6 +256,8 @@ Skills own workflows; root owns hard policy and routing.
 - Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
 - Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.
 - Use named intermediates only for domain meaning or readability; avoid temp-variable soup.
+- Correct but not over-engineered. Correctness on real inputs/states is mandatory; extra layers, guards, and generality for imagined ones are defects, not rigor.
+- Codebase is already large; pragmatism wins. Extremely unlikely edge cases are tradable for real simplification — name the accepted tradeoff (comment or PR) so it is a decision, not an oversight.
 - Code size matters. Prefer small clear code; maintainability includes not growing LOC without payoff.
 - Refactors should delete about as much local complexity as they add. If LOC grows, the new ownership/API needs to clearly pay for it.
 - Refactors should reduce non-test LOC unless they remove a larger architectural cost. Treat positive prod LOC as a smell. Before closeout, run `git diff --numstat`; if non-test LOC grew, trim or explicitly justify why fewer paths now exist.
