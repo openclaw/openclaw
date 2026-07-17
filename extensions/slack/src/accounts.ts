@@ -33,6 +33,7 @@ export type SlackTokenSource = "env" | "config" | "none";
 export type ResolvedSlackAccount = {
   accountId: string;
   enabled: boolean;
+  identity: "bot" | "user";
   name?: string;
   botToken?: string;
   appToken?: string;
@@ -56,6 +57,13 @@ export function resolveSlackOperationToken(
   account: ResolvedSlackAccount,
   operation: "read" | "write",
 ): string | undefined {
+  if (account.identity === "user") {
+    // User identity authenticates with the browser-session token; its required
+    // companion `sessionCookie` is attached at client construction (session RTM
+    // transport, later phase). The user path is not wired end-to-end until then,
+    // so returning the token alone here is intentional, not a missing credential.
+    return normalizeOptionalString(account.sessionToken);
+  }
   const userToken = normalizeOptionalString(account.userToken);
   const botToken = normalizeOptionalString(account.botToken);
   if (operation === "read") {
@@ -240,14 +248,15 @@ export function resolveSlackAccount(params: {
   );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
+  const identity = merged.identity ?? "bot";
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const mode = merged.mode ?? "socket";
   const baseAllowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const botActive = enabled;
-  const appActive = enabled && mode === "socket" && merged.identity !== "user";
+  const appActive = enabled && mode === "socket" && identity === "bot";
   const userActive = enabled;
-  const sessionActive = enabled && merged.identity === "user";
+  const sessionActive = enabled && identity === "user";
   const envBot =
     botActive && baseAllowEnv ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN) : undefined;
   const envApp =
@@ -305,6 +314,7 @@ export function resolveSlackAccount(params: {
   return {
     accountId,
     enabled,
+    identity,
     name: normalizeOptionalString(merged.name),
     botToken,
     appToken,
