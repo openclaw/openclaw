@@ -76,6 +76,7 @@ type PluginsViewProps = {
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
   detailPluginId: string | null;
+  iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   pageNotice: PluginRowMessage | null;
@@ -87,6 +88,7 @@ type PluginsViewProps = {
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
+  onIconError: (pluginId: string) => void;
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
@@ -264,11 +266,28 @@ const compactNumber = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-function renderArtTile(slug: string, name: string): TemplateResult {
+function renderArtTile(
+  slug: string,
+  name: string,
+  iconUrl?: string,
+  onIconError?: () => void,
+): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
     return html`<span class="plugins-tile">
       <img src=${art} alt="" loading="lazy" decoding="async" />
+    </span>`;
+  }
+  if (iconUrl) {
+    return html`<span class="plugins-tile">
+      <img
+        class="plugins-icon"
+        src=${iconUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @error=${onIconError}
+      />
     </span>`;
   }
   const [from, to] = pluginFallbackGradient(slug);
@@ -554,7 +573,9 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
         }
       }}
     >
-      ${renderArtTile(plugin.id, plugin.name)}
+      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+        props.onIconError(plugin.id),
+      )}
       <div class="settings-row__text">
         <h3 class="settings-row__title">
           ${plugin.name}
@@ -764,7 +785,9 @@ function renderCatalogRow(plugin: PluginCatalogItem, props: PluginsViewProps): T
         }
       }}
     >
-      ${renderArtTile(plugin.id, plugin.name)}
+      ${renderArtTile(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+        props.onIconError(plugin.id),
+      )}
       <div class="settings-row__text">
         <h3 class="settings-row__title">
           ${plugin.name}
@@ -1068,7 +1091,9 @@ function renderDetailOverlay(props: PluginsViewProps) {
         >
           ${icons.x}
         </button>
-        ${renderDetailCover(plugin.id, plugin.name)}
+        ${renderDetailCover(plugin.id, plugin.name, props.iconUrls[plugin.id], () =>
+          props.onIconError(plugin.id),
+        )}
         <div class="plugins-detail__body">
           <div class="plugins-detail__title">
             <h2>${plugin.name}</h2>
@@ -1146,11 +1171,28 @@ function renderDetailOverlay(props: PluginsViewProps) {
   `;
 }
 
-function renderDetailCover(slug: string, name: string): TemplateResult {
+function renderDetailCover(
+  slug: string,
+  name: string,
+  iconUrl?: string,
+  onIconError?: () => void,
+): TemplateResult {
   const art = pluginArtPath(slug);
   if (art) {
     return html`<span class="plugins-cover">
       <img src=${art} alt="" loading="lazy" decoding="async" />
+    </span>`;
+  }
+  if (iconUrl) {
+    return html`<span class="plugins-cover">
+      <img
+        class="plugins-icon"
+        src=${iconUrl}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        @error=${onIconError}
+      />
     </span>`;
   }
   const [from, to] = pluginFallbackGradient(slug);

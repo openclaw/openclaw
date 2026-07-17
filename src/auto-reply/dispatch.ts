@@ -519,6 +519,7 @@ export async function dispatchInboundMessage(params: {
   replyResolver?: InternalGetReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
+  onSettled?: () => void | Promise<void>;
 }): Promise<DispatchInboundResult> {
   const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
   const replyPayloadRunState = params.replyPayloadRunState ?? {
@@ -546,6 +547,7 @@ export async function dispatchInboundMessage(params: {
   installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
+    onSettled: params.onSettled,
     run: () =>
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",

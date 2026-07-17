@@ -49,10 +49,10 @@ function normalizeClickClackSetupCode(value: string): string | undefined {
   return normalized;
 }
 
-function requireHttpsClickClackBaseUrl(value: string | undefined): string {
+function requireClickClackSetupCodeBaseUrl(value: string | undefined): string {
   const baseUrl = normalizeClickClackBaseUrl(value);
-  if (!baseUrl || new URL(baseUrl).protocol !== "https:") {
-    throw new Error("ClickClack setup codes require an HTTPS base URL.");
+  if (!baseUrl) {
+    throw new Error("ClickClack setup codes require a valid HTTP(S) base URL.");
   }
   return baseUrl;
 }
@@ -73,10 +73,10 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
     try {
       setupUrl = new URL(rawCode);
     } catch {
-      throw new Error("ClickClack --code must be a valid HTTPS setup URL or a bare setup code.");
+      throw new Error("ClickClack --code must be a valid HTTP(S) setup URL or a bare setup code.");
     }
-    if (setupUrl.protocol !== "https:") {
-      throw new Error("ClickClack setup codes require HTTPS.");
+    if (setupUrl.protocol !== "http:" && setupUrl.protocol !== "https:") {
+      throw new Error("ClickClack setup codes require an HTTP(S) URL.");
     }
     if (setupUrl.username || setupUrl.password) {
       throw new Error("ClickClack setup URLs must not include credentials.");
@@ -87,9 +87,9 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
     }
     setupUrl.hash = "";
     setupUrl.search = "";
-    baseUrl = requireHttpsClickClackBaseUrl(setupUrl.toString());
+    baseUrl = requireClickClackSetupCodeBaseUrl(setupUrl.toString());
     if (params.baseUrl) {
-      const suppliedBaseUrl = requireHttpsClickClackBaseUrl(params.baseUrl);
+      const suppliedBaseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
       if (suppliedBaseUrl !== baseUrl) {
         throw new Error("ClickClack --base-url does not match the server in the setup-code URL.");
       }
@@ -99,7 +99,7 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
     if (!params.baseUrl) {
       throw new Error("A bare ClickClack setup code requires --base-url.");
     }
-    baseUrl = requireHttpsClickClackBaseUrl(params.baseUrl);
+    baseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
   }
 
   const normalizedCode = normalizeClickClackSetupCode(code);

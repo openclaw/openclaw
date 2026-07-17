@@ -450,3 +450,38 @@ describe("ReefInboxConnection response frame bounds", () => {
     expect(result.states).toEqual(["connected", "disconnected"]);
   });
 });
+
+describe("createReefWebSocket handshake deadline", () => {
+  it("errors when the relay accepts TCP but never completes the upgrade", async () => {
+    const peers = new Set<import("node:net").Socket>();
+    const server = http.createServer();
+    server.on("connection", (socket) => {
+      peers.add(socket);
+      socket.once("close", () => peers.delete(socket));
+    });
+    server.on("upgrade", () => {
+      // Leave the HTTP upgrade pending until the client deadline aborts it.
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      const socket = createReefWebSocket(`ws://127.0.0.1:${port}`, {
+        handshakeTimeoutMs: 50,
+      }) as WebSocket;
+      const [error] = await once(socket, "error");
+
+      expect(error).toMatchObject({ message: "Opening handshake has timed out" });
+    } finally {
+      for (const peer of peers) {
+        peer.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+});

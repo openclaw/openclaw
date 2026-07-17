@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS auth_profile_state (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS mcp_oauth_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  format_version INTEGER NOT NULL CHECK (format_version = 1),
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
   event_key TEXT NOT NULL,
@@ -681,6 +688,7 @@ CREATE TABLE IF NOT EXISTS node_host_config (
   gateway_tls INTEGER,
   gateway_tls_fingerprint TEXT,
   gateway_context_path TEXT,
+  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
 
@@ -1402,6 +1410,13 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   ended_reason TEXT,
   pause_reason TEXT,
   wake_on_descendant_settle INTEGER,
+  requester_settle_wake_status TEXT,
+  requester_settle_wake_attempt_count INTEGER,
+  requester_settle_wake_replay_count INTEGER,
+  requester_settle_wake_next_attempt_at INTEGER,
+  requester_settle_wake_batch_run_ids_json TEXT,
+  requester_settle_wake_last_error TEXT,
+  requester_settle_wake_retire_after INTEGER,
   frozen_result_text TEXT,
   frozen_result_captured_at INTEGER,
   fallback_frozen_result_text TEXT,

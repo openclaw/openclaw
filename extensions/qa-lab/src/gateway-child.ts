@@ -14,10 +14,12 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
+  normalizeOptionalString,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createQaBundledPluginsDir,
   resolveQaBundledPluginSourceDir,
@@ -493,7 +495,10 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
 const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
 
 function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
-  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  const logTail = sliceUtf16Safe(
+    redactQaGatewayDebugText(logs),
+    -QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS,
+  );
   return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
 }
 
@@ -635,6 +640,7 @@ function signalQaGatewayWindowsProcessTree(
   const result = runTaskkill(taskkillPath, args, {
     stdio: "ignore",
     windowsHide: true,
+    timeout: 5_000,
   });
   if (!result.error && result.status === 0) {
     return true;
@@ -643,6 +649,7 @@ function signalQaGatewayWindowsProcessTree(
     const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 5_000,
     });
     return !forceResult.error && forceResult.status === 0;
   }
@@ -751,15 +758,14 @@ function isQaModelProviderConfig(value: unknown): value is ModelProviderConfig {
 }
 
 function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | null {
-  if (isQaModelProviderConfig(value)) {
-    return value;
-  }
-  if (!isRecord(value) || !Object.hasOwn(value, "apiKey")) {
+  if (!isQaModelProviderConfig(value) && (!isRecord(value) || !Object.hasOwn(value, "apiKey"))) {
     return null;
   }
+  const { baseUrl: rawBaseUrl, ...providerConfig } = value;
+  const baseUrl = normalizeOptionalString(rawBaseUrl);
   return {
-    ...value,
-    baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+    ...providerConfig,
+    ...(baseUrl ? { baseUrl } : {}),
     models: Array.isArray(value.models) ? value.models : [],
   } as ModelProviderConfig;
 }

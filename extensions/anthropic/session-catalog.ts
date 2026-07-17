@@ -973,36 +973,43 @@ async function listClaudeSessionCatalog(params: {
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
-  const hosts: ClaudeSessionCatalogHost[] = [];
-  if (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID)) {
-    try {
-      hosts.push({
-        hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-        label: "Local Claude",
-        kind: "gateway",
-        connected: true,
-        ...(await listLocalClaudeSessionPage({
-          limit: query.limitPerHost,
-          ...(query.search ? { searchTerm: query.search } : {}),
-          ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID]
-            ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
-            : {}),
-        })),
-      });
-    } catch {
-      hosts.push({
-        hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
-        label: "Local Claude",
-        kind: "gateway",
-        connected: true,
-        sessions: [],
-        error: { code: "LOCAL_READ_FAILED", message: "Local Claude sessions are unavailable" },
-      });
-    }
-  }
+  const localHosts: Promise<ClaudeSessionCatalogHost>[] =
+    !requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID)
+      ? [
+          (async () => {
+            try {
+              return {
+                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+                label: "Local Claude",
+                kind: "gateway",
+                connected: true,
+                ...(await listLocalClaudeSessionPage({
+                  limit: query.limitPerHost,
+                  ...(query.search ? { searchTerm: query.search } : {}),
+                  ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID]
+                    ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
+                    : {}),
+                })),
+              };
+            } catch {
+              return {
+                hostId: CLAUDE_LOCAL_SESSION_HOST_ID,
+                label: "Local Claude",
+                kind: "gateway",
+                connected: true,
+                sessions: [],
+                error: {
+                  code: "LOCAL_READ_FAILED",
+                  message: "Local Claude sessions are unavailable",
+                },
+              };
+            }
+          })(),
+        ]
+      : [];
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
-    return { hosts };
+    return { hosts: await Promise.all(localHosts) };
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
@@ -1010,7 +1017,7 @@ async function listClaudeSessionCatalog(params: {
   } catch (error) {
     return {
       hosts: [
-        ...hosts,
+        ...(await Promise.all(localHosts)),
         {
           hostId: "node:registry",
           label: "Paired nodes",
@@ -1028,7 +1035,7 @@ async function listClaudeSessionCatalog(params: {
         node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
-    .slice(0, MAX_HOSTS - hosts.length)
+    .slice(0, MAX_HOSTS - localHosts.length)
     .toSorted((left, right) => resolveNodeLabel(left).localeCompare(resolveNodeLabel(right)));
   const nodeHosts = await Promise.all(
     eligible.map(async (node): Promise<ClaudeSessionCatalogHost> => {
@@ -1077,7 +1084,7 @@ async function listClaudeSessionCatalog(params: {
       }
     }),
   );
-  return { hosts: [...hosts, ...nodeHosts] };
+  return { hosts: [...(await Promise.all(localHosts)), ...nodeHosts] };
 }
 
 async function readClaudeSessionTranscript(params: {

@@ -70,11 +70,6 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
-  CLAUDE_CLI_BACKEND_ID: "claude-cli",
-  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
-}));
-
 vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));

@@ -1,15 +1,16 @@
-// iMessage inbound replay protection: brings the channel in line with the
-// other channels (whatsapp/discord/signal/...) by deduping inbound messages on
-// a stable identity, plus an age fence that suppresses stale backlog Apple
-// delivers in a burst after a bridge/Push recovery.
+// iMessage inbound replay protection: GUID dedupe on a stable identity, plus
+// an age fence that suppresses stale backlog Apple delivers in a burst after a
+// bridge/Push recovery.
 //
-// Why both:
+// Why both, and what survives ingress-drain adoption:
 // - The GUID dedupe stops a message that was already dispatched from being
-//   dispatched again when imsg re-emits a recent row on reconnect.
-// - Dedupe cannot catch a message that was *never seen* (the gateway was down
-//   when it was sent). Apple writes that backlog into chat.db with a fresh
-//   ROWID but the original (old) send date, so it arrives on the live watch as
-//   a "new" row. The age fence is what recognizes it as stale.
+//   dispatched again when imsg re-emits a recent row on reconnect. It is the
+//   transitional layer: if this channel adopts the durable ingress drain with
+//   event_id = GUID, the queue tombstone owns this job and the dedupe goes.
+// - The age fence is NOT a dedupe and stays regardless. It catches messages
+//   the gateway *never saw* (sent while down): Apple writes that backlog into
+//   chat.db with a fresh ROWID/GUID but the original old send date, so no
+//   dedupe or tombstone can recognize it — only the send-date fence does.
 import { createHash } from "node:crypto";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { IMessagePayload } from "./types.js";

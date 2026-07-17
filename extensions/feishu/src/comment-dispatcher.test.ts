@@ -32,6 +32,13 @@ vi.mock("./drive.js", () => ({
 vi.mock("./runtime.js", () => ({
   getFeishuRuntime: getFeishuRuntimeMock,
 }));
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
+  };
+});
 
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 
@@ -52,6 +59,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
     vi.doUnmock("./comment-reaction.js");
     vi.doUnmock("./drive.js");
     vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
     vi.resetModules();
   });
 

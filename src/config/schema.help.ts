@@ -2037,6 +2037,14 @@ export const FIELD_HELP: Record<string, string> = {
     'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
   "channels.defaults.contextVisibility":
     'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
+  "channels.defaults.implicitMentions":
+    "Default policy for whether reply-to-bot, quoted-bot, and bot-participated-thread facts activate supporting message channels without an explicit mention.",
+  "channels.defaults.implicitMentions.replyToBot":
+    "Treat replies to the bot's own messages as implicit mentions by default. Defaults to true for backward compatibility.",
+  "channels.defaults.implicitMentions.quotedBot":
+    "Treat quoted bot messages as implicit mentions by default. Defaults to true for backward compatibility.",
+  "channels.defaults.implicitMentions.threadParticipation":
+    "Treat follow-ups in threads where the bot participated as implicit mentions by default. Defaults to true for backward compatibility.",
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":

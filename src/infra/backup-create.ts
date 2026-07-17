@@ -15,7 +15,10 @@ import {
 import { isPathWithin } from "../commands/cleanup-utils.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawGlobalStateSnapshot } from "../state/openclaw-state-snapshot-sanitizer.js";
+import {
+  sanitizeOpenClawGlobalStateSnapshot,
+  sanitizeOpenClawStateLeaseRows,
+} from "../state/openclaw-state-snapshot-sanitizer.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeArchiveStreamToFile } from "./backup-create-stream.js";
@@ -435,6 +438,18 @@ function isCanonicalAgentSqlitePathOrAncestor(sourcePath: string, stateDir: stri
   );
 }
 
+function isCanonicalAgentSqliteDatabasePath(sourcePath: string, stateDir: string): boolean {
+  const relativePath = path.relative(path.resolve(stateDir), path.resolve(sourcePath));
+  const segments = relativePath.split(path.sep);
+  return (
+    segments.length === 4 &&
+    segments[0] === "agents" &&
+    Boolean(segments[1]) &&
+    segments[2] === "agent" &&
+    segments[3] === "openclaw-agent.sqlite"
+  );
+}
+
 function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
   const resolvedStateDir = path.resolve(stateDir);
   const resolvedSourcePath = path.resolve(sourcePath);
@@ -510,9 +525,28 @@ async function listStateSqlitePaths(params: {
     }
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
-      // Preserve state-tree symlinks in the archive instead of dereferencing
-      // their SQLite-looking targets during snapshot discovery.
+      // Preserve noncanonical state-tree symlinks instead of dereferencing
+      // their SQLite-looking targets. Canonical agent DBs mirror the global
+      // DB contract: snapshot the target so restore receives a regular file.
       if (entry.isSymbolicLink()) {
+        if (isCanonicalAgentSqliteDatabasePath(entryPath, params.stateDir)) {
+          let targetEntry: import("node:fs").Stats;
+          try {
+            targetEntry = await fs.stat(entryPath);
+          } catch (err) {
+            throw new Error(`Canonical agent SQLite symlink cannot be snapshotted: ${entryPath}`, {
+              cause: err,
+            });
+          }
+          if (!targetEntry.isFile()) {
+            throw new Error(
+              `Canonical agent SQLite symlink must resolve to a regular file: ${entryPath}`,
+            );
+          }
+          const resolvedEntryPath = path.resolve(entryPath);
+          snapshotPaths.add(resolvedEntryPath);
+          discoveredSourcePaths.add(resolvedEntryPath);
+        }
         continue;
       }
       if (entry.isDirectory()) {
@@ -608,6 +642,14 @@ async function createStateSqliteBackupPlan(params: {
   const canonicalGlobalSourcePath = globalStateIdentity
     ? await fs.realpath(globalStateSqlitePath)
     : globalStateSqlitePath;
+  const canonicalAgentSources = await Promise.all(
+    discovery.snapshotPaths
+      .filter((sourcePath) => isCanonicalAgentSqliteDatabasePath(sourcePath, params.stateDir))
+      .map(async (sourcePath) => ({
+        identity: await fs.stat(sourcePath),
+        sourcePath: await fs.realpath(sourcePath),
+      })),
+  );
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
@@ -618,17 +660,26 @@ async function createStateSqliteBackupPlan(params: {
     const isGlobalStateDatabase =
       globalStateIdentity !== undefined &&
       sameFileIdentity(globalStateIdentity, archiveSourceIdentity);
-    // Every hardlink/symlink alias of the canonical global DB must read its
-    // canonical WAL and receive the same transient-row sanitizer.
+    const canonicalAgentSource = canonicalAgentSources.find((source) =>
+      sameFileIdentity(source.identity, archiveSourceIdentity),
+    );
+    // Every alias of a canonical DB must read that database's WAL and receive
+    // the same role-specific transient-row sanitizer.
     const sourceDatabasePath = isGlobalStateDatabase
       ? canonicalGlobalSourcePath
-      : archiveSourcePath;
+      : (canonicalAgentSource?.sourcePath ?? archiveSourcePath);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
       await createVerifiedSqliteSnapshot({
         sourcePath: sourceDatabasePath,
         targetPath: sourcePath,
-        transform: isGlobalStateDatabase ? sanitizeOpenClawGlobalStateSnapshot : undefined,
+        // Agent coordination is transient, while unrelated plugin databases
+        // remain owner-defined. Queue and TTL-blob policy is global-only.
+        transform: isGlobalStateDatabase
+          ? sanitizeOpenClawGlobalStateSnapshot
+          : canonicalAgentSource
+            ? sanitizeOpenClawStateLeaseRows
+            : undefined,
       });
     } catch (err) {
       throw new Error(

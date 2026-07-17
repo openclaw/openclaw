@@ -15,7 +15,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
-import { beginNativeWindowDragFromTopInset } from "../../../app/native-window-drag.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
@@ -1180,7 +1179,6 @@ function renderChatThreadContents(
         : null}
       @touchend=${props.onHistoryIntent}
       @touchcancel=${props.onHistoryIntent}
-      @mousedown=${beginNativeWindowDragFromTopInset}
       @click=${(event: Event) => {
         handleMarkdownCodeBlockCopy(event);
         const target = markdownFileLinkFromEvent(event);

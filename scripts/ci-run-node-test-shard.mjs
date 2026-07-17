@@ -14,9 +14,14 @@ import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.
 // stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
 const PLAN_CONCURRENCY = 2;
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
+const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
+const NODE_COMPILE_CACHE_WRITER_ENV_KEY = "OPENCLAW_NODE_COMPILE_CACHE_WRITER";
 const FS_MODULE_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const NODE_COMPILE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
 const FS_MODULE_CACHE_METADATA_FILE = "_metadata.json";
+const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
 
 function parseJsonEnv(env, name, fallback = null) {
   try {
@@ -115,7 +120,10 @@ export function pruneFsModuleCache(root, maxBytes = FS_MODULE_CACHE_MAX_BYTES) {
       }
       const fileStat = statSync(filePath);
       totalBytes += fileStat.size;
-      if (entry.name !== FS_MODULE_CACHE_METADATA_FILE) {
+      if (
+        entry.name !== FS_MODULE_CACHE_METADATA_FILE &&
+        entry.name !== FS_MODULE_CACHE_GENERATION_FILE
+      ) {
         files.push({ filePath, mtimeMs: fileStat.mtimeMs, size: fileStat.size });
       }
     }
@@ -216,6 +224,7 @@ export async function runShardPlans(plans, options = {}) {
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+  const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
 
   let nextIndex = 0;
   let exitCode = 0;
@@ -243,16 +252,30 @@ export async function runShardPlans(plans, options = {}) {
     }
   });
   await Promise.all(workers);
-  if (persistentCacheRoot) {
+  if (persistentCacheRoot && baseEnv[FS_MODULE_CACHE_WRITER_ENV_KEY] === "1") {
     try {
-      const pruned = pruneFsModuleCache(persistentCacheRoot);
-      if (pruned.removedFiles > 0) {
-        process.stdout.write(
-          `[shard:cache] pruned ${pruned.removedFiles} files (${pruned.beforeBytes} -> ${pruned.afterBytes} bytes)\n`,
-        );
-      }
+      const pruned = pruneFsModuleCache(
+        persistentCacheRoot,
+        options.fsModuleCacheMaxBytes ?? FS_MODULE_CACHE_MAX_BYTES,
+      );
+      process.stdout.write(
+        `[shard:cache] vitest ${pruned.beforeBytes} -> ${pruned.afterBytes} bytes; removed ${pruned.removedFiles} files\n`,
+      );
     } catch (error) {
-      console.warn(`[shard:cache] failed to prune persistent cache: ${String(error)}`);
+      console.warn(`[shard:cache] failed to prune Vitest cache: ${String(error)}`);
+    }
+  }
+  if (nodeCompileCacheRoot && baseEnv[NODE_COMPILE_CACHE_WRITER_ENV_KEY] === "1") {
+    try {
+      const pruned = pruneFsModuleCache(
+        nodeCompileCacheRoot,
+        options.nodeCompileCacheMaxBytes ?? NODE_COMPILE_CACHE_MAX_BYTES,
+      );
+      process.stdout.write(
+        `[shard:cache] node-compile ${pruned.beforeBytes} -> ${pruned.afterBytes} bytes; removed ${pruned.removedFiles} files\n`,
+      );
+    } catch (error) {
+      console.warn(`[shard:cache] failed to prune Node compile cache: ${String(error)}`);
     }
   }
   return exitCode;

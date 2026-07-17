@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -914,6 +914,33 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
   expect((context as { agentId?: string } | undefined)?.agentId).toBe("main");
 });
 
+test("sessions.delete sessions.changed event always carries the resolved owner", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-side", "hello");
+  await writeSessionStore({ entries: { "agent:main:side": sessionStoreEntry("sess-side") } });
+  const broadcastToConnIds = vi.fn();
+
+  const deleted = await directSessionReq<{ deleted: boolean }>(
+    "sessions.delete",
+    { key: "agent:main:side", deleteTranscript: true },
+    {
+      client: { connect: { scopes: ["operator.admin"] } } as never,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
+  );
+
+  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "sessions.changed",
+    expect.objectContaining({ sessionKey: "agent:main:side", agentId: "main", reason: "delete" }),
+    new Set(["conn-1"]),
+    { dropIfSlow: true },
+  );
+});
+
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -985,6 +1012,11 @@ test("sessions.delete returns unavailable when active run does not stop", async 
 
   embeddedRunMock.activeIds.add("sess-active");
   embeddedRunMock.waitResults.set("sess-active", false);
+  const waitCallCountsAtRetirement: number[] = [];
+  bundleMcpRuntimeMocks.retireSessionMcpRuntime.mockImplementation(async () => {
+    waitCallCountsAtRetirement.push(embeddedRunMock.waitCalls.length);
+    return true;
+  });
 
   const { ws } = await openClient();
 
@@ -999,6 +1031,15 @@ test("sessions.delete returns unavailable when active run does not stop", async 
     ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
     "sess-active",
   );
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledWith({
+    sessionId: "sess-active",
+    reason: "gateway-session-cleanup",
+    preserveActiveLeases: true,
+    retainAcrossReuse: true,
+    onError: expect.any(Function),
+  });
+  expect(bundleMcpRuntimeMocks.retireSessionMcpRuntime).toHaveBeenCalledTimes(2);
+  expect(waitCallCountsAtRetirement).toEqual([0, 1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
   const storedEntry = loadSessionEntry({

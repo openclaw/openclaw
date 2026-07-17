@@ -71,7 +71,7 @@ struct WatchCommandsTests {
     @Test func `unknown semantic statuses fall back to legacy text`() throws {
         let json = """
         {
-          "type": "watch.appSnapshot",
+          "type": "watch.app.snapshot",
           "gatewayStatus": {"code": "futureGateway", "arguments": []},
           "gatewayStatusText": "Future gateway state",
           "gatewayConnected": true,

@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
       allow_unreleased_changelog:
-        description: Allow current-tree packaging to use Unreleased notes; canonical release contexts stay strict
+        description: Allow current-tree packaging to use Unreleased notes; release contexts require this explicit opt-in
         required: false
         default: false
         type: boolean
@@ -182,7 +182,7 @@ jobs:
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
@@ -785,7 +785,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.target_context_ref == '' && (inputs.allow_unreleased_changelog || inputs.ref == 'main' || inputs.ref == 'refs/heads/main') }}
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}

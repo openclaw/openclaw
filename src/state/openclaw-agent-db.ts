@@ -41,6 +41,8 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
+  backfillSessionConversations,
+  migrateConversationDeliveryTargetColumn,
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
@@ -70,14 +72,17 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v10 = materialized active transcript paths. v9 added SQLite STRICT tables.
+// v11 = agent-scoped runtime leases, durable delivery operations, canonical
+// external conversation addresses, and bounded per-session heartbeat outcome context.
+// v10 = materialized active transcript paths.
+// v9 = SQLite STRICT tables.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 10;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 11;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -111,6 +116,9 @@ const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
   },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 const OPENCLAW_AGENT_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowedColumnDefinitions: {
+    "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
+  },
   optionalCanonicalTriggerGroups: [
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
@@ -311,6 +319,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
       account_id TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('direct', 'group', 'channel')),
       peer_id TEXT NOT NULL,
+      delivery_target TEXT NOT NULL,
       parent_conversation_id TEXT,
       thread_id TEXT,
       native_channel_id TEXT,
@@ -568,8 +577,16 @@ export function ensureOpenClawAgentDatabasePermissions(
     chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
   for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
-    if (existsSync(candidate)) {
+    try {
       chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
+    } catch (error) {
+      // WAL/SHM/journal sidecars are transient: SQLite removes them at
+      // checkpoint/close, so a concurrent worker can race this sweep. A
+      // vanished sidecar needs no tightening; an existsSync guard would just
+      // reintroduce the TOCTOU window.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
     }
   }
 }
@@ -722,14 +739,18 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      migrateConversationDeliveryTargetColumn(db);
       migrateSessionTranscriptActiveProjection(db, previousVersion);
-      if (previousVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
+      if (previousVersion < 11) {
         migrateSqliteSchemaToStrictInTransaction(db, OPENCLAW_AGENT_SCHEMA_SQL, {
           databaseLabel: pathname,
         });
       }
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
       backfillOpenClawAgentSchema(db, previousVersion);
+      if (previousVersion < 11) {
+        backfillSessionConversations(db);
+      }
       backfillSessionEntryProvenance(db, previousVersion);
       const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
@@ -1068,7 +1089,7 @@ export function runOpenClawAgentWriteTransaction<T>(
   options: OpenClawAgentDatabaseOptions,
   transactionOptions: Pick<
     SqliteTransactionOptions,
-    "operationLabel" | "slowTransactionHoldMs"
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
   > = {},
 ): T {
   const database = openOpenClawAgentDatabase(options);
@@ -1094,7 +1115,7 @@ export function runOpenClawAgentWriteTransaction<T>(
         return operationResult;
       },
       {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: database.path,
         ...transactionOptions,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",

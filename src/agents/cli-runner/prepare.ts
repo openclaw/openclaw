@@ -25,7 +25,6 @@ import {
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
-import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
@@ -101,7 +100,7 @@ import {
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
-import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
+import { buildCliAgentSystemPrompt, isClaudeCliProvider, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliMcpBashElevated,

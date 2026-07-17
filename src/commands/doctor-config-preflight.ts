@@ -4,6 +4,8 @@ import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
+  parseConfigJson5,
+  preserveConfigSnapshotAsClobbered,
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
@@ -340,6 +342,21 @@ export async function runDoctorConfigPreflight(
           "Config",
         );
         snapshot = addDoctorLegacyIssues(await readConfigFileSnapshot(readOptions));
+      }
+      if (
+        !snapshot.valid &&
+        typeof snapshot.raw === "string" &&
+        !parseConfigJson5(snapshot.raw).ok
+      ) {
+        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
+        if (!clobberedPath) {
+          throw new Error(
+            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
+          );
+        }
+        throw new Error(
+          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
+        );
       }
     }
     const invalidConfigNote =

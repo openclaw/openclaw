@@ -199,11 +199,6 @@ interface GatewayGroupOptions {
     accountId: string;
     groupId: string;
   }) => string | undefined;
-  /**
-   * Session-store reader for the `/activation` command override. When
-   * omitted, the engine loads a default node-based reader lazily.
-   */
-  sessionStoreReader?: import("../group/activation.js").SessionStoreReader;
 }
 
 /** Full gateway startup context. */

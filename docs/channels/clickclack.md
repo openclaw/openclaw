@@ -19,10 +19,15 @@ bot using **Setup code (recommended)**, and copy the generated command:
 openclaw channels add clickclack --code 'https://clickclack.example.com/#XXXX-XXXX-XXXX'
 ```
 
-The setup code is single-use and expires after 10 minutes. OpenClaw claims it
-over HTTPS, receives the newly minted bot token and workspace settings, saves
-the account, verifies the connection, and reports whether the running gateway
-picked it up. The setup code itself is not stored in OpenClaw config.
+The setup code is single-use and expires after 10 minutes. OpenClaw claims it,
+receives the newly minted bot token and workspace settings, saves the account,
+verifies the connection, and reports whether the running gateway picked it up.
+The setup code itself is not stored in OpenClaw config.
+
+Setup-code claims use HTTPS for public servers. Plain HTTP is also supported for
+local installations on loopback or private networks, including `localhost`,
+private IP addresses, and internal hostnames that resolve only to private
+addresses.
 
 If OpenClaw is already running, ClickClack connects automatically and no second
 command is needed. Otherwise, start it with:

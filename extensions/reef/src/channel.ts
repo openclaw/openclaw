@@ -1,5 +1,5 @@
 import {
-  dispatchInboundDirectDmWithRuntime,
+  dispatchInboundDirectDm,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -9,11 +9,12 @@ import {
   buildChannelOutboundSessionRoute,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
-import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import {
   ReefChannelConfigSchema,
   autonomyBudget,
   normalizeReefTarget,
+  parseReefRelayUrl,
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
@@ -29,7 +30,7 @@ import {
 import { isRephrasedReefResend } from "./rejection-resend.js";
 import { getActiveReef, getOptionalReefRuntime, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
-import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
+import { assertReefIdentityBinding, loadKeys, openStores } from "./state.js";
 import {
   ReefInboxConnection,
   ReefTransportClient,
@@ -61,6 +62,24 @@ function listTrustedPeers(config: ReefAccount["config"]): string[] {
         .list()
         .map((entry) => entry.peer)
     : [];
+}
+
+function listTrustedPeerDirectoryEntries(params: {
+  config: ReefAccount["config"];
+  query: string | null | undefined;
+  limit: number | null | undefined;
+}) {
+  const query = normalizeReefTarget(params.query ?? "") ?? params.query?.trim().toLowerCase();
+  const peers = listTrustedPeers(params.config).filter(
+    (peer) => !query || peer === query || peer.includes(query),
+  );
+  const limit = params.limit == null ? peers.length : Math.max(0, params.limit);
+  return peers.slice(0, limit).map((peer) => ({
+    kind: "user" as const,
+    id: peer,
+    name: `@${peer}'s agent`,
+    handle: `@${peer}`,
+  }));
 }
 
 function replyText(payload: unknown): string {
@@ -146,7 +165,15 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         : null;
     },
   },
-  directory: createEmptyChannelDirectoryAdapter(),
+  directory: createChannelDirectoryAdapter({
+    listPeers: async ({ cfg, query, limit }) =>
+      listTrustedPeerDirectoryEntries({
+        config: resolveReefConfig(cfg as ReefCoreConfig),
+        query,
+        limit,
+      }),
+    listGroups: async () => [],
+  }),
   message: reefMessageAdapter,
   outbound: reefOutboundAdapter,
   pairing: {
@@ -191,15 +218,18 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         throw new Error("Reef requires handle, email, and guard config");
       }
       const runtime = getReefRuntime();
-      const stateDir = resolveStateDir(ctx.account.config.stateDir);
-      const keys = await loadKeys(stateDir);
+      const keys = await loadKeys(runtime);
+      assertReefIdentityBinding(runtime, {
+        handle: ctx.account.config.handle!,
+        relayUrl: parseReefRelayUrl(ctx.account.config.relayUrl),
+      });
       const transport = new ReefTransportClient(
         ctx.account.config.relayUrl,
         ctx.account.config.handle!,
         keys,
       );
-      const stores = openStores(stateDir, keys);
-      const reviews = new ReviewApprovalStore(stateDir);
+      const stores = openStores(runtime, keys);
+      const reviews = stores.reviews;
       const pairing = createChannelPairingController({
         core: runtime,
         channel: "reef",
@@ -231,9 +261,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           });
           return;
         }
-        await dispatchInboundDirectDmWithRuntime({
+        await dispatchInboundDirectDm({
           cfg: ctx.cfg,
-          runtime,
           channel: "reef",
           channelLabel: "Reef",
           accountId: "default",
@@ -245,6 +274,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           ...dispatchContent,
           messageId: message.id,
           commandAuthorized: false,
+          // ReefMessageFlow invokes ingress only after peer trust and guard approval.
+          inboundAccessAuthorized: true,
           deliver: async (payload) => {
             const text = replyText(payload);
             if (text.trim()) {
@@ -270,12 +301,12 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         config: ctx.account.config,
         trust,
         keys,
-        stateDir,
         transport,
         guard: createConfiguredGuard(ctx.account.config),
         audit: stores.audit,
         replay: stores.replay,
         reviews,
+        delivered: stores.delivered,
         onIngress,
         onOwnerNotice: async (text) =>
           ownerNotice({
@@ -287,9 +318,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         async (notice) => {
           let resendText = "";
           let dispatchFailure: Error | undefined;
-          await dispatchInboundDirectDmWithRuntime({
+          await dispatchInboundDirectDm({
             cfg: ctx.cfg,
-            runtime,
             channel: "reef",
             channelLabel: "Reef",
             accountId: "default",
