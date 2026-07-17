@@ -21,7 +21,11 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
     try {
       const content = readFileSync(ignorePath, "utf-8");
       ig.add(content.split(/\r?\n/).map((line) => prefixIgnorePattern(line, prefix)));
-    } catch {}
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
   }
   return ig;
 }
