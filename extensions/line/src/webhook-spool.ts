@@ -4,7 +4,6 @@ import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressDrain,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -156,7 +155,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     });
   const shutdown = new AbortController();
   // Match the predecessor worker's per-spool cap across repeated drain pumps.
-  let activeDeliveries = 0;
+  const activeDeliveries = new Set<Promise<void>>();
   const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
     queue,
     abortSignal: shutdown.signal,
@@ -166,7 +165,9 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
     retryPolicy: {
       maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-      deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+      // LINE previously dead-lettered on attempt eight. The generic 24-hour floor
+      // would let one poison event block its user/group lane for a full day.
+      deadLetterMinAgeMs: 0,
     },
     resolveNonRetryableFailure: (error) => {
       if (error instanceof LineWebhookPayloadError) {
@@ -182,15 +183,15 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     },
     onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
     dispatchClaimedEvent: async (claimed, lifecycle) => {
-      activeDeliveries += 1;
+      const event = parseClaimedEvent(claimed.payload, claimed.id);
+      const delivery = options.deliver(event, claimed.payload.destination, {
+        turnAdoptionLifecycle: bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+      });
+      activeDeliveries.add(delivery);
       try {
-        const event = parseClaimedEvent(claimed.payload, claimed.id);
-        await options.deliver(event, claimed.payload.destination, {
-          turnAdoptionLifecycle:
-            bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
-        });
+        await delivery;
       } finally {
-        activeDeliveries -= 1;
+        activeDeliveries.delete(delivery);
       }
     },
   });
@@ -216,7 +217,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           shouldStop: () =>
             !running ||
             shutdown.signal.aborted ||
-            activeDeliveries >= LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
+            activeDeliveries.size >= LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
         });
       }
     })
@@ -277,8 +278,12 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         drainTimer = undefined;
       }
       shutdown.abort();
-      drain.dispose();
       await drainTask;
+      // Keep the claim owner live until every real delivery and core handler exits;
+      // disposing earlier lets a replacement drain recover work still producing replies.
+      await Promise.allSettled([...activeDeliveries]);
+      await drain.waitForIdle();
+      drain.dispose();
     },
   };
 }
