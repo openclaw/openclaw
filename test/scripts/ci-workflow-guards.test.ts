@@ -2893,10 +2893,10 @@ describe("ci workflow guards", () => {
     const steps = workflow.jobs["generated-doc-baselines"].steps;
     const stepNames = steps.map((step: WorkflowStep) => step.name);
 
-    expect(stepNames).toContain("Check plugin SDK API baseline drift");
+    expect(stepNames).toContain("Check plugin SDK API contract manifest");
     expect(stepNames).toContain("Check SQLite sessions/transcripts schema baseline drift");
     expect(stepNames).toContain("Check plugin SDK surface budget");
-    expect(stepNames.indexOf("Check plugin SDK API baseline drift")).toBeLessThan(
+    expect(stepNames.indexOf("Check plugin SDK API contract manifest")).toBeLessThan(
       stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     );
     expect(

@@ -465,7 +465,7 @@ export function createChangedCheckPlan(result, options = {}) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
   if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
-    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+    add("Plugin SDK API contract manifest", ["plugin-sdk:api:check"]);
   }
   if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
     add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
