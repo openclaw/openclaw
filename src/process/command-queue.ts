@@ -91,6 +91,7 @@ type QueueEntry = {
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
+  onTaskTimeout?: () => void;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -335,7 +336,17 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
         | { cause: "abort-grace"; graceMs: number }
         | { cause: "release-signal" },
     ) => {
+      if (timedOut) {
+        return;
+      }
       timedOut = true;
+      try {
+        // Owner cleanup must run before the lane admits a replacement task;
+        // keep this callback synchronous so a broken owner cannot strand the queue.
+        entry.onTaskTimeout?.();
+      } catch (err) {
+        diag.warn(`lane task timeout cleanup failed: lane=${lane} error="${String(err)}"`);
+      }
       reject(
         new CommandLaneTaskTimeoutError(lane, {
           ...details,
@@ -550,6 +561,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
+      onTaskTimeout: opts?.onTaskTimeout,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));

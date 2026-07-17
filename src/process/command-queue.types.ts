@@ -11,6 +11,8 @@ export type CommandQueueEnqueueOptions = {
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */
   taskTimeoutReleaseSignal?: AbortSignal;
+  /** Synchronous owner cleanup immediately before a timed-out lane admits later work. */
+  onTaskTimeout?: () => void;
   priority?: "foreground" | "normal" | "background";
 };
 

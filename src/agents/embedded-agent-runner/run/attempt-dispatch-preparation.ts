@@ -75,8 +75,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     notifyToolResult,
     resolveAttemptFastModeParam,
   } = runInput.progressController;
-  const { laneTaskAbortController, laneTaskReleaseController, noteLaneTaskProgress } =
-    runInput.laneController;
+  const {
+    laneTaskAbortController,
+    laneTaskReleaseController,
+    noteLaneTaskProgress,
+    registerLaneTimeoutMcpLease,
+  } = runInput.laneController;
   const {
     requestedModelId,
     beforeAgentStartResult,
@@ -218,6 +222,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       laneTaskAbortController,
       laneTaskReleaseController,
       noteLaneTaskProgress,
+      registerLaneTimeoutMcpLease,
       onToolOutcome: input.observeToolOutcome,
       allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
       onToolStreamBoundary: maybeAnnounceFastModeAutoOff,

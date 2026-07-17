@@ -40,11 +40,19 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   it("disposes prepared bundle runtimes when later policy setup fails", async () => {
     const disposeMcp = vi.fn(async () => {});
     const disposeLsp = vi.fn(async () => {});
-    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
-    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({
+    const onBundleMcpLeaseAcquired = vi.fn();
+    const leaseHandle = { dispose: disposeMcp };
+    const materializedMcpRuntime = {
       tools: [],
       dispose: disposeMcp,
-    });
+    };
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockImplementation(
+      async (params: { onLeaseAcquired?: (handle: typeof leaseHandle) => void }) => {
+        params.onLeaseAcquired?.(leaseHandle);
+        return materializedMcpRuntime;
+      },
+    );
     mocks.createBundleLspToolRuntime.mockResolvedValue({
       tools: [],
       dispose: disposeLsp,
@@ -63,6 +71,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         runId: "run",
         runtimePlan: {},
         sessionId: "session",
+        onBundleMcpLeaseAcquired,
       },
       effectiveWorkspace: "/tmp/workspace",
       getCurrentAttemptPluginMetadataSnapshot: () => undefined,
@@ -80,6 +89,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     } as unknown as Parameters<typeof prepareEmbeddedAttemptBundleTools>[0];
 
     await expect(prepareEmbeddedAttemptBundleTools(input)).rejects.toThrow("bundle policy failed");
+    expect(onBundleMcpLeaseAcquired).toHaveBeenCalledWith(leaseHandle);
     expect(disposeMcp).toHaveBeenCalledOnce();
     expect(disposeLsp).toHaveBeenCalledOnce();
   });

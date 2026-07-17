@@ -299,6 +299,10 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
   it("releases a native lane when a timed-out attempt ignores cancellation", async () => {
     vi.useFakeTimers();
+    const events: string[] = [];
+    const disposeMcpRunLease = vi.fn(async () => {
+      events.push("lease-released");
+    });
     let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
     let resolveAttemptStarted: (() => void) | undefined;
     const attemptStarted = new Promise<void>((resolve) => {
@@ -306,16 +310,24 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     });
     try {
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-        const { onAttemptTimeoutArmed, onAttemptTimeout } = attemptParams as {
-          onAttemptTimeoutArmed?: () => void;
-          onAttemptTimeout?: (reason: Error) => void;
-        };
+        const { onAttemptTimeoutArmed, onAttemptTimeout, onBundleMcpLeaseAcquired } =
+          attemptParams as {
+            onAttemptTimeoutArmed?: () => void;
+            onAttemptTimeout?: (reason: Error) => void;
+            onBundleMcpLeaseAcquired?: (handle: { dispose(): Promise<void> }) => void;
+          };
         resolveAttemptStarted?.();
+        // Catalog startup remains pending after the run-owned lease is acquired.
+        onBundleMcpLeaseAcquired?.({ dispose: disposeMcpRunLease });
         onAttemptTimeoutArmed?.();
         onAttemptTimeout?.(new Error("attempt timed out"));
         return await new Promise((resolve) => {
           settleAttempt = resolve;
         });
+      });
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+        events.push("next-attempt");
+        return makeAttemptResult();
       });
 
       const run = runEmbeddedAgent({
@@ -337,10 +349,92 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
       expect(settled).toBe(true);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+      expect(disposeMcpRunLease).toHaveBeenCalledOnce();
+
+      await expect(
+        runEmbeddedAgent({
+          ...baseParams,
+          runId: "run-after-native-timeout-lane-release",
+          agentHarnessRuntimeOverride: "openclaw",
+        }),
+      ).resolves.toMatchObject({ meta: { aborted: false } });
+      expect(events).toEqual(["lease-released", "next-attempt"]);
     } finally {
       settleAttempt?.(makeAttemptResult());
       vi.useRealTimers();
     }
+  });
+
+  it("disposes a native MCP run lease acquired after the lane already timed out", async () => {
+    vi.useFakeTimers();
+    const disposeLateMcpRunLease = vi.fn(async () => {});
+    let registerLateLease: ((handle: { dispose(): Promise<void> }) => void) | undefined;
+    let settleAttempt: ((value: ReturnType<typeof makeAttemptResult>) => void) | undefined;
+    let resolveAttemptStarted: (() => void) | undefined;
+    const attemptStarted = new Promise<void>((resolve) => {
+      resolveAttemptStarted = resolve;
+    });
+    try {
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { onAttemptTimeoutArmed, onAttemptTimeout, onBundleMcpLeaseAcquired } =
+          attemptParams as {
+            onAttemptTimeoutArmed?: () => void;
+            onAttemptTimeout?: (reason: Error) => void;
+            onBundleMcpLeaseAcquired?: (handle: { dispose(): Promise<void> }) => void;
+          };
+        registerLateLease = onBundleMcpLeaseAcquired;
+        resolveAttemptStarted?.();
+        onAttemptTimeoutArmed?.();
+        onAttemptTimeout?.(new Error("attempt timed out"));
+        return await new Promise((resolve) => {
+          settleAttempt = resolve;
+        });
+      });
+
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-native-late-mcp-lease-after-timeout",
+        timeoutMs: 48 * 60 * 60 * 1000,
+        agentHarnessRuntimeOverride: "openclaw",
+      });
+      const runRejected = expect(run).rejects.toMatchObject({
+        name: "CommandLaneTaskTimeoutError",
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await attemptStarted;
+      await vi.advanceTimersByTimeAsync(30_001);
+      await runRejected;
+
+      expect(registerLateLease).toBeDefined();
+      registerLateLease?.({ dispose: disposeLateMcpRunLease });
+      expect(disposeLateMcpRunLease).toHaveBeenCalledOnce();
+    } finally {
+      settleAttempt?.(makeAttemptResult());
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves an already-disposed native MCP lease alone after normal completion", async () => {
+    const disposeMcpRunLease = vi.fn(async () => {});
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const { onBundleMcpLeaseAcquired } = attemptParams as {
+        onBundleMcpLeaseAcquired?: (handle: { dispose(): Promise<void> }) => void;
+      };
+      const handle = { dispose: disposeMcpRunLease };
+      onBundleMcpLeaseAcquired?.(handle);
+      await handle.dispose();
+      return makeAttemptResult();
+    });
+
+    await expect(
+      runEmbeddedAgent({
+        ...baseParams,
+        runId: "run-native-normal-lease-cleanup",
+        agentHarnessRuntimeOverride: "openclaw",
+      }),
+    ).resolves.toMatchObject({ meta: { aborted: false } });
+    expect(disposeMcpRunLease).toHaveBeenCalledOnce();
   });
 
   it("releases a native lane when an explicit abort ignores cancellation", async () => {

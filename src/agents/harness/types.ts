@@ -49,7 +49,7 @@ type InternalEmbeddedRunAttemptParams =
 
 export type AgentHarnessAttemptParams = Omit<
   InternalEmbeddedRunAttemptParams,
-  "trajectoryRecorder"
+  "onBundleMcpLeaseAcquired" | "trajectoryRecorder"
 >;
 export type AgentHarnessAttemptResult =
   import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
