@@ -469,7 +469,7 @@ export async function resumeMainSession(params: {
           reservation,
         },
         target: { sessionKey: params.sessionKey, storePath: params.storePath },
-      }).catch((rollbackError) => {
+      }).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );

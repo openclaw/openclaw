@@ -275,7 +275,7 @@ export async function releaseMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease | undefined,
 ): Promise<MainSessionRecoveryPendingTarget | undefined> {
   if (!lease) {
-    return;
+    return undefined;
   }
   // A leaked current-generation token blocks automatic recovery until restart.
   // Token-scoped release is idempotent, so transient writer failures are safe to retry.
