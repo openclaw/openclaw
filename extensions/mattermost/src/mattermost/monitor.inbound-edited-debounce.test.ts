@@ -75,7 +75,9 @@ describe("mattermost edited post debounce", () => {
       message: "@openclaw edited wake",
       editAt: 1_714_000_000_125,
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     const lookupsBeforeRelease = mockState.resolveChannelInfo.mock.calls.length;
 
     releaseFirstLookup();
