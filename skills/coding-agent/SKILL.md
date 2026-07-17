@@ -47,6 +47,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Monitor with `process`; do not kill slow workers without cause.
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
+- Codex: use the worker-only `$HOME/.codex-coding-agent` home. Authorize it separately, scope `CODEX_HOME` to each `codex` command, and never export it into the OpenClaw Gateway environment.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
 - Classify the source ref as trusted or untrusted before any checkout or worktree creation. Never materialize a contributor-controlled ref outside the repository's approved untrusted-PR sandbox/review workflow, and never launch a permission-bypassed worker in it.
 - For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
@@ -120,10 +121,18 @@ printf 'prompt file: %s\n' "$PROMPT"
 
 Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
 
+Before the first Codex launch on a host, create and authorize its worker-only home. Re-run the status check before later launches; only start login when it is not already authorized:
+
+```bash
+mkdir -p "$HOME/.codex-coding-agent"
+CODEX_HOME="$HOME/.codex-coding-agent" codex login status || \
+  CODEX_HOME="$HOME/.codex-coding-agent" codex login
+```
+
 Codex:
 
 ```bash
-bash pty:true background:true workdir:/path/isolated-worktree command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:/path/isolated-worktree command:"CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
 ```
 
 Claude Code:
@@ -159,7 +168,7 @@ Build X.
 <notification block>
 EOF
 printf 'prompt file: %s\n' "$PROMPT"
-bash pty:true background:true workdir:$SCRATCH command:"codex exec - < \"$PROMPT\""
+bash pty:true background:true workdir:$SCRATCH command:"CODEX_HOME=\"$HOME/.codex-coding-agent\" codex exec - < \"$PROMPT\""
 ```
 
 ## Process actions
