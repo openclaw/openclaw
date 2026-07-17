@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -323,14 +324,22 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
-      const agentId = params.agentId ?? params.sessionTarget?.agentId;
+      const sessionId = params.sessionTarget?.sessionId ?? params.sessionId;
+      const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? sessionId;
+      const agentId = params.sessionTarget?.agentId ?? params.agentId;
       const storePath = params.sessionTarget?.storePath;
+      // A persisted marker can retain the pre-relocation store path. Rebuild it
+      // from the canonical target so maintenance cannot rewrite the old database.
+      const sessionFile =
+        agentId && storePath
+          ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath })
+          : params.sessionFile;
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
-            sessionFile: params.sessionFile,
+            sessionId,
+            sessionKey,
+            sessionFile,
             ...(agentId ? { agentId } : {}),
             ...(storePath ? { storePath } : {}),
           },
