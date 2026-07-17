@@ -134,6 +134,41 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun boundedAgentListPreservesTheActiveAgent() =
+    runTest {
+      val activeAgentId = "agent-32"
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> buildJsonObject {} },
+          isGatewayConnected = { true },
+          gatewayStatusText = { "Connected" },
+          activeAgentId = { activeAgentId },
+          agents = {
+            listOf(WearProxyAgent(id = " ", name = "Invalid", emoji = null)) +
+              (0..32).map { index ->
+                WearProxyAgent(id = "agent-$index", name = "Agent $index", emoji = null)
+              }
+          },
+        )
+
+      val response = controller.handle(request(WearRpcMethod.AgentsList))
+      val agents = checkNotNull(response.result).jsonObject.getValue("agents").jsonArray
+
+      assertEquals(32, agents.size)
+      assertTrue(
+        agents.any { agent ->
+          val value = agent.jsonObject
+          value.getValue("id").jsonPrimitive.content == activeAgentId &&
+            value
+              .getValue("selected")
+              .jsonPrimitive
+              .content
+              .toBoolean()
+        },
+      )
+    }
+
+  @Test
   fun talkStartBindsTheWatchNodeAndSelectedSession() =
     runTest {
       var startArgs: List<String?>? = null

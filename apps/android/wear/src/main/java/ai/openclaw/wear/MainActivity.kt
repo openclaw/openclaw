@@ -291,7 +291,10 @@ internal fun OpenClawWearApp(
             state.talkBusy ||
             state.controlBusy ||
             state.activeRunId != null ||
-            !state.streamText.isNullOrBlank(),
+            !state.streamText.isNullOrBlank() ||
+            state.realtimeTalk.active ||
+            state.realtimeCapturing ||
+            state.realtimePlaying,
         inputEnabled = state.connected && snapshot?.activeSessionId != null,
         canAbort = state.activeRunId != null || !state.streamText.isNullOrBlank(),
         themeMode = themeMode,

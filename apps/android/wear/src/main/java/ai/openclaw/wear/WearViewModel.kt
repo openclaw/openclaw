@@ -270,6 +270,10 @@ internal class WearViewModel(
     val phoneNodeId = current.phoneNodeId ?: return
     if (
       current.controlBusy ||
+      current.talkBusy ||
+      current.realtimeTalk.active ||
+      current.realtimeCapturing ||
+      current.realtimePlaying ||
       current.activeAgentId == agentId ||
       WearProxyCapability.AgentControls !in current.proxyCapabilities
     ) {

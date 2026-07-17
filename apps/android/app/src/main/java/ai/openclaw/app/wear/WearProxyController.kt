@@ -129,12 +129,29 @@ internal class WearProxyController(
   private fun listAgents(params: JsonObject): JsonObject {
     params.requireOnly()
     val selected = activeAgentId()
+    val availableAgents =
+      agents().mapNotNull { agent ->
+        agent.id
+          .trim()
+          .takeIf(String::isNotEmpty)
+          ?.let { id -> id to agent }
+      }
+    val boundedAgents = availableAgents.take(MAX_AGENT_COUNT).toMutableList()
+    availableAgents
+      .firstOrNull { (id) -> id == selected }
+      ?.takeIf { selectedAgent -> boundedAgents.none { (id) -> id == selectedAgent.first } }
+      ?.let { selectedAgent ->
+        if (boundedAgents.size == MAX_AGENT_COUNT) {
+          boundedAgents[boundedAgents.lastIndex] = selectedAgent
+        } else {
+          boundedAgents += selectedAgent
+        }
+      }
     return buildJsonObject {
       put(
         "agents",
         buildJsonArray {
-          agents().take(MAX_AGENT_COUNT).forEach { agent ->
-            val id = agent.id.trim().takeIf(String::isNotEmpty) ?: return@forEach
+          boundedAgents.forEach { (id, agent) ->
             add(
               buildJsonObject {
                 put("id", id.takeCodePoints(MAX_AGENT_ID_CHARS))

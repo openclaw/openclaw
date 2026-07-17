@@ -199,6 +199,7 @@ internal fun OpenClawWearScreens(
             agents = snapshot.agents,
             supported = snapshot.agentControlsSupported,
             actionBusy = actionBusy,
+            errorText = snapshot.errorText,
             onSelectAgent = onSelectAgent,
           )
         SESSIONS_PAGE ->
@@ -1026,9 +1027,13 @@ private fun AgentsPage(
   agents: List<WearAgentSummary>,
   supported: Boolean,
   actionBusy: Boolean,
+  errorText: String?,
   onSelectAgent: (String) -> Unit,
 ) {
   WearPage(pageLabel = stringResource(R.string.agents)) {
+    errorText?.takeIf(String::isNotBlank)?.let { error ->
+      item { InlineError(text = error) }
+    }
     if (!supported) {
       item {
         EmptyPanel(
@@ -1122,6 +1127,9 @@ private fun ControlsPage(
   WearPage(pageLabel = stringResource(R.string.controls)) {
     item {
       ConnectionPanel(snapshot = snapshot)
+    }
+    snapshot.errorText?.takeIf(String::isNotBlank)?.let { error ->
+      item { InlineError(text = error) }
     }
     item {
       SelectionButton(
