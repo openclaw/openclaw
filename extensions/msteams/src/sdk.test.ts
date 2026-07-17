@@ -8,10 +8,14 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
-    statSync: vi.fn(() => ({ size: 1024 }) as fs.Stats),
-    readFileSync: vi.fn(
-      () => "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----",
+    openSync: vi.fn(() => 42),
+    readSync: vi.fn(
+      (_fd: number, buffer: Buffer, _offset: number, _length: number, _position: number) => {
+        const content = "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----";
+        return buffer.write(content, 0, buffer.length, "utf-8");
+      },
     ),
+    closeSync: vi.fn(),
   };
 });
 
@@ -77,13 +81,15 @@ describe("createMSTeamsApp", () => {
 
     const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
-    expect(fs.statSync).toHaveBeenCalledWith("/path/to/cert.pem");
-    expect(fs.readFileSync).toHaveBeenCalledWith("/path/to/cert.pem", "utf-8");
+    expect(fs.openSync).toHaveBeenCalledWith("/path/to/cert.pem", "r");
+    expect(fs.readSync).toHaveBeenCalled();
+    expect(fs.closeSync).toHaveBeenCalled();
   });
 
   it("rejects oversized certificate files before reading them", async () => {
-    vi.mocked(fs.readFileSync).mockClear();
-    vi.mocked(fs.statSync).mockReturnValueOnce({ size: 64 * 1024 + 1 } as fs.Stats);
+    vi.mocked(fs.readSync).mockImplementationOnce((_fd, _buffer, _offset, length, _position) => {
+      return length; // maxBytes + 1 — triggers the oversized rejection
+    });
 
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",
@@ -93,11 +99,10 @@ describe("createMSTeamsApp", () => {
     };
 
     await expect(createMSTeamsApp(creds)).rejects.toThrow("certificate file exceeds 65536 bytes");
-    expect(fs.readFileSync).not.toHaveBeenCalled();
   });
 
   it("throws when certificate file is missing", async () => {
-    vi.mocked(fs.readFileSync).mockImplementation(() => {
+    vi.mocked(fs.openSync).mockImplementationOnce(() => {
       throw new Error("ENOENT: no such file");
     });
 

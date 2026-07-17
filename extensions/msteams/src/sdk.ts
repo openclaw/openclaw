@@ -178,6 +178,31 @@ type AzureIdentityModule = {
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 const MAX_MSTEAMS_CERTIFICATE_FILE_BYTES = 64 * 1024;
 
+/**
+ * Read at most {@link maxBytes} from one opened file descriptor and close it
+ * in a finally block. The single-handle bounded read prevents a TOCTOU race
+ * where a separate stat + read would let the file grow or be replaced between
+ * the two calls.
+ */
+function readBoundedFileSync(path: string, maxBytes: number): string {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(path, "r");
+    // Allocate one extra byte so we can detect overflow — if readSync fills
+    // the buffer the file is larger than maxBytes.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    if (bytesRead > maxBytes) {
+      throw new Error(`certificate file exceeds ${maxBytes} bytes`);
+    }
+    return buffer.toString("utf-8", 0, bytesRead);
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
+}
+
 const loadAzureIdentity = createLazyRuntimeModule(
   () => import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>,
 );
@@ -320,11 +345,7 @@ function createFederatedApp(
 
   let privateKey: string;
   try {
-    const certificateSize = fs.statSync(creds.certificatePath).size;
-    if (certificateSize > MAX_MSTEAMS_CERTIFICATE_FILE_BYTES) {
-      throw new Error(`certificate file exceeds ${MAX_MSTEAMS_CERTIFICATE_FILE_BYTES} bytes`);
-    }
-    privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
+    privateKey = readBoundedFileSync(creds.certificatePath, MAX_MSTEAMS_CERTIFICATE_FILE_BYTES);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
