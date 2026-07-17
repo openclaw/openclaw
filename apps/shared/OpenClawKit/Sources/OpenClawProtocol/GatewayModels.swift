@@ -3370,6 +3370,7 @@ public struct SessionCatalogTranscriptItem: Codable, Sendable {
 public struct SessionsCatalogListParams: Codable, Sendable {
     public let catalogid: String?
     public let agentid: String?
+    public let progressid: String?
     public let search: String?
     public let limitperhost: Int?
     public let hostids: [String]?
@@ -3378,6 +3379,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     public init(
         catalogid: String? = nil,
         agentid: String? = nil,
+        progressid: String? = nil,
         search: String? = nil,
         limitperhost: Int? = nil,
         hostids: [String]? = nil,
@@ -3385,6 +3387,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     {
         self.catalogid = catalogid
         self.agentid = agentid
+        self.progressid = progressid
         self.search = search
         self.limitperhost = limitperhost
         self.hostids = hostids
@@ -3394,6 +3397,7 @@ public struct SessionsCatalogListParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case catalogid = "catalogId"
         case agentid = "agentId"
+        case progressid = "progressId"
         case search
         case limitperhost = "limitPerHost"
         case hostids = "hostIds"

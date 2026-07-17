@@ -56,6 +56,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
+  "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],

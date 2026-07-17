@@ -88,6 +88,30 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
+    @Test func `controller explicit agent wins and nil falls back to cached default`() throws {
+        let cachedIdentity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "global",
+            mainSessionKey: "main",
+            defaultAgentID: "main"))
+        let explicit = WebChatSwiftUIWindowController(
+            sessionKey: "global",
+            agentID: " Work ",
+            presentation: .window,
+            cachedRoutingIdentity: cachedIdentity,
+            store: nil)
+        let fallback = WebChatSwiftUIWindowController(
+            sessionKey: "global",
+            agentID: nil,
+            presentation: .window,
+            cachedRoutingIdentity: cachedIdentity,
+            store: nil)
+
+        #expect(explicit._testActiveAgentID == "work")
+        #expect(fallback._testActiveAgentID == "main")
+        explicit.close()
+        fallback.close()
+    }
+
     @Test func `max and Ultra thinking preferences survive reopen`() throws {
         let suiteName = "WebChatSwiftUISmokeTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
