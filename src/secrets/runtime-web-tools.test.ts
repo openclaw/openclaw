@@ -899,6 +899,39 @@ describe("runtime web tools resolution", () => {
     );
   });
 
+  it("keeps unresolved auto-detected providers strict during cold-start isolation", async () => {
+    await expect(
+      runRuntimeWebTools({
+        config: asConfig({
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+              },
+            },
+          },
+          plugins: {
+            entries: {
+              google: {
+                enabled: true,
+                config: {
+                  webSearch: {
+                    apiKey: {
+                      source: "env",
+                      provider: "default",
+                      id: "MISSING_GEMINI_API_KEY_REF",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        allowUnavailableSecretOwners: true,
+      }),
+    ).rejects.toThrow("[WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK]");
+  });
+
   it("auto-detects Gemini from the Google model provider key after env fallbacks", async () => {
     const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({

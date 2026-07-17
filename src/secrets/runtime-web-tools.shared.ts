@@ -628,7 +628,7 @@ export async function resolveRuntimeWebProviderSelection<
       }
     }
 
-    if (selectedProvider) {
+    if (selectedProvider && !unavailableProvider) {
       params.metadata.selectedProvider = selectedProvider;
       params.metadata.selectedProviderKeySource = selectedResolution?.source;
       if (!params.configuredProvider) {
