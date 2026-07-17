@@ -64,16 +64,12 @@ export class PluginUiBridgeController {
     ].join("\0");
     const currentTarget = this.target;
     if (currentTarget?.frame === target.frame) {
-      const shouldReconnect =
-        this.port !== null &&
-        (this.bridgeKey !== nextBridgeKey || currentTarget.client !== target.client);
-      if (shouldReconnect) {
-        this.target = target;
-      } else {
-        // Keep object identity stable for the active port listener while
-        // refreshing callback/client references from the latest UI context.
-        Object.assign(currentTarget, target);
-      }
+      const shouldReconnect = this.port !== null && this.bridgeKey !== nextBridgeKey;
+      // Keep object identity stable for the active port listener while
+      // refreshing callback/client references from the latest UI context.
+      // UI snapshots can replace the client wrapper without changing the
+      // underlying connection, which must not orphan the transferred port.
+      Object.assign(currentTarget, target);
       this.bridgeKey = nextBridgeKey;
       if (shouldReconnect) {
         this.scheduleConnect();

@@ -59,6 +59,7 @@ async function connectBridge(
     navigateToChat,
     request,
     responses,
+    postMessage,
     targetOrigin,
   };
 }
@@ -183,5 +184,26 @@ describe("PluginUiBridgeController", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(postMessage).toHaveBeenCalledOnce();
     bridge.clear();
+  });
+
+  it("keeps the active port when the connected client wrapper refreshes", async () => {
+    const connected = await connectBridge();
+    connected.bridge.sync({
+      frame: connected.frame,
+      key: "notes/settings",
+      pluginId: "notes",
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      connected: true,
+      sessionKey: "agent:main:active",
+      contextTokens: 64_000,
+      sessionActions: ["save"],
+      allowChatNavigation: false,
+      navigateToChat: vi.fn(),
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(connected.postMessage).toHaveBeenCalledOnce();
+    connected.bridge.clear();
+    connected.childPort.close();
   });
 });
