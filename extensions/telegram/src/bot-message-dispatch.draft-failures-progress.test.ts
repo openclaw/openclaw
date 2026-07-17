@@ -70,6 +70,35 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     );
   });
 
+  it("finalizes a streamed answer draft with the final error payload", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "partial answer" });
+        await dispatcherOptions.deliver(
+          { text: "Something went wrong after partial output", isError: true },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "partial answer");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith(
+      "partial answer\n\nSomething went wrong after partial output",
+    );
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("returns retryable when spooled replay suppresses fallback after non-silent delivery skip", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       dispatcherOptions.onSkip?.({ text: "final answer" }, { kind: "final", reason: "empty" });
