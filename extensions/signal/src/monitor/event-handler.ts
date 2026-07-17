@@ -144,23 +144,11 @@ function resolveSignalInboundRoute(params: {
   });
 }
 
-const SIGNAL_CANONICAL_DECIMAL_TIMESTAMP_RE = /^[1-9]\d*$/u;
-
-export function resolveSignalStatusReactionTimestamp(params: {
-  timestamp?: number;
-  messageId?: string;
-}): number | null {
+function resolveSignalStatusReactionTimestamp(params: { timestamp?: number }): number | null {
   if (typeof params.timestamp === "number") {
     return Number.isFinite(params.timestamp) && params.timestamp > 0 ? params.timestamp : null;
   }
-  if (
-    typeof params.messageId !== "string" ||
-    !SIGNAL_CANONICAL_DECIMAL_TIMESTAMP_RE.test(params.messageId)
-  ) {
-    return null;
-  }
-  const parsed = Number(params.messageId);
-  return Number.isSafeInteger(parsed) ? parsed : null;
+  return null;
 }
 
 type SignalStatusDispatchResult = {
