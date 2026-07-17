@@ -9,8 +9,16 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
+import { readFileDescriptorBoundedSync } from "../../infra/file-descriptor-read.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+
+const log = createSubsystemLogger("post-compaction-context");
 
 const MAX_CONTEXT_CHARS = 1800;
+// AGENTS.md is workspace bootstrap documentation. Bound the post-compaction read so a
+// pathologically large file cannot trigger an unbounded allocation at compaction time.
+// Aligns with the 2 MiB workspace bootstrap file limit used for other workspace reads.
+const POST_COMPACTION_AGENTS_MD_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
 const LEGACY_POST_COMPACTION_SECTIONS = ["Every Session", "Safety"];
 
@@ -75,11 +83,25 @@ export async function readPostCompactionContext(
     }
     const content = (() => {
       try {
-        return fs.readFileSync(opened.fd, "utf-8");
+        return readFileDescriptorBoundedSync(
+          opened.fd,
+          POST_COMPACTION_AGENTS_MD_MAX_BYTES,
+        ).toString("utf-8");
+      } catch (err) {
+        if (err instanceof RangeError) {
+          log.warn(
+            `Ignoring oversized AGENTS.md ${agentsPath}: file exceeds the ${POST_COMPACTION_AGENTS_MD_MAX_BYTES}-byte limit`,
+          );
+          return null;
+        }
+        throw err;
       } finally {
         fs.closeSync(opened.fd);
       }
     })();
+    if (content === null) {
+      return null;
+    }
 
     const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
     if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
