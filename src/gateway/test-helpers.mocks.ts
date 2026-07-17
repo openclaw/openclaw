@@ -251,6 +251,7 @@ vi.mock("../commands/status.js", () => ({
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromGatewayIngress: agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../agents/btw.js", () => ({

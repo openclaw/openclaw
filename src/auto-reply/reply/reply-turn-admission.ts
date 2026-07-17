@@ -258,9 +258,11 @@ async function admitReplyTurnWithWaitSignal(
           storePath &&
           !params.resetTriggered &&
           admittedSessionEntry &&
-          (admittedSessionEntry.abortedLastRun === true ||
-            admittedSessionEntry.restartRecoveryRuns !== undefined ||
-            admittedSessionEntry.mainRestartRecovery !== undefined) &&
+          ((admittedSessionEntry.status === "running" &&
+            (admittedSessionEntry.abortedLastRun === true ||
+              admittedSessionEntry.restartRecoveryRuns !== undefined ||
+              admittedSessionEntry.mainRestartRecovery !== undefined)) ||
+            admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
           isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey)
         ) {
           const ownerClaim = await claimMainSessionRecoveryOwner({
