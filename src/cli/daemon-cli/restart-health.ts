@@ -1,6 +1,7 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
+import { LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS } from "../../daemon/launchd-plist.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
@@ -40,6 +41,23 @@ export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
 const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
+/** Baseline consecutive stopped+free polls before early exit (≈3s at 500ms delay). */
+const STOPPED_FREE_BASELINE_THRESHOLD = 6;
+
+/**
+ * Prepared supervisor facts for restart-health. Collected once before the wait
+ * loop so the hot path does not re-discover launchd/plist state on every poll.
+ * KeepAlive + throttle only extends stopped-free early exit; unmanaged /
+ * unloaded / non-macOS paths keep the fast baseline threshold.
+ */
+export type GatewayRestartSupervisorFacts =
+  | {
+      kind: "launchd-keepalive";
+      throttleIntervalMs: number;
+    }
+  | {
+      kind: "none";
+    };
 
 function applyExpectedVersion(
   snapshot: GatewayRestartSnapshot,
@@ -262,6 +280,56 @@ function stoppedFreeEarlyExitGraceMs(): number {
     : STOPPED_FREE_EARLY_EXIT_GRACE_MS;
 }
 
+/**
+ * Continuous stopped+free polls required before early exit. KeepAlive launchd
+ * jobs can remain stopped+port-free for a full ThrottleInterval between
+ * respawns; baseline 6×500ms (~3s) false-fires inside that window. Require one
+ * extra poll past the prepared throttle so a single KeepAlive gap cannot trip
+ * the false "stayed stopped" verdict.
+ */
+function stoppedFreeEarlyExitThreshold(
+  supervisor: GatewayRestartSupervisorFacts,
+  delayMs: number,
+): number {
+  if (supervisor.kind !== "launchd-keepalive") {
+    return STOPPED_FREE_BASELINE_THRESHOLD;
+  }
+  const throttlePolls = Math.ceil(supervisor.throttleIntervalMs / Math.max(1, delayMs));
+  return Math.max(STOPPED_FREE_BASELINE_THRESHOLD, throttlePolls + 1);
+}
+
+/**
+ * Prepare supervisor facts once for the wait. OpenClaw LaunchAgents ship with
+ * KeepAlive=true and the product ThrottleInterval; only extend stopped-free
+ * early exit when the agent is still loaded. Fail closed to baseline when
+ * isLoaded is missing or throws (tests, unsupported adapters).
+ */
+export async function prepareGatewayRestartSupervisorFacts(params: {
+  service: GatewayService;
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): Promise<GatewayRestartSupervisorFacts> {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return { kind: "none" };
+  }
+  if (typeof params.service.isLoaded !== "function") {
+    return { kind: "none" };
+  }
+  try {
+    const loaded = await params.service.isLoaded({ env: params.env ?? process.env });
+    if (!loaded) {
+      return { kind: "none" };
+    }
+    return {
+      kind: "launchd-keepalive",
+      throttleIntervalMs: LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS * 1000,
+    };
+  } catch {
+    return { kind: "none" };
+  }
+}
+
 function withWaitContext(
   snapshot: GatewayRestartSnapshot,
   waitOutcome: GatewayRestartWaitOutcome,
@@ -280,11 +348,22 @@ export async function waitForGatewayHealthyRestart(params: {
   includeUnknownListenersAsStale?: boolean;
   requireRunningService?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
+  /** Prepared once by caller or resolved once at wait start; never rediscovered per poll. */
+  supervisor?: GatewayRestartSupervisorFacts;
 }): Promise<GatewayRestartSnapshot> {
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const standardDeadlineMs = attempts * delayMs;
+  // Collect launchd KeepAlive/throttle once before the poll loop so request-time
+  // restart health does not re-stat plists or re-run launchctl on every attempt.
+  const supervisor =
+    params.supervisor ??
+    (await prepareGatewayRestartSupervisorFacts({
+      service: params.service,
+      env: params.env,
+    }));
+  const stoppedFreeThreshold = stoppedFreeEarlyExitThreshold(supervisor, delayMs);
 
   const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
   let snapshot = await inspectGatewayRestart({
@@ -297,7 +376,6 @@ export async function waitForGatewayHealthyRestart(params: {
   });
 
   let consecutiveStoppedFreeCount = 0;
-  const STOPPED_FREE_THRESHOLD = 6;
   const minAttemptForEarlyExit = Math.min(
     Math.ceil(stoppedFreeEarlyExitGraceMs() / delayMs),
     Math.floor(attempts / 2),
@@ -330,7 +408,7 @@ export async function waitForGatewayHealthyRestart(params: {
     }
     if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
       consecutiveStoppedFreeCount += 1;
-      if (consecutiveStoppedFreeCount >= STOPPED_FREE_THRESHOLD) {
+      if (consecutiveStoppedFreeCount >= stoppedFreeThreshold) {
         return withWaitContext(snapshot, "stopped-free", elapsedMs);
       }
     } else if (snapshot.runtime.status !== "stopped" || snapshot.portUsage.status !== "free") {

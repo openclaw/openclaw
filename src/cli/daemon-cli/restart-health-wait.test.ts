@@ -277,6 +277,106 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(185);
   });
 
+  it("extends stopped-free early exit past launchd KeepAlive ThrottleInterval", async () => {
+    // KeepAlive=true with ThrottleInterval=10s can leave stopped+port-free for a full
+    // throttle window; baseline 6×500ms (~3s) after the 10s grace false-fires (#109941).
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+      supervisor: {
+        kind: "launchd-keepalive",
+        throttleIntervalMs: 10_000,
+      },
+    });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.runtime.status).toBe("stopped");
+    expect(snapshot.portUsage.status).toBe("free");
+    expect(snapshot.waitOutcome).toBe("stopped-free");
+    // Grace 10s (20 polls) then 21 consecutive polls (ceil(10s/500ms)+1) → 40 sleeps.
+    expect(snapshot.elapsedMs).toBe(20_000);
+    expect(sleep).toHaveBeenCalledTimes(40);
+  });
+
+  it("keeps baseline stopped-free exit when launchd KeepAlive is not active", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "stopped" }),
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+      supervisor: { kind: "none" },
+    });
+
+    expect(snapshot.waitOutcome).toBe("stopped-free");
+    expect(snapshot.elapsedMs).toBe(12_500);
+    expect(sleep).toHaveBeenCalledTimes(25);
+  });
+
+  it("does not stop-free-exit inside one KeepAlive throttle window when health recovers", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    let inspectCount = 0;
+    inspectPortUsage.mockImplementation(async () => {
+      inspectCount += 1;
+      // Stay free longer than the baseline false-exit window (~26 inspects / 12.5s),
+      // then bind so health can succeed — proves KeepAlive extension is required.
+      if (inspectCount < 28) {
+        return { port: 18789, status: "free" as const, listeners: [], hints: [] };
+      }
+      return {
+        port: 18789,
+        status: "busy" as const,
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      };
+    });
+    const readRuntime = vi.fn(async () =>
+      inspectCount < 28
+        ? { status: "stopped" as const }
+        : { status: "running" as const, pid: 8000 },
+    );
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: { version: "2026.7.1", connId: "new" },
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: { readRuntime } as unknown as GatewayService,
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+      supervisor: {
+        kind: "launchd-keepalive",
+        throttleIntervalMs: 10_000,
+      },
+    });
+
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.elapsedMs).toBeGreaterThan(12_500);
+  });
+
   it("keeps waiting when the expected gateway version is not available yet", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });
     inspectPortUsage
