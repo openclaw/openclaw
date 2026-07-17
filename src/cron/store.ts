@@ -303,9 +303,27 @@ export async function saveCronQuarantineFile(params: {
     return null;
   }
   const quarantinePath = resolveCronQuarantinePath(params.storePath);
-  const existing = await loadCronQuarantineFile(quarantinePath);
-  const seen = new Set(existing.jobs.map(quarantineEntryKey));
+
+  // If the existing sidecar is already over the byte cap, we cannot safely
+  // load it for deduplication. Archive it and start fresh with the new entries.
+  let existing: CronQuarantineFile = { version: 1, jobs: [] };
+  let existingKeys = new Set<string>();
+  const existingStat = await fs.promises.stat(quarantinePath).catch((err) => {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return null;
+    }
+    return Promise.reject(err);
+  });
+  if (existingStat && existingStat.size > CRON_QUARANTINE_MAX_BYTES) {
+    await archiveQuarantineFile(quarantinePath);
+  } else {
+    existing = await loadCronQuarantineFile(quarantinePath);
+    existingKeys = new Set(existing.jobs.map(quarantineEntryKey));
+  }
+
+  const seen = new Set(existingKeys);
   const nextJobs = existing.jobs.slice();
+  const appendedEntries: QuarantinedCronConfigJob[] = [];
   let appended = false;
   for (const entry of params.entries.toSorted((a, b) => a.sourceIndex - b.sourceIndex)) {
     const key = quarantineEntryKey(entry);
@@ -316,6 +334,7 @@ export async function saveCronQuarantineFile(params: {
     // keep appending the same quarantined config job.
     seen.add(key);
     appended = true;
+    appendedEntries.push(entry);
     nextJobs.push({
       quarantinedAtMs: params.nowMs,
       sourceIndex: entry.sourceIndex,
@@ -332,8 +351,39 @@ export async function saveCronQuarantineFile(params: {
   }
   const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
   if (Buffer.byteLength(payload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
-    throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
+    // The sidecar has grown past the cap. Archive the existing file so the
+    // canonical SQLite cron store can still persist, then start a fresh
+    // quarantine file containing only the new entries. This prevents a
+    // cap-saturated sidecar from blocking every subsequent cron mutation.
+    await archiveQuarantineFile(quarantinePath);
+    const freshJobs = appendedEntries.map((entry) => ({
+      quarantinedAtMs: params.nowMs,
+      sourceIndex: entry.sourceIndex,
+      reason: entry.reason,
+      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
+      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
+      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
+      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
+      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
+    }));
+    const freshPayload = JSON.stringify({ version: 1, jobs: freshJobs }, null, 2);
+    if (Buffer.byteLength(freshPayload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
+      throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
+    }
+    await atomicWrite(quarantinePath, freshPayload);
+    return quarantinePath;
   }
   await atomicWrite(quarantinePath, payload);
   return quarantinePath;
+}
+
+async function archiveQuarantineFile(quarantinePath: string): Promise<void> {
+  try {
+    await fs.promises.access(quarantinePath);
+  } catch {
+    // Nothing to archive.
+    return;
+  }
+  const archivePath = `${quarantinePath}.${Date.now()}.${Math.random().toString(36).slice(2)}.archive.json`;
+  await fs.promises.rename(quarantinePath, archivePath);
 }

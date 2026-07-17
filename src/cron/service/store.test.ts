@@ -1,9 +1,15 @@
 // Cron service store tests cover persisted service state loading and writes.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronQuarantineFile,
+  loadCronStore,
+  resolveCronQuarantinePath,
+  saveCronStore,
+} from "../store.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
@@ -348,6 +354,63 @@ describe("cron service store seam coverage", () => {
       }),
     );
     expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
+  });
+
+  it("persists cron state when the quarantine sidecar is archived after exceeding the cap", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    const initialNextRunAtMs = STORE_TEST_NOW + 60_000;
+    const changedNextRunAtMs = STORE_TEST_NOW + 120_000;
+    await writeSingleJobStore(
+      storePath,
+      createReloadCronJob({
+        id: "quarantine-archive-job",
+        state: { nextRunAtMs: initialNextRunAtMs },
+      }),
+    );
+
+    // Pre-fill the sidecar close to the cap so the next quarantine entry triggers recovery.
+    const paddingSize = 8 * 1024 * 1024 - 1024;
+    const existingJobs = Array.from({ length: 10 }, (_, i) => ({
+      sourceIndex: i,
+      reason: "old-entry",
+      job: { id: `old-job-${i}`, padding: "x".repeat(Math.floor(paddingSize / 10)) },
+    }));
+    await fs.mkdir(path.dirname(quarantinePath), { recursive: true });
+    await fs.writeFile(
+      quarantinePath,
+      JSON.stringify({ version: 1, jobs: existingJobs }, null, 2),
+      "utf-8",
+    );
+
+    const onEvent = vi.fn();
+    const state = createStoreTestState(storePath, onEvent);
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, "quarantine-archive-job");
+    job.state.nextRunAtMs = changedNextRunAtMs;
+    state.pendingQuarantineConfigJobs = [
+      { sourceIndex: 99, reason: "invalid-schedule", job: { id: "quarantined-job" } },
+    ];
+
+    const persisted = await persist(state, { stateOnly: true });
+
+    expect(persisted).toBe(true);
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: "scheduled",
+        jobId: job.id,
+        nextRunAtMs: changedNextRunAtMs,
+      }),
+    );
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(changedNextRunAtMs);
+
+    const freshQuarantine = await loadCronQuarantineFile(quarantinePath);
+    expect(freshQuarantine.jobs).toHaveLength(1);
+    expect(freshQuarantine.jobs[0]?.sourceIndex).toBe(99);
+
+    const dir = await fs.readdir(path.dirname(quarantinePath));
+    expect(dir.some((name) => name.endsWith(".archive.json"))).toBe(true);
   });
 
   it("loads normalized jobId-only jobs from SQLite so scheduler lookups resolve by stable id", async () => {
