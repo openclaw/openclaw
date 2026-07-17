@@ -1,8 +1,3 @@
-/**
- * Direct-DM dispatch compatibility facade.
- *
- * Routes legacy direct-message ingress through the standard channel reply pipeline.
- */
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -30,16 +25,8 @@ export {
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "./direct-dm-guard-policy.js";
 
-type DirectDmRoutePeer = {
-  kind: "direct";
-  id: string;
-};
-
-type DirectDmRoute = {
-  agentId: string;
-  sessionKey: string;
-  accountId?: string;
-};
+type DirectDmRoutePeer = { kind: "direct"; id: string };
+type DirectDmRoute = { agentId: string; sessionKey: string; accountId?: string };
 
 type DispatchInboundDirectDmParams = {
   cfg: OpenClawConfig;
@@ -110,27 +97,26 @@ function buildDirectDmContext(
   });
 }
 
-function prepareDirectDmTurn(params: DispatchInboundDirectDmParams) {
+export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmParams): Promise<{
+  route: DirectDmRoute;
+  ctxPayload: FinalizedMsgContext;
+}> {
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
   });
-  const body = buildEnvelope({
-    channel: params.channelLabel,
-    from: params.conversationLabel,
-    body: params.rawBody,
-    timestamp: params.timestamp,
-  });
-  return { route, ctxPayload: buildDirectDmContext(params, route, body) };
-}
-
-export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmParams): Promise<{
-  route: DirectDmRoute;
-  ctxPayload: FinalizedMsgContext;
-}> {
-  const { route, ctxPayload } = prepareDirectDmTurn(params);
+  const ctxPayload = buildDirectDmContext(
+    params,
+    route,
+    buildEnvelope({
+      channel: params.channelLabel,
+      from: params.conversationLabel,
+      body: params.rawBody,
+      timestamp: params.timestamp,
+    }),
+  );
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,

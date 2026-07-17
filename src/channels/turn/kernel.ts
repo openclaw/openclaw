@@ -1,4 +1,3 @@
-// Channel turn kernel for normalized inbound event dispatch, history, and delivery.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearChannelHistoryIfEnabled,

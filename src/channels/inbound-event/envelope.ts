@@ -72,7 +72,6 @@ type InboundRouteResolveParams<TConfig, TPeer extends RoutePeerLike> = {
   peer: TPeer;
 };
 
-/** Create an envelope formatter bound to one resolved route and session store. */
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   cfg: TConfig;
   route: RouteLike;
@@ -103,7 +102,6 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   };
 }
 
-/** Resolve a route first, then return both the route and a formatter for future inbound messages. */
 export function resolveInboundRouteEnvelopeBuilder<
   TConfig,
   TEnvelope,
