@@ -193,8 +193,10 @@ function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
 }
 
 /**
- * Older installed @openclaw/codex releases emit plan steps as strings.
- * Normalize that external-plugin version skew to pending typed steps.
+ * TODO(remove): normalizes the pre-2026.7.2 string plan-step wire shape to
+ * pending typed steps. Bundled producers all emit typed steps, and
+ * @openclaw/codex is force-updated with core, so this only covers a plugin
+ * pinned against an update. Delete once that cannot happen.
  */
 export function normalizeAgentPlanSteps(value: unknown): AgentPlanStep[] | undefined {
   if (!Array.isArray(value)) {
