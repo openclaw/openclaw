@@ -720,16 +720,16 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
     return {
       name: "google-live-browser-ws",
       ok:
-        result.setupComplete === true &&
-        result.videoFrameSent === true &&
-        result.describeViewCalled === true &&
-        result.functionResponseAccepted === true,
+        result.setupComplete &&
+        result.videoFrameSent &&
+        result.describeViewCalled &&
+        result.functionResponseAccepted,
       details: {
         model: GOOGLE_REALTIME_MODEL,
-        setupComplete: result.setupComplete === true,
-        videoFrameSent: result.videoFrameSent === true,
-        describeViewCalled: result.describeViewCalled === true,
-        functionResponseAccepted: result.functionResponseAccepted === true,
+        setupComplete: result.setupComplete,
+        videoFrameSent: result.videoFrameSent,
+        describeViewCalled: result.describeViewCalled,
+        functionResponseAccepted: result.functionResponseAccepted,
       },
     };
   } catch (error) {
