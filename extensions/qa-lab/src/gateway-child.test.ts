@@ -1294,10 +1294,12 @@ describe("buildQaRuntimeEnv", () => {
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 5_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
