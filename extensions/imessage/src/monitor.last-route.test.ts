@@ -188,6 +188,10 @@ describe("iMessage monitor last-route updates", () => {
       };
       params.replyOptions?.onTypingController?.(typingController);
       await params.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params.replyOptions?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
       typingController.markRunComplete();
       typingController.markDispatchIdle();
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -275,6 +279,10 @@ describe("iMessage monitor last-route updates", () => {
       expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
       expect(params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
       expect(params.replyOptions?.onToolStart).toBeUndefined();
+      await params.replyOptions?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
     });
 
