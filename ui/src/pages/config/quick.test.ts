@@ -253,6 +253,21 @@ describe("renderQuickSettings", () => {
     expectRowByTitle(container, "1 MCP server");
   });
 
+  it("renders a dash when cron job count is unavailable", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          automation: { cronJobCount: null, skillCount: 5, mcpServerCount: 2 },
+        }),
+      ),
+      container,
+    );
+
+    expectRowByTitle(container, "—");
+  });
+
   it("renders Gateway host identity and resources", () => {
     const container = document.createElement("div");
 
