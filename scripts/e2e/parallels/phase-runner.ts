@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { decodeUtf8Tail } from "../lib/text-file-utils.mjs";
 import { say, warn } from "./host-command.ts";
 
 const PHASE_LOG_TAIL_MAX_BYTES = 512 * 1024;
@@ -15,7 +16,9 @@ function appendTextTail(current: string, chunk: string, maxBytes: number): strin
   }
   const marker = `[phase log tail truncated to last ${maxBytes} bytes]\n`;
   const tailBytes = Math.max(0, maxBytes - Buffer.byteLength(marker));
-  const tail = Buffer.from(combined).subarray(-tailBytes).toString("utf8");
+  // The byte cut can land inside a multi-byte UTF-8 character; drop the
+  // leading continuation bytes so the diagnostics tail stays valid UTF-8.
+  const tail = decodeUtf8Tail(Buffer.from(combined).subarray(-tailBytes), true);
   return `${marker}${tail}`;
 }
 
