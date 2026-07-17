@@ -8,10 +8,10 @@ import {
   runHeartbeatOnce,
   setHeartbeatsEnabled,
   startHeartbeatRunner,
-  type HeartbeatRunResult,
   type HeartbeatRunner,
 } from "./heartbeat-runner.js";
 import { readSessionStoreForTest } from "./heartbeat-runner.test-utils.js";
+import type { HeartbeatRunResult } from "./heartbeat-wake.js";
 
 const cleanupDirs: string[] = [];
 const runners: HeartbeatRunner[] = [];
