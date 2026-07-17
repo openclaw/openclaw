@@ -23,6 +23,7 @@ import {
   readNostrProfileState,
   writeNostrProfileState,
 } from "./nostr-state-store.js";
+import { publishNostrEventToRelay } from "./relay-publish.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
 // ============================================================================
@@ -769,12 +770,7 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      const publishPromises = pool.publish([relay], reply);
-      if (publishPromises.length === 0) {
-        throw new Error(`Failed to create publish promise for relay ${relay}`);
-      }
-      const publishPromise = publishPromises[0];
-      await publishPromise;
+      await publishNostrEventToRelay(pool, relay, reply);
       const latency = Date.now() - startTime;
 
       // Record success
@@ -783,7 +779,7 @@ async function sendEncryptedDm(
 
       return; // Success - exit early
     } catch (err) {
-      lastError = err as Error;
+      lastError = err instanceof Error ? err : new Error(String(err));
       const latency = Date.now() - startTime;
 
       // Record failure

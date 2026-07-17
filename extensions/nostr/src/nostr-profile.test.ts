@@ -11,10 +11,12 @@ const TEST_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
 async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: number): Promise<Event> {
   let publishedEvent: Event | undefined;
   const pool = {
-    publish: vi.fn((_relays: string[], event: Event) => {
-      publishedEvent = event;
-      return [Promise.resolve()];
-    }),
+    ensureRelay: vi.fn(async () => ({
+      publish: vi.fn(async (event: Event) => {
+        publishedEvent = event;
+        return "saved";
+      }),
+    })),
   } as unknown as SimplePool;
 
   await publishProfile(
@@ -292,7 +294,9 @@ describe("publishProfile", () => {
 
   function createFakePool(publishResult: unknown): SimplePool {
     return {
-      publish: vi.fn(() => [publishResult]),
+      ensureRelay: vi.fn(async () => ({
+        publish: vi.fn(() => publishResult),
+      })),
     } as unknown as SimplePool;
   }
 
@@ -310,6 +314,26 @@ describe("publishProfile", () => {
 
     expect(result.successes).toEqual(["wss://relay.example"]);
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports relay connection failures instead of successful publishes", async () => {
+    const profile: NostrProfile = { name: "test" };
+    const pool = {
+      ensureRelay: vi.fn(async () => {
+        throw new Error("connection failed");
+      }),
+      publish: vi.fn(() => [Promise.resolve("connection failure: connection failed")]),
+    } as unknown as SimplePool;
+
+    const result = await publishProfile(
+      pool,
+      TEST_HEX_PRIVATE_KEY_BYTES,
+      ["wss://relay.example"],
+      profile,
+    );
+
+    expect(result.successes).toEqual([]);
+    expect(result.failures).toEqual([{ relay: "wss://relay.example", error: "connection failed" }]);
   });
 
   it("clears the per-relay timeout timer after a publish timeout", async () => {
