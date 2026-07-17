@@ -49,6 +49,11 @@ openclaw nodes canvas eval --node <id> --js "document.title"
 openclaw nodes canvas snapshot --node <id>
 ```
 
+`eval` and `a2ui.*` update content without opening or revealing the panel. Only
+`present`, `navigate`, or a user action shows it; after a hide, content updates
+continue to apply to the hidden panel. `snapshot` needs a visible panel and
+returns `CANVAS_HIDDEN` otherwise; run `present` first.
+
 `canvas.navigate` accepts local canvas paths, `http(s)` URLs, and `file://`
 URLs. Passing `"/"` shows the local scaffold or `index.html`.
 

@@ -29,6 +29,7 @@ const { forceKillChildProcessTreeMock, spawnMock } = vi.hoisted(() => ({
   forceKillChildProcessTreeMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
+const FAST_WAIT_OPTS = { interval: 1 } as const;
 
 function createSpawnMock(params?: { pid?: number }) {
   const child = Object.assign(new EventEmitter(), {
@@ -408,7 +409,7 @@ describe("managed service update handoff", () => {
       argv1: "/opt/openclaw/openclaw.mjs",
       meta: {},
     });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
 
     const pending = Symbol("pending");
     await expect(
@@ -442,7 +443,7 @@ describe("managed service update handoff", () => {
       argv1: "/opt/openclaw/openclaw.mjs",
       meta: { sessionKey: "agent:test:webchat:dm:user-123" },
     });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args[0] ?? "");
     tempDirs.add(handoffDir);
@@ -476,7 +477,7 @@ describe("managed service update handoff", () => {
       env: { PATH: binDir, OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
       meta: {},
     });
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args.at(-2) ?? "");
     tempDirs.add(handoffDir);
@@ -509,7 +510,7 @@ describe("managed service update handoff", () => {
       meta: {},
     });
     const rejection = resultPromise.catch((err: unknown) => err);
-    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1), FAST_WAIT_OPTS);
     const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
     const handoffDir = path.dirname(args[0] ?? "");
     tempDirs.add(handoffDir);

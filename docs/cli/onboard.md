@@ -44,8 +44,24 @@ openclaw onboard --flow manual
 openclaw onboard --flow import
 openclaw onboard --import-from hermes --import-source ~/.hermes
 openclaw onboard --skip-bootstrap
+openclaw onboard recommendations --json
+openclaw onboard recommendations acknowledge
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
+
+`openclaw onboard recommendations` reads pending app-recommendation matches
+stored during onboarding. Add `--json` for the machine-readable list used by
+the first-run bootstrap. The command does not rescan installed apps or call a
+model. Its output contains only validated install IDs, source, and tier; it
+intentionally omits untrusted marketplace prose, model reasons, and local app
+labels. After the recommendation offer has been answered, the command returns
+an empty list and future onboarding runs skip the step entirely. A future
+explicit refresh command can clear that accepted state and run discovery again.
+
+Fresh workspaces defer the recommendation choice to the bootstrap conversation.
+After that conversation handles the user's choices,
+`openclaw onboard recommendations acknowledge` marks the stored offer answered.
+The acknowledgement is idempotent.
 
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.

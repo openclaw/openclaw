@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { OnboardingRecommendationsRecord } from "../state/onboarding-recommendations.js";
 import type { SetupAppRecommendationsResult } from "../system-agent/setup-app-recommendations.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupAppRecommendations } from "./setup.app-recommendations.js";
@@ -24,6 +25,14 @@ const runtime: RuntimeEnv = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+
+function storeDeps() {
+  return {
+    readStored: vi.fn((): OnboardingRecommendationsRecord | null => null),
+    writeOffer: vi.fn(),
+    deferOfferToBootstrap: vi.fn(() => false),
+  };
+}
 
 function recommendationResult(): Extract<SetupAppRecommendationsResult, { status: "ok" }> {
   const apps = [{ label: "Chat", bundleId: "com.example.chat" }];
@@ -62,6 +71,7 @@ describe("setupAppRecommendations", () => {
     [{}, "linux" as const],
   ])("skips when gated", async (config, platform) => {
     const recommend = vi.fn(async () => recommendationResult());
+    const store = storeDeps();
     await setupAppRecommendations({
       config,
       prompter: createPrompter(),
@@ -69,9 +79,120 @@ describe("setupAppRecommendations", () => {
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform,
-      deps: { recommend },
+      deps: { recommend, ...store },
     });
     expect(recommend).not.toHaveBeenCalled();
+    expect(store.readStored).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits before scanning when the offer was already answered", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const writeOffer = vi.fn();
+    const prompter = createPrompter();
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        writeOffer,
+        readStored: () => ({
+          inventoryHash: "hash",
+          matches: [],
+          offeredAt: 1,
+          acceptedAt: 2,
+          updatedAt: 2,
+        }),
+      },
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(prompter.progress).not.toHaveBeenCalled();
+    expect(writeOffer).not.toHaveBeenCalled();
+  });
+
+  it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const writeOffer = vi.fn();
+    const acknowledgeStored = vi.fn();
+    const prompter = createPrompter(["recommendation:0"]);
+    const pending: OnboardingRecommendationsRecord = {
+      inventoryHash: "hash",
+      matches: recommendationResult().matches,
+      offeredAt: 1,
+      acceptedAt: null,
+      updatedAt: 1,
+    };
+    const ensurePlugin = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      installed: true as const,
+      status: "installed" as const,
+    }));
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        writeOffer,
+        acknowledgeStored,
+        readStored: () => pending,
+        deferOfferToBootstrap: () => false,
+        ensurePlugin: ensurePlugin as never,
+        resolveOfficialEntry: () => ({
+          pluginId: "chat-plugin",
+          label: "Chat plugin",
+          install: { kind: "npm", package: "chat-plugin" } as never,
+          trustedSourceLinkedOfficialInstall: true,
+        }),
+      },
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(prompter.progress).not.toHaveBeenCalled();
+    expect(prompter.multiselect).toHaveBeenCalledOnce();
+    expect(acknowledgeStored).toHaveBeenCalledOnce();
+    expect(writeOffer).not.toHaveBeenCalled();
+    expect(ensurePlugin).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a pending stored offer to the bootstrap without rescanning", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const writeOffer = vi.fn();
+    const prompter = createPrompter();
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        writeOffer,
+        readStored: () => ({
+          inventoryHash: "hash",
+          matches: recommendationResult().matches,
+          offeredAt: 1,
+          acceptedAt: null,
+          updatedAt: 1,
+        }),
+        deferOfferToBootstrap: () => true,
+      },
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(writeOffer).not.toHaveBeenCalled();
   });
 
   it("never preselects third-party ClawHub skills even when model-recommended", async () => {
@@ -81,6 +202,7 @@ describe("setupAppRecommendations", () => {
       tier: "recommended",
     };
     const prompter = createPrompter();
+    const store = storeDeps();
     await setupAppRecommendations({
       config: {},
       prompter,
@@ -88,7 +210,7 @@ describe("setupAppRecommendations", () => {
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
-      deps: { recommend: vi.fn(async () => result) },
+      deps: { recommend: vi.fn(async () => result), ...store },
     });
     expect(prompter.multiselect).toHaveBeenCalledWith(
       expect.objectContaining({ initialValues: ["recommendation:0"] }),
@@ -119,6 +241,7 @@ describe("setupAppRecommendations", () => {
       modelRouteVerified: true,
       platform: "darwin",
       deps: {
+        ...storeDeps(),
         recommend: async () => recommendationResult(),
         ensurePlugin,
         installSkill,
@@ -142,6 +265,7 @@ describe("setupAppRecommendations", () => {
     const ensurePlugin = vi.fn();
     const installSkill = vi.fn();
     const config: OpenClawConfig = {};
+    const store = storeDeps();
 
     await expect(
       setupAppRecommendations({
@@ -152,6 +276,7 @@ describe("setupAppRecommendations", () => {
         modelRouteVerified: true,
         platform: "darwin",
         deps: {
+          ...store,
           recommend: async () => recommendationResult(),
           ensurePlugin,
           installSkill,
@@ -160,5 +285,46 @@ describe("setupAppRecommendations", () => {
     ).resolves.toBe(config);
     expect(ensurePlugin).not.toHaveBeenCalled();
     expect(installSkill).not.toHaveBeenCalled();
+    expect(store.writeOffer).toHaveBeenCalledWith(
+      expect.objectContaining({ answered: true, matches: recommendationResult().matches }),
+    );
+  });
+
+  it("records an empty submitted selection as answered", async () => {
+    const store = storeDeps();
+
+    await setupAppRecommendations({
+      config: {},
+      prompter: createPrompter([]),
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: { recommend: async () => recommendationResult(), ...store },
+    });
+
+    expect(store.writeOffer).toHaveBeenCalledWith(expect.objectContaining({ answered: true }));
+  });
+
+  it("stores a pending offer for a fresh workspace bootstrap", async () => {
+    const store = storeDeps();
+    store.deferOfferToBootstrap.mockReturnValue(true);
+    const prompter = createPrompter();
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: { recommend: async () => recommendationResult(), ...store },
+    });
+
+    expect(store.writeOffer).toHaveBeenCalledWith(
+      expect.objectContaining({ answered: false, matches: recommendationResult().matches }),
+    );
+    expect(prompter.note).not.toHaveBeenCalled();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
   });
 });

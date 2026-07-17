@@ -27683,7 +27683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 233,
+      "line": 231,
       "path": "apps/macos/Sources/OpenClaw/CanvasManager.swift",
       "source": "Degraded",
       "surface": "apple",

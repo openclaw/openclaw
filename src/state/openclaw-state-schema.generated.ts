@@ -490,6 +490,15 @@ CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
 CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
   ON macos_port_guardian_records(port, timestamp DESC);
 
+CREATE TABLE IF NOT EXISTS onboarding_recommendations (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  inventory_hash TEXT NOT NULL,
+  matches_json TEXT NOT NULL,
+  offered_at_ms INTEGER NOT NULL,
+  accepted_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS workspace_setup_state (
   workspace_key TEXT NOT NULL PRIMARY KEY,
   workspace_path TEXT NOT NULL,

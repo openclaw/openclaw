@@ -756,6 +756,15 @@ export interface OfficialExternalPluginCatalogSnapshots {
   updated_at_ms: number;
 }
 
+export interface OnboardingRecommendations {
+  accepted_at_ms: number | null;
+  config_key: string;
+  inventory_hash: string;
+  matches_json: string;
+  offered_at_ms: number;
+  updated_at_ms: number;
+}
+
 export interface OperatorApprovals {
   approval_id: string;
   audience_session_keys_json: string;
@@ -1344,6 +1353,7 @@ export interface DB {
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
+  onboarding_recommendations: OnboardingRecommendations;
   operator_approvals: OperatorApprovals;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
