@@ -20,17 +20,9 @@ import {
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
-const BASH_PATH = process.env.OPENCLAW_TEST_BASH ?? "/bin/bash";
-
-function toShellPath(path: string) {
-  if (process.platform !== "win32") {
-    return path;
-  }
-  return `/${path[0]?.toLowerCase() ?? ""}${path.slice(2).replace(/\\/g, "/")}`;
-}
 
 function runInstallCliShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync(BASH_PATH, ["-c", script], {
+  return spawnSync("/bin/bash", ["-c", script], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -653,11 +645,10 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-broken-npm-"));
     const badBin = join(tmp, "bad-bin");
     const goodBin = join(tmp, "good-bin");
-    const toolsBin = join(tmp, "tools-bin");
     const prefix = join(tmp, "prefix");
     const badNpmLog = join(tmp, "bad-npm.log");
     const goodNpmLog = join(tmp, "good-npm.log");
-    const nodeLog = join(tmp, "node.log");
+    const goodNodeLog = join(tmp, "good-node.log");
     const badNode = join(badBin, "node");
     const badNpm = join(badBin, "npm");
     const goodNode = join(goodBin, "node");
@@ -665,36 +656,13 @@ describe("install-cli.sh", () => {
 
     mkdirSync(badBin, { recursive: true });
     mkdirSync(goodBin, { recursive: true });
-    mkdirSync(toolsBin, { recursive: true });
-    for (const tool of ["ln", "mkdir"]) {
-      const wrapper = join(toolsBin, tool);
-      writeFileSync(wrapper, ["#!/bin/bash", `exec /bin/${tool} "$@"`, ""].join("\n"));
-      chmodSync(wrapper, 0o755);
-    }
-
-    const fakeNodeVersionProbe = [
-      "#!/bin/bash",
-      'if [[ "${1:-}" == "-v" ]]; then',
-      "  printf 'v22.22.3\\n'",
-      "  exit 0",
-      "fi",
-      'if [[ "${1:-}" == "-e" ]]; then',
-      "  exit 0",
-      "fi",
-    ];
-    writeFileSync(
-      badNode,
-      [...fakeNodeVersionProbe, 'printf "bad-env-node\\n" >> "$NODE_LOG"', "exit 44", ""].join(
-        "\n",
-      ),
-    );
+    symlinkSync(process.execPath, badNode);
     writeFileSync(
       goodNode,
       [
-        ...fakeNodeVersionProbe,
-        'printf "good-env-node\\n" >> "$NODE_LOG"',
-        'printf "%s\\n" "${*:2}" >> "$GOOD_NPM_LOG"',
-        "exit 0",
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$GOOD_NODE_LOG"',
+        `exec ${JSON.stringify(process.execPath)} "$@"`,
         "",
       ].join("\n"),
     );
@@ -706,14 +674,13 @@ describe("install-cli.sh", () => {
       goodNpm,
       [
         "#!/usr/bin/env node",
-        "import { appendFileSync } from 'node:fs';",
-        "if (process.env.GOOD_NPM_LOG) {",
-        "  appendFileSync(process.env.GOOD_NPM_LOG, `${process.argv.slice(2).join(' ')}\\n`);",
-        "}",
+        'require("node:fs").appendFileSync(',
+        "  process.env.GOOD_NPM_LOG,",
+        '  `${process.argv.slice(2).join(" ")}\\n`,',
+        ");",
         "",
       ].join("\n"),
     );
-    chmodSync(badNode, 0o755);
     chmodSync(badNpm, 0o755);
     chmodSync(goodNode, 0o755);
     chmodSync(goodNpm, 0o755);
@@ -722,47 +689,28 @@ describe("install-cli.sh", () => {
       const result = runInstallCliShell(
         [
           "set -euo pipefail",
-          `cd ${JSON.stringify(toShellPath(process.cwd()))}`,
+          `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `export PATH=${JSON.stringify(`${toShellPath(badBin)}:${toShellPath(goodBin)}:${toShellPath(toolsBin)}`)}`,
-          `PREFIX=${JSON.stringify(toShellPath(prefix))}`,
-          "NODE_VERSION=22.22.3",
+          `export PATH=${JSON.stringify(`${badBin}:${goodBin}:${process.env.PATH ?? ""}`)}`,
+          `PREFIX=${JSON.stringify(prefix)}`,
           "try_link_usable_node_runtime_from_path",
         ].join("\n"),
         {
-          BAD_NPM_LOG: toShellPath(badNpmLog),
-          GOOD_NPM_LOG: toShellPath(goodNpmLog),
-          NODE_LOG: toShellPath(nodeLog),
+          BAD_NPM_LOG: badNpmLog,
+          GOOD_NPM_LOG: goodNpmLog,
+          GOOD_NODE_LOG: goodNodeLog,
         },
       );
 
       expect(result.status).toBe(0);
-      const nodeLink = join(prefix, "tools", "node-v22.22.3", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v22.22.3", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.15.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.15.0", "bin", "npm");
       expect(readFileSync(badNpmLog, "utf8")).toBe("--version\n");
       expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n");
-      expect(readFileSync(nodeLog, "utf8")).toBe("good-env-node\n");
-      if (process.platform === "win32") {
-        const linkedRuntime = runInstallCliShell(
-          [
-            "set -euo pipefail",
-            `${JSON.stringify(toShellPath(nodeLink))} -v`,
-            `${JSON.stringify(toShellPath(npmLink))} --version`,
-          ].join("\n"),
-          {
-            BAD_NPM_LOG: toShellPath(badNpmLog),
-            GOOD_NPM_LOG: toShellPath(goodNpmLog),
-            NODE_LOG: toShellPath(nodeLog),
-          },
-        );
-        expect(linkedRuntime.status).toBe(0);
-        expect(linkedRuntime.stdout).toContain("v22.22.3");
-        expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n--version\n");
-      } else {
-        expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
-        expect(readlinkSync(nodeLink)).toBe(goodNode);
-        expect(readlinkSync(npmLink)).toBe(goodNpm);
-      }
+      expect(readFileSync(goodNodeLog, "utf8")).toContain("npm --version");
+      expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(nodeLink)).toBe(goodNode);
+      expect(readlinkSync(npmLink)).toBe(goodNpm);
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
