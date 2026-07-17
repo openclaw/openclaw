@@ -11,7 +11,7 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
@@ -283,18 +283,19 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),
   create: async (options) => {
-    const explicitValue = await resolveConfiguredSecretInputString({
-      config: options.config,
-      env: process.env,
+    const explicitValue = normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,
       path: "agents.*.memorySearch.remote.apiKey",
     });
-    const profile = await resolveFirstGithubToken({
-      agentDir: options.agentDir,
-      config: options.config,
-      env: process.env,
-    });
-    const value = explicitValue.value || profile.githubToken;
+    const value = explicitValue
+      ? explicitValue
+      : (
+          await resolveFirstGithubToken({
+            agentDir: options.agentDir,
+            config: options.config,
+            env: process.env,
+          })
+        ).githubToken;
     if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
@@ -329,7 +330,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       baseUrl,
       env: process.env,
       fetchImpl: fetch,
-      githubToken,
+      githubToken: value,
       githubDomain,
       headers: options.remote?.headers,
       model,

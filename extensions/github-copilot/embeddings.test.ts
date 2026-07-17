@@ -301,7 +301,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("honors remote overrides when creating the provider", async () => {
-    resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "test-token-placeholder" });
     mockDiscoveryResponse({
       ok: true,
       json: buildModelsResponse([
@@ -318,7 +317,8 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       },
     } as never);
 
-    expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
+    expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
     expect(firstCopilotApiTokenRequest().env).toBe(process.env);
     expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
 
@@ -326,6 +326,23 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("test-token-placeholder");
+  });
+
+  it("rejects an unresolved remote ref without falling back to another profile", async () => {
+    await expect(
+      githubCopilotMemoryEmbeddingProviderAdapter.create({
+        ...defaultCreateOptions(),
+        remote: {
+          apiKey: { source: "env", provider: "default", id: "MISSING_TEST_VALUE" },
+        },
+      } as never),
+    ).rejects.toMatchObject({
+      name: "UnresolvedSecretInputError",
+      path: "agents.*.memorySearch.remote.apiKey",
+    });
+    expect(resolveFirstGithubTokenMock).not.toHaveBeenCalled();
+    expect(resolveCopilotApiTokenMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 
   it("includes provider, baseUrl, and model in runtime cache data", async () => {
