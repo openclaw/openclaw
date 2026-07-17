@@ -176,6 +176,28 @@
       "zh-CN",
       "zh-TW"
     ],
+    "publisherFeedsPage.noSignedProfiles": [
+      "ar",
+      "de",
+      "es",
+      "fa",
+      "fr",
+      "hi",
+      "id",
+      "it",
+      "ja-JP",
+      "ko",
+      "nl",
+      "pl",
+      "pt-BR",
+      "ru",
+      "th",
+      "tr",
+      "uk",
+      "vi",
+      "zh-CN",
+      "zh-TW"
+    ],
     "publisherFeedsPage.noStatus": [
       "ar",
       "de",
@@ -441,6 +463,6 @@
       "zh-TW"
     ]
   },
-  "sourceHash": "184f61e6d12451104b2a259abb8238412cbfdd76fe68342b07f35a723c17677e",
+  "sourceHash": "a285d95fa264c8205225fc62d4a86dfc4db16edb594e756968c8e0d9cb548e19",
   "version": 1
 }

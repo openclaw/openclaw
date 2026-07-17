@@ -688,6 +688,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "publisherFeeds.list",
+      "publisherFeeds.profiles",
       "publisherFeeds.follow",
       "publisherFeeds.unfollow",
       "publisherFeeds.refresh",

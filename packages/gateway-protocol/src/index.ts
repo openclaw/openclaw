@@ -18,6 +18,7 @@ import { lazyCompile } from "./protocol-validator.js";
 import {
   PublisherFeedsFollowParamsSchema,
   PublisherFeedsListParamsSchema,
+  PublisherFeedsProfilesParamsSchema,
   PublisherFeedsRefreshParamsSchema,
   PublisherFeedsStatusParamsSchema,
   PublisherFeedsUnfollowParamsSchema,
@@ -811,6 +812,7 @@ export const validateTaskSuggestionsCreateParams = lazyCompile(TaskSuggestionsCr
 export const validateTaskSuggestionsAcceptParams = lazyCompile(TaskSuggestionsAcceptParamsSchema);
 export const validateTaskSuggestionsDismissParams = lazyCompile(TaskSuggestionsDismissParamsSchema);
 export const validatePublisherFeedsListParams = lazyCompile(PublisherFeedsListParamsSchema);
+export const validatePublisherFeedsProfilesParams = lazyCompile(PublisherFeedsProfilesParamsSchema);
 export const validatePublisherFeedsFollowParams = lazyCompile(PublisherFeedsFollowParamsSchema);
 export const validatePublisherFeedsUnfollowParams = lazyCompile(PublisherFeedsUnfollowParamsSchema);
 export const validatePublisherFeedsRefreshParams = lazyCompile(PublisherFeedsRefreshParamsSchema);

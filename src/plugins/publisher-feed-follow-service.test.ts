@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   followPublisherFeed,
   followPublisherFeedByHandle,
+  listEligiblePublisherFeedProfiles,
   listFollowedPublisherFeeds,
   refreshFollowedPublisherFeeds,
+  resolveFollowedPublisherFeedTarget,
   unfollowPublisherFeed,
 } from "./publisher-feed-follow-service.js";
 import type {
@@ -96,6 +98,62 @@ function dependencies(
 }
 
 describe("publisher feed follow service", () => {
+  it("lists only eligible signed profiles without exposing trust keys", () => {
+    const profiles = listEligiblePublisherFeedProfiles({
+      feeds: {
+        unsigned: { url: "https://unsigned.example/feed" },
+        malformed: {
+          url: "https://user:secret@example.com/feed",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "secret-key-id", publicKey: "secret-public-key" }],
+          },
+        },
+        "z-signed": {
+          url: "https://z.example/feed/path",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "z-key", publicKey: "z-public-key" }],
+          },
+        },
+        "a-signed": {
+          url: "https://a.example/feed/path",
+          verification: {
+            mode: "signed",
+            keys: [{ keyId: "a-key", publicKey: "a-public-key" }],
+          },
+        },
+      },
+    });
+
+    expect(profiles).toEqual([
+      { name: "a-signed", sourceOrigin: "https://a.example" },
+      { name: "z-signed", sourceOrigin: "https://z.example" },
+    ]);
+    expect(JSON.stringify(profiles)).not.toContain("public-key");
+  });
+
+  it("requires a configured signed profile and binds its origin", () => {
+    expect(() =>
+      resolveFollowedPublisherFeedTarget({
+        follow: { ...followRecord(), feedProfile: "unsigned" },
+        marketplaces,
+      }),
+    ).toThrow("must require signatures");
+    expect(() =>
+      resolveFollowedPublisherFeedTarget({
+        follow: { ...followRecord(), sourceOrigin: "https://mirror.example" },
+        marketplaces,
+      }),
+    ).toThrow("no longer matches");
+    expect(
+      resolveFollowedPublisherFeedTarget({ follow: followRecord(), marketplaces }),
+    ).toMatchObject({
+      baseUrl: "https://clawhub.ai",
+      publisherId: "publishers:alice",
+      verification: { trustedKeys: [{ keyId: "clawhub-2026-q3" }] },
+    });
+  });
   it("refreshes before persisting a new follow", async () => {
     const deps = dependencies();
     const refresh = vi.fn(async () => ({

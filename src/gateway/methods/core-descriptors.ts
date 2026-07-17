@@ -451,6 +451,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "publisherFeeds.unfollow", scope: "operator.write" },
   { name: "publisherFeeds.refresh", scope: "operator.write", startup: true },
   { name: "publisherFeeds.status", scope: "operator.read", startup: true },
+  { name: "publisherFeeds.profiles", scope: "operator.read", startup: true },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

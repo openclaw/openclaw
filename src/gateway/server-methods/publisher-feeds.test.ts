@@ -32,6 +32,7 @@ const refreshStatus = {
 function createHarness(
   overrides: {
     list?: () => Promise<(typeof followStatus)[]>;
+    profiles?: () => Array<{ name: string; sourceOrigin: string }>;
     follow?: () => Promise<{ follow: typeof follow; refresh: never }>;
     unfollow?: () => Promise<boolean>;
     scheduler?: GatewayPublisherFeedRefresh;
@@ -48,6 +49,10 @@ function createHarness(
   const dependencies = {
     createServiceDependencies: vi.fn(() => serviceDependencies),
     list: vi.fn(overrides.list ?? (async () => [followStatus])),
+    profiles: vi.fn(
+      overrides.profiles ??
+        (() => [{ name: "clawhub-public", sourceOrigin: "https://clawhub.ai" }]),
+    ),
     follow: vi.fn(
       overrides.follow ??
         (async () => ({
@@ -76,6 +81,15 @@ function createHarness(
 }
 
 describe("publisher feed gateway methods", () => {
+  it("lists safe configured profile descriptors", async () => {
+    const { call } = createHarness();
+    expect(await call("publisherFeeds.profiles", {})).toEqual([
+      true,
+      { profiles: [{ name: "clawhub-public", sourceOrigin: "https://clawhub.ai" }] },
+      undefined,
+    ]);
+  });
+
   it("lists persisted follows with scheduler status", async () => {
     const { call } = createHarness();
     expect(await call("publisherFeeds.list", {})).toEqual([
@@ -174,6 +188,7 @@ describe("publisher feed gateway methods", () => {
     const handlers = createPublisherFeedsHandlers({
       createServiceDependencies: () => ({}) as never,
       list: async () => [followStatus],
+      profiles: () => [],
       follow: async () => ({ follow, refresh: {} as never }),
       unfollow: async () => true,
     });

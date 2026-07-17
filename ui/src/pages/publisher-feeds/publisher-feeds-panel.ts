@@ -1,9 +1,11 @@
 import { consume } from "@lit/context";
 import type {
   PublisherFeedFollow,
+  PublisherFeedProfile,
   PublisherFeedRefreshStatus,
   PublisherFeedsFollowResult,
   PublisherFeedsListResult,
+  PublisherFeedsProfilesResult,
   PublisherFeedsRefreshResult,
   PublisherFeedsUnfollowResult,
 } from "@openclaw/gateway-protocol";
@@ -58,6 +60,7 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
   @state() private connected = false;
   @state() private loading = false;
   @state() private follows: PublisherFeedFollow[] = [];
+  @state() private profiles: PublisherFeedProfile[] = [];
   @state() private refreshStatus: PublisherFeedRefreshStatus | null = null;
   @state() private error: string | null = null;
   @state() private publisherId = "";
@@ -66,6 +69,7 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
   @state() private canFollow = false;
   @state() private canUnfollow = false;
   @state() private canRefresh = false;
+  @state() private profileDiscoveryAvailable = false;
 
   private sourceGeneration = 0;
   private readonly subscriptions = new SubscriptionsController(this).effect(
@@ -94,6 +98,8 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
       canWrite && isGatewayMethodAdvertised(snapshot, "publisherFeeds.unfollow") === true;
     this.canRefresh =
       canWrite && isGatewayMethodAdvertised(snapshot, "publisherFeeds.refresh") === true;
+    this.profileDiscoveryAvailable =
+      isGatewayMethodAdvertised(snapshot, "publisherFeeds.profiles") === true;
     if (sourceChanged || connectionChanged || clientChanged) {
       this.sourceGeneration += 1;
       this.loading = false;
@@ -101,6 +107,7 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
       this.error = null;
       if (sourceChanged || clientChanged) {
         this.follows = [];
+        this.profiles = [];
         this.refreshStatus = null;
       }
     }
@@ -122,12 +129,27 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
     this.loading = true;
     this.error = null;
     try {
-      const result = await client.request<PublisherFeedsListResult>("publisherFeeds.list", {});
+      const [result, profilesResult] = await Promise.all([
+        client.request<PublisherFeedsListResult>("publisherFeeds.list", {}),
+        this.profileDiscoveryAvailable
+          ? client.request<PublisherFeedsProfilesResult>("publisherFeeds.profiles", {})
+          : Promise.resolve(null),
+      ]);
       if (generation !== this.sourceGeneration || client !== this.client) {
         return;
       }
       this.follows = result.follows;
       this.refreshStatus = result.refresh;
+      if (profilesResult) {
+        this.profiles = profilesResult.profiles;
+        const availableNames = new Set(this.profiles.map((profile) => profile.name));
+        if (!availableNames.has(this.feedProfile)) {
+          this.feedProfile =
+            this.profiles.find((profile) => profile.name === "clawhub-public")?.name ??
+            this.profiles[0]?.name ??
+            "";
+        }
+      }
     } catch (error) {
       if (generation === this.sourceGeneration && client === this.client) {
         this.error = errorMessage(error);
@@ -280,16 +302,40 @@ class PublisherFeedsPanel extends OpenClawLightDomElement {
           @input=${(event: Event) =>
             (this.publisherId = (event.currentTarget as HTMLInputElement).value)}
         />
-        <input
-          class="settings-input"
-          name="feed-profile"
-          autocomplete="off"
-          aria-label=${t("publisherFeedsPage.feedProfile")}
-          placeholder=${t("publisherFeedsPage.feedProfile")}
-          .value=${this.feedProfile}
-          @input=${(event: Event) =>
-            (this.feedProfile = (event.currentTarget as HTMLInputElement).value)}
-        />
+        ${this.profileDiscoveryAvailable
+          ? html`<select
+              class="settings-select"
+              name="feed-profile"
+              aria-label=${t("publisherFeedsPage.feedProfile")}
+              .value=${this.feedProfile}
+              ?disabled=${this.profiles.length === 0}
+              @change=${(event: Event) =>
+                (this.feedProfile = (event.currentTarget as HTMLSelectElement).value)}
+            >
+              ${this.profiles.length === 0
+                ? html`<option value="" selected>
+                    ${t("publisherFeedsPage.noSignedProfiles")}
+                  </option>`
+                : this.profiles.map(
+                    (profile) =>
+                      html`<option
+                        value=${profile.name}
+                        ?selected=${profile.name === this.feedProfile}
+                      >
+                        ${profile.name} · ${profile.sourceOrigin}
+                      </option>`,
+                  )}
+            </select>`
+          : html`<input
+              class="settings-input"
+              name="feed-profile"
+              autocomplete="off"
+              aria-label=${t("publisherFeedsPage.feedProfile")}
+              placeholder=${t("publisherFeedsPage.feedProfile")}
+              .value=${this.feedProfile}
+              @input=${(event: Event) =>
+                (this.feedProfile = (event.currentTarget as HTMLInputElement).value)}
+            />`}
         <button type="submit" class="btn btn--sm" ?disabled=${followDisabled}>
           ${this.operation === "follow"
             ? t("publisherFeedsPage.following")

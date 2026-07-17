@@ -32,6 +32,15 @@ export const PublisherFeedsListResultSchema = closedObject({
   refresh: PublisherFeedRefreshStatusSchema,
 });
 
+export const PublisherFeedProfileSchema = closedObject({
+  name: FeedProfileSchema,
+  sourceOrigin: Type.String({ format: "uri", maxLength: 2_048 }),
+});
+export const PublisherFeedsProfilesParamsSchema = closedObject({});
+export const PublisherFeedsProfilesResultSchema = closedObject({
+  profiles: Type.Array(PublisherFeedProfileSchema),
+});
+
 export const PublisherFeedsFollowParamsSchema = closedObject({
   publisherId: PublisherIdSchema,
   feedProfile: FeedProfileSchema,
@@ -57,6 +66,9 @@ export type PublisherFeedFollow = Static<typeof PublisherFeedFollowSchema>;
 export type PublisherFeedRefreshStatus = Static<typeof PublisherFeedRefreshStatusSchema>;
 export type PublisherFeedsListParams = Static<typeof PublisherFeedsListParamsSchema>;
 export type PublisherFeedsListResult = Static<typeof PublisherFeedsListResultSchema>;
+export type PublisherFeedProfile = Static<typeof PublisherFeedProfileSchema>;
+export type PublisherFeedsProfilesParams = Static<typeof PublisherFeedsProfilesParamsSchema>;
+export type PublisherFeedsProfilesResult = Static<typeof PublisherFeedsProfilesResultSchema>;
 export type PublisherFeedsFollowParams = Static<typeof PublisherFeedsFollowParamsSchema>;
 export type PublisherFeedsFollowResult = Static<typeof PublisherFeedsFollowResultSchema>;
 export type PublisherFeedsUnfollowParams = Static<typeof PublisherFeedsUnfollowParamsSchema>;

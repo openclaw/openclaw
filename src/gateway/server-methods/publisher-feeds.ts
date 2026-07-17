@@ -3,6 +3,7 @@ import {
   errorShape,
   validatePublisherFeedsFollowParams,
   validatePublisherFeedsListParams,
+  validatePublisherFeedsProfilesParams,
   validatePublisherFeedsRefreshParams,
   validatePublisherFeedsStatusParams,
   validatePublisherFeedsUnfollowParams,
@@ -10,6 +11,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   followPublisherFeed,
+  listEligiblePublisherFeedProfiles,
   listFollowedPublisherFeeds,
   PublisherFeedFollowInputError,
   unfollowPublisherFeed,
@@ -26,6 +28,7 @@ type PublisherFeedHandlerDependencies = {
   ) => PublisherFeedFollowServiceDependencies;
   follow: typeof followPublisherFeed;
   list: typeof listFollowedPublisherFeeds;
+  profiles: typeof listEligiblePublisherFeedProfiles;
   unfollow: typeof unfollowPublisherFeed;
 };
 
@@ -37,6 +40,7 @@ const defaultDependencies: PublisherFeedHandlerDependencies = {
   }),
   follow: followPublisherFeed,
   list: listFollowedPublisherFeeds,
+  profiles: listEligiblePublisherFeedProfiles,
   unfollow: unfollowPublisherFeed,
 };
 
@@ -60,6 +64,27 @@ export function createPublisherFeedsHandlers(
   dependencies: PublisherFeedHandlerDependencies = defaultDependencies,
 ): GatewayRequestHandlers {
   return {
+    "publisherFeeds.profiles": ({ params, respond, context }) => {
+      if (
+        !assertValidParams(
+          params,
+          validatePublisherFeedsProfilesParams,
+          "publisherFeeds.profiles",
+          respond,
+        )
+      ) {
+        return;
+      }
+      try {
+        respond(
+          true,
+          { profiles: dependencies.profiles(context.getRuntimeConfig().marketplaces) },
+          undefined,
+        );
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
     "publisherFeeds.list": async ({ params, respond, context }) => {
       if (
         !assertValidParams(params, validatePublisherFeedsListParams, "publisherFeeds.list", respond)

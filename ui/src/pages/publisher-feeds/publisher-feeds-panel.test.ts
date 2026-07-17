@@ -45,6 +45,7 @@ type TestPanel = HTMLElement & { updateComplete: Promise<boolean> };
 function createGateway(
   handler: (method: string, params: unknown) => Promise<unknown>,
   scopes = ["operator.read", "operator.write"],
+  profileDiscovery = false,
 ) {
   const request = vi.fn(handler);
   const client = { request } as unknown as GatewayBrowserClient;
@@ -62,6 +63,7 @@ function createGateway(
           "publisherFeeds.follow",
           "publisherFeeds.unfollow",
           "publisherFeeds.refresh",
+          ...(profileDiscovery ? ["publisherFeeds.profiles"] : []),
         ],
       },
     },
@@ -127,6 +129,107 @@ describe("PublisherFeedsPanel", () => {
     expect(panel.textContent).toContain("Sequence 42");
     expect(panel.textContent).toContain("1 of 1 refreshed");
     expect(request).toHaveBeenCalledWith("publisherFeeds.list", {});
+  });
+
+  it("discovers signed profiles and prefers the ClawHub default", async () => {
+    const { gateway } = createGateway(
+      async (method) => {
+        if (method === "publisherFeeds.profiles") {
+          return {
+            profiles: [
+              { name: "partner", sourceOrigin: "https://partner.example" },
+              { name: "clawhub-public", sourceOrigin: "https://clawhub.ai" },
+            ],
+          };
+        }
+        return listResult([]);
+      },
+      undefined,
+      true,
+    );
+    const { panel } = await mount(gateway);
+
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLSelectElement>('select[name="feed-profile"]')?.value).toBe(
+        "clawhub-public",
+      ),
+    );
+    const profileSelect = panel.querySelector<HTMLSelectElement>('select[name="feed-profile"]');
+    expect(profileSelect?.textContent).toContain("partner · https://partner.example");
+    expect(panel.querySelector('input[name="feed-profile"]')).toBeNull();
+  });
+
+  it("does not permit follows when no signed profiles are configured", async () => {
+    const { gateway } = createGateway(
+      async (method) => (method === "publisherFeeds.profiles" ? { profiles: [] } : listResult([])),
+      undefined,
+      true,
+    );
+    const { panel } = await mount(gateway);
+
+    await vi.waitFor(() =>
+      expect(panel.textContent).toContain("No signed feed profiles configured"),
+    );
+    expect(panel.querySelector<HTMLSelectElement>('select[name="feed-profile"]')?.disabled).toBe(
+      true,
+    );
+    expect(panel.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+  });
+
+  it("keeps the selected and submitted profile aligned after discovery changes", async () => {
+    let profileLoads = 0;
+    const { gateway, request } = createGateway(
+      async (method) => {
+        if (method === "publisherFeeds.profiles") {
+          profileLoads += 1;
+          return {
+            profiles:
+              profileLoads === 1
+                ? [
+                    { name: "partner", sourceOrigin: "https://partner.example" },
+                    { name: "clawhub-public", sourceOrigin: "https://clawhub.ai" },
+                  ]
+                : [{ name: "clawhub-public", sourceOrigin: "https://clawhub.ai" }],
+          };
+        }
+        if (method === "publisherFeeds.refresh") {
+          return { status: refreshStatus };
+        }
+        if (method === "publisherFeeds.follow") {
+          return { follow };
+        }
+        return listResult([]);
+      },
+      undefined,
+      true,
+    );
+    const { panel } = await mount(gateway);
+    const profileSelect = await vi.waitFor(() => {
+      const select = panel.querySelector<HTMLSelectElement>('select[name="feed-profile"]');
+      expect(select?.value).toBe("clawhub-public");
+      return select;
+    });
+    if (!profileSelect) {
+      throw new Error("profile select was not rendered");
+    }
+    profileSelect.value = "partner";
+    profileSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    panel.querySelector<HTMLButtonElement>('[aria-label="Refresh publisher feeds"]')?.click();
+
+    await vi.waitFor(() => expect(profileSelect.value).toBe("clawhub-public"));
+    const publisherInput = panel.querySelector<HTMLInputElement>('[name="publisher-id"]');
+    if (!publisherInput) {
+      throw new Error("publisher id input was not rendered");
+    }
+    publisherInput.value = "nvidia";
+    publisherInput.dispatchEvent(new Event("input", { bubbles: true }));
+    panel.querySelector<HTMLFormElement>("form")?.requestSubmit();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("publisherFeeds.follow", {
+        publisherId: "nvidia",
+        feedProfile: "clawhub-public",
+      }),
+    );
   });
 
   it("blocks mutations until the current list request completes", async () => {
