@@ -145,8 +145,11 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
-                if self.swabbleEnabled {
+                if self.swabbleEnabled, !self.talkEnabled {
                     Task { await VoiceWakeRuntime.shared.refresh(state: self) }
+                }
+                if self.talkEnabled {
+                    Task { await TalkModeRuntime.shared.inputDeviceSelectionDidChange() }
                 }
             }
         }

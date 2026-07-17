@@ -593,6 +593,7 @@ private struct MacChatSurface: View {
     @State private var viewModel: OpenClawChatViewModel
     @State private var appState = AppStateStore.shared
     @State private var talkController = TalkModeController.shared
+    @State private var audioInputCatalog = MacChatAudioInputCatalog()
     @AppStorage(OpenClawChatWindowShell.assistantTraceDefaultsKey)
     private var showsAssistantTrace = true
 
@@ -616,27 +617,31 @@ private struct MacChatSurface: View {
     }
 
     var body: some View {
-        if self.isFullWindow {
-            OpenClawChatWindowShell(
-                viewModel: self.viewModel,
-                userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
-                emptyAssistantIntro: Self.emptyAssistantIntro,
-                emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: self.talkControl,
-                voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
-        } else {
-            OpenClawChatView(
-                viewModel: self.viewModel,
-                showsSessionSwitcher: true,
-                userAccent: self.userAccent,
-                emptyAssistantIntro: Self.emptyAssistantIntro,
-                emptyAssistantPrompts: Self.emptyAssistantPrompts,
-                talkControl: self.talkControl,
-                voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+        Group {
+            if self.isFullWindow {
+                OpenClawChatWindowShell(
+                    viewModel: self.viewModel,
+                    userAccent: self.userAccent,
+                    showsAssistantTrace: self.showsAssistantTrace,
+                    emptyAssistantIntro: Self.emptyAssistantIntro,
+                    emptyAssistantPrompts: Self.emptyAssistantPrompts,
+                    talkControl: self.talkControl,
+                    voiceNoteControl: self.voiceNoteControl,
+                    speech: self.speech)
+            } else {
+                OpenClawChatView(
+                    viewModel: self.viewModel,
+                    showsSessionSwitcher: true,
+                    userAccent: self.userAccent,
+                    emptyAssistantIntro: Self.emptyAssistantIntro,
+                    emptyAssistantPrompts: Self.emptyAssistantPrompts,
+                    talkControl: self.talkControl,
+                    voiceNoteControl: self.voiceNoteControl,
+                    speech: self.speech)
+            }
         }
+        .onAppear { self.audioInputCatalog.start() }
+        .onDisappear { self.audioInputCatalog.stop() }
     }
 
     private var talkControl: OpenClawChatTalkControl {
@@ -649,6 +654,14 @@ private struct MacChatSurface: View {
             // macOS exposes live phase but not the runtime's resolved TTS provider.
             // An empty label avoids presenting stale config as current state.
             providerLabel: "",
+            level: self.talkController.level,
+            partialTranscript: self.talkController.partialTranscript,
+            recentTranscript: self.talkController.recentTranscripts,
+            inputDevices: self.audioInputCatalog.chatDevices,
+            selectedInputDeviceID: self.appState.voiceWakeMicID.isEmpty ? nil : self.appState.voiceWakeMicID,
+            selectInputDevice: { deviceID in
+                self.audioInputCatalog.select(deviceID, state: self.appState)
+            },
             toggle: { sessionKey in
                 WebChatManager.shared.recordActiveSessionKey(sessionKey)
                 Task {

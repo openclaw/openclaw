@@ -101,6 +101,10 @@ struct OpenClawChatComposer: View {
                 }
             }
 
+            if let talkControl, talkControl.isEnabled {
+                ChatTalkActivityStrip(control: talkControl)
+            }
+
             if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
                 OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
                     .padding(self.editorPadding)
@@ -576,7 +580,7 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+                ChatTalkButtonGlyph(control: talkControl)
                     .font(OpenClawChatTypography.captionSemiBold)
                 Text(talkControl.isEnabled ? "Stop" : "Talk")
                     .font(OpenClawChatTypography.captionSemiBold)
@@ -600,13 +604,14 @@ struct OpenClawChatComposer: View {
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
+        .chatTalkInputDeviceMenu(talkControl)
     }
 
     private func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
         Button {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
-            Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
+            ChatTalkButtonGlyph(control: talkControl)
                 .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
                 .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
@@ -628,6 +633,7 @@ struct OpenClawChatComposer: View {
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
         .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
+        .chatTalkInputDeviceMenu(talkControl)
     }
 
     private func talkButtonFill(_ talkControl: OpenClawChatTalkControl) -> AnyShapeStyle {
