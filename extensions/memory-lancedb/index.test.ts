@@ -2722,7 +2722,7 @@ describe("memory plugin e2e", () => {
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
-    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+    const vectorSearch = vi.fn((_vector?: number[]) => createAgentScopedVectorQuery(limit));
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),
