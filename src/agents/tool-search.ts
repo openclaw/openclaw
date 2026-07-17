@@ -2445,11 +2445,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
       label: "Tool Search Code",
       description:
-        "Run one complete JavaScript workflow in an isolated Node subprocess over a large tool catalog. Keep dependent discovery, calls, and result processing in this invocation. Await prerequisites before later calls; parallelize only independent work. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Describe returns metadata and schema only; call executes the tool and returns `{ tool, result }`, with the tool's JSON value normally in `result.details`.",
+        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
       parameters: Type.Object({
         code: Type.String({
           description:
-            "JavaScript body for one async workflow. `search` takes a query string, not an object. Await dependent operations here, never put them in Promise.all, and use return for the final value instead of splitting work across code tool calls.",
+            "JavaScript body for an async function. Use return to return the final value. The openclaw.tools bridge is available.",
         }),
       }),
       execute: async (

@@ -212,25 +212,15 @@ describe("Tool Search", () => {
     }
   });
 
-  it("describes the fastest valid model workflow in control schemas", () => {
+  it("guides structured control tools toward compact catalog calls", () => {
     const tools = createToolSearchTools({ config: {} as never });
     const byName = new Map(tools.map((tool) => [tool.name, tool]));
-    const codeTool = expectDefined(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME), "code tool");
-    const codeParameters = codeTool.parameters as {
-      properties?: Record<string, { description?: string }>;
-    };
-
-    expect(codeTool.description).toContain("one complete JavaScript workflow");
-    expect(codeTool.description).toContain("search(query: string, options?)");
-    expect(codeTool.description).toContain("Describe returns metadata and schema only");
-    expect(codeTool.description).toContain("JSON value normally in `result.details`");
-    expect(codeParameters.properties?.code?.description).toContain(
-      "search` takes a query string, not an object",
+    expect(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME)?.description).toContain(
+      "search(query: string, options?)",
     );
-    expect(codeParameters.properties?.code?.description).toContain(
-      "instead of splitting work across code tool calls",
+    expect(byName.get(TOOL_SEARCH_CODE_MODE_TOOL_NAME)?.description).toContain(
+      "JSON values normally live in `result.details`",
     );
-    expect(codeParameters.properties?.code?.description).toContain("never put them in Promise.all");
     expect(byName.get(TOOL_SEARCH_RAW_TOOL_NAME)?.description).toContain(
       "use tool_describe only when you need its input schema",
     );
