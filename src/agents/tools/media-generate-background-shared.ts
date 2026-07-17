@@ -377,6 +377,11 @@ function failMediaGenerationTaskRun(params: {
   }
 }
 
+/**
+ * Durable completion handoffs already own outbound media delivery.
+ * The resumed agent may only supply caption text through the active
+ * visible-reply contract; re-attaching MEDIA creates a second channel send.
+ */
 function buildMediaGenerationReplyInstruction(params: {
   status: "ok" | "error";
   completionLabel: string;
@@ -384,8 +389,10 @@ function buildMediaGenerationReplyInstruction(params: {
   if (params.status === "ok") {
     return [
       `The ${params.completionLabel} is ready for the original chat.`,
-      'Use the current visible-reply contract: if this session requires message-tool replies, call message(action="send") with a short caption and every structured attachment from the internal event, then reply only NO_REPLY.',
-      "Otherwise, write the normal final reply and attach every generated media path with final-reply MEDIA lines.",
+      "Generated media delivery is already owned by this completion handoff.",
+      "Do not re-send, re-attach, or echo MEDIA lines / structured attachments from the internal event.",
+      'Use the current visible-reply contract for caption text only: if this session requires message-tool replies, call message(action="send") with a short caption and no attachments, then reply only NO_REPLY.',
+      "Otherwise, write a short normal final reply caption with no MEDIA lines, or reply NO_REPLY if no caption is needed.",
     ].join(" ");
   }
   return [
