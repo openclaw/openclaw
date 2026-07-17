@@ -53,7 +53,7 @@ const replaceEditSchema = Type.Object(
       description: "Replacement text.",
     }),
   },
-  { additionalProperties: false },
+  {},
 );
 
 const editSchema = Type.Object(
@@ -66,7 +66,7 @@ const editSchema = Type.Object(
         "Targeted replacements against original file; no overlap/nesting. Merge nearby changes.",
     }),
   },
-  { additionalProperties: false },
+  {},
 );
 type LegacyEditToolInput = Record<string, unknown> & {
   edits?: unknown;

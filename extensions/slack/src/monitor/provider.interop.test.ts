@@ -410,6 +410,37 @@ describe("createSlackBoltApp", () => {
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
 
+  it.each(["socket", "http"] as const)(
+    "routes %s Events API receive through the durable receiver wrapper",
+    async (slackMode) => {
+      const wrappedReceiver = { durable: true };
+      const wrapReceiver = vi.fn(() => wrappedReceiver as never);
+      const { app, receiver } = createSlackBoltApp({
+        interop: {
+          App: FakeApp as never,
+          HTTPReceiver: FakeHTTPReceiver as never,
+          SocketModeReceiver: FakeSocketModeReceiver as never,
+        },
+        slackMode,
+        botToken: "test-bot-token",
+        ...(slackMode === "socket"
+          ? { appToken: "test-app-token" }
+          : { signingSecret: "test-signing-secret" }),
+        slackWebhookPath: "/slack/events",
+        clientOptions: {},
+        wrapReceiver,
+      });
+
+      expect(wrapReceiver).toHaveBeenCalledWith(receiver);
+      expect((app as unknown as FakeApp).args.receiver).toBe(wrappedReceiver);
+      const receiverArgs = (receiver as unknown as FakeHTTPReceiver | FakeSocketModeReceiver).args;
+      expect(receiverArgs.processEventErrorHandler).toBeTypeOf("function");
+      await expect(
+        (receiverArgs.processEventErrorHandler as () => Promise<boolean>)(),
+      ).resolves.toBe(false);
+    },
+  );
+
   it("prevents Bolt's constructor-time token verification side effect", () => {
     let eagerAuthTestCalls = 0;
     class BoltLikeEagerAuthApp extends FakeApp {

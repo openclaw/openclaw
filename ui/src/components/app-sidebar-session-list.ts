@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { titleForRoute } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -18,9 +19,11 @@ import {
 } from "./app-sidebar-session-catalogs.ts";
 import {
   limitSidebarSessionRows,
+  loadStoredSidebarCatalogGrouping,
   SIDEBAR_SESSION_PAGE_SIZE,
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
   sidebarSessionMetaId,
+  storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -29,6 +32,8 @@ import "./elapsed-time.ts";
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarMenusElement {
+  @state() protected catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
+
   private renderSessionState(session: SidebarRecentSession) {
     if (session.hasActiveRun || (session.isChild && session.status === "running")) {
       return html`<span
@@ -51,7 +56,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
     if (!status) {
       return nothing;
     }
-    const state =
+    const statusBadge =
       status === "done"
         ? { icon: icons.check, label: t("sessionsView.statusDone") }
         : status === "killed"
@@ -61,13 +66,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
             : status === "failed"
               ? { icon: icons.alertTriangle, label: t("sessionsView.statusFailed") }
               : null;
-    return state
+    return statusBadge
       ? html`<span
           class="sidebar-child-session__status sidebar-child-session__status--${status}"
           role="img"
-          aria-label=${state.label}
-          title=${state.label}
-          >${state.icon}</span
+          aria-label=${statusBadge.label}
+          title=${statusBadge.label}
+          >${statusBadge.icon}</span
         >`
       : nothing;
   }
@@ -485,13 +490,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               </div>
             `
           : nothing}
-        <div
-          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
-            .sessionsScrollState}"
-          aria-label=${titleForRoute("sessions")}
-          @scroll=${(event: Event) =>
-            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
-        >
+        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
@@ -505,16 +504,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                 this.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
             >
               ${icons.listFilter}
-            </button>
-            <button
-              type="button"
-              class="sidebar-session-sort sidebar-session-new"
-              title=${navigationState.newSessionTitle}
-              aria-label=${t("chat.runControls.newSession")}
-              ?disabled=${navigationState.newSessionDisabled}
-              @click=${() => this.onOpenNewSession?.(expandedAgentId)}
-            >
-              ${icons.plus}
             </button>
           </div>
           ${this.renderSessionListBody(visibleSessions, {
@@ -540,6 +529,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       newSessionAgentId: this.expandedAgentId(),
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+      projectGrouping: this.catalogProjectGrouping,
       liveRows: [
         ...(this.sessionsResult?.sessions ?? []),
         ...Object.values(this.sessionRowsByAgent).flat(),
@@ -547,6 +537,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
       renderLiveRow: (row, display) =>
         this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
+      onToggleProjectGrouping: () => {
+        const next = this.catalogProjectGrouping === "project" ? "none" : "project";
+        storeSidebarCatalogGrouping(next);
+        this.catalogProjectGrouping = next;
+      },
       onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
       onOpenNewSession: this.onOpenNewSession,
       onNavigate: this.onNavigate,

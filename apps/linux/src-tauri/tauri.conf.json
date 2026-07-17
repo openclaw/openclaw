@@ -83,6 +83,9 @@
     ],
     "resources": {
       "../../../scripts/install-cli.sh": "install-cli.sh"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
     }
   }
 }

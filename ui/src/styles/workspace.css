@@ -129,6 +129,20 @@ button.workspace-tab:hover {
   min-height: 0;
 }
 
+.workspace-fullbleed {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-fullbleed > .workspace-widget__custom,
+.workspace-fullbleed > .workspace-embed__frame {
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+}
+
 /* --- Widget cell --------------------------------------------------------- */
 
 .workspace-widget {
@@ -526,6 +540,31 @@ button.workspace-tab:hover {
   white-space: nowrap;
 }
 
+.workspace-custom-widget-approvals__row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-custom-widget-approvals__actions {
+  display: flex;
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  gap: 6px;
+}
+
+.workspace-custom-widget-approvals__requested-by,
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  white-space: normal;
+}
+
+.workspace-custom-widget-approvals__permission {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 /* Live-run / health status dot. */
 .workspace-dot {
   flex: none;
@@ -717,6 +756,7 @@ button.workspace-tab:hover {
 
 /* iframe-embed widget. */
 .workspace-embed__frame {
+  display: block;
   width: 100%;
   height: 100%;
   min-height: 120px;

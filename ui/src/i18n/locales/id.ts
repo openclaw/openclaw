@@ -1776,6 +1776,11 @@ export const id: TranslationMap = {
       testingButton: "Menguji…",
       testing: "Menguji — meminta balasan singkat dari {modelRef}…",
     },
+    empty: {
+      title: "Instalasi yang direkomendasikan",
+      intro:
+        "Tidak ada akses AI yang terdeteksi. Instal salah satu alat ini, lalu periksa kembali.",
+    },
     unavailable: {
       title: "Terdeteksi, tetapi tidak diuji secara otomatis",
     },
@@ -2327,6 +2332,13 @@ export const id: TranslationMap = {
     session: "Sesi",
     outputTruncated: "Pratinjau disunting dan dipotong.",
     noOutputPreview: "Tidak ada pratinjau output.",
+    answerCandidate: {
+      title: "Kandidat jawaban",
+      itemId: "Item",
+      candidate: "Kandidat jawaban",
+      superseded: "Jawaban yang digantikan",
+      selected: "Jawaban yang dipilih",
+    },
     status: {
       running: "Berjalan",
       done: "Selesai",
@@ -2489,6 +2501,20 @@ export const id: TranslationMap = {
       },
       sessions: {
         empty: "No sessions yet.",
+      },
+      agentStatus: {
+        empty: "Belum ada agen atau sesi.",
+        busy: "Sibuk",
+        idle: "Siaga",
+        progress: "{percent}% selesai",
+      },
+      customWidgetApprovals: {
+        empty: "Tidak ada widget kustom yang menunggu persetujuan.",
+        kind: "Widget kustom",
+        requestedBy: "Diminta oleh {agent}",
+        approve: "Setujui",
+        reject: "Tolak",
+        permissionRequired: "Izin persetujuan diperlukan",
       },
       usage: {
         cost: "Cost",
@@ -3520,6 +3546,19 @@ export const id: TranslationMap = {
     disconnected: "Terputus dari gateway.",
     archivedSessionDisabled: "Pulihkan sesi ini untuk mengirim pesan.",
     loadOlder: "Muat yang lebih lama",
+    sessionHeader: {
+      renameTooltip: "Ganti nama sesi",
+      renameAria: "Ganti nama sesi {title}",
+      renameInputAria: "Judul sesi",
+      renameInputPlaceholder: "Judul sesi",
+      workspaceAria: "Tindakan workspace untuk {workspace}",
+      revealFinder: "Tampilkan di Finder",
+      revealFileExplorer: "Tampilkan di File Explorer",
+      revealFileManager: "Buka di pengelola berkas",
+      copyPath: "Salin jalur",
+      copyBranch: "Salin nama branch",
+      copied: "Disalin",
+    },
     catalog: {
       remoteViewOnly: "Sesi ini berada di node yang dipasangkan dan hanya dapat dilihat.",
       unsupportedViewOnly: "Sumber sesi eksternal ini hanya dapat dilihat.",
@@ -3572,7 +3611,12 @@ export const id: TranslationMap = {
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
     followUpMode: "Tindak lanjut saat agen sedang bekerja",
     followUpModeQueue: "Antrekan hingga proses berakhir",
+    followUpModeServer: "Default server ({mode})",
+    followUpModeLoading: "memuat…",
     followUpModeSteer: "Arahkan ke proses yang sedang aktif",
+    followUpModeUsingServer: "Menggunakan default server ({mode})",
+    followUpModeOverriding: "Menimpa default server ({mode})",
+    followUpModeReset: "Setel ulang ke default server",
     catalogOpenTarget: "Open Codex/Claude sessions in",
     catalogOpenTargetViewer: "OpenClaw viewer",
     catalogOpenTargetTerminal: "Terminal",
@@ -3653,6 +3697,7 @@ export const id: TranslationMap = {
       updateGateway: "Perbarui Gateway",
       allSessions: "Semua sesi",
       chats: "Chat",
+      groupCatalogSessionsByProject: "Kelompokkan menurut proyek",
       openSessionMenu: "Open session menu",
       sortBy: "Urutkan berdasarkan",
       sortCreated: "Dibuat",
@@ -3700,6 +3745,11 @@ export const id: TranslationMap = {
       pause: "Jeda tujuan",
       resume: "Lanjutkan tujuan",
       clear: "Hapus tujuan",
+    },
+    questions: {
+      title: "Codex membutuhkan masukan",
+      other: "Ketik jawaban lain",
+      submit: "Kirim jawaban",
     },
     messages: {
       activity: "Aktivitas",
@@ -3788,6 +3838,11 @@ export const id: TranslationMap = {
         limitHours: "Batas {hours} jam",
       },
       takePhoto: "Ambil foto",
+      cameraBusy: "Kamera sedang sibuk atau tidak tersedia untuk browser.",
+      cameraNoneFound: "Tidak ada kamera yang ditemukan.",
+      cameraPermissionBlocked:
+        "Akses kamera diblokir. Izinkan akses kamera dan mikrofon di pengaturan situs browser.",
+      cameraPreview: "Pratinjau kamera",
       dismissVoiceInputError: "Tutup kesalahan input suara",
       microphoneAccessFailed: "Tidak dapat mengakses input mikrofon.",
       microphoneBusy: "Input mikrofon sedang digunakan atau tidak tersedia untuk browser.",
@@ -3803,6 +3858,7 @@ export const id: TranslationMap = {
       selectedMicrophoneUnavailable:
         "Mikrofon yang dipilih tidak tersedia. Pilih input lain atau default Sistem.",
       startVoiceInput: "Mulai input suara",
+      startVideoTalk: "Mulai obrolan video",
       stillListening: "Masih mendengarkan",
       stopVoiceInput: "Hentikan input suara",
       systemDefaultMicrophone: "Default sistem",

@@ -1,4 +1,4 @@
-// Removes transient runtime state from restorable global database snapshots.
+// Removes transient runtime state from restorable OpenClaw database snapshots.
 import type { DatabaseSync } from "node:sqlite";
 
 function tableExists(database: DatabaseSync, tableName: string): boolean {
@@ -8,10 +8,18 @@ function tableExists(database: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
+/** Remove coordination rows that must never survive restore. */
+export function sanitizeOpenClawStateLeaseRows(database: DatabaseSync): void {
+  if (tableExists(database, "state_leases")) {
+    database.prepare("DELETE FROM state_leases").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
+  }
+}
+
 /** Remove transient rows whose restoration would replay work or extend private-data retention. */
 export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): void {
   // Archive backup can encounter an older database shape, so each optional
   // table is detected before applying the current sanitizer contract.
+  sanitizeOpenClawStateLeaseRows(database);
   if (tableExists(database, "delivery_queue_entries")) {
     database.prepare("DELETE FROM delivery_queue_entries").run(); // sqlite-allow-raw -- Offline snapshot maintenance boundary.
   }

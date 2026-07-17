@@ -1104,11 +1104,6 @@
       "translated": "Не удалось подготовить вложение к отправке."
     },
     {
-      "id": "native.android.0b29275eefad9863",
-      "source": "Could not queue message for later delivery.",
-      "translated": "Не удалось поставить сообщение в очередь для последующей доставки."
-    },
-    {
       "id": "native.android.c3899241029d152c",
       "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
       "translated": "Офлайн-очередь заполнена ($OUTBOX_MAX_QUEUED сообщений); сначала удалите элементы из очереди."
@@ -1127,6 +1122,11 @@
       "id": "native.android.84af66e78ec02fa3",
       "source": "Gateway health not OK; cannot send",
       "translated": "Состояние Gateway неудовлетворительное; отправка невозможна"
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Не удалось поставить сообщение в очередь для последующей доставки."
     },
     {
       "id": "native.android.8c2ff49af3e78aee",
@@ -7114,6 +7114,11 @@
       "translated": "$text "
     },
     {
+      "id": "native.android.d1712183ebf86197",
+      "source": "Widget unavailable",
+      "translated": "Виджет недоступен"
+    },
+    {
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
@@ -7392,6 +7397,16 @@
       "id": "native.android.707eccff20a79f65",
       "source": "Chat",
       "translated": "Чат"
+    },
+    {
+      "id": "native.android.ec49cca2ed03f9f9",
+      "source": "Messages to recover",
+      "translated": "Messages to recover"
+    },
+    {
+      "id": "native.android.7983bb6667118aa1",
+      "source": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+      "translated": "${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows."
     },
     {
       "id": "native.android.882cc14a58e7e105",
@@ -18754,6 +18769,16 @@
       "translated": "Включить мигания и покачивания значка состояния в режиме ожидания."
     },
     {
+      "id": "native.apple.d908ab245711bbd2",
+      "source": "Quick Chat shortcut",
+      "translated": "Сочетание клавиш для быстрого чата"
+    },
+    {
+      "id": "native.apple.6ae77665b5f4490f",
+      "source": "Global shortcut that opens a floating chat bar for the main session.",
+      "translated": "Глобальное сочетание клавиш, открывающее плавающую панель чата для основного сеанса."
+    },
+    {
       "id": "native.apple.a66c725f98bfa823",
       "source": "Capabilities",
       "translated": "Возможности"
@@ -19439,6 +19464,11 @@
       "translated": "Открыть чат"
     },
     {
+      "id": "native.apple.22334935d637c907",
+      "source": "Quick Chat",
+      "translated": "Быстрый чат"
+    },
+    {
       "id": "native.apple.5e3cd7734f27f447",
       "source": "Close Canvas",
       "translated": "Закрыть Canvas"
@@ -19834,9 +19864,19 @@
       "translated": "На этом Gateway не найден пригодный доступ к ИИ"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "Ничего страшного — можно подключиться с помощью ключа API или токена. Также можно войти в Claude Code или Codex либо запустить Ollama или LM Studio с подходящей моделью, а затем нажать «Проверить снова»."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "Подключите ниже провайдера с помощью API-ключа или токена, затем повторите проверку."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "Установите один из этих инструментов, затем повторите проверку. Также можно подключить провайдера ниже."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "Рекомендуемые установки"
     },
     {
       "id": "native.apple.e2749739df556643",
@@ -20534,9 +20574,9 @@
       "translated": "Откройте панель в строке меню"
     },
     {
-      "id": "native.apple.f99e39e248dbc8ed",
-      "source": "Click the OpenClaw menu bar icon for quick chat and status.",
-      "translated": "Нажмите значок OpenClaw в строке меню для быстрого чата и просмотра статуса."
+      "id": "native.apple.409bfb3a6e0f9f7c",
+      "source": "Click the OpenClaw menu bar icon for the compact chat panel and status.",
+      "translated": "Нажмите значок OpenClaw в строке меню, чтобы открыть компактную панель чата и просмотреть статус."
     },
     {
       "id": "native.apple.1b6cfcf3be8765c2",
@@ -20569,9 +20609,9 @@
       "translated": "Используйте панель + Canvas"
     },
     {
-      "id": "native.apple.774cf9fe7e3e289e",
-      "source": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas.",
-      "translated": "Open the menu bar panel for quick chat; the agent can show previews and richer visuals in Canvas."
+      "id": "native.apple.6022f5a79ed93235",
+      "source": "Open the compact chat panel; the agent can show previews and richer visuals in Canvas.",
+      "translated": "Откройте компактную панель чата; агент может показывать предпросмотры и более наглядные материалы в Canvas."
     },
     {
       "id": "native.apple.9b44b38b75a868d8",
@@ -20724,6 +20764,11 @@
       "translated": "Системный доступ"
     },
     {
+      "id": "native.apple.fee0f3732a447f35",
+      "source": "Location",
+      "translated": "Геолокация"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Настройка"
@@ -20837,46 +20882,6 @@
       "id": "native.apple.c8a3879230179938",
       "source": "Request access",
       "translated": "Запросить доступ"
-    },
-    {
-      "id": "native.apple.8d8386041799d2b0",
-      "source": "Automation (AppleScript)",
-      "translated": "Автоматизация (AppleScript)"
-    },
-    {
-      "id": "native.apple.bc935384479c2f48",
-      "source": "Notifications",
-      "translated": "Уведомления"
-    },
-    {
-      "id": "native.apple.922a8b5e049ef146",
-      "source": "Accessibility",
-      "translated": "Универсальный доступ"
-    },
-    {
-      "id": "native.apple.c2f2fac8ab1ef9c0",
-      "source": "Screen Recording",
-      "translated": "Запись экрана"
-    },
-    {
-      "id": "native.apple.5ec94fe5a6864de7",
-      "source": "Microphone",
-      "translated": "Микрофон"
-    },
-    {
-      "id": "native.apple.b27a5cb9cffe05f0",
-      "source": "Speech Recognition",
-      "translated": "Распознавание речи"
-    },
-    {
-      "id": "native.apple.3639c706ed77975c",
-      "source": "Camera",
-      "translated": "Камера"
-    },
-    {
-      "id": "native.apple.fee0f3732a447f35",
-      "source": "Location",
-      "translated": "Геолокация"
     },
     {
       "id": "native.apple.4a4c10ca63e99590",
@@ -21092,6 +21097,36 @@
       "id": "native.apple.144b21229f65f2a4",
       "source": "Continue",
       "translated": "Продолжить"
+    },
+    {
+      "id": "native.apple.b3700cf60f4520dc",
+      "source": "Message \\(self.model.agentDisplay.name)",
+      "translated": "Сообщение для \\(self.model.agentDisplay.name)"
+    },
+    {
+      "id": "native.apple.c1fec5e4735d8995",
+      "source": "main session",
+      "translated": "основной сеанс"
+    },
+    {
+      "id": "native.apple.136cef9f750d3803",
+      "source": "Send message",
+      "translated": "Отправить сообщение"
+    },
+    {
+      "id": "native.apple.024725d220e79697",
+      "source": "Needs additional permissions",
+      "translated": "Требуются дополнительные разрешения"
+    },
+    {
+      "id": "native.apple.84027c0f438c7aaa",
+      "source": "Grant",
+      "translated": "Предоставить"
+    },
+    {
+      "id": "native.apple.a3332fa4db187973",
+      "source": "Not now",
+      "translated": "Не сейчас"
     },
     {
       "id": "native.apple.1eeca02c45d3db5a",
@@ -22374,6 +22409,71 @@
       "translated": "Голосовое пробуждение обнаружено!"
     },
     {
+      "id": "native.apple.282d11786f2f4c4b",
+      "source": "Talk mode off",
+      "translated": "Режим разговора выключен"
+    },
+    {
+      "id": "native.apple.133d737c2b59e66d",
+      "source": "Talk mode paused",
+      "translated": "Режим разговора приостановлен"
+    },
+    {
+      "id": "native.apple.c11a8fc78a7b2cf8",
+      "source": "Talk mode ready",
+      "translated": "Режим разговора готов"
+    },
+    {
+      "id": "native.apple.62a4d588f4259d54",
+      "source": "Listening",
+      "translated": "Слушаю"
+    },
+    {
+      "id": "native.apple.d602e6304c3ef523",
+      "source": "Thinking",
+      "translated": "Размышляю"
+    },
+    {
+      "id": "native.apple.2328556b7443e453",
+      "source": "Speaking",
+      "translated": "Говорю"
+    },
+    {
+      "id": "native.apple.b42b8777035baf64",
+      "source": "What would you like to work on?",
+      "translated": "Над чем вы хотели бы поработать?"
+    },
+    {
+      "id": "native.apple.448dfe21a7f3a883",
+      "source": "Check OpenClaw status",
+      "translated": "Проверить состояние OpenClaw"
+    },
+    {
+      "id": "native.apple.00f4977e0123ce7a",
+      "source": "Summarize the current OpenClaw status and tell me what needs attention.",
+      "translated": "Кратко опиши текущее состояние OpenClaw и сообщи, что требует внимания."
+    },
+    {
+      "id": "native.apple.9c1a9be47ac92727",
+      "source": "What can you do?",
+      "translated": "Что ты умеешь?"
+    },
+    {
+      "id": "native.apple.5101b6cab56c0faf",
+      "source": "Show me what you can help with on this Mac right now.",
+      "translated": "Покажи, с чем ты можешь помочь на этом Mac прямо сейчас."
+    },
+    {
+      "id": "native.apple.070fa91f6622e6cf",
+      "source": "Catch me up",
+      "translated": "Введи меня в курс дела"
+    },
+    {
+      "id": "native.apple.234ec45f4231edc4",
+      "source": "Summarize what happened in my sessions since yesterday.",
+      "translated": "Кратко опиши, что произошло в моих сеансах со вчерашнего дня."
+    },
+    {
       "id": "native.apple.c5d8bca2d78e1b9b",
       "source": " (local filtered)",
       "translated": " (локально отфильтровано)"
@@ -22619,6 +22719,11 @@
       "translated": "Использовано токенов: %@"
     },
     {
+      "id": "native.apple.2c865ac4a69645d3",
+      "source": "Widget unavailable",
+      "translated": "Виджет недоступен"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
@@ -22699,6 +22804,146 @@
       "translated": "Развернуть план"
     },
     {
+      "id": "native.apple.7cd6fb01b9f5d14a",
+      "source": "User",
+      "translated": "Пользователь"
+    },
+    {
+      "id": "native.apple.8ec708a3605a2cc3",
+      "source": "Search sessions",
+      "translated": "Поиск сессий"
+    },
+    {
+      "id": "native.apple.23b069b4e7f97039",
+      "source": "No Sessions",
+      "translated": "Нет сессий"
+    },
+    {
+      "id": "native.apple.2d4ee298bdd1c05d",
+      "source": "No Results",
+      "translated": "Нет результатов"
+    },
+    {
+      "id": "native.apple.0058923f2ce8a3ec",
+      "source": "New Session",
+      "translated": "Новая сессия"
+    },
+    {
+      "id": "native.apple.66ba42960eb4135b",
+      "source": "New session",
+      "translated": "Новая сессия"
+    },
+    {
+      "id": "native.apple.36753ef2f1ed4264",
+      "source": "Rename Session",
+      "translated": "Переименовать сессию"
+    },
+    {
+      "id": "native.apple.c9de0a1510ef475f",
+      "source": "Session name",
+      "translated": "Название сессии"
+    },
+    {
+      "id": "native.apple.6ec5a13c0e6c20d9",
+      "source": "Rename",
+      "translated": "Переименовать"
+    },
+    {
+      "id": "native.apple.4c76665d89af4bec",
+      "source": "Cancel",
+      "translated": "Отмена"
+    },
+    {
+      "id": "native.apple.afb4e6c99c63a28d",
+      "source": "Delete Session",
+      "translated": "Удалить сессию"
+    },
+    {
+      "id": "native.apple.3d4ef32e42f136a4",
+      "source": "The session and its transcript are removed from the gateway.",
+      "translated": "Сессия и её расшифровка будут удалены из Gateway."
+    },
+    {
+      "id": "native.apple.90bcad5f067b4be1",
+      "source": "Delete “%@”?",
+      "translated": "Удалить «%@»?"
+    },
+    {
+      "id": "native.apple.9a7dca238fba628d",
+      "source": "Session running",
+      "translated": "Сессия выполняется"
+    },
+    {
+      "id": "native.apple.fcfbfe5e97a95e9c",
+      "source": "Session failed",
+      "translated": "Сессия завершилась с ошибкой"
+    },
+    {
+      "id": "native.apple.ac85292b16a7465f",
+      "source": "Unread",
+      "translated": "Непрочитанное"
+    },
+    {
+      "id": "native.apple.a174cb1027a9b881",
+      "source": "Rename…",
+      "translated": "Переименовать…"
+    },
+    {
+      "id": "native.apple.134d6bf84d58fb38",
+      "source": "Pin",
+      "translated": "Закрепить"
+    },
+    {
+      "id": "native.apple.e7815cc4ba359513",
+      "source": "Unpin",
+      "translated": "Открепить"
+    },
+    {
+      "id": "native.apple.83f9f2db7eef6a19",
+      "source": "Fork",
+      "translated": "Ответвить"
+    },
+    {
+      "id": "native.apple.235614194dc19df2",
+      "source": "Mark Read",
+      "translated": "Отметить как прочитанное"
+    },
+    {
+      "id": "native.apple.bc71f0d20b7f72a0",
+      "source": "Mark Unread",
+      "translated": "Отметить как непрочитанное"
+    },
+    {
+      "id": "native.apple.c9e118f6aae18d97",
+      "source": "Archive",
+      "translated": "Архивировать"
+    },
+    {
+      "id": "native.apple.10365a351a1b58b3",
+      "source": "Restore",
+      "translated": "Восстановить"
+    },
+    {
+      "id": "native.apple.660f63319b89bd8e",
+      "source": "Copy Session Key",
+      "translated": "Скопировать ключ сеанса"
+    },
+    {
+      "id": "native.apple.4aeb7c14c26dabac",
+      "source": "Delete Session…",
+      "translated": "Удалить сеанс…"
+    },
+    {
+      "id": "native.apple.6a3425ea2811ff88",
+      "source": "Gateway connected",
+      "translated": "Gateway подключён"
+    },
+    {
+      "id": "native.apple.e3958d1053259f1d",
+      "source": "Connecting…",
+      "translated": "Подключение…"
+    },
+    {
       "id": "native.apple.63320b6d5138c0db",
       "source": "Pinned",
       "translated": "Закреплено"
@@ -22754,6 +22999,16 @@
       "translated": "Сессии не найдены"
     },
     {
+      "id": "native.apple.f0e9d8f69c1d9190",
+      "source": "Restore",
+      "translated": "Восстановить"
+    },
+    {
+      "id": "native.apple.666ba6eb696e649f",
+      "source": "Archive",
+      "translated": "Архивировать"
+    },
+    {
       "id": "native.apple.05cb1fecc5844b69",
       "source": "Pinned",
       "translated": "Закреплено"
@@ -22774,14 +23029,34 @@
       "translated": "Открепить"
     },
     {
-      "id": "native.apple.666ba6eb696e649f",
-      "source": "Archive",
-      "translated": "Архивировать"
+      "id": "native.apple.6de479e9d780869a",
+      "source": "Fork",
+      "translated": "Создать ответвление"
     },
     {
-      "id": "native.apple.34b910911a05110e",
-      "source": "Unarchive",
-      "translated": "Разархивировать"
+      "id": "native.apple.1398a2f69867f22d",
+      "source": "Mark Read",
+      "translated": "Отметить как прочитанное"
+    },
+    {
+      "id": "native.apple.4f259c4409cfcc75",
+      "source": "Mark Unread",
+      "translated": "Отметить как непрочитанное"
+    },
+    {
+      "id": "native.apple.946b677d8dbf0f37",
+      "source": "Hide talk transcript",
+      "translated": "Скрыть расшифровку разговора"
+    },
+    {
+      "id": "native.apple.cb1d1c999a859927",
+      "source": "Show talk transcript",
+      "translated": "Показать расшифровку разговора"
+    },
+    {
+      "id": "native.apple.e7beeef6043ffd2a",
+      "source": "System Default",
+      "translated": "Системные настройки"
     },
     {
       "id": "native.apple.c4e808a2ec8d49f5",
@@ -22832,6 +23107,21 @@
       "id": "native.apple.fe9f30f12f1dcfaf",
       "source": "Copy Message",
       "translated": "Копировать сообщение"
+    },
+    {
+      "id": "native.apple.b37ec7bd7dc1579a",
+      "source": "Reply",
+      "translated": "Ответ"
+    },
+    {
+      "id": "native.apple.8d80a6bb3d6e99b0",
+      "source": "You",
+      "translated": "Вы"
+    },
+    {
+      "id": "native.apple.3b44a67aa284886f",
+      "source": "Assistant",
+      "translated": "Ассистент"
     },
     {
       "id": "native.apple.f84b674ad395b694",
@@ -22934,9 +23224,34 @@
       "translated": "Это сбросит разговор для %@. Ключ сеанса останется прежним."
     },
     {
+      "id": "native.apple.a92e96bed98bd553",
+      "source": "Rename Session",
+      "translated": "Переименовать сеанс"
+    },
+    {
+      "id": "native.apple.848e2388f3466f40",
+      "source": "Session name",
+      "translated": "Название сеанса"
+    },
+    {
+      "id": "native.apple.8d636ca6b4764418",
+      "source": "Rename",
+      "translated": "Переименовать"
+    },
+    {
+      "id": "native.apple.32b4a79f1b889aa6",
+      "source": "Cancel",
+      "translated": "Отмена"
+    },
+    {
       "id": "native.apple.2ee7858b00a47c42",
       "source": "Export Transcript",
       "translated": "Экспорт транскрипта"
+    },
+    {
+      "id": "native.apple.4af0f566d39d7041",
+      "source": "Sessions",
+      "translated": "Сеансы"
     },
     {
       "id": "native.apple.b1f10b5e9113881d",
@@ -22969,14 +23284,74 @@
       "translated": "Модель"
     },
     {
+      "id": "native.apple.eb58552e43c8dde2",
+      "source": "New Session",
+      "translated": "Новая сессия"
+    },
+    {
       "id": "native.apple.5361129a24118af6",
       "source": "Refresh",
       "translated": "Обновить"
     },
     {
+      "id": "native.apple.2bcff4a8fa503739",
+      "source": "Sessions…",
+      "translated": "Сеансы…"
+    },
+    {
+      "id": "native.apple.c36e008b051adb38",
+      "source": "Rename Session…",
+      "translated": "Переименовать сеанс…"
+    },
+    {
+      "id": "native.apple.ea0ef95a159bffe0",
+      "source": "Fork Session",
+      "translated": "Создать ответвление сеанса"
+    },
+    {
+      "id": "native.apple.8768f9ed198edc54",
+      "source": "Unpin",
+      "translated": "Открепить"
+    },
+    {
+      "id": "native.apple.a8a2f4b248663f97",
+      "source": "Pin",
+      "translated": "Закрепить"
+    },
+    {
+      "id": "native.apple.e53f1d7e094dc542",
+      "source": "Mark Read",
+      "translated": "Отметить как прочитанное"
+    },
+    {
+      "id": "native.apple.99579b05ec001672",
+      "source": "Mark Unread",
+      "translated": "Отметить как непрочитанное"
+    },
+    {
+      "id": "native.apple.b39c58e213137cc8",
+      "source": "Restore",
+      "translated": "Восстановить"
+    },
+    {
+      "id": "native.apple.6f5686f621b44307",
+      "source": "Archive",
+      "translated": "Архив"
+    },
+    {
+      "id": "native.apple.27ddbe5e4643b60f",
+      "source": "Copy Session Key",
+      "translated": "Скопировать ключ сессии"
+    },
+    {
       "id": "native.apple.9b2ad72143b931bf",
       "source": "Export Transcript…",
       "translated": "Экспорт транскрипта…"
+    },
+    {
+      "id": "native.apple.3294ababd29c4457",
+      "source": "Show reasoning & tool activity",
+      "translated": "Показывать ход рассуждений и действия инструментов"
     },
     {
       "id": "native.apple.4b24d792545e5086",
@@ -23002,76 +23377,6 @@
       "id": "native.apple.f0a4720df5f5f403",
       "source": "Compact Session",
       "translated": "Сжать сессию"
-    },
-    {
-      "id": "native.apple.0b9fc81ff2031799",
-      "source": "Search sessions",
-      "translated": "Поиск сессий"
-    },
-    {
-      "id": "native.apple.f10d5ccfd0530fec",
-      "source": "No Results",
-      "translated": "Нет результатов"
-    },
-    {
-      "id": "native.apple.42b0ee4c8b3326b6",
-      "source": "No Sessions",
-      "translated": "Нет сессий"
-    },
-    {
-      "id": "native.apple.eb58552e43c8dde2",
-      "source": "New Session",
-      "translated": "Новая сессия"
-    },
-    {
-      "id": "native.apple.247771e4350c006f",
-      "source": "New session",
-      "translated": "Новая сессия"
-    },
-    {
-      "id": "native.apple.d9a72d07e8d95d35",
-      "source": "Delete Session",
-      "translated": "Удалить сессию"
-    },
-    {
-      "id": "native.apple.499537ec30a28ae0",
-      "source": "The session and its transcript are removed from the gateway.",
-      "translated": "Сессия и её транскрипт удаляются из Gateway."
-    },
-    {
-      "id": "native.apple.1bd1b747fd161df5",
-      "source": "Unread",
-      "translated": "Непрочитанные"
-    },
-    {
-      "id": "native.apple.a8a2f4b248663f97",
-      "source": "Pin",
-      "translated": "Закрепить"
-    },
-    {
-      "id": "native.apple.8768f9ed198edc54",
-      "source": "Unpin",
-      "translated": "Открепить"
-    },
-    {
-      "id": "native.apple.27ddbe5e4643b60f",
-      "source": "Copy Session Key",
-      "translated": "Скопировать ключ сессии"
-    },
-    {
-      "id": "native.apple.a994d072ab35cb35",
-      "source": "Delete Session…",
-      "translated": "Удалить сессию…"
-    },
-    {
-      "id": "native.apple.22d5ce71e22a7f73",
-      "source": "Connecting…",
-      "translated": "Подключение…"
-    },
-    {
-      "id": "native.apple.8d0606ab1a2c0f44",
-      "source": "Gateway connected",
-      "translated": "Gateway подключён"
     },
     {
       "id": "native.apple.f74d150ce05205dd",

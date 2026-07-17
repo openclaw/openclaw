@@ -1,5 +1,7 @@
 // Feishu plugin module implements comment handler behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -214,36 +216,36 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: bodyForAgent,
-    BodyForAgent: bodyForAgent,
-    RawBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
-    CommandBody: turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt,
-    From: `feishu:${turn.senderId}`,
-    To: commentTarget,
-    SessionKey: commentSessionKey,
-    AccountId: route.accountId,
-    ChatType: "direct",
-    ConversationLabel: turn.documentTitle
-      ? `Feishu comment · ${turn.documentTitle}`
-      : "Feishu comment",
-    SenderName: turn.senderId,
-    SenderId: turn.senderId,
-    Provider: "feishu",
-    Surface: "feishu-comment",
-    MessageSid: turn.messageId,
-    // For Feishu comment turns, MessageThreadId carries the inbound reply_id so
-    // comment-aware tools can clean typing reaction before sending visible output.
-    MessageThreadId: turn.replyId,
-    Timestamp: parseTimestampMs(turn.timestamp),
-    WasMentioned: turn.isMentioned,
-    CommandAuthorized: false,
-    OriginatingChannel: "feishu",
-    OriginatingTo: commentTarget,
-  });
-
-  const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
-    agentId: route.agentId,
+  const rawBody = turn.targetReplyText ?? turn.rootCommentText ?? turn.prompt;
+  const conversationLabel = turn.documentTitle
+    ? `Feishu comment · ${turn.documentTitle}`
+    : "Feishu comment";
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "feishu",
+    accountId: route.accountId,
+    surface: "feishu-comment",
+    messageId: turn.messageId,
+    timestamp: parseTimestampMs(turn.timestamp),
+    from: `feishu:${turn.senderId}`,
+    sender: { id: turn.senderId, name: turn.senderId },
+    conversation: { kind: "direct", id: commentTarget, label: conversationLabel },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: commentSessionKey,
+      dispatchSessionKey: commentSessionKey,
+    },
+    reply: {
+      to: commentTarget,
+      originatingTo: commentTarget,
+      // Comment-aware tools use the inbound reply id as the native thread id.
+      messageThreadId: turn.replyId,
+    },
+    message: { body: bodyForAgent, bodyForAgent, rawBody, commandBody: rawBody },
+    access: {
+      commands: { authorized: false },
+      mentions: { canDetectMention: true, wasMentioned: turn.isMentioned ?? false },
+    },
   });
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
@@ -279,12 +281,11 @@ export async function handleFeishuCommentEvent(
           raw: turn,
         }),
         resolveTurn: () => ({
+          cfg: effectiveCfg,
           channel: "feishu",
           accountId: route.accountId,
-          routeSessionKey: commentSessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey: commentSessionKey },
           ctxPayload,
-          recordInboundSession: core.channel.session.recordInboundSession,
           record: {
             onRecordError: (err) => {
               error(
@@ -303,15 +304,11 @@ export async function handleFeishuCommentEvent(
             });
           },
           runDispatch: () =>
-            core.channel.reply.withReplyDispatcher({
+            dispatchInboundMessage({
+              ctx: ctxPayload,
+              cfg: effectiveCfg,
               dispatcher,
-              run: () =>
-                core.channel.reply.dispatchReplyFromConfig({
-                  ctx: ctxPayload,
-                  cfg: effectiveCfg,
-                  dispatcher,
-                  replyOptions,
-                }),
+              replyOptions,
             }),
         }),
       },

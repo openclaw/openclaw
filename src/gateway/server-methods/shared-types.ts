@@ -36,6 +36,7 @@ import type {
   BufferedAgentEvent,
   ChatAbortMarker,
   ChatRunEntry,
+  ChatRunPlanSnapshot,
   ChatRunRegistration,
 } from "../server-chat-state.js";
 import type { GatewayCronServiceContract } from "../server-cron-contract.js";
@@ -117,6 +118,7 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
@@ -193,6 +195,7 @@ export type GatewayRequestContext = {
   chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatAbortedRuns: Map<string, ChatAbortMarker>;
   chatRunBuffers: Map<string, string>;
+  chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;

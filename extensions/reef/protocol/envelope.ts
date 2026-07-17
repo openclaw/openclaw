@@ -136,7 +136,7 @@ export type ClaimedOpenResult =
   | { claim: "new"; body: MessageBody; envelopeHash: string }
   | { claim: "duplicate"; receipt?: SignedReceipt; body?: MessageBody };
 
-const MAX_PLAINTEXT = 32 * 1024;
+export const REEF_MAX_PLAINTEXT_BYTES = 32 * 1024;
 const MAX_CIPHERTEXT_BASE64 = 44_752;
 const MAX_ENVELOPE_BYTES = 48 * 1024;
 export const REEF_ENVELOPE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
@@ -152,7 +152,7 @@ export function seal(options: SealOptions): Envelope {
   );
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
-  if (plaintext.length > MAX_PLAINTEXT) {
+  if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
     throw new TooLargeError();
   }
   const ephemeral = x25519.keygen((options.rng ?? randomBytes)(32));
@@ -251,7 +251,7 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
     );
     const key = hkdf(sha256, shared, undefined, HKDF_INFO, 32);
     const plaintext = gcm(key, fromBase64(envelope.n)).decrypt(fromBase64(envelope.ct));
-    if (plaintext.length > MAX_PLAINTEXT) {
+    if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
       throw new TooLargeError();
     }
     const body = JSON.parse(decodeUtf8(plaintext)) as unknown;

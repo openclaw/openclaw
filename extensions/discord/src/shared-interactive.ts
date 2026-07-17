@@ -1,12 +1,12 @@
 // Discord plugin module implements shared interactive behavior.
 import {
-  reduceInteractiveReply,
+  reduceLegacyInteractiveReply,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
-  InteractiveReply,
+  LegacyInteractiveReply,
   MessagePresentation,
   MessagePresentationButton,
   MessagePresentationOption,
@@ -141,9 +141,9 @@ function appendDiscordButtonBlocks(
  * @deprecated Use buildDiscordPresentationComponents with MessagePresentation.
  */
 export function buildDiscordInteractiveComponents(
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceInteractiveReply(
+  const blocks = reduceLegacyInteractiveReply(
     interactive,
     [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
     (state, block) => {

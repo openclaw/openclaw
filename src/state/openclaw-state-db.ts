@@ -22,7 +22,10 @@ import {
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -847,9 +850,15 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     );
     return { changes, warnings: [] };
   } catch (err) {
+    // Reaching this catch inside doctor means repair itself refused or failed,
+    // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
+    const reason = String(err).replace(
+      /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\./u,
+      "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
+    );
     return {
       changes: [],
-      warnings: [`Failed migrating shared state database schema at ${pathname}: ${String(err)}`],
+      warnings: [`Failed migrating shared state database schema at ${pathname}: ${reason}`],
     };
   } finally {
     if (db.isOpen) {
@@ -1355,6 +1364,7 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
   ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
+  ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_paired", "approved_via TEXT");
@@ -1696,12 +1706,17 @@ export function openOpenClawStateDatabase(
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  transactionOptions: Pick<
+    SqliteTransactionOptions,
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+  > = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
   const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     databaseLabel: database.path,
-    operationLabel: "state.write",
+    ...transactionOptions,
+    operationLabel: transactionOptions.operationLabel ?? "state.write",
   });
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);

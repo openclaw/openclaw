@@ -140,6 +140,7 @@ enum class GatewayMethod(
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
+  OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),
   WizardNext("wizard.next"),
   WizardCancel("wizard.cancel"),
@@ -203,6 +204,7 @@ enum class GatewayMethod(
   SessionsFilesList("sessions.files.list"),
   SessionsFilesGet("sessions.files.get"),
   SessionsFilesSet("sessions.files.set"),
+  SessionsFilesReveal("sessions.files.reveal"),
   ArtifactsList("artifacts.list"),
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
@@ -307,6 +309,9 @@ enum class GatewayMethod(
   SystemPresence("system-presence"),
   SystemEvent("system-event"),
   MessageAction("message.action"),
+  ConversationsSend("conversations.send"),
+  ConversationsTurn("conversations.turn"),
+  ConversationsTurnCancel("conversations.turn.cancel"),
   Send("send"),
   Agent("agent"),
   AgentIdentityGet("agent.identity.get"),
@@ -355,6 +360,7 @@ enum class GatewayMethod(
   PluginsInstall("plugins.install"),
   PluginsSetEnabled("plugins.setEnabled"),
   PluginsUninstall("plugins.uninstall"),
+  PluginsRefresh("plugins.refresh"),
   ControlUiSessionPullRequests("controlUi.sessionPullRequests"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
@@ -379,6 +385,8 @@ enum class GatewayMethod(
   MigrationsMemoryApply("migrations.memory.apply"),
   UiCommand("ui.command"),
   ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
+  ConversationsList("conversations.list"),
 }
 
 enum class GatewayEvent(

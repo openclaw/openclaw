@@ -7,10 +7,17 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "./runtime-media-secret-owner.js";
+import {
   collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
+  type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -42,7 +49,13 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
-    collectSecretInputAssignment({
+    const owner = {
+      ownerKind: "provider",
+      ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
+      requiredForGateway: false,
+      disposition: "isolate",
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
@@ -50,6 +63,7 @@ function collectModelProviderAssignments(params: {
       context: params.context,
       active: providerIsActive,
       inactiveReason: "provider is disabled.",
+      owner,
       apply: (value) => {
         provider.apiKey = value;
       },
@@ -57,7 +71,7 @@ function collectModelProviderAssignments(params: {
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
     if (headers) {
       for (const [headerKey, headerValue] of Object.entries(headers)) {
-        collectSecretInputAssignment({
+        collectRuntimeSecretInputAssignment({
           value: headerValue,
           path: `models.providers.${providerId}.headers.${headerKey}`,
           expected: "string",
@@ -65,6 +79,7 @@ function collectModelProviderAssignments(params: {
           context: params.context,
           active: providerIsActive,
           inactiveReason: "provider is disabled.",
+          owner,
           apply: (value) => {
             headers[headerKey] = value;
           },
@@ -82,6 +97,7 @@ function collectModelProviderAssignments(params: {
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
         collectTransportSecrets: true,
+        owner,
       });
     }
   }
@@ -93,7 +109,7 @@ function collectSkillAssignments(params: {
   context: ResolverContext;
 }): void {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: entry.apiKey,
       path: `skills.entries.${skillKey}.apiKey`,
       expected: "string",
@@ -101,96 +117,19 @@ function collectSkillAssignments(params: {
       context: params.context,
       active: entry.enabled !== false,
       inactiveReason: "skill entry is disabled.",
+      // Keep this id aligned with isSkillSecretOwnerUnavailable so a failed key
+      // removes only its owning skill from prompts and runtime env injection.
+      owner: {
+        ownerKind: "capability",
+        ownerId: `skill:${skillKey}`,
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
       apply: (value) => {
         entry.apiKey = value;
       },
     });
   }
-}
-
-function collectAgentMemorySearchAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const agents = params.config.agents as Record<string, unknown> | undefined;
-  if (!isRecord(agents)) {
-    return;
-  }
-  const defaultsConfig = isRecord(agents.defaults) ? agents.defaults : undefined;
-  const defaultsMemorySearch = isRecord(defaultsConfig?.memorySearch)
-    ? defaultsConfig.memorySearch
-    : undefined;
-  const defaultsEnabled = defaultsMemorySearch?.enabled !== false;
-
-  const list = Array.isArray(agents.list) ? agents.list : [];
-  let hasEnabledAgentWithoutOverride = false;
-  for (const rawAgent of list) {
-    if (!isRecord(rawAgent)) {
-      continue;
-    }
-    if (rawAgent.enabled === false) {
-      continue;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (memorySearch?.enabled === false) {
-      continue;
-    }
-    if (!memorySearch || !Object.hasOwn(memorySearch, "remote")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.hasOwn(remote, "apiKey")) {
-      hasEnabledAgentWithoutOverride = true;
-      continue;
-    }
-  }
-
-  if (defaultsMemorySearch && isRecord(defaultsMemorySearch.remote)) {
-    const remote = defaultsMemorySearch.remote;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: "agents.defaults.memorySearch.remote.apiKey",
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: defaultsEnabled && (hasEnabledAgentWithoutOverride || list.length === 0),
-      inactiveReason: hasEnabledAgentWithoutOverride
-        ? undefined
-        : "all enabled agents override memorySearch.remote.apiKey.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  }
-
-  list.forEach((rawAgent, index) => {
-    if (!isRecord(rawAgent)) {
-      return;
-    }
-    const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
-    if (!memorySearch) {
-      return;
-    }
-    const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.hasOwn(remote, "apiKey")) {
-      return;
-    }
-    const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
-    collectSecretInputAssignment({
-      value: remote.apiKey,
-      path: `agents.list.${index}.memorySearch.remote.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      active: enabled,
-      inactiveReason: "agent or memorySearch override is disabled.",
-      apply: (value) => {
-        remote.apiKey = value;
-      },
-    });
-  });
 }
 
 function collectTalkAssignments(params: {
@@ -270,7 +209,13 @@ function collectGatewayAssignments(params: {
     defaults: params.defaults,
   });
   if (auth) {
-    collectSecretInputAssignment({
+    const ingressAuthOwner = {
+      ownerKind: "gateway",
+      ownerId: "ingress-auth",
+      requiredForGateway: true,
+      disposition: "fail-closed",
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: auth.token,
       path: "gateway.auth.token",
       expected: "string",
@@ -278,11 +223,12 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.token"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.token = value;
       },
     });
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
       expected: "string",
@@ -290,6 +236,7 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.password"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.password"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.password = value;
       },
@@ -331,11 +278,12 @@ function collectProviderRequestAssignments(params: {
   active?: boolean;
   inactiveReason?: string;
   collectTransportSecrets?: boolean;
+  owner?: SecretAssignmentOwner;
 }): void {
   const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
   if (headers) {
     for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
+      collectRuntimeSecretInputAssignment({
         value: headerValue,
         path: `${params.pathPrefix}.headers.${headerKey}`,
         expected: "string",
@@ -343,6 +291,7 @@ function collectProviderRequestAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: params.inactiveReason,
+        owner: params.owner,
         apply: (value) => {
           headers[headerKey] = value;
         },
@@ -352,7 +301,7 @@ function collectProviderRequestAssignments(params: {
 
   const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
   if (auth) {
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.token,
       path: `${params.pathPrefix}.auth.token`,
       expected: "string",
@@ -360,11 +309,12 @@ function collectProviderRequestAssignments(params: {
       context: params.context,
       active: params.active,
       inactiveReason: params.inactiveReason,
+      owner: params.owner,
       apply: (value) => {
         auth.token = value;
       },
     });
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.value,
       path: `${params.pathPrefix}.auth.value`,
       expected: "string",
@@ -372,6 +322,7 @@ function collectProviderRequestAssignments(params: {
       context: params.context,
       active: params.active,
       inactiveReason: params.inactiveReason,
+      owner: params.owner,
       apply: (value) => {
         auth.value = value;
       },
@@ -383,7 +334,7 @@ function collectProviderRequestAssignments(params: {
       return;
     }
     for (const key of ["ca", "cert", "key", "passphrase"] as const) {
-      collectSecretInputAssignment({
+      collectRuntimeSecretInputAssignment({
         value: tls[key],
         path: `${pathPrefix}.${key}`,
         expected: "string",
@@ -391,6 +342,7 @@ function collectProviderRequestAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: params.inactiveReason,
+        owner: params.owner,
         apply: (value) => {
           tls[key] = value;
         },
@@ -436,6 +388,7 @@ function collectMediaRequestAssignments(params: {
   const collectModelAssignments = (
     models: unknown,
     pathPrefix: string,
+    resolveOwnerId: (index: number) => string,
     resolveActivity: (rawModel: Record<string, unknown>) => {
       active: boolean;
       inactiveReason: string;
@@ -456,34 +409,45 @@ function collectMediaRequestAssignments(params: {
         context: params.context,
         active,
         inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: resolveOwnerId(index),
+          requiredForGateway: false,
+          disposition: "isolate",
+        },
       });
     });
   };
 
-  collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
-    const entry = rawModel as MediaUnderstandingModelConfig;
-    const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-    // Shared models are active only for enabled capabilities; when the config omits explicit
-    // capabilities, provider metadata is the contract for which media sections can use it.
-    const capabilities =
-      configuredCapabilities ??
-      resolveEffectiveMediaEntryCapabilities({
-        entry,
-        source: "shared",
-        providerRegistry: getProviderRegistry(),
-      });
-    if (!capabilities || capabilities.length === 0) {
+  collectModelAssignments(
+    media.models,
+    "tools.media.models",
+    (index) => runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    (rawModel) => {
+      const entry = rawModel as MediaUnderstandingModelConfig;
+      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+      // Shared models are active only for enabled capabilities; when the config omits explicit
+      // capabilities, provider metadata is the contract for which media sections can use it.
+      const capabilities =
+        configuredCapabilities ??
+        resolveEffectiveMediaEntryCapabilities({
+          entry,
+          source: "shared",
+          providerRegistry: getProviderRegistry(),
+        });
+      if (!capabilities || capabilities.length === 0) {
+        return {
+          active: false,
+          inactiveReason:
+            "shared media model does not declare capabilities and none could be inferred from its provider.",
+        };
+      }
       return {
-        active: false,
-        inactiveReason:
-          "shared media model does not declare capabilities and none could be inferred from its provider.",
+        active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+        inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
       };
-    }
-    return {
-      active: capabilities.some((capability) => isCapabilityEnabled(capability)),
-      inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
-    };
-  });
+    },
+  );
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
@@ -497,20 +461,31 @@ function collectMediaRequestAssignments(params: {
         context: params.context,
         active,
         inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: runtimeMediaRequestSecretOwnerId(capability),
+          requiredForGateway: false,
+          disposition: "isolate",
+        },
       });
     }
-    collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
-      active:
-        active &&
-        (() => {
-          const entry = rawModel as MediaUnderstandingModelConfig;
-          const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-          return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
-        })(),
-      inactiveReason: active
-        ? `${capability} media model is filtered out by its configured capabilities.`
-        : inactiveReason,
-    }));
+    collectModelAssignments(
+      section?.models,
+      `tools.media.${capability}.models`,
+      (index) => runtimeMediaModelSecretOwnerId({ source: "capability", capability, index }),
+      (rawModel) => ({
+        active:
+          active &&
+          (() => {
+            const entry = rawModel as MediaUnderstandingModelConfig;
+            const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+            return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
+          })(),
+        inactiveReason: active
+          ? `${capability} media model is filtered out by its configured capabilities.`
+          : inactiveReason,
+      }),
+    );
   }
 }
 
@@ -563,12 +538,18 @@ function collectCronAssignments(params: {
   if (!isRecord(cron)) {
     return;
   }
-  collectSecretInputAssignment({
+  collectRuntimeSecretInputAssignment({
     value: cron.webhookToken,
     path: "cron.webhookToken",
     expected: "string",
     defaults: params.defaults,
     context: params.context,
+    owner: {
+      ownerKind: "capability",
+      ownerId: "cron-webhook",
+      requiredForGateway: false,
+      disposition: "isolate",
+    },
     apply: (value) => {
       cron.webhookToken = value;
     },
@@ -661,7 +642,6 @@ function collectSandboxSshAssignments(params: {
   }
 }
 
-/** Collects SecretRef assignments from core-owned config surfaces. */
 /** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;

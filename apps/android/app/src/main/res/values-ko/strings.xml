@@ -171,6 +171,7 @@
     <string name="native_1d183f3f10e963ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"격리됨"</string>
     <string name="native_1d19464a31484a7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"© 2026 OpenClaw Foundation — MIT 라이선스."</string>
     <string name="native_1d393b0081b632c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"PDF"</string>
+    <string name="native_1d432f58690c2b4a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversations"</string>
     <string name="native_1d4ca3259ee90b68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"메모리 통합 및 꿈 일기."</string>
     <string name="native_1d5e35075a1017e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Create Goal"</string>
     <string name="native_1d91629837639a5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"편집하는 동안 이 자동화가 변경되었습니다. 저장하기 전에 Gateway의 최신 버전으로 되돌리세요."</string>
@@ -279,7 +280,7 @@
     <string name="native_2f9c977d4df31bfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연락처 읽기"</string>
     <string name="native_300574ec69847390" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"오프라인 첨부 파일 저장 공간이 가득 찼습니다. 먼저 대기 중인 항목을 삭제하세요."</string>
     <string name="native_3043615848685c0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"한 번"</string>
-    <string name="native_3064d79a295cefe4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이름 바꾸기"</string>
+    <string name="native_3064d79a295cefe4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이름 변경"</string>
     <string name="native_308bdae31be27cbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채널을 찾을 수 없습니다."</string>
     <string name="native_30a64216eaeac5d3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"모두 보기"</string>
     <string name="native_30d01a64f9a923c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새 기기"</string>
@@ -328,6 +329,7 @@
     <string name="native_37582309e7a1dbe5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"승인 %1$s"</string>
     <string name="native_379ce0aacf46c35f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway에서 %1$s 준비 상태를 반환하지 않았습니다"</string>
     <string name="native_37b637bd85f6d2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"구성된 모델이 %1$s개 있습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."</string>
+    <string name="native_381428f5f251a764" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Send"</string>
     <string name="native_3824a9f4dafe92c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"캔버스"</string>
     <string name="native_384ae4ab1a2830f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"공급자 1개"</string>
     <string name="native_387b2569e440838c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"전송 실패: %1$s"</string>
@@ -375,6 +377,7 @@
     <string name="native_40d04f6fb9437ff3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"기기 내 음성 인식을 사용할 수 없습니다."</string>
     <string name="native_4122a5c9825224af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"첨부 파일이 너무 커서 하나의 메시지로 대기열에 추가할 수 없습니다. 일부를 제거한 후 다시 시도하세요."</string>
     <string name="native_4135d64f3bde1a92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"구성된 모델이 1개 있습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."</string>
+    <string name="native_41659b48f2dc4c36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"위젯을 사용할 수 없음"</string>
     <string name="native_4186107d2194d09a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이 호스트에는 보안 연결이 필요합니다."</string>
     <string name="native_41cb8a2ca2cf1e36" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일치하는 자동화가 없습니다."</string>
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대폰에서 Gateway에 연결할 수 있음"</string>
@@ -707,6 +710,7 @@
     <string name="native_788011833a5a0f22" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"알림"</string>
     <string name="native_78af93f13a7e5044" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"적용, 거부, 격리에는 operator.admin 범위가 필요합니다. 공유 Gateway 인증으로 다시 연결하거나 operator.admin 기기 범위 업그레이드를 승인하여 수명 주기 작업을 활성화하세요."</string>
     <string name="native_78f25f393aa9bcbf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker upload"</string>
+    <string name="native_790d78931c21b895" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Messages to recover"</string>
     <string name="native_792175fb265c32bc" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw devices approve %1$s"</string>
     <string name="native_7981cbd5763dfcbb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일치하는 세션이 아직 없습니다."</string>
     <string name="native_79a68a0d42388125" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"읽기 쉬운 Gateway 로그 세부 정보."</string>
@@ -1270,6 +1274,7 @@
     <string name="native_de9f057a471cdb8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"항상"</string>
     <string name="native_df0bf21d612f1c1c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"드리밍을 불러올 수 없습니다."</string>
     <string name="native_df194cb3eb3cb3cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"자동화 실행이 대기열에 추가되었습니다."</string>
+    <string name="native_df2e1ea7f2793fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Turn"</string>
     <string name="native_df539a150f19b260" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"자동화가 시작되었습니다."</string>
     <string name="native_df796c655f6f5ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"새 그룹"</string>
     <string name="native_dfe0c2e802b1ff63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"서버 오류"</string>
@@ -1297,6 +1302,7 @@
     <string name="native_e2d1ec2328a8146f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw에 Android 기능 사용을 요청하세요."</string>
     <string name="native_e31ab643c44f7a0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"member"</string>
     <string name="native_e330f9d64f5ad4dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"아래 복구 옵션을 사용하여 다시 연결하세요."</string>
+    <string name="native_e3399e6ed762c252" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s message(s) need recovery. Re-enter anything you want to keep, then delete these rows."</string>
     <string name="native_e35e24d39a82aec2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"채널을 불러올 수 없습니다."</string>
     <string name="native_e3cda2d4381e42cd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s일 후"</string>
     <string name="native_e3d8e1685f141cba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연속 오류"</string>

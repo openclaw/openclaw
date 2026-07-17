@@ -2101,6 +2101,37 @@ describe("openclaw state database", () => {
     expect(migratedSql.sql).toContain("'system-agent'");
   });
 
+  it("does not recursively recommend doctor when operator approval repair refuses a shape", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const database = openOpenClawStateDatabase(options);
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const customizedDb = new DatabaseSync(databasePath);
+    const currentSql = (
+      customizedDb
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'operator_approvals'",
+        )
+        .get() as { sql: string }
+    ).sql;
+    customizedDb.exec("ALTER TABLE operator_approvals RENAME TO operator_approvals_current");
+    customizedDb.exec(
+      currentSql.replace("'exec', 'plugin', 'system-agent'", "'exec', 'plugin', 'custom-thing'"),
+    );
+    customizedDb.exec("DROP TABLE operator_approvals_current");
+    customizedDb.close();
+
+    const result = repairOpenClawStateDatabaseSchema(options);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("automatic repair refused the unrecognized schema shape"),
+    ]);
+    expect(result.warnings[0]).not.toContain("run openclaw doctor --fix");
+  });
+
   it("adds managed-image typed columns before creating canonical indexes", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
