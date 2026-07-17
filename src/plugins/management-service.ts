@@ -377,10 +377,9 @@ function compareCatalogEntries(
 function resolveInstalledOfficialCatalogEntry(params: {
   entries: readonly OfficialExternalPluginCatalogEntry[];
   packageName?: string;
-  origin?: string;
   source: CatalogPackageSourceIdentity["source"];
 }): OfficialExternalPluginCatalogEntry | undefined {
-  if (params.origin === "bundled" || !params.packageName) {
+  if (!params.packageName) {
     return undefined;
   }
   const matches = params.entries.filter((entry) =>
@@ -427,26 +426,36 @@ export async function listManagedPlugins(params: {
     const trustedOfficialNpmPackage = trustedOfficialNpmSpec
       ? parseRegistryNpmSpec(trustedOfficialNpmSpec)?.name
       : undefined;
+    const bundledPublishedEntry =
+      record.origin === "bundled"
+        ? resolveInstalledOfficialCatalogEntry({
+            entries: bundledOfficialEntries,
+            packageName: record.packageName,
+            source: "npm",
+          })
+        : undefined;
     const installedOfficialIdentity = sourceLinkedOfficialClawHubPackage
       ? { source: "clawhub" as const, packageName: sourceLinkedOfficialClawHubPackage }
       : trustedOfficialNpmPackage
         ? { source: "npm" as const, packageName: trustedOfficialNpmPackage }
         : currentOfficialClawHubPackage && record.packageName === currentOfficialClawHubPackage
           ? { source: "clawhub" as const, packageName: currentOfficialClawHubPackage }
-          : undefined;
+          : bundledPublishedEntry && record.packageName
+            ? { source: "npm" as const, packageName: record.packageName }
+            : undefined;
     const hasInstalledOfficialProvenance = Boolean(
-      record.origin !== "bundled" &&
       installedOfficialIdentity &&
       (!record.packageName || record.packageName === installedOfficialIdentity.packageName),
     );
-    const bundledOfficialEntry = resolveInstalledOfficialCatalogEntry({
-      entries: bundledOfficialEntries,
-      packageName: hasInstalledOfficialProvenance
-        ? installedOfficialIdentity?.packageName
-        : undefined,
-      origin: record.origin,
-      source: installedOfficialIdentity?.source ?? "clawhub",
-    });
+    const bundledOfficialEntry =
+      bundledPublishedEntry ??
+      resolveInstalledOfficialCatalogEntry({
+        entries: bundledOfficialEntries,
+        packageName: hasInstalledOfficialProvenance
+          ? installedOfficialIdentity?.packageName
+          : undefined,
+        source: installedOfficialIdentity?.source ?? "clawhub",
+      });
     const hostedPackageName =
       installedOfficialIdentity?.source === "npm"
         ? (bundledOfficialEntry
@@ -457,7 +466,6 @@ export async function listManagedPlugins(params: {
     const officialEntry = resolveInstalledOfficialCatalogEntry({
       entries: officialCatalog.entries,
       packageName: hasInstalledOfficialProvenance ? hostedPackageName : undefined,
-      origin: record.origin,
       source: "clawhub",
     });
     const hasHostedOfficialIdentity = Boolean(hasInstalledOfficialProvenance && hostedPackageName);
@@ -465,7 +473,7 @@ export async function listManagedPlugins(params: {
       ? normalizeCatalogMetadata(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
       : undefined;
     // Published plugin curation follows the live feed even after install, including
-    // omission. Runtime-bundled plugins keep their local manifest state.
+    // omission. Private bundled plugins without an exact package/source match stay local.
     const catalog =
       hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative
         ? {

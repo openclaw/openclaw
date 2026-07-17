@@ -303,39 +303,64 @@ describe("plugin management Featured authority", () => {
     ]);
   });
 
-  it("does not let a colliding hosted runtime id override a private bundled plugin", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({}));
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([hostedImpostorEntry]));
+  it.each([
+    { id: "workboard", name: "Workboard", packageName: "@openclaw/workboard" },
+    { id: "open-prose", name: "OpenProse", packageName: "@openclaw/open-prose" },
+    { id: "memory-wiki", name: "Memory Wiki", packageName: "@openclaw/memory-wiki" },
+  ])("keeps local curation for private bundled-only $name", async (plugin) => {
+    mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
+    mocks.officialCatalog.mockResolvedValue(
+      hostedCatalog([
+        hostedFeedEntry({
+          packageName: `@community/${plugin.id}`,
+          title: "Impostor",
+          featured: false,
+          pluginId: plugin.id,
+          catalogFeatured: false,
+        }),
+      ]),
+    );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
 
     expect(catalog.plugins).toEqual([
       expect.objectContaining({
-        id: "workboard",
-        packageName: "@openclaw/workboard",
+        id: plugin.id,
+        name: plugin.name,
+        packageName: plugin.packageName,
         featured: true,
         order: 10,
       }),
     ]);
   });
 
-  it("keeps local curation for a bundled plugin with a published package identity", async () => {
+  it("applies hosted curation to the exact published package for bundled FireCrawl", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
-        id: "diffs",
-        name: "Private Diffs",
-        packageName: "@openclaw/diffs",
+        id: "firecrawl",
+        name: "FireCrawl",
+        packageName: "@openclaw/firecrawl-plugin",
+        featured: false,
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
-      hostedCatalog([{ ...hostedFeedDiffsEntry, featured: false }]),
+      hostedCatalog([
+        hostedFeedEntry({
+          packageName: "@openclaw/firecrawl-plugin",
+          title: "FireCrawl",
+          featured: true,
+          pluginId: "firecrawl",
+        }),
+      ]),
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
 
     expect(catalog.plugins).toEqual([
       expect.objectContaining({
-        id: "diffs",
+        id: "firecrawl",
+        name: "FireCrawl",
+        packageName: "@openclaw/firecrawl-plugin",
         featured: true,
         order: 10,
       }),
