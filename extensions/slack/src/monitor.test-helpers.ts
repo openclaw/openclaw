@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 // Slack helper module supports monitor helpers behavior.
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 
@@ -243,7 +243,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     fs.rmSync(lastSlackTestStateDir, { recursive: true, force: true });
   }
   lastSlackTestStateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-monitor-state-")),
+    fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-slack-monitor-state-")),
   );
   process.env.OPENCLAW_STATE_DIR = lastSlackTestStateDir;
   slackTestState.config = config;
