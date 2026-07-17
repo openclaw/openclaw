@@ -436,7 +436,7 @@ describe("createSlackBoltApp", () => {
           SocketModeReceiver: FakeSocketModeReceiver as never,
         },
         slackMode,
-        botToken: "test-bot-token",
+        token: "test-bot-token",
         ...(slackMode === "socket"
           ? { appToken: "test-app-token" }
           : { signingSecret: "test-signing-secret" }),
