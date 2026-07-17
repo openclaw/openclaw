@@ -57,7 +57,7 @@ function readDateFromSessionDir(sessionDirValue: string): string {
 }
 
 function formatSelector(entry: StoredTranscriptsSession): string {
-  return `${entry.date}/${entry.session.sessionId}`;
+  return `${entry.date}/${safeSegment(entry.session.sessionId)}`;
 }
 
 function parseQualifiedSelector(selector: string): { date: string; sessionId: string } | null {
@@ -157,7 +157,7 @@ function assertRequestedSession(
   entry: StoredTranscriptsSession,
   sessionId: string,
 ): StoredTranscriptsSession {
-  if (entry.session.sessionId !== sessionId) {
+  if (entry.session.sessionId !== sessionId && safeSegment(entry.session.sessionId) !== sessionId) {
     throw new Error(
       `transcripts metadata mismatch for ${sessionId}: found ${entry.session.sessionId}`,
     );
@@ -181,7 +181,10 @@ async function requireStoredSession(selector: string): Promise<StoredTranscripts
     return assertRequestedSession(session, selector);
   }
   const sessions = await listStoredSessions();
-  const matches = sessions.filter((entry) => entry.session.sessionId === selector);
+  const matches = sessions.filter(
+    (entry) =>
+      entry.session.sessionId === selector || safeSegment(entry.session.sessionId) === selector,
+  );
   if (matches.length === 1 && matches[0]) {
     return assertRequestedSession(matches[0], selector);
   }
@@ -215,11 +218,10 @@ function formatSessionLine(entry: StoredTranscriptsSession): string {
   const title = sanitizeTerminalText(entry.session.title?.trim() || "Transcripts");
   const started = sanitizeTerminalText(entry.session.startedAt || "unknown");
   const summary = sanitizeTerminalText(entry.hasSummary ? entry.summaryPath : "no summary.md");
-  return `${sanitizeTerminalText(formatSelector(entry))}\t${started}\t${title}\t${summary}`;
+  return `${formatSelector(entry)}\t${started}\t${title}\t${summary}`;
 }
 
 function sanitizeMarkdownForTerminal(markdown: string): string {
-  // Preserve the artifact's document structure while making every rendered line terminal-safe.
   return markdown.split("\n").map(sanitizeTerminalText).join("\n");
 }
 

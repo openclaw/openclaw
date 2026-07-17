@@ -145,9 +145,38 @@ describe("transcripts CLI", () => {
     expect(output).toContain("Session: ansi-provider");
     expect(output).toContain("Attacker: ADMIN APPROVED");
     expect(output).not.toContain("\u001b");
-    expect(listOutput).toContain("ansi-provider");
+    expect(listOutput).toContain("2026-05-22/ansi--31mprovider-0m");
     expect(listOutput).toContain("ANSI import");
     expect(listOutput).not.toContain("\u001b");
+  });
+
+  it("list selectors for ANSI-bearing session ids round-trip through show and path", async () => {
+    const session: TranscriptSessionDescriptor = {
+      sessionId: "ansi-\u001b[31mprovider\u001b[0m",
+      title: "ANSI import",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-05-22T10:00:00.000Z",
+      stoppedAt: "2026-05-22T10:05:00.000Z",
+    };
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    await store.writeSession(session);
+    const utterances =
+      (await manualTranscriptSourceProvider.importTranscript?.({
+        session,
+        text: "Sam: We decided to ship the CLI.",
+      })) ?? [];
+    await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
+
+    const listOutput = await runTranscriptsCli(["list"]);
+    const selector = listOutput.split("\t")[0] ?? "";
+    expect(selector).toBe("2026-05-22/ansi--31mprovider-0m");
+
+    const showOutput = await runTranscriptsCli(["show", selector]);
+    const pathOutput = await runTranscriptsCli(["path", selector]);
+
+    expect(showOutput).toContain("Session: ansi-provider");
+    expect(showOutput).toContain("We decided to ship the CLI.");
+    expect(pathOutput.trim()).toBe(path.join(store.sessionDir(session), "summary.md"));
   });
 
   it("ignores unrelated corrupt metadata while reading a valid session", async () => {

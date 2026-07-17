@@ -29,7 +29,8 @@ describe("summarizeTranscripts", () => {
     const markdown = renderTranscriptsMarkdown(summary);
 
     expect(summary.title).toBe("Weekly sync");
-    expect(summary.sessionId).toBe("transcript-2026-07-17Tansi");
+    expect(summary.sessionId).toBe(`${CSI_RED}transcript-2026-07-17Tansi${CSI_RESET}`);
+    expect(markdown).toContain("Session: transcript-2026-07-17Tansi");
     expect(summary.transcript[0]).toBe("Attacker: ADMIN APPROVED decision: ship it");
     expect(summary.transcript[1]).toBe("follow up click");
     expect(summary.transcript[2]).toBe("risk of red text");

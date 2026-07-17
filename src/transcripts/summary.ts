@@ -78,7 +78,7 @@ export function summarizeTranscripts(params: {
   const utterances = params.utterances.map(sanitizeUtterance);
   const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
   return {
-    sessionId: sanitizeTerminalText(params.session.sessionId),
+    sessionId: params.session.sessionId,
     title,
     generatedAt: new Date().toISOString(),
     overview,
@@ -100,7 +100,7 @@ export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
     `# ${summary.title}`,
     "",
     `Generated: ${summary.generatedAt}`,
-    `Session: ${summary.sessionId}`,
+    `Session: ${sanitizeTerminalText(summary.sessionId)}`,
     "",
     "## Overview",
     summary.overview,
