@@ -130,6 +130,7 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
 import { HEARTBEAT_RUN_SCOPE, type HeartbeatRunScope } from "./heartbeat-run-scope.js";
 import {
   computeNextHeartbeatPhaseDueMs,
@@ -1922,6 +1923,16 @@ export async function runHeartbeatOnce(opts: {
     const responsePrefix = resolveHeartbeatResponsePrefix();
 
     if (heartbeatToolResponse && !heartbeatToolResponse.notify && !heartbeatTerminalToolFailure) {
+      persistHeartbeatOutcome({
+        agentId,
+        sessionKey,
+        runSessionKey,
+        response: heartbeatToolResponse,
+        taskNames: dueHeartbeatTasks.map((task) => task.name),
+        wakeSource: opts.source,
+        wakeReason: opts.reason,
+        occurredAt: startedAt,
+      });
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,

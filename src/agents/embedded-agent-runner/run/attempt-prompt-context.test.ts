@@ -173,6 +173,21 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
   });
 
+  it("injects the latest heartbeat outcome only as hidden runtime context", () => {
+    const fixture = createInput();
+    const result = prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      heartbeatOutcomeContext: "Latest silent heartbeat outcome: deployment finished",
+    });
+
+    expect(result.promptForSession).toBe("Visible request");
+    expect(result.promptForModel).toBe("Visible request");
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "Latest silent heartbeat outcome: deployment finished",
+    );
+    expect(result.llmBoundaryPromptForPrecheck).not.toContain("deployment finished");
+  });
+
   it("reports aggregate tool-result pressure for compact-then-truncate routing", () => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
       messages: [...inputMessages],
