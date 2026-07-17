@@ -31,6 +31,7 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
+  cancelQuestionPrompt,
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
@@ -2308,6 +2309,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       onGatewayQuestionSubmit: (id, answers) =>
         submitQuestionPrompt(this.questionPromptState, id, answers),
+      onGatewayQuestionSkip: (id) => cancelQuestionPrompt(this.questionPromptState, id),
       messages: catalogKey ? this.catalogMessages : state.chatMessages,
       historyPagination:
         catalogKey || state.chatHistoryPagination?.hasMore || this.loadingOlder

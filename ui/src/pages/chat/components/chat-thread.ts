@@ -134,8 +134,6 @@ type ChatThreadProps = {
   onOpenSessionCheckpoints?: () => void | Promise<void>;
   onAssistantAttachmentLoaded?: () => void;
   onRequestUpdate?: () => void;
-  onQuestionChange?: () => void;
-  onQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onChatScroll?: (event: Event) => void;
   onHistoryIntent?: (event: Event) => void;
   onDraftChange: (next: string) => void;
@@ -1062,8 +1060,6 @@ function renderChatThreadContents(
     if (item.kind === "stream-run") {
       return renderStreamGroup(item.parts, {
         questionPrompts,
-        onQuestionChange: props.onQuestionChange,
-        onQuestionSubmit: props.onQuestionSubmit,
         planStatus: props.planStatus,
         planActive: Boolean(props.runActive),
         onOpenSidebar: props.onOpenSidebar,
@@ -1091,8 +1087,6 @@ function renderChatThreadContents(
     if (item.kind === "question") {
       return renderStreamGroup([item], {
         questionPrompts,
-        onQuestionChange: props.onQuestionChange,
-        onQuestionSubmit: props.onQuestionSubmit,
       });
     }
     return nothing;

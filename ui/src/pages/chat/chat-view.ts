@@ -91,6 +91,7 @@ export type ChatProps = {
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
+  onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
   historyPagination?: {
     loading: boolean;
@@ -311,8 +312,6 @@ export function renderChat(props: ChatProps) {
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       onRequestUpdate: requestUpdate,
-      onQuestionChange: props.onGatewayQuestionChange,
-      onQuestionSubmit: props.onGatewayQuestionSubmit,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
@@ -346,6 +345,7 @@ export function renderChat(props: ChatProps) {
     fallbackStatus: props.fallbackStatus,
     planStatus: props.planStatus,
     questionStatus: props.questionStatus,
+    gatewayQuestionPrompts: props.gatewayQuestionPrompts,
     messages: props.messages,
     stream: props.stream,
     queue: props.queue,
@@ -381,6 +381,9 @@ export function renderChat(props: ChatProps) {
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
     onQuestionSubmit: props.onQuestionSubmit,
+    onGatewayQuestionChange: props.onGatewayQuestionChange,
+    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
+    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,
