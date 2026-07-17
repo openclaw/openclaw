@@ -1289,6 +1289,55 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("rolls back the reservation when ambiguous settlement persistence fails", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    let dispatchFailed = false;
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "agent") {
+        dispatchFailed = true;
+        throw new Error("ambiguous dispatch transport failure");
+      }
+      return { runId: "recovery-run", status: "ok", endedAt: Date.now() };
+    });
+    const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    let settlementFailed = false;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        if (dispatchFailed && !settlementFailed && params.requireWriteSuccess !== true) {
+          settlementFailed = true;
+          throw new Error("settlement store failure");
+        }
+        return await applySessionEntryReplacements(params);
+      });
+
+    try {
+      await expect(
+        recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir }),
+      ).resolves.toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    } finally {
+      replacementSpy.mockRestore();
+    }
+    expect(settlementFailed).toBe(true);
+    const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
+    expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
   it("settles an admitted recovery that completed before its ambiguous response", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

@@ -4,6 +4,10 @@ import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-too
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
 import {
+  restoreAdmittedRecoveryWithRetries,
+  scheduleAdmittedRecoveryRestore,
+} from "../../agents/main-session-recovery-restore.js";
+import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
@@ -434,22 +438,36 @@ export function startAgentRunExecution(params: {
     } finally {
       if (!dispatched) {
         try {
-          pendingRecovery ??= await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
-          await params.releaseCronContinuationClaimWithRecovery();
+          if (prepared.restoreAdmittedRestartRecoveryInterrupted) {
+            try {
+              pendingRecovery ??= await restoreAdmittedRecoveryWithRetries(
+                prepared.restoreAdmittedRestartRecoveryInterrupted,
+              );
+            } catch (err) {
+              params.context.logGateway.warn(
+                `failed to restore undispatched restart recovery: ${formatForLog(err)}`,
+              );
+              scheduleAdmittedRecoveryRestore(prepared.restoreAdmittedRestartRecoveryInterrupted);
+            }
+          }
         } finally {
           try {
-            pendingRecovery ??= await releaseMainSessionRecoveryOwner(
-              params.mainRestartRecoveryOwnerLease,
-            );
-          } catch (err) {
-            params.context.logGateway.warn(
-              `failed to release undispatched main restart recovery owner: ${formatForLog(err)}`,
-            );
+            await params.releaseCronContinuationClaimWithRecovery();
           } finally {
             try {
-              cleanupAdmittedRun({ force: true });
+              pendingRecovery ??= await releaseMainSessionRecoveryOwner(
+                params.mainRestartRecoveryOwnerLease,
+              );
+            } catch (err) {
+              params.context.logGateway.warn(
+                `failed to release undispatched main restart recovery owner: ${formatForLog(err)}`,
+              );
             } finally {
-              scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+              try {
+                cleanupAdmittedRun({ force: true });
+              } finally {
+                scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+              }
             }
           }
         }

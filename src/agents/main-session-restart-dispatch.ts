@@ -521,51 +521,57 @@ export async function resumeMainSession(params: {
     return "resumed";
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError;
-    if (dispatchStarted && !explicitlyRejected) {
-      const terminalStatus = await probeRestartRecoveryTerminalStatus(
-        recoveryRunId,
-        params.gatewayRuntime,
-      );
-      if (terminalStatus) {
-        const lifecycleGeneration = getAgentEventLifecycleGeneration();
-        const admission = await commitMainSessionRecovery({
-          command: {
-            kind: "admit_recovery",
-            lifecycleGeneration,
-            now: Date.now(),
-            runId: recoveryRunId,
-            sessionId: params.entry.sessionId,
-          },
-          target: { sessionKey: params.sessionKey, storePath: params.storePath },
-        });
-        const exactRunAlreadyAdmitted = isExactRestartRecoveryDispatchAdmission({
-          admission,
-          lifecycleGeneration,
+    try {
+      if (dispatchStarted && !explicitlyRejected) {
+        const terminalStatus = await probeRestartRecoveryTerminalStatus(
           recoveryRunId,
-          sessionId: params.entry.sessionId,
-          terminalStatus,
-        });
-        if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
-          log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
-        } else {
-          if (reservation) {
-            await commitMainSessionRecovery({
-              command: { kind: "abandon_reservation", reservation },
-              target: { sessionKey: params.sessionKey, storePath: params.storePath },
-            });
-          }
-          await settleRestartRecoveryDispatch({
-            expectedRecoveryRunId: recoveryRunId,
-            expectedRecoverySourceRunId: sourceRunId,
-            expectedSessionId: params.entry.sessionId,
-            sessionKeys: recoverySessionKeys,
-            storePath: params.storePath,
+          params.gatewayRuntime,
+        );
+        if (terminalStatus) {
+          const lifecycleGeneration = getAgentEventLifecycleGeneration();
+          const admission = await commitMainSessionRecovery({
+            command: {
+              kind: "admit_recovery",
+              lifecycleGeneration,
+              now: Date.now(),
+              runId: recoveryRunId,
+              sessionId: params.entry.sessionId,
+            },
+            target: { sessionKey: params.sessionKey, storePath: params.storePath },
+          });
+          const exactRunAlreadyAdmitted = isExactRestartRecoveryDispatchAdmission({
+            admission,
+            lifecycleGeneration,
+            recoveryRunId,
+            sessionId: params.entry.sessionId,
             terminalStatus,
           });
-          log.info(`settled completed restart recovery for ${params.sessionKey}`);
-          return "resumed";
+          if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
+            log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
+          } else {
+            if (reservation) {
+              await commitMainSessionRecovery({
+                command: { kind: "abandon_reservation", reservation },
+                target: { sessionKey: params.sessionKey, storePath: params.storePath },
+              });
+            }
+            await settleRestartRecoveryDispatch({
+              expectedRecoveryRunId: recoveryRunId,
+              expectedRecoverySourceRunId: sourceRunId,
+              expectedSessionId: params.entry.sessionId,
+              sessionKeys: recoverySessionKeys,
+              storePath: params.storePath,
+              terminalStatus,
+            });
+            log.info(`settled completed restart recovery for ${params.sessionKey}`);
+            return "resumed";
+          }
         }
       }
+    } catch (settlementError) {
+      log.warn(
+        `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
+      );
     }
     if (reservation) {
       const rollbackReservation = reservation;

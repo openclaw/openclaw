@@ -1,9 +1,12 @@
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
-import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
+import {
+  restoreAdmittedRecoveryWithRetries,
+  scheduleAdmittedRecoveryRestore,
+} from "./main-session-recovery-restore.js";
 import {
   bindMainSessionRecoveryOwnerRun,
   claimMainSessionRecoveryOwner,
@@ -15,38 +18,6 @@ import {
 } from "./main-session-recovery-store.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-const ADMITTED_RECOVERY_RESTORE_RETRY_DELAY_MS = 1_000;
-const ADMITTED_RECOVERY_RESTORE_RETRY_MAX_DELAY_MS = 30_000;
-
-type RestoreAdmittedRecovery = () => Promise<MainSessionRecoveryPendingTarget | undefined>;
-
-async function restoreAdmittedRecoveryWithRetries(
-  restore: RestoreAdmittedRecovery,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  return await retryAsync(restore, 3, 25);
-}
-
-function scheduleAdmittedRecoveryRestore(
-  restore: RestoreAdmittedRecovery,
-  delayMs = ADMITTED_RECOVERY_RESTORE_RETRY_DELAY_MS,
-): void {
-  // Gateway admission consumed the reservation already. Keep restoration
-  // alive until this exact idempotent callback repairs or rejects its fence.
-  setTimeout(() => {
-    void restoreAdmittedRecoveryWithRetries(restore).then(
-      (pendingRecovery) => {
-        scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
-      },
-      (error: unknown) => {
-        log.warn(`failed delayed admitted recovery restoration: ${formatErrorMessage(error)}`);
-        scheduleAdmittedRecoveryRestore(
-          restore,
-          Math.min(delayMs * 2, ADMITTED_RECOVERY_RESTORE_RETRY_MAX_DELAY_MS),
-        );
-      },
-    );
-  }, delayMs).unref?.();
-}
 
 type PreparedRecoveryOwnerTarget = object & {
   isNewSession: boolean;
