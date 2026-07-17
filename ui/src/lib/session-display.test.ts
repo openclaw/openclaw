@@ -27,11 +27,8 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
-    const name = resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890");
-    expect(() => encodeURIComponent(name)).not.toThrow();
-    expect(name).toContain("Telegram · …");
-    expect(name).not.toMatch(
-      /[\uD800-\uDFFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
+      "Telegram · …67890",
     );
   });
 
