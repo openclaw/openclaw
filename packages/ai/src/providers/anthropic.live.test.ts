@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
-import { streamSimpleAnthropic } from "./anthropic.js";
+import { isContextOverflow } from "../utils/overflow.js";
+import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
+import { clampMaxTokensToContext, estimateContextInputTokens } from "./simple-options.js";
 
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const live = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey.length > 0;
@@ -80,6 +82,68 @@ describeLive("Anthropic provider live", () => {
       expect(result.stopReason).toBe("stop");
       const thinking = result.content.find((block) => block.type === "thinking");
       expect(thinking?.thinkingSignature?.length).toBeGreaterThan(0);
+    },
+    timeoutMs,
+  );
+
+  it(
+    "classifies the provider's current context-overflow error",
+    async () => {
+      const result = await streamAnthropic(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "x ".repeat(Math.ceil(model.contextWindow * 1.1)),
+              timestamp: 0,
+            },
+          ],
+        },
+        { apiKey, maxTokens: 1, maxRetries: 0 },
+      ).result();
+
+      expect(result.stopReason).toBe("error");
+      expect(isContextOverflow(result)).toBe(true);
+    },
+    timeoutMs,
+  );
+
+  it(
+    "clamps an excessive output request to the remaining context",
+    async () => {
+      let sentMaxTokens: number | undefined;
+      const contextWithoutSystem: Context = {
+        messages: [{ role: "user", content: "Reply briefly with ok.", timestamp: 0 }],
+      };
+      const promptUnit = "x ";
+      const baseEstimate = estimateContextInputTokens(contextWithoutSystem);
+      const unitEstimate =
+        estimateContextInputTokens({ ...contextWithoutSystem, systemPrompt: promptUnit }) -
+        baseEstimate;
+      const targetEstimate = model.contextWindow - Math.floor(model.maxTokens / 2);
+      const context: Context = {
+        ...contextWithoutSystem,
+        systemPrompt: promptUnit.repeat(Math.ceil((targetEstimate - baseEstimate) / unitEstimate)),
+      };
+      const requestedMaxTokens = model.maxTokens * 100;
+      expect(estimateContextInputTokens(context)).toBeGreaterThanOrEqual(targetEstimate);
+      const expectedMaxTokens = clampMaxTokensToContext(model, context, requestedMaxTokens);
+      expect(expectedMaxTokens).toBeLessThan(model.maxTokens);
+
+      const result = await streamSimpleAnthropic(model, context, {
+        apiKey,
+        maxTokens: requestedMaxTokens,
+        maxRetries: 0,
+        reasoning: "off",
+        onPayload: (payload) => {
+          sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;
+        },
+      }).result();
+
+      expect(sentMaxTokens).toBe(expectedMaxTokens);
+      expect(result.errorMessage).toBeUndefined();
+      expect(["stop", "length"]).toContain(result.stopReason);
     },
     timeoutMs,
   );
