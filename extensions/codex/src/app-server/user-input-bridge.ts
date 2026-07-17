@@ -306,8 +306,8 @@ function buildUserInputActionResponse(
   }
   const answerEntries: Array<[string, { answers: string[] }]> = [];
   for (const question of questions) {
-    const rawAnswer = action.answers[question.id]?.trim();
-    if (!rawAnswer) {
+    const rawAnswer = action.answers[question.id];
+    if (!rawAnswer?.trim()) {
       return undefined;
     }
     const exactOption = question.options?.find((option) => option.label === rawAnswer);

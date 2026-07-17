@@ -183,7 +183,7 @@ describe("Codex app-server user input bridge", () => {
             question: "Pick a mode",
             isOther: false,
             isSecret: false,
-            options: [{ label: "FAST" }, { label: "fast" }],
+            options: [{ label: "FAST" }, { label: " fast " }],
           },
         ],
       },
@@ -200,10 +200,10 @@ describe("Codex app-server user input bridge", () => {
     expect(
       resolveCodexUserInputAction(String(actionId), {
         type: "answers",
-        answers: { mode: "fast" },
+        answers: { mode: " fast " },
       }),
     ).toBe(true);
-    await expect(response).resolves.toEqual({ answers: { mode: { answers: ["fast"] } } });
+    await expect(response).resolves.toEqual({ answers: { mode: { answers: [" fast "] } } });
   });
 
   it("preserves reserved question ids in structured answers", async () => {

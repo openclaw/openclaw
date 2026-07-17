@@ -33,7 +33,7 @@ describe("native Codex question card", () => {
                 header: "Mode",
                 question: "Pick one",
                 isOther: false,
-                options: [{ label: "Fast" }, { label: "Deep", description: "More reasoning" }],
+                options: [{ label: "Fast" }, { label: " Deep ", description: "More reasoning" }],
               },
             ],
           },
@@ -47,7 +47,7 @@ describe("native Codex question card", () => {
     options[1]!.click();
     await card.updateComplete;
     container.querySelector<HTMLButtonElement>(".chat-question__submit")!.click();
-    expect(onSubmit).toHaveBeenCalledWith({ mode: "Deep" }, expect.any(Function));
+    expect(onSubmit).toHaveBeenCalledWith({ mode: " Deep " }, expect.any(Function));
     await card.updateComplete;
     expect(container.querySelector<HTMLButtonElement>(".chat-question__submit")?.disabled).toBe(
       true,
