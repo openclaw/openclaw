@@ -404,6 +404,16 @@ describe("runDaemonRestart health checks", () => {
     expect(waitParams.env?.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
   });
 
+  it("carries launchd KeepAlive supervision into managed restart health", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({ supervisorKeepsAlive: true }),
+    );
+  });
+
   it("re-reads the installed service environment after restart repair", async () => {
     service.readCommand
       .mockResolvedValueOnce({

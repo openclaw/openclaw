@@ -684,6 +684,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
         env: managedRestartContext.env,
         includeUnknownListenersAsStale: process.platform === "win32",
+        supervisorKeepsAlive: process.platform === "darwin",
       });
 
       if (!health.healthy && health.staleGatewayPids.length > 0) {
@@ -708,6 +709,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           env: managedRestartContext.env,
           includeUnknownListenersAsStale: process.platform === "win32",
+          supervisorKeepsAlive: process.platform === "darwin",
         });
       }
 
