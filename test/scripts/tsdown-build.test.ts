@@ -16,6 +16,7 @@ import {
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
+  resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
   signalTsdownBuildProcessTree,
 } from "../../scripts/tsdown-build.mjs";
@@ -466,6 +467,36 @@ describe("resolveTsdownBuildInvocation", () => {
     });
   });
 
+  it("limits cleanup to the explicitly selected declaration group", () => {
+    expect(resolveTsdownCleanOutputRoots(["--config", "tsdown.ai.config.ts"])).toEqual([
+      "packages/ai/dist",
+    ]);
+    expect(
+      resolveTsdownCleanOutputRoots([
+        "--config",
+        "tsdown.config.ts",
+        "--filter",
+        "openclaw-packages",
+      ]),
+    ).toEqual(expect.arrayContaining(["packages/agent-core/dist", "packages/net-policy/dist"]));
+    expect(
+      resolveTsdownCleanOutputRoots(["--config=tsdown.config.ts", "--filter=openclaw-packages"]),
+    ).not.toContain("packages/ai/dist");
+    expect(resolveTsdownCleanOutputRoots(["-c=tsdown.config.ts", "-F=openclaw-unified"])).toEqual([
+      "dist",
+      "dist-runtime",
+    ]);
+    expect(
+      resolveTsdownCleanOutputRoots([
+        "--config",
+        "configs/tsdown.config.ts",
+        "--filter",
+        "openclaw-packages",
+      ]),
+    ).toEqual(listTsdownOutputRoots());
+    expect(resolveTsdownCleanOutputRoots(["--format", "esm"])).toEqual(listTsdownOutputRoots());
+  });
+
   it("keeps source-checkout prune best-effort", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rmSync = vi.spyOn(fs, "rmSync");
@@ -567,6 +598,21 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(pluginSdkPackageFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(packageSourceFile, "utf8")).resolves.toBe("keep\n");
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("cleans only selected tsdown output roots", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-selected-clean-");
+    const aiFile = path.join(rootDir, "packages", "ai", "dist", "stale.js");
+    const coreFile = path.join(rootDir, "dist", "keep.js");
+    await fsPromises.mkdir(path.dirname(aiFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(coreFile), { recursive: true });
+    await fsPromises.writeFile(aiFile, "stale\n");
+    await fsPromises.writeFile(coreFile, "keep\n");
+
+    cleanTsdownOutputRoots({ cwd: rootDir, roots: ["packages/ai/dist"] });
+
+    await expectPathMissing(aiFile);
+    await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("removes CLI startup metadata during default tsdown clean", async () => {

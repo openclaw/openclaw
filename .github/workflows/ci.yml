@@ -1744,6 +1744,7 @@ jobs:
         with:
           node-version: "22.22.3"
           install-bun: "false"
+          build-all-cache-scope: full
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
