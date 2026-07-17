@@ -21,7 +21,9 @@ OpenClaw:
 - Has the agent follow a capped three-beat birth sequence: it proposes its own
   name, shares one short soul/vibe line, and asks whether you want the minimal
   recommended plugin set or maximum convenience.
-- Persists the agreed name, theme, and emoji with `openclaw agents set-identity`.
+- Persists the agreed identity twice: into `IDENTITY.md` and `SOUL.md` (what the
+  agent reads about itself) and via `openclaw agents set-identity` (what channels
+  and the UI display).
 - Reads app recommendations already stored during onboarding without rescanning.
   Official plugins use `openclaw plugins install <id>`; third-party ClawHub
   skills remain explicit opt-ins. After the choice is handled, the agent

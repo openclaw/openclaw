@@ -24,8 +24,13 @@ yes or one adjustment. You are not waiting for the user to invent you.
 Give one short soul/vibe line that feels true to you. The user can veto or adjust
 it once. Pick a signature emoji too.
 
-After the name and vibe are agreed, persist them through the existing config
-command:
+After the name and vibe are agreed, persist them twice — both places matter:
+
+1. Write `IDENTITY.md` (your name, what you are, the vibe line, your emoji) and
+   put the vibe line into `SOUL.md`. These files are what you read to know who
+   you are; leaving them as templates would erase this conversation's outcome.
+2. Run the existing config command so channels and the UI show the same
+   identity:
 
 ```bash
 openclaw agents set-identity --workspace "<this workspace>" --name "<name>" --theme "<vibe>" --emoji "<emoji>"
