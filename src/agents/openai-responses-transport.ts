@@ -702,37 +702,26 @@ function stripEncryptedContentFields(value: unknown): { value: unknown; changed:
   return changed ? { value: next, changed: true } : { value, changed: false };
 }
 
-function dropResponsesRequestEncryptedReplayItems(
+function stripResponsesRequestEncryptedReasoningContent(
   params: OpenAIResponsesRequestParams,
 ): OpenAIResponsesRequestParams {
-  let changed = false;
-  let droppedReasoningBeforeNextItem = false;
-  const input: ResponseInput = [];
-
-  for (const value of params.input) {
-    const item = isRecord(value) ? value : undefined;
-    const type = typeof item?.type === "string" ? item.type : undefined;
-    if (type === "reasoning" || type === "compaction") {
-      changed = true;
-      droppedReasoningBeforeNextItem = type === "reasoning";
-      continue;
-    }
-
-    if (
-      droppedReasoningBeforeNextItem &&
-      type === "message" &&
-      item?.role === "assistant" &&
-      "id" in item
-    ) {
-      const message = { ...item };
-      // Signed message ids are replayable only with their preceding reasoning item.
-      delete message.id;
-      input.push(message as ResponseInputItem);
-    } else {
-      input.push(value);
-    }
-    droppedReasoningBeforeNextItem = false;
+  // Compaction ciphertext is the canonical compacted context and is required by
+  // the wire contract. It cannot be stripped or dropped without corrupting history.
+  if (params.input.some((value) => isRecord(value) && value.type === "compaction")) {
+    return params;
   }
+
+  let changed = false;
+  const input = params.input.map((value) => {
+    if (!isRecord(value) || value.type !== "reasoning" || !("encrypted_content" in value)) {
+      return value;
+    }
+
+    const reasoning = { ...value };
+    delete reasoning.encrypted_content;
+    changed = true;
+    return reasoning as ResponseInputItem;
+  });
 
   if (!changed) {
     return params;
@@ -904,7 +893,7 @@ async function runResponsesStreamWithEncryptedContentRetry(params: {
       ) {
         throw error;
       }
-      const retryRequest = dropResponsesRequestEncryptedReplayItems(request);
+      const retryRequest = stripResponsesRequestEncryptedReasoningContent(request);
       if (retryRequest === request) {
         throw error;
       }
