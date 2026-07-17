@@ -208,10 +208,7 @@ This example gives the `research` agent a writable primary workspace, read-only 
         sandbox: {
           workspaceAccess: "rw",
           docker: {
-            binds: [
-              "/srv/shared/reference:/reference:ro",
-              "/srv/shared/drafts:/drafts:rw",
-            ],
+            binds: ["/srv/shared/reference:/reference:ro", "/srv/shared/drafts:/drafts:rw"],
             // Required because these sources are outside the agent workspace.
             dangerouslyAllowExternalBindSources: true,
           },
@@ -224,12 +221,12 @@ This example gives the `research` agent a writable primary workspace, read-only 
 
 `workspaceAccess` and bind modes are independent:
 
-| Setting                         | Controls                                                                            |
-| ------------------------------- | ----------------------------------------------------------------------------------- |
-| `workspaceAccess: "none"`      | Uses an isolated sandbox workspace; does not expose the agent workspace.            |
-| `workspaceAccess: "ro"`        | Mounts the agent workspace read-only at `/agent`.                                   |
-| `workspaceAccess: "rw"`        | Mounts the agent workspace read/write at `/workspace`.                              |
-| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path.         |
+| Setting                          | Controls                                                                    |
+| -------------------------------- | --------------------------------------------------------------------------- |
+| `workspaceAccess: "none"`        | Uses an isolated sandbox workspace; does not expose the agent workspace.    |
+| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                           |
+| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                      |
+| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path. |
 
 Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
 
