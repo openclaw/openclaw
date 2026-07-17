@@ -185,8 +185,12 @@ export async function resolveGoogleMeetAccessToken(params: {
   expiresAt?: number;
 }): Promise<{ accessToken: string; expiresAt?: number; refreshed: boolean }> {
   if (shouldUseCachedGoogleMeetAccessToken(params)) {
+    const accessToken = params.accessToken?.trim();
+    if (!accessToken) {
+      throw new Error("Google Meet: cached access token unexpectedly missing");
+    }
     return {
-      accessToken: params.accessToken!.trim(),
+      accessToken,
       expiresAt: params.expiresAt,
       refreshed: false,
     };
