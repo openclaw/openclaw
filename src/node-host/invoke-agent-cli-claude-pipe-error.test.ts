@@ -20,8 +20,8 @@ function frame(params: unknown): NodeInvokeRequestPayload {
 
 function client(): NodeHostClient {
   return {
-    async request() {
-      return {};
+    async request<T = Record<string, unknown>>() {
+      return {} as T;
     },
   };
 }
