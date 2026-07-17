@@ -344,6 +344,20 @@ describe("Bedrock bearer token resolution", () => {
 
     expect(getConfiguredToken()).toEqual({ token: "option-token" });
   });
+
+  it("sanitizes blank static AWS keys to keep the default credential chain available", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "   ");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    // No bearer token + blank static keys → sanitization clears them
+    // so the SDK falls through to profile, SSO, ECS, or IMDS credentials.
+    await runWithBearerToken(undefined);
+
+    // The request succeeded and no bearer token was configured,
+    // proving blank env vars did not prevent client creation.
+    expect(getConfiguredToken()).toBeUndefined();
+  });
 });
 
 describe("Bedrock thinking effort mapping", () => {

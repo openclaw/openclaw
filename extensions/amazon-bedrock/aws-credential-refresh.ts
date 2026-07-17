@@ -14,6 +14,22 @@ function shouldRefreshAwsSharedConfigCacheForBedrock(env: NodeJS.ProcessEnv): bo
   return !hasStaticAwsCredentialEnv(env);
 }
 
+/**
+ * Clear whitespace-only static AWS credential environment variables so the AWS SDK
+ * default credential chain bypasses them. The SDK's `fromEnv()` provider only checks
+ * truthiness, so strings such as `" "` are selected and prevent the chain from
+ * falling through to profile, SSO, ECS, or IMDS credentials.
+ */
+export function sanitizeBlankAwsCredentials(): void {
+  if (!hasStaticAwsCredentialEnv(process.env)) {
+    if (process.env.AWS_ACCESS_KEY_ID !== undefined) {
+      delete process.env.AWS_ACCESS_KEY_ID;
+      delete process.env.AWS_SECRET_ACCESS_KEY;
+      delete process.env.AWS_SESSION_TOKEN;
+    }
+  }
+}
+
 /** Refresh Smithy shared config files when Bedrock needs default-chain credentials. */
 export async function refreshAwsSharedConfigCacheForBedrock(
   env: NodeJS.ProcessEnv = process.env,

@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  refreshAwsSharedConfigCacheForBedrock,
+  sanitizeBlankAwsCredentials,
+} from "./aws-credential-refresh.js";
 
 const loadSharedConfigFiles = vi.hoisted(() => vi.fn().mockResolvedValue({}));
 
@@ -29,5 +32,42 @@ describe("refreshAwsSharedConfigCacheForBedrock", () => {
     await refreshAwsSharedConfigCacheForBedrock(env);
 
     expect(loadSharedConfigFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("sanitizeBlankAwsCredentials", () => {
+  afterEach(() => {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+    delete process.env.AWS_SESSION_TOKEN;
+  });
+
+  it("clears whitespace-only AWS credential env vars", () => {
+    process.env.AWS_ACCESS_KEY_ID = "  ";
+    process.env.AWS_SECRET_ACCESS_KEY = "secret";
+    process.env.AWS_SESSION_TOKEN = "token";
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(process.env.AWS_SESSION_TOKEN).toBeUndefined();
+  });
+
+  it("does not clear valid static AWS credentials", () => {
+    process.env.AWS_ACCESS_KEY_ID = "AKID";
+    process.env.AWS_SECRET_ACCESS_KEY = "secret";
+
+    sanitizeBlankAwsCredentials();
+
+    expect(process.env.AWS_ACCESS_KEY_ID).toBe("AKID");
+    expect(process.env.AWS_SECRET_ACCESS_KEY).toBe("secret");
+  });
+
+  it("does not throw when no AWS credential env vars are set", () => {
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+
+    expect(() => sanitizeBlankAwsCredentials()).not.toThrow();
   });
 });
