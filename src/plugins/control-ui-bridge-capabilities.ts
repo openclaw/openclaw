@@ -1,6 +1,6 @@
 import { normalizePluginHostHookId, type PluginControlUiDescriptor } from "./host-hooks.js";
 
-export type NormalizedControlUiBridgeCapabilities = Pick<
+type NormalizedControlUiBridgeCapabilities = Pick<
   PluginControlUiDescriptor,
   "sessionActions" | "allowChatNavigation"
 >;
