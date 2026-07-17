@@ -2,6 +2,7 @@ import {
   listSessionEntries,
   loadTranscriptEventsSync,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 // Qa Lab plugin module implements runtime parity behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -15,6 +16,9 @@ import {
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
 import * as parity from "./parity-shared.js";
+
+const RUNTIME_PARITY_MOCK_REQUESTS_MAX_BYTES = 256 * 1024;
+const RUNTIME_PARITY_MOCK_REQUESTS_IDLE_TIMEOUT_MS = 30_000;
 
 export type RuntimeId = "openclaw" | "codex";
 
@@ -1054,7 +1058,7 @@ async function loadRuntimeParityMockToolCalls(
       if (!response.ok) {
         return null;
       }
-      payload = await response.json();
+      payload = await readRuntimeParityMockRequestsJson(response);
     } finally {
       await release();
     }
@@ -1076,6 +1080,17 @@ async function loadRuntimeParityMockToolCalls(
   } catch {
     return null;
   }
+}
+
+async function readRuntimeParityMockRequestsJson(response: Response): Promise<unknown> {
+  const bytes = await readResponseWithLimit(response, RUNTIME_PARITY_MOCK_REQUESTS_MAX_BYTES, {
+    chunkTimeoutMs: RUNTIME_PARITY_MOCK_REQUESTS_IDLE_TIMEOUT_MS,
+    onOverflow: ({ maxBytes }) =>
+      new Error(`runtime parity mock requests exceed ${maxBytes} bytes`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`runtime parity mock requests stalled after ${chunkTimeoutMs}ms`),
+  });
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
 export async function captureRuntimeParityCell(
