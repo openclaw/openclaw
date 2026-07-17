@@ -649,4 +649,3 @@ export async function startTelegramWebhook(opts: {
 
   return { server, bot, stop: shutdown };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

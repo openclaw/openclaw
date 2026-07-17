@@ -24,6 +24,7 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_MS,
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
+  sleepIngressRetryDelay,
   type IngressNonRetryableFailure,
   type IngressRetryPolicyConfig,
 } from "./ingress-retry-policy.js";
@@ -48,8 +49,6 @@ class IngressAdoptionLostError extends Error {
     this.code = code;
   }
 }
-
-type IngressAdoptionLost = IngressAdoptionLostError;
 
 export function isIngressAdoptionLostError(error: unknown): error is IngressAdoptionLostError {
   return error instanceof IngressAdoptionLostError;
@@ -189,24 +188,6 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
 // onAdoptionFinalizing stays drain-only (not reply-options); channels call it
 // via the spooled-replay ALS lifecycle frame during settlement hold.
 
-function sleepMs(ms: number, abortSignal?: AbortSignal): Promise<void> {
-  if (abortSignal?.aborted) {
-    return Promise.reject(abortSignal.reason ?? new Error("ingress-aborted"));
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    timer.unref?.();
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortSignal?.reason ?? new Error("ingress-aborted"));
-    };
-    abortSignal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 /** Creates a channel-agnostic durable ingress drain over an existing queue. */
 export function createChannelIngressDrain<
   TPayload,
@@ -288,7 +269,7 @@ export function createChannelIngressDrain<
         .refreshClaim(state.claim, { refreshedAt: now() })
         .then((refreshed) => {
           // false = claim-token fence rejected (lease reclaimed by another owner).
-          if (refreshed === false) {
+          if (!refreshed) {
             markLeaseReclaimed(state);
           }
         })
@@ -354,7 +335,7 @@ export function createChannelIngressDrain<
           log(`completion retry ${attempt} scheduled for event ${displayId}`);
         }
         // Abortable sleep: webhook stop aborts options.abortSignal mid-backoff.
-        await sleepMs(delayMs, options.abortSignal);
+        await sleepIngressRetryDelay(delayMs, options.abortSignal);
       }
     }
   };
@@ -485,7 +466,7 @@ export function createChannelIngressDrain<
         .settleOnce(async () => {
           await failClaim(state.claim, "handler-timeout", message);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           log(
             `ingress drain: failed to dead-letter stalled event ${displayId}; holding claim: ${formatError(err)}`,
           );
@@ -831,7 +812,9 @@ export function createChannelIngressDrain<
     dispose: () => {
       disposed = true;
       deregisterLiveIngressDrainInstance(ownerId);
-      for (const state of [...activeByLane.values()]) {
+      // Snapshot: removeActive mutates activeByLane during this sweep.
+      const activeStates = Array.from(activeByLane.values());
+      for (const state of activeStates) {
         clearStallTimer(state);
         if (state.phase === "dispatching" || state.phase === "deferred") {
           try {

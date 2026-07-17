@@ -122,7 +122,10 @@ describe("telegram ingress worker durable-before-offset", () => {
     };
     const fetchImpl: typeof fetch = async (_url, init) => {
       pollCount += 1;
-      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as Record<
+        string,
+        unknown
+      >;
       pollBodies.push(body);
       if (pollCount === 1) {
         return jsonResponse(200, {

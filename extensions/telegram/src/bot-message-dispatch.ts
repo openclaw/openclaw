@@ -376,7 +376,7 @@ export const dispatchTelegramMessage = async ({
   });
 
   let isFirstTurnInSession = false;
-  let dispatchWasSuperseded = false;
+  let dispatchWasSuperseded: boolean;
   let turnDispatched: boolean | undefined;
   const isDmTopic =
     !dispatchContext.isGroup &&

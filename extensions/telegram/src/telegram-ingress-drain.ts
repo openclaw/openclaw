@@ -134,12 +134,16 @@ export function createTelegramIngressDrain(
         const participant = result.deferredWork;
         if (participant) {
           const terminal = await new Promise<TelegramMessageProcessingResult>((resolve, reject) => {
+            const abortError = () =>
+              drainLifecycle.abortSignal.reason instanceof Error
+                ? drainLifecycle.abortSignal.reason
+                : new Error("ingress-aborted");
             if (drainLifecycle.abortSignal.aborted) {
-              reject(drainLifecycle.abortSignal.reason ?? new Error("ingress-aborted"));
+              reject(abortError());
               return;
             }
             const onAbort = () => {
-              reject(drainLifecycle.abortSignal.reason ?? new Error("ingress-aborted"));
+              reject(abortError());
             };
             drainLifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
             void participant.task.then(
@@ -149,7 +153,7 @@ export function createTelegramIngressDrain(
               },
               (error: unknown) => {
                 drainLifecycle.abortSignal.removeEventListener("abort", onAbort);
-                reject(error);
+                reject(error instanceof Error ? error : new Error(String(error)));
               },
             );
           }).then(

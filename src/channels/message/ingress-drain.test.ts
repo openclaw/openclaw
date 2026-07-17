@@ -873,7 +873,8 @@ describe("channel ingress drain", () => {
       });
       await queue.enqueue("evt-refresh-false", { text: "x" }, { laneKey: "l1" });
 
-      queue.refreshClaim = vi.fn(async () => false);
+      const refreshClaim = vi.fn(async () => false);
+      queue.refreshClaim = refreshClaim;
 
       let sawAbort = false;
       let lateAdoptError: unknown;
@@ -908,7 +909,7 @@ describe("channel ingress drain", () => {
       await drain.drainOnce();
       clock += 1_000;
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(queue.refreshClaim).toHaveBeenCalled();
+      expect(refreshClaim).toHaveBeenCalled();
       await vi.waitFor(() => expect(sawAbort).toBe(true));
 
       releaseDispatch();

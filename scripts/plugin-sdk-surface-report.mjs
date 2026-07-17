@@ -287,7 +287,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared realtime voice session harness through realtime-voice.
       // +9: narrowed drain seam functions and compat mirrors after the
       // WhatsApp-split harvest (#108656).
-      4489,
+      4488,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

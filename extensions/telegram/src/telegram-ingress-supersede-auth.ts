@@ -41,7 +41,6 @@ function extractUpdateSenderFacts(update: unknown): UpdateSenderFacts | null {
       const from = cb.from;
       const msg = cb.message;
       if (from && typeof from === "object" && msg && typeof msg === "object") {
-        message = msg as Record<string, unknown>;
         const chat = (msg as { chat?: { id?: unknown; type?: unknown; is_forum?: unknown } }).chat;
         const fromObj = from as { id?: unknown; username?: unknown };
         if (typeof chat?.id === "number" && typeof fromObj.id === "number") {

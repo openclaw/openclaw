@@ -160,9 +160,7 @@ export async function runWithTelegramSpooledReplayUpdate<T>(
   fn: () => Promise<T>,
   lifecycle?: TelegramSpooledReplayLifecycle,
 ): Promise<{ value: T; deferredWork?: TelegramSpooledReplayDeferredParticipant }> {
-  const frame: TelegramSpooledReplayFrame = {
-    ...(lifecycle ? { lifecycle } : {}),
-  };
+  const frame: TelegramSpooledReplayFrame = lifecycle ? { lifecycle } : {};
   telegramSpooledReplayUpdates.add(update);
   try {
     const value = await telegramSpooledReplayFrames.run(frame, fn);

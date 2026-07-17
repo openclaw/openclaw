@@ -5,7 +5,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS as TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   isIngressClaimOwnedByOtherLiveProcess as isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   resolveIngressRetryDelayMs,
@@ -120,8 +119,6 @@ type TelegramMessageProcessingResult =
   import("./bot-processing-outcome.js").TelegramMessageProcessingResult;
 type TelegramSpooledReplayDeferredParticipant =
   import("./bot-processing-outcome.js").TelegramSpooledReplayDeferredParticipant;
-type TelegramSpooledReplaySettlementHold =
-  import("./bot-processing-outcome.js").TelegramSpooledReplaySettlementHold;
 async function claimSpooledUpdate(update: TelegramSpooledUpdate) {
   return await claimNextTelegramSpooledUpdate({
     spoolDir: path.dirname(update.path),
