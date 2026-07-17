@@ -15,9 +15,9 @@ import {
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 export const SESSION_CATALOG_CHANGED_REFRESH_MS = 5_000;
-export const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
+const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
 
-export function sessionCatalogSnapshot(catalogs: readonly SessionCatalog[]): string {
+function sessionCatalogSnapshot(catalogs: readonly SessionCatalog[]): string {
   return JSON.stringify(catalogs);
 }
 
