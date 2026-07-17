@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -409,14 +410,14 @@ export function createConfiguredGuard(
   if (!config.guard) {
     throw new Error("Reef guard is not configured");
   }
-  const apiKey = process.env[config.guard.apiKeyEnv]?.trim();
-  if (!apiKey) {
+  const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
+  if (!guardCredential) {
     throw new Error(
       `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
     );
   }
   const options = {
-    apiKey,
+    apiKey: guardCredential,
     pinnedModel: config.guard.pinnedModel,
     timeoutMs: config.guard.timeoutMs,
     fetch: fetcher,
