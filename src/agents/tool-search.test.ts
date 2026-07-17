@@ -16,6 +16,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   addClientToolsToToolSearchCatalog,
@@ -348,6 +349,39 @@ describe("Tool Search", () => {
     await expect(runtime.callValue("orchard_shipments")).resolves.toEqual([
       { id: "H-1", paid: false, tons: 14 },
     ]);
+  });
+
+  it("keeps output hints and validation after runtime normalization clones tools", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_normalized_output", "Read a normalized orchard row");
+    target.outputSchema = Type.Object({ id: Type.String() }, { additionalProperties: false });
+    target.execute = vi.fn(async () => jsonResult({ id: 42 }));
+    const [normalized] = normalizeAgentRuntimeTools({
+      tools: [target],
+      provider: "openai",
+      runtimePlan: {
+        tools: {
+          normalize: (tools) =>
+            tools.map(({ outputSchema: _outputSchema, ...tool }) => tool as AnyAgentTool),
+          logDiagnostics: vi.fn(),
+        },
+      } as never,
+    });
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [expectDefined(normalized, "normalized tool")],
+    });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.search("normalized orchard row")).resolves.toContainEqual(
+      expect.objectContaining({ name: "orchard_normalized_output", output: "{ id: string }" }),
+    );
+    await expect(runtime.callValue("orchard_normalized_output")).rejects.toThrow(
+      "returned details that do not match its declared outputSchema",
+    );
   });
 
   it("exposes nullable trusted output schemas without hiding null", async () => {
