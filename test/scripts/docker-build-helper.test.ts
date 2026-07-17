@@ -1317,7 +1317,7 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
   });
 
   it("explains how to opt out when Docker rejects default resource limits", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-diagnostic-"));
+    const workDir = tempDirs.make("openclaw-docker-resource-diagnostic-");
 
     try {
       const rootDir = process.cwd();
@@ -1362,7 +1362,7 @@ stderr="$(<"$TMPDIR/stderr")"
   });
 
   it("does not suggest resource opt-out for other Docker failures", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-unrelated-"));
+    const workDir = tempDirs.make("openclaw-docker-resource-unrelated-");
 
     try {
       const rootDir = process.cwd();
@@ -1406,7 +1406,7 @@ stderr="$(<"$TMPDIR/stderr")"
   });
 
   it("runs Docker when resource diagnostic capture is unavailable", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-no-temp-"));
+    const workDir = tempDirs.make("openclaw-docker-resource-no-temp-");
 
     try {
       const rootDir = process.cwd();
@@ -1791,7 +1791,7 @@ docker_e2e_docker_run_cmd run demo
   });
 
   it("diagnoses rejected resource limits in the package-backed fallback", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-diagnostic-"));
+    const workDir = tempDirs.make("openclaw-docker-package-diagnostic-");
 
     try {
       const rootDir = process.cwd();
