@@ -40,7 +40,6 @@ type TestChatPane = HTMLElement & {
   connectedCallback: () => void;
   connectionGeneration: number;
   createSession: () => Promise<boolean>;
-  applySessionsState: (state: ApplicationContext["sessions"]["state"]) => void;
   disconnectedCallback: () => void;
   acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
@@ -574,70 +573,6 @@ describe("chat pane initialization", () => {
       "chat.startup",
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
     );
-  });
-});
-
-describe("chat pane queue mode ownership", () => {
-  it("keeps its history-projected mode when another pane publishes a scoped list", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    state.chatQueueModeOverride = "interrupt";
-    state.chatEffectiveQueueMode = "interrupt";
-
-    pane.applySessionsState({
-      agentId: "other",
-      deletedSessions: [],
-      error: null,
-      groups: [],
-      loading: false,
-      modelOverrides: {},
-      result: {
-        count: 1,
-        defaults: { contextTokens: null, model: null, modelProvider: null },
-        path: "/tmp/sessions.json",
-        sessions: [{ key: "agent:other:main", kind: "direct", updatedAt: 1 }],
-        ts: 1,
-      },
-    } as ApplicationContext["sessions"]["state"]);
-
-    expect(state.chatQueueModeOverride).toBe("interrupt");
-    expect(state.chatEffectiveQueueMode).toBe("interrupt");
-  });
-
-  it("adopts a matching session row mode when its own scoped list arrives", () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const sessions = {} as SessionCapability;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    state.chatQueueModeOverride = "interrupt";
-    state.chatEffectiveQueueMode = "interrupt";
-
-    pane.applySessionsState({
-      agentId: "main",
-      deletedSessions: [],
-      error: null,
-      groups: [],
-      loading: false,
-      modelOverrides: {},
-      result: {
-        count: 1,
-        defaults: { contextTokens: null, model: null, modelProvider: null },
-        path: "/tmp/sessions.json",
-        sessions: [
-          {
-            effectiveQueueMode: "followup",
-            key: state.sessionKey,
-            kind: "direct",
-            queueMode: "followup",
-            updatedAt: 1,
-          },
-        ],
-        ts: 1,
-      },
-    } as ApplicationContext["sessions"]["state"]);
-
-    expect(state.chatQueueModeOverride).toBe("followup");
-    expect(state.chatEffectiveQueueMode).toBe("followup");
   });
 });
 

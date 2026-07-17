@@ -79,7 +79,11 @@ import {
   resolveChatHistoryPagination,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { dismissChatError, resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  dismissChatError,
+  resolveAssistantAttachmentAuthToken,
+} from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
@@ -1710,10 +1714,7 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
-    if (selectedSession) {
-      state.selectedChatSessionArchived = selectedSession.archived === true;
-      state.chatQueueModeOverride = selectedSession.queueMode;
-      state.chatEffectiveQueueMode = selectedSession.effectiveQueueMode;
+    if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
     if (selectedSessionDeleted) {
