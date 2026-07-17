@@ -1,5 +1,6 @@
 // Managed gateway restart polling tests.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS } from "../../daemon/launchd-plist.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   inspectPortUsage,
@@ -11,6 +12,17 @@ import {
   sleep,
   waitForStoppedFreeGatewayRestart,
 } from "./restart-health.test-helpers.js";
+
+/** Expected stopped-free early-exit elapsed for KeepAlive using the product throttle. */
+function keepAliveStoppedFreeElapsedMs(delayMs: number): number {
+  const throttleMs = LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS * 1000;
+  const throttlePolls = Math.ceil(throttleMs / Math.max(1, delayMs));
+  const threshold = Math.max(6, throttlePolls + 2);
+  // Grace is 10s on non-Windows; consecutive counting starts at that attempt index.
+  const minAttemptForEarlyExit = Math.ceil(10_000 / delayMs);
+  const finalAttempt = minAttemptForEarlyExit + threshold - 1;
+  return finalAttempt * delayMs;
+}
 
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
@@ -278,8 +290,10 @@ describe("restart health", () => {
   });
 
   it("extends stopped-free early exit for a loaded launchd KeepAlive service", async () => {
-    // KeepAlive=true with ThrottleInterval=10s can leave stopped+port-free for a full
-    // throttle window; baseline 6×500ms (~3s) after the 10s grace false-fires (#109941).
+    // KeepAlive + product ThrottleInterval can leave stopped+port-free for a full
+    // throttle window; baseline after the 10s grace false-fires (#109941).
+    // Expected elapsed is derived from LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS so
+    // this stays aligned with the launchd product default (currently 10s on main).
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     inspectPortUsage.mockResolvedValue({
       port: 18789,
@@ -294,13 +308,15 @@ describe("restart health", () => {
       isLoaded,
     } as GatewayService;
     const serviceEnv = { OPENCLAW_PROFILE: "keepalive-test" } as NodeJS.ProcessEnv;
+    const delayMs = 500;
+    const expectedElapsedMs = keepAliveStoppedFreeElapsedMs(delayMs);
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service,
       port: 18789,
       attempts: 120,
-      delayMs: 500,
+      delayMs,
       env: serviceEnv,
     });
 
@@ -308,9 +324,10 @@ describe("restart health", () => {
     expect(snapshot.runtime.status).toBe("stopped");
     expect(snapshot.portUsage.status).toBe("free");
     expect(snapshot.waitOutcome).toBe("stopped-free");
-    // Grace 10s (20 polls), then wait one poll beyond the 10s throttle boundary.
-    expect(snapshot.elapsedMs).toBe(20_500);
-    expect(sleep).toHaveBeenCalledTimes(41);
+    expect(LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS).toBe(10);
+    expect(snapshot.elapsedMs).toBe(expectedElapsedMs);
+    expect(expectedElapsedMs).toBe(20_500);
+    expect(sleep).toHaveBeenCalledTimes(expectedElapsedMs / delayMs);
     expect(isLoaded).toHaveBeenCalledOnce();
     expect(isLoaded).toHaveBeenCalledWith({ env: serviceEnv });
   });

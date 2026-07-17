@@ -6,6 +6,7 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
@@ -1445,7 +1446,8 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>Umask</key>");
     expect(plist).toContain("<integer>63</integer>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain("<integer>10</integer>");
+    // Plist must ship the product throttle constant (not a second hard-coded default).
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS}</integer>`);
   });
 
   it("rewrites the plist before bootstrap during restart fallback", async () => {

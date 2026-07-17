@@ -2,10 +2,11 @@
 import fs from "node:fs/promises";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
-// launchd defaults to a 10s spawn throttle. Keep that default explicitly so
-// crash loops back off instead of respawning every second while still allowing
-// explicit kickstart restarts to take effect. Restart-health uses this same
-// product throttle when extending the stopped-free early exit for KeepAlive.
+// Product LaunchAgent ThrottleInterval (seconds). launchd's own default is 10s;
+// keep that value explicitly so crash loops back off instead of respawning every
+// second while still allowing explicit kickstart restarts. Export only so
+// restart-health can reuse the same product constant for KeepAlive stopped-free
+// early-exit — do not fork a second throttle default here.
 export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
 export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
 // launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
