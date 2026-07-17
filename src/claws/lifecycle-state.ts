@@ -1,7 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { stableStringify } from "../agents/stable-stringify.js";
-import { pruneAgentConfig } from "../commands/agents.config.js";
+import {
+  prepareLegacyWorkspaceStateReset,
+  removeLegacyWorkspaceStateForReset,
+} from "../agents/workspace-legacy-state.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
+import { moveToTrash } from "../commands/onboard-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
@@ -10,6 +19,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  clawRemoveQuietRuntime,
+  deletionEffects,
+  readAllClawWorkspaceFiles,
+  synthesizeOrphanInstall,
+} from "./lifecycle-delete-support.js";
 import {
   applyClawPackageRemovals,
   inspectClawPackage,
@@ -38,6 +53,7 @@ type ClawManagedFileStatus = PersistedClawWorkspaceFile & {
 };
 type ClawStatusRecord = {
   install: PersistedClawInstall;
+  orphaned?: boolean;
   agentState: "present" | "modified" | "missing";
   workspaceFiles: ClawManagedFileStatus[];
   packages: ClawPackageInspection[];
@@ -59,9 +75,18 @@ type ClawStatusResult = {
   };
 };
 type ClawRemovePlanAction = {
-  kind: "agent" | "workspaceFile" | "packageRef" | "installRecord";
+  kind:
+    | "agent"
+    | "configBinding"
+    | "agentAllow"
+    | "workspace"
+    | "agentState"
+    | "sessionTranscripts"
+    | "workspaceFile"
+    | "packageRef"
+    | "installRecord";
   id: string;
-  action: "remove" | "delete" | "retain" | "release" | "uninstall";
+  action: "remove" | "delete" | "retain" | "release" | "uninstall" | "trash";
   target: string;
   blocked: boolean;
   reason?: string;
@@ -95,6 +120,7 @@ type ClawRemoveResult = {
   packageRefsReleased: number;
   error?: { code: string; message: string };
 };
+
 export class ClawRemoveError extends Error {
   constructor(
     readonly code: string,
@@ -144,23 +170,52 @@ export async function readClawStatus(
   } = {},
 ): Promise<ClawStatusResult> {
   const config = options.config ?? getRuntimeConfig();
-  const installs = readClawInstallRecords(options).filter(
+  const allInstalls = readClawInstallRecords(options);
+  const installAgentIds = new Set(allInstalls.map((install) => install.agentId));
+  const allPackageRefs = readClawPackageRefs(options);
+  const allWorkspaceFiles = readAllClawWorkspaceFiles(options);
+  const orphanAgentIds = new Set<string>();
+  for (const packageRef of allPackageRefs) {
+    if (!installAgentIds.has(packageRef.agentId)) {
+      orphanAgentIds.add(packageRef.agentId);
+    }
+  }
+  for (const file of allWorkspaceFiles) {
+    if (!installAgentIds.has(file.agentId)) {
+      orphanAgentIds.add(file.agentId);
+    }
+  }
+  const orphanInstalls = [...orphanAgentIds].map((agentId) => {
+    const packageRef = allPackageRefs.find((candidate) => candidate.agentId === agentId);
+    const file = allWorkspaceFiles.find((candidate) => candidate.agentId === agentId);
+    return synthesizeOrphanInstall({
+      agentId,
+      clawName: packageRef?.clawName,
+      workspace: file?.workspace,
+      updatedAtMs: Math.max(packageRef?.updatedAtMs ?? 0, file?.updatedAtMs ?? 0),
+    });
+  });
+  const installs = [...allInstalls, ...orphanInstalls].filter(
     (install) => !target || install.agentId === target || install.claw.name === target,
   );
   const records: ClawStatusRecord[] = [];
   for (const install of installs) {
     const agent = config.agents?.list?.find((candidate) => candidate.id === install.agentId);
-    const packageRefs = readClawPackageRefs({ ...options, agentId: install.agentId });
+    const packageRefs = allPackageRefs.filter(
+      (packageRef) => packageRef.agentId === install.agentId,
+    );
+    const workspaceFiles = installAgentIds.has(install.agentId)
+      ? readClawWorkspaceFiles(install.agentId, options)
+      : allWorkspaceFiles.filter((file) => file.agentId === install.agentId);
     records.push({
       install,
+      ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"
         : digestAgent(agent) === install.agentConfigDigest
           ? "present"
           : "modified",
-      workspaceFiles: await Promise.all(
-        readClawWorkspaceFiles(install.agentId, options).map(inspectFile),
-      ),
+      workspaceFiles: await Promise.all(workspaceFiles.map(inspectFile)),
       packages: await Promise.all(
         packageRefs.map((packageRef) =>
           inspectClawPackage(install, packageRef, options.packageDeps),
@@ -235,6 +290,7 @@ export async function buildClawRemovePlan(
       ...options,
       deps: options.packageDeps,
     });
+    const effects = deletionEffects(options.config ?? getRuntimeConfig(), record.install.agentId);
     actions.push({
       kind: "agent",
       id: record.install.agentId,
@@ -247,6 +303,56 @@ export async function buildClawRemovePlan(
         ownedPaths: record.install.agentOwnedPaths,
       },
       ...(record.agentState === "modified" ? { reason: "Agent config digest changed." } : {}),
+    });
+    if (effects.pruned.removedBindings > 0) {
+      actions.push({
+        kind: "configBinding",
+        id: record.install.agentId,
+        action: "remove",
+        target: `bindings[agentId=${record.install.agentId}]`,
+        blocked: record.agentState === "modified",
+        details: { count: effects.pruned.removedBindings },
+      });
+    }
+    if (effects.pruned.removedAllow > 0) {
+      actions.push({
+        kind: "agentAllow",
+        id: record.install.agentId,
+        action: "remove",
+        target: `tools.agentToAgent.allow[${record.install.agentId}]`,
+        blocked: record.agentState === "modified",
+        details: { count: effects.pruned.removedAllow },
+      });
+    }
+    if (effects.workspace) {
+      actions.push({
+        kind: "workspace",
+        id: record.install.agentId,
+        action: effects.workspaceRetained ? "retain" : "trash",
+        target: effects.workspace,
+        blocked: record.agentState === "modified",
+        details: {
+          retained: effects.workspaceRetained,
+          sharedWith: effects.workspaceSharedWith,
+        },
+        ...(effects.workspaceRetained ? { reason: "Workspace overlaps another agent." } : {}),
+      });
+    }
+    if (effects.agentDir) {
+      actions.push({
+        kind: "agentState",
+        id: record.install.agentId,
+        action: "trash",
+        target: effects.agentDir,
+        blocked: record.agentState === "modified",
+      });
+    }
+    actions.push({
+      kind: "sessionTranscripts",
+      id: record.install.agentId,
+      action: "trash",
+      target: effects.sessionsDir,
+      blocked: record.agentState === "modified",
     });
     for (const file of record.workspaceFiles) {
       actions.push({
@@ -322,6 +428,14 @@ export async function buildClawRemovePlan(
   };
 }
 
+function tableExists(db: DatabaseSync, name: string): boolean {
+  return Boolean(
+    db /* sqlite-allow-raw: schema probe for optional Claw state tables. */
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name),
+  );
+}
+
 async function removeFile(record: ClawManagedFileStatus): Promise<RemovedWorkspaceFile> {
   if (record.state === "missing") {
     return { path: record.path, action: "missing" };
@@ -355,13 +469,6 @@ async function removeFile(record: ClawManagedFileStatus): Promise<RemovedWorkspa
       message: error instanceof FsSafeError ? `${error.code}: ${error.message}` : String(error),
     };
   }
-}
-function tableExists(db: DatabaseSync, name: string): boolean {
-  return Boolean(
-    db /* sqlite-allow-raw: schema probe for optional Claw state tables. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(name),
-  );
 }
 function releaseRows(
   agentId: string,
@@ -444,27 +551,6 @@ export async function applyClawRemovePlan(
     throw new ClawRemoveError("remove_changed", "Package ownership changed after remove planning.");
   }
   let agentRemoved = false;
-  if (options.commitConfig) {
-    await options.commitConfig((config) => {
-      const agents = config.agents?.list ?? [];
-      const agent = agents.find((candidate) => candidate.id === plan.agentId);
-      if (agent && digestAgent(agent) !== record.install.agentConfigDigest) {
-        throw new ClawRemoveError("agent_modified", "Agent config changed during remove.");
-      }
-      agentRemoved = Boolean(agent);
-      return pruneAgentConfig(config, agentId).config;
-    });
-  } else {
-    await deleteAgentConfigEntry({
-      agentId,
-      validate: (agent) => {
-        if (digestAgent(agent) !== record.install.agentConfigDigest) {
-          throw new ClawRemoveError("agent_modified", "Agent config changed during remove.");
-        }
-      },
-    });
-    agentRemoved = true;
-  }
   const packages = await applyClawPackageRemovals(packageDecisions, {
     ...options,
     deps: options.packageDeps,
@@ -488,12 +574,62 @@ export async function applyClawRemovePlan(
       },
     };
   }
+  let committedDelete: Awaited<ReturnType<typeof deleteAgentConfigEntry>>["result"] | undefined;
+  let committedNextConfig: OpenClawConfig | undefined;
+  if (options.commitConfig) {
+    await options.commitConfig((config) => {
+      const deleteEffects = deletionEffects(config, agentId);
+      const agents = config.agents?.list ?? [];
+      const agent = agents.find((candidate) => candidate.id === plan.agentId);
+      if (agent && digestAgent(agent) !== record.install.agentConfigDigest) {
+        throw new ClawRemoveError("agent_modified", "Agent config changed during remove.");
+      }
+      agentRemoved = Boolean(agent);
+      return deleteEffects.pruned.config;
+    });
+  } else {
+    const committed = await deleteAgentConfigEntry({
+      agentId,
+      validate: (agent) => {
+        if (digestAgent(agent) !== record.install.agentConfigDigest) {
+          throw new ClawRemoveError("agent_modified", "Agent config changed during remove.");
+        }
+      },
+    });
+    agentRemoved = Boolean(committed.result);
+    committedDelete = committed.result;
+    committedNextConfig = committed.nextConfig;
+  }
   const workspaceFiles: RemovedWorkspaceFile[] = [];
   for (const file of record.workspaceFiles) {
     workspaceFiles.push(await removeFile(file));
   }
   const errors = workspaceFiles.filter((file) => file.action === "error");
   const complete = errors.length === 0;
+  if (complete && committedDelete && committedNextConfig) {
+    const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
+      committedNextConfig,
+      agentId,
+      committedDelete.workspaceDir,
+    );
+    if (workspaceSharedWith.length === 0) {
+      const legacyPlan = prepareLegacyWorkspaceStateReset(committedDelete.workspaceDir);
+      const statePlan = prepareWorkspaceStateDeletion(committedDelete.workspaceDir);
+      const workspaceRemoved = await moveToTrash(
+        committedDelete.workspaceDir,
+        clawRemoveQuietRuntime,
+      );
+      if (workspaceRemoved) {
+        const legacyCleanup = await removeLegacyWorkspaceStateForReset(legacyPlan);
+        for (const warning of legacyCleanup.warnings) {
+          clawRemoveQuietRuntime.log(warning);
+        }
+        deleteWorkspaceState(statePlan);
+      }
+    }
+    await moveToTrash(committedDelete.agentDir, clawRemoveQuietRuntime);
+    await moveToTrash(committedDelete.sessionsDir, clawRemoveQuietRuntime);
+  }
   releaseRows(plan.agentId, workspaceFiles, complete, options);
   return {
     schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,

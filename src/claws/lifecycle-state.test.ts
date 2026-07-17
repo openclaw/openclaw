@@ -17,6 +17,8 @@ import type { ClawSourceIdentity } from "./types.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
+const packageIntegrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 async function fixture(params: { id?: string; name?: string; withFile?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-claw-remove-"));
   if (params.withFile) {
@@ -66,7 +68,13 @@ describe("Claw status and remove", () => {
     const current = await addFixture({ withFile: true });
     persistClawPackageRef(
       current.plan,
-      { kind: "plugin", source: "clawhub", ref: "audit", version: "2.0.0" },
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+      },
       { env: current.env, nowMs: 2 },
     );
     const status = await readClawStatus("worker", {
@@ -93,11 +101,67 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("reports orphaned subordinate ownership without a root install row", async () => {
+    const current = await fixture();
+    persistClawPackageRef(
+      current.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+      },
+      { env: current.env, nowMs: 2 },
+    );
+
+    await expect(readClawStatus("worker", { env: current.env, config: {} })).resolves.toMatchObject(
+      {
+        summary: { claws: 1, partial: 1, missingAgents: 1, packageRefs: 1 },
+        records: [
+          {
+            orphaned: true,
+            install: { agentId: "worker", status: "partial" },
+            packages: [{ ref: "audit", state: "missing" }],
+          },
+        ],
+      },
+    );
+  });
+
+  it("previews all canonical agent config deletion effects", async () => {
+    const current = await addFixture();
+    const config: OpenClawConfig = {
+      ...current.getConfig(),
+      bindings: [{ match: { channel: "telegram", accountId: "*" }, agentId: "worker" }],
+      tools: { agentToAgent: { allow: ["worker"] } },
+    } as OpenClawConfig;
+
+    const plan = await buildClawRemovePlan("worker", { env: current.env, config });
+
+    expect(plan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "agent", target: "agents.list[worker]" }),
+        expect.objectContaining({ kind: "configBinding", target: "bindings[agentId=worker]" }),
+        expect.objectContaining({ kind: "agentAllow", target: "tools.agentToAgent.allow[worker]" }),
+        expect.objectContaining({ kind: "workspace", action: "trash" }),
+        expect.objectContaining({ kind: "agentState", action: "trash" }),
+        expect.objectContaining({ kind: "sessionTranscripts", action: "trash" }),
+      ]),
+    );
+  });
+
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
     persistClawPackageRef(
       current.plan,
-      { kind: "skill", source: "clawhub", ref: "triage", version: "1.0.0" },
+      {
+        kind: "skill",
+        source: "clawhub",
+        ref: "triage",
+        version: "1.0.0",
+        integrity: packageIntegrity,
+      },
       { env: current.env },
     );
     const plan = await buildClawRemovePlan("worker", {
@@ -253,7 +317,13 @@ describe("Claw status and remove", () => {
     const second = await fixture({ id: "worker-b", name: "@acme/second" });
     persistClawInstallRecord(first.plan, { env: first.env, nowMs: 1 });
     persistClawInstallRecord(second.plan, { env: first.env, nowMs: 2 });
-    const plugin = { kind: "plugin", source: "clawhub", ref: "audit", version: "1.0.0" } as const;
+    const plugin = {
+      kind: "plugin",
+      source: "clawhub",
+      ref: "audit",
+      version: "1.0.0",
+      integrity: packageIntegrity,
+    } as const;
     persistClawPackageRef(first.plan, plugin, {
       env: first.env,
       nowMs: 1,

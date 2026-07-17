@@ -9,6 +9,7 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   readClawPackageRefs,
+  updateClawPackageRefStatus,
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
@@ -31,6 +32,7 @@ export type ClawPackageRemovalResult = {
 
 export type PackageRemovalDeps = {
   readPackageRefs?: typeof readClawPackageRefs;
+  claimPackageRef?: typeof updateClawPackageRefStatus;
   resolvePlugin?: typeof resolveInstalledClawHubPlugin;
   planSkill?: typeof planClawHubSkillUninstall;
   uninstallPlugin?: typeof runPluginUninstallCommand;
@@ -45,6 +47,13 @@ export type ClawPackageInspection = PersistedClawPackageRef & {
 
 function sameArtifact(left: PersistedClawPackageRef, right: PersistedClawPackageRef): boolean {
   return left.kind === right.kind && left.source === right.source && left.ref === right.ref;
+}
+
+function sameVersionedArtifact(
+  left: PersistedClawPackageRef,
+  right: PersistedClawPackageRef,
+): boolean {
+  return sameArtifact(left, right) && left.version === right.version;
 }
 
 function ownerInstallIsNewer(
@@ -204,15 +213,15 @@ export async function applyClawPackageRemovals(
       const currentRef = currentRefs.find(
         (candidate) =>
           candidate.agentId === decision.packageRef.agentId &&
-          candidate.version === decision.packageRef.version &&
-          sameArtifact(candidate, decision.packageRef),
+          sameVersionedArtifact(candidate, decision.packageRef),
       );
       const sharedPlugin =
         decision.packageRef.kind === "plugin" &&
         currentRefs.some(
           (candidate) =>
             candidate.agentId !== decision.packageRef.agentId &&
-            sameArtifact(candidate, decision.packageRef),
+            sameArtifact(candidate, decision.packageRef) &&
+            candidate.status === "complete",
         );
       if (
         !currentRef ||
@@ -222,6 +231,31 @@ export async function applyClawPackageRemovals(
       ) {
         throw new Error(
           `Package ${decision.packageRef.ref}@${decision.packageRef.version} ownership changed after removal planning.`,
+        );
+      }
+      (deps.claimPackageRef ?? updateClawPackageRefStatus)(currentRef, "pending", options);
+      const postClaimRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
+      const postClaimRef = postClaimRefs.find(
+        (candidate) =>
+          candidate.agentId === decision.packageRef.agentId &&
+          sameVersionedArtifact(candidate, decision.packageRef),
+      );
+      const postClaimShared =
+        decision.packageRef.kind === "plugin" &&
+        postClaimRefs.some(
+          (candidate) =>
+            candidate.agentId !== decision.packageRef.agentId &&
+            sameArtifact(candidate, decision.packageRef) &&
+            candidate.status === "complete",
+        );
+      if (
+        !postClaimRef ||
+        postClaimRef.status !== "pending" ||
+        postClaimRef.ownership !== "claw-installed" ||
+        postClaimShared
+      ) {
+        throw new Error(
+          `Package ${decision.packageRef.ref}@${decision.packageRef.version} ownership changed while claiming removal.`,
         );
       }
       if (decision.packageRef.kind === "skill") {
@@ -260,8 +294,22 @@ export async function applyClawPackageRemovals(
           runtime,
         );
       }
+      (deps.claimPackageRef ?? updateClawPackageRefStatus)(
+        decision.packageRef,
+        "complete",
+        options,
+      );
       results.push({ ...base, action: "uninstalled" });
     } catch (error) {
+      try {
+        (deps.claimPackageRef ?? updateClawPackageRefStatus)(
+          decision.packageRef,
+          "complete",
+          options,
+        );
+      } catch {
+        // Preserve the original cleanup failure as the actionable result.
+      }
       results.push({
         ...base,
         action: "error",
