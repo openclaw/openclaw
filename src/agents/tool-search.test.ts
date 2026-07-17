@@ -350,6 +350,32 @@ describe("Tool Search", () => {
     ]);
   });
 
+  it("exposes nullable trusted output schemas without hiding null", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("orchard_optional_shipment", "Read an optional orchard shipment");
+    target.outputSchema = {
+      type: "object",
+      nullable: true,
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    } as never;
+    target.execute = vi.fn(async () => jsonResult(null));
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { mode: "tools" } } } as never),
+    );
+
+    await expect(runtime.search("optional orchard shipment")).resolves.toContainEqual(
+      expect.objectContaining({
+        name: "orchard_optional_shipment",
+        output: "{ id: string } | null",
+      }),
+    );
+    await expect(runtime.callValue("orchard_optional_shipment")).resolves.toBeNull();
+  });
+
   it("rejects final catalog details that drift from a declared output schema", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const target = pluginTool("orchard_bad_output", "Return a bad orchard result");

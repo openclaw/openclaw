@@ -42,6 +42,36 @@ function withSupportedShape(schema: Record<string, unknown>, hint: SchemaHint): 
     : hint;
 }
 
+function normalizeNullableSchemaForHint(
+  schema: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(schema, "nullable")) {
+    return schema;
+  }
+  if (typeof schema.nullable !== "boolean") {
+    return undefined;
+  }
+  const types =
+    typeof schema.type === "string"
+      ? [schema.type]
+      : Array.isArray(schema.type) && schema.type.every((value) => typeof value === "string")
+        ? schema.type
+        : undefined;
+  if (!types) {
+    return undefined;
+  }
+  if (!schema.nullable) {
+    return schema;
+  }
+  // Mirror the validator's AJV-style nullable normalization so promoted
+  // hints include every value that output validation can accept.
+  return {
+    ...schema,
+    nullable: false,
+    type: [...new Set([...types, "null"])],
+  };
+}
+
 function renderPrimitive(value: unknown): string | undefined {
   if (
     value === null ||
@@ -201,6 +231,13 @@ function compactObjectHint(schema: Record<string, unknown>, depth: number): Sche
 function compactSchemaType(schema: unknown, depth = 0): SchemaHint {
   if (!isRecord(schema) || depth >= MAX_COMPACT_SCHEMA_DEPTH) {
     return UNKNOWN_HINT;
+  }
+  const normalizedNullableSchema = normalizeNullableSchemaForHint(schema);
+  if (!normalizedNullableSchema) {
+    return UNKNOWN_HINT;
+  }
+  if (normalizedNullableSchema !== schema) {
+    return compactSchemaType(normalizedNullableSchema, depth);
   }
   const finish = (hint: SchemaHint) => withSupportedShape(schema, hint);
 

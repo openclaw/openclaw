@@ -27,6 +27,23 @@ describe("tool schema hints", () => {
     );
   });
 
+  it("includes null in AJV-style nullable output hints", () => {
+    expect(compactToolOutputHint({ type: "string", nullable: true })).toBe("string | null");
+    expect(
+      compactToolOutputHint({
+        type: "object",
+        nullable: true,
+        properties: { id: { type: "string" } },
+        required: ["id"],
+        additionalProperties: false,
+      }),
+    ).toBe("{ id: string } | null");
+    expect(compactToolOutputHint({ type: "string", nullable: true, enum: ["ready"] })).toBe(
+      '"ready"',
+    );
+    expect(compactToolOutputHint({ type: "string", nullable: "yes" })).toBeUndefined();
+  });
+
   it("orders required and optional fields deterministically", () => {
     const first = {
       type: "object",
