@@ -1,10 +1,7 @@
 // Doctor web fetch proxy tests cover explicit opt-in diagnostics without exposing proxy values.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  collectWebFetchProxyDiagnostic,
-  noteWebFetchProxyDiagnostic,
-} from "./doctor-web-fetch-proxy.js";
+import { noteWebFetchProxyDiagnostic } from "./doctor-web-fetch-proxy.js";
 
 function serviceWithEnv(environment?: Record<string, string>) {
   return {
@@ -14,10 +11,23 @@ function serviceWithEnv(environment?: Record<string, string>) {
   };
 }
 
+async function collectDiagnostic(
+  params: Omit<Parameters<typeof noteWebFetchProxyDiagnostic>[0], "noteFn">,
+): Promise<string | null> {
+  let diagnostic: string | null = null;
+  await noteWebFetchProxyDiagnostic({
+    ...params,
+    noteFn: (message) => {
+      diagnostic = message;
+    },
+  });
+  return diagnostic;
+}
+
 describe("web_fetch proxy doctor diagnostic", () => {
   it("reports direct routing for an installed Gateway proxy without exposing its value", async () => {
     const proxyUrl = "http://private-proxy.example:8080/proxy-value-marker";
-    const diagnostic = await collectWebFetchProxyDiagnostic({
+    const diagnostic = await collectDiagnostic({
       cfg: {},
       env: {},
       service: serviceWithEnv({ HTTPS_PROXY: proxyUrl }),
@@ -36,7 +46,7 @@ describe("web_fetch proxy doctor diagnostic", () => {
   });
 
   it("reports a reachable direct path from the doctor process", async () => {
-    const diagnostic = await collectWebFetchProxyDiagnostic({
+    const diagnostic = await collectDiagnostic({
       cfg: {},
       env: { http_proxy: "http://proxy.example:8080" },
       service: serviceWithEnv(),
@@ -48,7 +58,7 @@ describe("web_fetch proxy doctor diagnostic", () => {
   });
 
   it("reports both process and installed service proxy sources", async () => {
-    const diagnostic = await collectWebFetchProxyDiagnostic({
+    const diagnostic = await collectDiagnostic({
       cfg: {},
       env: { HTTP_PROXY: "http://shell-proxy.example:8080" },
       service: serviceWithEnv({ HTTPS_PROXY: "http://service-proxy.example:8080" }),
@@ -63,7 +73,7 @@ describe("web_fetch proxy doctor diagnostic", () => {
     const probe = vi.fn(async () => "reachable" as const);
 
     await expect(
-      collectWebFetchProxyDiagnostic({
+      collectDiagnostic({
         cfg: {},
         env: { ALL_PROXY: "socks5://proxy.example:1080" },
         service: serviceWithEnv(),
@@ -91,7 +101,7 @@ describe("web_fetch proxy doctor diagnostic", () => {
     const probe = vi.fn(async () => "unreachable" as const);
 
     await expect(
-      collectWebFetchProxyDiagnostic({
+      collectDiagnostic({
         cfg: cfg as OpenClawConfig,
         env: {},
         service,

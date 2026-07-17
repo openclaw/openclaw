@@ -62,7 +62,7 @@ async function resolveProxyEnvSources(params: {
 }
 
 /** Builds a read-only diagnostic when proxy env exists but web_fetch remains direct. */
-export async function collectWebFetchProxyDiagnostic(params: {
+async function collectWebFetchProxyDiagnostic(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   service?: Pick<GatewayService, "readCommand">;
