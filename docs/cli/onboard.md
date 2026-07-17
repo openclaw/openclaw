@@ -62,10 +62,16 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ## Guided flow
 
 Plain `openclaw onboard` starts the guided flow. It shows the security notice,
+then asks one question up front: **full access** (recommended — setup looks for
+AI apps, keys, and local runtimes automatically) or **ask first** (setup asks
+once before looking around, or lets you configure manually). The
+choice persists as `wizard.accessMode`. With discovery allowed, onboarding
 detects AI access already available through configured models, API-key
 environment variables, and supported local CLIs, then tests the recommended
-candidate with a real completion. If that candidate fails, onboarding shows
-the reason and automatically tries the next usable candidate.
+candidate with a real completion. If a candidate fails, onboarding quietly
+tries the next usable one and summarizes anything that did not respond in a
+single line; the working route is announced with a one-keystroke option to see
+everything else instead.
 
 If automatic detection is exhausted, the provider picker shows OpenAI,
 Anthropic, xAI (Grok), Google, and OpenRouter first. Choose **More…** for every
@@ -93,16 +99,21 @@ the same memory-only scope. (A full [`openclaw migrate`](/cli/migrate) run is
 broader: it can also import config, skills, and credentials.) The classic
 wizard shows the same page after it prepares the workspace.
 
-After inference passes, guided onboarding immediately starts OpenClaw with
-the verified model. OpenClaw can then configure the workspace, Gateway,
-channels, agents, plugins, and other optional features. Inside OpenClaw, use
-`open channel wizard for <channel>` to hand channel credential collection to a
-masked terminal wizard. To change the model provider or its authentication,
-exit OpenClaw and run `openclaw onboard`; OpenClaw does not open the guided
-or classic provider flows.
+After inference passes (and the memory-import offer), guided onboarding
+applies the standard setup automatically — workspace, Gateway, and sessions,
+the same plan the conversational `openclaw setup` chat would apply on "yes" —
+announces where to find OpenClaw later, and hatches your agent directly in the
+terminal chat. If applying setup fails, onboarding falls back to the
+conversational OpenClaw chat to finish interactively. Channels, agents,
+plugins, and other optional features remain OpenClaw chat territory: run
+`openclaw` and use `open channel wizard for <channel>` to hand channel
+credential collection to a masked terminal wizard. To change the model
+provider or its authentication, exit OpenClaw and run `openclaw onboard`;
+OpenClaw does not open the guided or classic provider flows.
 
 On a configured install, running `openclaw onboard` again verifies the current
-default model first, so the same flow acts as a verification and repair pass.
+default model first, so the same flow acts as a verification and repair pass —
+it does not re-apply setup, reinstall, or restart the Gateway service.
 If that check fails, the configured model is never replaced automatically —
 onboarding stops and asks how to continue. The check runs outside your
 workspace, so a model provided by a workspace plugin can fail here while still

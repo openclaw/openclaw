@@ -32,7 +32,7 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { buildBaseOptions } from "./simple-options.js";
+import { buildBaseOptions, clampMaxTokensToModel } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
@@ -217,7 +217,10 @@ export const streamSimpleMistral: StreamFunction<"mistral-conversations", Simple
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = buildBaseOptions(model, options, apiKey, context);
+  const base = {
+    ...buildBaseOptions(model, options, apiKey),
+    maxTokens: clampMaxTokensToModel(model, options?.maxTokens),
+  };
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;

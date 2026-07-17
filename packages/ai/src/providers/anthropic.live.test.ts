@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
 import { isContextOverflow } from "../utils/overflow.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
-import { clampMaxTokensToContext, estimateContextInputTokens } from "./simple-options.js";
 
 const apiKey = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
 const live = process.env.OPENCLAW_LIVE_TEST === "1" && apiKey.length > 0;
@@ -110,26 +109,13 @@ describeLive("Anthropic provider live", () => {
   );
 
   it(
-    "clamps an excessive output request to the remaining context",
+    "clamps an excessive output request to the model limit",
     async () => {
       let sentMaxTokens: number | undefined;
-      const contextWithoutSystem: Context = {
+      const context: Context = {
         messages: [{ role: "user", content: "Reply briefly with ok.", timestamp: 0 }],
       };
-      const promptUnit = "x ";
-      const baseEstimate = estimateContextInputTokens(contextWithoutSystem);
-      const unitEstimate =
-        estimateContextInputTokens({ ...contextWithoutSystem, systemPrompt: promptUnit }) -
-        baseEstimate;
-      const targetEstimate = model.contextWindow - Math.floor(model.maxTokens / 2);
-      const context: Context = {
-        ...contextWithoutSystem,
-        systemPrompt: promptUnit.repeat(Math.ceil((targetEstimate - baseEstimate) / unitEstimate)),
-      };
       const requestedMaxTokens = model.maxTokens * 100;
-      expect(estimateContextInputTokens(context)).toBeGreaterThanOrEqual(targetEstimate);
-      const expectedMaxTokens = clampMaxTokensToContext(model, context, requestedMaxTokens);
-      expect(expectedMaxTokens).toBeLessThan(model.maxTokens);
 
       const result = await streamSimpleAnthropic(model, context, {
         apiKey,
@@ -141,7 +127,7 @@ describeLive("Anthropic provider live", () => {
         },
       }).result();
 
-      expect(sentMaxTokens).toBe(expectedMaxTokens);
+      expect(sentMaxTokens).toBe(model.maxTokens);
       expect(result.errorMessage).toBeUndefined();
       expect(["stop", "length"]).toContain(result.stopReason);
     },

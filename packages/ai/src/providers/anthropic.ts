@@ -89,8 +89,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import {
   adjustMaxTokensForThinking,
   buildBaseOptions,
-  clampMaxTokensToContext,
-  clampThinkingBudgetToMaxTokens,
+  clampMaxTokensToModel,
 } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -913,7 +912,8 @@ export const streamSimpleAnthropic: StreamFunction<
   }
 
   const base = {
-    ...buildBaseOptions(model, options, apiKey, context),
+    ...buildBaseOptions(model, options, apiKey),
+    maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,
   };
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
@@ -963,17 +963,19 @@ export const streamSimpleAnthropic: StreamFunction<
     reasoning,
     options?.thinkingBudgets,
   );
-  const maxTokens = clampMaxTokensToContext(model, context, adjusted.maxTokens);
-  const thinkingBudget = clampThinkingBudgetToMaxTokens(maxTokens, adjusted.thinkingBudget);
-
   // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
   // consumers (payload, replay, temperature, tool-choice) see consistent state.
-  const thinkingEnabled = thinkingBudget >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS;
+  const thinkingEnabled = adjusted.thinkingBudget >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS;
+  // When thinking cannot fit, restore the visible-output cap instead of keeping
+  // the thinking-inflated request limit from adjustMaxTokensForThinking.
+  const maxTokens = thinkingEnabled
+    ? adjusted.maxTokens
+    : clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens);
   return streamAnthropic(model, context, {
     ...base,
     maxTokens,
     thinkingEnabled,
-    thinkingBudgetTokens: thinkingEnabled ? thinkingBudget : undefined,
+    thinkingBudgetTokens: thinkingEnabled ? adjusted.thinkingBudget : undefined,
   } satisfies AnthropicOptions);
 };
 

@@ -2090,6 +2090,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
       replyOptions: {
+        ...(prepared.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: prepared.turnAdoptionLifecycle }
+          : {}),
         skillFilter: prepared.channelConfig?.skills,
         sourceReplyDeliveryMode,
         // Room events are observe-style turns; Slack status indicators imply an

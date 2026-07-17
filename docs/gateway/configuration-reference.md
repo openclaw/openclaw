@@ -1446,6 +1446,7 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
 ```json5
 {
   wizard: {
+    accessMode: "full",
     lastRunAt: "2026-01-01T00:00:00.000Z",
     lastRunVersion: "2026.1.4",
     lastRunCommit: "abc1234",
@@ -1455,6 +1456,8 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
   },
 }
 ```
+
+- `wizard.accessMode`: discovery consent chosen at the start of guided onboarding. `"full"` (recommended) lets setup look for AI apps, keys, and local runtimes automatically; `"guarded"` makes setup ask once before looking around and offers manual configuration instead.
 
 ---
 

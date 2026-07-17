@@ -988,6 +988,181 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("does not infer prompt tokens when clamping the output limit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      contextWindow: 4_000,
+      maxTokens: 512,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_old",
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: model.maxTokens,
+        reasoning: "off",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
+  });
+
+  it("clamps an excessive output request to the model limit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      contextWindow: 4_000,
+      maxTokens: 512,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_old",
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: 5_000,
+        reasoning: "off",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { max_tokens?: number }).max_tokens).toBe(model.maxTokens);
+  });
+
+  it("restores the caller output cap when thinking cannot fit", async () => {
+    let capturedPayload: unknown;
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      contextWindow: 4_000,
+      maxTokens: 500,
+    });
+    const stream = streamSimpleAnthropic(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: model.id,
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "private reasoning ".repeat(1_000),
+                thinkingSignature: "sig_tool",
+              },
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "42" }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "test-api-key",
+        maxTokens: 32,
+        reasoning: "low",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload as { max_tokens?: number; thinking?: unknown }).toMatchObject({
+      max_tokens: 32,
+    });
+    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+  });
+
   it("preserves mixed text and image tool-result order", async () => {
     let capturedPayload: unknown;
     const imageData = Buffer.from("image").toString("base64");

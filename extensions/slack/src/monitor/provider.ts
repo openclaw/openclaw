@@ -63,6 +63,7 @@ import {
   type SlackAuthTestIdentity,
 } from "./enterprise-install.js";
 import { registerSlackMonitorEvents } from "./events.js";
+import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
 import { createSlackPresenceMonitor, hasSlackPresenceEventsEnabled } from "./presence-monitor.js";
@@ -320,6 +321,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const clientOptions = resolveSlackWebClientOptions();
+  const durableIngress = createSlackDurableIngress({
+    accountId: account.accountId,
+    ...(runtime.log ? { onLog: runtime.log } : {}),
+    ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+  });
   const { app, receiver, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
@@ -329,6 +335,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     ...(slackCfg.socketMode ? { socketMode: slackCfg.socketMode } : {}),
+    wrapReceiver: durableIngress.wrapReceiver,
   });
 
   // Pre-set shuttingDown on the SocketModeClient before app.stop() to prevent
@@ -540,6 +547,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     appHomeSlashCommandName,
     trackEvent,
   });
+  durableIngress.start();
   presenceMonitor?.start();
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
@@ -777,11 +785,23 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       runtime.log?.(
         `slack relay mode connecting to ${relayConfig.url} gateway_id:${relayConfig.gatewayId}`,
       );
+      // Send identity flows through the account default (relay hello ->
+      // setIdentity); resolveSlackSendIdentity falls back to it, so claimed
+      // relay events replayed after a restart dispatch with correct identity
+      // once the relay reattaches.
+      durableIngress.attachRelayDispatch(async (message, turnAdoptionLifecycle) => {
+        await handleSlackMessage(message as Parameters<typeof handleSlackMessage>[0], {
+          source: "message",
+          wasMentioned: true,
+          awaitDispatch: true,
+          turnAdoptionLifecycle,
+        });
+      });
       await (
         await loadSlackRelaySource()
       ).monitorSlackRelaySource({
         config: relayConfig,
-        handleSlackMessage,
+        acceptRelayEvent: durableIngress.acceptRelayEvent,
         runtime,
         abortSignal: opts.abortSignal,
         setStatus: opts.setStatus,
@@ -805,6 +825,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
+    await durableIngress.stop();
     await gracefulStop();
   }
 }

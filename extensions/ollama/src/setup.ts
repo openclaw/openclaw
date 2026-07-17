@@ -630,10 +630,12 @@ async function inspectOllamaModelsForSetup(
           signal?.throwIfAborted();
           // Fail open per model: one stale/corrupt local model (observed: a
           // months-old pull whose /api/show returns HTTP 500) must not brick
-          // the whole setup. Unenriched models carry no capabilities, so the
-          // tools-capable selection below skips them naturally.
+          // the whole setup. Mark the failure with EMPTY capabilities: undefined
+          // means "never inspected" and downstream config building optimistically
+          // defaults that to supportsTools, which would advertise a broken model
+          // as tools-capable (ClawSweeper P2 on #109797).
           inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
-          return model;
+          return Object.assign({}, model, { capabilities: [] as string[] });
         }
       }),
     );
