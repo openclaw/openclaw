@@ -59,22 +59,44 @@ function canonicalize(value) {
   );
 }
 
-function normalizeManifest(manifest, relativePath) {
+function installLifecycleScripts(manifest) {
+  if (
+    !manifest.scripts ||
+    typeof manifest.scripts !== "object" ||
+    Array.isArray(manifest.scripts)
+  ) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(manifest.scripts).filter(([name]) => INSTALL_LIFECYCLE_SCRIPTS.has(name)),
+  );
+}
+
+function canFilterOrdinaryScripts(manifest, relativePath) {
+  const installScripts = installLifecycleScripts(manifest);
+  if (Object.keys(installScripts).length === 0) {
+    return true;
+  }
+  return (
+    JSON.stringify(canonicalize(installScripts)) ===
+    JSON.stringify(canonicalize(FILTERED_SCRIPT_CONTRACTS.get(relativePath)))
+  );
+}
+
+function normalizeManifest(manifest, filterOrdinaryScripts) {
   const normalized = { ...manifest };
+  if (!filterOrdinaryScripts) {
+    return canonicalize(normalized);
+  }
   if (
     manifest.scripts &&
     typeof manifest.scripts === "object" &&
     !Array.isArray(manifest.scripts)
   ) {
-    const installScripts = Object.fromEntries(
-      Object.entries(manifest.scripts).filter(([name]) => INSTALL_LIFECYCLE_SCRIPTS.has(name)),
-    );
+    const installScripts = installLifecycleScripts(manifest);
     if (Object.keys(installScripts).length === 0) {
       delete normalized.scripts;
-    } else if (
-      JSON.stringify(canonicalize(installScripts)) ===
-      JSON.stringify(canonicalize(FILTERED_SCRIPT_CONTRACTS.get(relativePath)))
-    ) {
+    } else {
       normalized.scripts = installScripts;
     }
   }
@@ -119,7 +141,7 @@ export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
   if (manifests.length === 0) {
     throw new Error(`no tracked package.json files found under ${workspace}`);
   }
-  for (const relativePath of manifests) {
+  const parsedManifests = manifests.map((relativePath) => {
     const source = readFileSync(path.join(workspace, relativePath), "utf8");
     let manifest;
     try {
@@ -127,11 +149,19 @@ export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
     } catch (error) {
       throw new Error(`invalid JSON in ${relativePath}: ${error.message}`);
     }
+    return { manifest, relativePath };
+  });
+  // Lifecycle hooks can delegate to ordinary scripts in any workspace package.
+  // One unaudited hook therefore makes every manifest's scripts install inputs.
+  const filterOrdinaryScripts = parsedManifests.every(({ manifest, relativePath }) =>
+    canFilterOrdinaryScripts(manifest, relativePath),
+  );
+  for (const { manifest, relativePath } of parsedManifests) {
     addRecord(
       hash,
       "manifest",
       relativePath,
-      JSON.stringify(normalizeManifest(manifest, relativePath)),
+      JSON.stringify(normalizeManifest(manifest, filterOrdinaryScripts)),
     );
   }
 

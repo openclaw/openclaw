@@ -2315,6 +2315,25 @@ describe("ci workflow guards", () => {
       });
       expect(fingerprint()).not.toBe(delegatedBaseline);
 
+      mkdirSync(path.join(root, "packages", "worker"), { recursive: true });
+      writeManifest({
+        name: "fixture",
+        scripts: { postinstall: "pnpm --filter worker run build" },
+        devDependencies: { vitest: "1.0.0" },
+      });
+      const workerManifest = path.join(root, "packages", "worker", "package.json");
+      writeFileSync(
+        workerManifest,
+        `${JSON.stringify({ name: "worker", scripts: { build: "node build-v1.mjs" } })}\n`,
+      );
+      execFileSync("git", ["add", "packages/worker/package.json"], { cwd: root });
+      const crossWorkspaceBaseline = fingerprint();
+      writeFileSync(
+        workerManifest,
+        `${JSON.stringify({ name: "worker", scripts: { build: "node build-v2.mjs" } })}\n`,
+      );
+      expect(fingerprint()).not.toBe(crossWorkspaceBaseline);
+
       writeManifest({
         name: "fixture",
         scripts: {
