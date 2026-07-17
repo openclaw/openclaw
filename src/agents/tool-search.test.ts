@@ -346,9 +346,10 @@ describe("Tool Search", () => {
     await expect(runtime.describe("orchard_shipments")).resolves.toMatchObject({
       outputSchema: { type: "array" },
     });
-    await expect(runtime.callValue("orchard_shipments")).resolves.toEqual([
-      { id: "H-1", paid: false, tons: 14 },
-    ]);
+    const result = await runtime.callValue("orchard_shipments");
+    expect(result).toEqual([{ id: "H-1", paid: false, tons: 14 }]);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen((result as unknown[])[0])).toBe(true);
   });
 
   it("keeps output hints and validation after runtime normalization clones tools", async () => {

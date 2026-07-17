@@ -959,7 +959,7 @@ function freezeJsonSnapshot(value: unknown): unknown {
 }
 
 /** Capture a stable JSON-safe result before delayed transcript settlement. */
-export function snapshotToolSearchTargetTranscriptResult(
+function snapshotToolSearchTargetTranscriptResult(
   result: AgentToolResult<unknown>,
 ): AgentToolResult<unknown> {
   const snapshot = toJsonSafe(result);

@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  snapshotToolSearchTargetTranscriptResult,
-  type ToolSearchTargetTranscriptProjection,
-} from "../../tool-search.js";
+import type { ToolSearchTargetTranscriptProjection } from "../../tool-search.js";
 
 const mocks = vi.hoisted(() => ({
   buildSubscriptionParams: vi.fn(),
@@ -138,7 +135,11 @@ describe("prepareEmbeddedAttemptStream", () => {
       acceptResultBeforeProjection: async (candidate) => {
         expect(candidate).toBe(rawResult);
         expect(projections).toHaveLength(0);
-        return snapshotToolSearchTargetTranscriptResult(candidate);
+        const snapshot = structuredClone(candidate);
+        if (snapshot.details && typeof snapshot.details === "object") {
+          Object.freeze(snapshot.details);
+        }
+        return Object.freeze(snapshot);
       },
     });
 
