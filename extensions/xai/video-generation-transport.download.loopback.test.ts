@@ -35,7 +35,8 @@ describe("downloadXaiVideo", () => {
   });
 
   it("rejects a stalled body with the download-owned idle timeout", async () => {
-    const timeoutMs = 50;
+    const totalTimeoutMs = 50;
+    const idleTimeoutMs = Math.ceil(totalTimeoutMs / 2);
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode("partial"));
@@ -55,17 +56,17 @@ describe("downloadXaiVideo", () => {
     await expect(
       downloadXaiVideo({
         url: "https://cdn.example.com/generated/video.mp4",
-        timeoutMs,
-        defaultTimeoutMs: timeoutMs,
+        timeoutMs: totalTimeoutMs,
+        defaultTimeoutMs: totalTimeoutMs,
         fetchFn: fetch,
         maxBytes: 1024 * 1024,
         allowPrivateNetwork: false,
       }),
-    ).rejects.toThrow(`xAI generated video download stalled after ${timeoutMs}ms`);
+    ).rejects.toThrow(`xAI generated video download stalled after ${idleTimeoutMs}ms`);
     const elapsedMs = performance.now() - startedAt;
 
-    expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs - 20);
-    expect(elapsedMs).toBeLessThan(timeoutMs + 1_500);
+    expect(elapsedMs).toBeGreaterThanOrEqual(idleTimeoutMs - 20);
+    expect(elapsedMs).toBeLessThan(totalTimeoutMs + 1_500);
   });
 
   it("rejects a continuously dripping CDN body within the guarded request deadline", async () => {
@@ -161,5 +162,47 @@ describe("downloadXaiVideo", () => {
       setTimeout(resolve, 400);
     });
     expect(settled).toBe(false);
+  });
+
+  it("rejects a stalled body with the idle deadline before the guarded request deadline in an unmocked loopback", async () => {
+    vi.resetModules();
+    vi.doUnmock("openclaw/plugin-sdk/provider-http");
+    const { downloadXaiVideo } = await import("./video-generation-transport.js");
+
+    const totalTimeoutMs = 300;
+    const idleTimeoutMs = Math.ceil(totalTimeoutMs / 2);
+    server = http.createServer((_req, res) => {
+      res.on("error", () => {});
+      res.writeHead(200, {
+        "Content-Type": "video/mp4",
+        "Content-Length": "9999999",
+      });
+      // Send initial bytes so the body reader starts, then stall.
+      res.write(Buffer.from([0x00, 0x00]));
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+
+    const startedAt = performance.now();
+    await expect(
+      downloadXaiVideo({
+        url: `http://127.0.0.1:${address.port}/generated/video.mp4`,
+        timeoutMs: totalTimeoutMs,
+        defaultTimeoutMs: totalTimeoutMs,
+        fetchFn: fetch,
+        maxBytes: 1024 * 1024,
+        allowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow(`xAI generated video download stalled after ${idleTimeoutMs}ms`);
+    const elapsedMs = performance.now() - startedAt;
+
+    // Must settle near idleTimeoutMs, well below totalTimeoutMs.
+    expect(elapsedMs).toBeGreaterThanOrEqual(idleTimeoutMs - 30);
+    expect(elapsedMs).toBeLessThan(totalTimeoutMs - 50);
   });
 });
