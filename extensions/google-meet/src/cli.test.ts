@@ -6,6 +6,7 @@ import { Command } from "commander";
 import JSZip from "jszip";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerGoogleMeetCli, testing } from "./cli.js";
 import { resolveGoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
@@ -24,6 +25,8 @@ const fetchGuardMocks = vi.hoisted(() => ({
     }),
   ),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -85,7 +88,9 @@ function requestUrl(input: RequestInfo | URL): URL {
   return new URL(input.url);
 }
 
-function stubMeetArtifactsApi(options: { failSmartNoteDocumentBody?: boolean } = {}) {
+function stubMeetArtifactsApi(
+  options: { failSmartNoteDocumentBody?: boolean; participantDisplayName?: string } = {},
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -135,7 +140,10 @@ function stubMeetArtifactsApi(options: { failSmartNoteDocumentBody?: boolean } =
           participants: [
             {
               name: "conferenceRecords/rec-1/participants/p1",
-              signedinUser: { user: "users/alice", displayName: "Alice" },
+              signedinUser: {
+                user: "users/alice",
+                displayName: options.participantDisplayName ?? "Alice",
+              },
             },
           ],
         });
@@ -617,6 +625,32 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("neutralizes spreadsheet formulas in CSV attendance output", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: " \t=1+1" });
+    const stdout = captureStdout();
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "attendance",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--format",
+          "csv",
+        ],
+        { from: "user" },
+      );
+      expect(stdout.output()).toContain("conferenceRecords/rec-1,' \t=1+1,users/alice");
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("writes an export bundle", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();
@@ -681,6 +715,35 @@ describe("google-meet CLI", () => {
       stdout.restore();
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(`${tempDir}.zip`, { force: true });
+    }
+  });
+
+  it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
+    stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
+    const stdout = captureStdout();
+    const tempDir = tempDirs.make("openclaw-google-meet-export-csv-");
+
+    try {
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--output",
+          tempDir,
+        ],
+        { from: "user" },
+      );
+      expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
+        "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
+      );
+    } finally {
+      stdout.restore();
     }
   });
 
@@ -1014,9 +1077,19 @@ describe("google-meet CLI", () => {
   it("runs a listen-first health probe", async () => {
     const testListen = vi.fn(async () => ({
       createdSession: true,
+      inCall: true,
+      manualActionRequired: false,
+      manualActionReason: undefined,
+      manualActionMessage: undefined,
       listenVerified: true,
       listenTimedOut: false,
+      captioning: true,
+      captionsEnabledAttempted: true,
       transcriptLines: 1,
+      lastCaptionAt: undefined,
+      lastCaptionSpeaker: undefined,
+      lastCaptionText: undefined,
+      recentTranscript: [],
       session: {
         id: "meet_1",
         url: "https://meet.google.com/abc-defg-hij",

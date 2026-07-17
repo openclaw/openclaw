@@ -1,6 +1,9 @@
-import type { GoogleMeetChromeHealth } from "./transports/types.js";
+export type MeetingRealtimeAudioTransportHealth = {
+  consecutiveInputErrors?: number;
+  lastInputError?: string;
+};
 
-export interface MeetRealtimeAudioTransport {
+export interface MeetingRealtimeAudioTransport {
   /** Delivers a prior failure immediately so provider setup cannot outrun transport teardown. */
   onFatal(handler: () => void): void;
   startInput(onAudio: (audio: Buffer) => void): void;
@@ -8,6 +11,6 @@ export interface MeetRealtimeAudioTransport {
   writeOutput(audio: Buffer): Promise<void>;
   clearOutput(): Promise<void>;
   dispose(): Promise<void>;
-  getHealth?(): Pick<GoogleMeetChromeHealth, "consecutiveInputErrors" | "lastInputError">;
+  getHealth?(): MeetingRealtimeAudioTransportHealth;
   startBargeInMonitor?(onBargeIn: (audio: Buffer) => boolean): void;
 }

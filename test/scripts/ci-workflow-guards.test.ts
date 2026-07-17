@@ -2383,6 +2383,67 @@ describe("ci workflow guards", () => {
     expect(source).toContain("blacksmith-8vcpu-windows-2025");
   });
 
+  it("keeps the extension boundary sticky disk on one protected key", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const checkShardJob = workflow.jobs["check-shard"];
+
+    // Light-run pole: cold prep + 122 plugin compiles scale with cores at
+    // similar billed core-minutes.
+    expect(additionalJob.strategy.matrix.include).toContainEqual({
+      check_name: "check-additional-extension-package-boundary",
+      group: "extension-package-boundary",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
+    });
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY).toBe(16);
+
+    // O(1) disks: Blacksmith caps sticky disks per installation, and the old
+    // per-PR/per-config keys minted new disks until every mount 429-failed
+    // fleet-wide. Snapshot validity lives in the in-job marker, not the key.
+    const boundaryMount = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Mount extension boundary sticky disk",
+    );
+    const lintMount = checkShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Mount extension boundary sticky disk",
+    );
+    expect(boundaryMount.with.key).toBe("${{ github.repository }}-ext-boundary-v2");
+    expect(lintMount.with.key).toBe(boundaryMount.with.key);
+    // Single semantic writer: protected pushes commit explicitly (not
+    // on-change/if-missing, whose allocated-byte heuristic can strand a stale
+    // marker); PR clones and the lint consumer stay read-only.
+    expect(boundaryMount.with.commit).toBe(
+      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
+    );
+    expect(lintMount.with.commit).toBe("false");
+
+    // The key no longer hashes config/scripts/lockfile, so every gate must
+    // compose the identical marker fingerprint or restores silently tear.
+    const restoreStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Restore extension boundary artifacts from sticky disk",
+    );
+    const lintRestoreStep = checkShardJob.steps.find(
+      (step: WorkflowStep) => step.name === "Restore extension boundary artifacts from sticky disk",
+    );
+    const seedStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Seed extension boundary sticky disk",
+    );
+    const configHash = seedStep.env.BOUNDARY_CONFIG_HASH;
+    expect(configHash).toContain("hashFiles(");
+    expect(configHash).toContain("pnpm-lock.yaml");
+    expect(restoreStep.env.BOUNDARY_CONFIG_HASH).toBe(configHash);
+    expect(lintRestoreStep.env.BOUNDARY_CONFIG_HASH).toBe(configHash);
+    for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
+      expect(gate.run).toContain('echo "$BOUNDARY_CONFIG_HASH"');
+    }
+    // Seeding is writer-only work: PR mounts never commit, so seeding there
+    // would burn wall clock on a discarded clone.
+    expect(seedStep.if).toContain("github.event_name != 'pull_request'");
+    expect(seedStep.if).toContain("steps.boundary-sticky-restore.outputs.restored == 'false'");
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];

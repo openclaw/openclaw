@@ -263,6 +263,15 @@ export const BUILD_ALL_STEPS = [
     label: "write-cli-startup-metadata",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-cli-startup-metadata.ts"],
+    cache: {
+      inputs: [
+        "scripts/write-cli-startup-metadata.ts",
+        "scripts/lib/cli-startup-root-help-bundle.ts",
+      ],
+      outputs: ["dist/cli-startup-metadata.json"],
+      restore: "always",
+      runOnHit: { finalize: "refresh" },
+    },
   },
 ];
 
@@ -791,9 +800,11 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
 }
 
 export function finalizeBuildAllStepCache(step, cacheState, params = {}) {
-  if (params.reusedCache) {
+  if (params.reusedCache && step.cache?.runOnHit?.finalize !== "refresh") {
     return restoreBuildAllStepCacheOutputs(cacheState, params);
   }
+  // Validator-style cache hits may update a restored seed. Capture that result;
+  // restoring the old seed here would silently discard the validated refresh.
   writeBuildAllStepCacheStamp(
     step,
     resolveBuildAllStepCacheStampState(step, cacheState, params),
@@ -869,7 +880,7 @@ if (isMainModule()) {
         reusedCache = true;
         stepToRun = cacheHitStep;
       }
-      console.error(`[build-all] ${step.label}${reusedCache ? " (cached declarations)" : ""}`);
+      console.error(`[build-all] ${step.label}${reusedCache ? " (cache restored)" : ""}`);
       const invocation = resolveBuildAllStep(stepToRun, { env: buildEnv });
       const result = spawnSync(invocation.command, invocation.args, invocation.options);
       const durationMs = performance.now() - startedAt;
