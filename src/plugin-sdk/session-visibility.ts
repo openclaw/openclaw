@@ -7,6 +7,7 @@ import { normalizeTrimmedStringList } from "../../packages/normalization-core/sr
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { listSessionStateWatchTargets } from "../sessions/session-state-events.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
@@ -316,13 +317,23 @@ export function createSessionVisibilityRowChecker(params: {
   const requesterAgentId =
     normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
     resolveAgentIdFromSessionKey(params.requesterSessionKey);
+  let watchedSessionKeys: Set<string> | undefined;
 
   const check = (row: SessionVisibilityRow): SessionAccessResult => {
     const targetSessionKey = row.key;
     const targetAgentId = row.agentId ?? resolveAgentIdFromSessionKey(targetSessionKey);
     const isRequesterSession =
       targetSessionKey === params.requesterSessionKey || targetSessionKey === "current";
-    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey);
+    // An actual durable cursor makes a watched session ownership-equivalent for
+    // same-agent reads; absent rows and cross-agent targets remain fail-closed.
+    const isWatchedRead =
+      params.action !== "send" &&
+      params.visibility === "tree" &&
+      targetAgentId === requesterAgentId &&
+      (watchedSessionKeys ??= listSessionStateWatchTargets(params.requesterSessionKey)).has(
+        targetSessionKey,
+      );
+    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey) || isWatchedRead;
     // Row ownership is stronger than agent ids: ACP children may use a backend
     // agent id while still belonging to the requester that spawned them.
     if (
