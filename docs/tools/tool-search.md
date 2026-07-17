@@ -126,8 +126,10 @@ to put back into prompt context. Each hit includes a bounded TypeScript-style
 model can skip `describe` when that signature is sufficient. A trusted
 OpenClaw core or plugin tool may also include a compact `output` hint, such as
 `Array<{ id: string; paid: boolean }>`. MCP and client output-schema claims are
-not promoted into this trusted hint. Open, oversized, or otherwise partial
-output schemas omit the hint and remain available through `describe` instead.
+not promoted into this trusted hint. Their untrusted input schemas are also
+deferred as `input: "unknown"`; use `describe` before calling them. Open,
+oversized, or otherwise partial output schemas omit the hint and remain
+available through `describe` instead.
 
 ```js
 const hits = await openclaw.tools.search("calendar event", { limit: 5 });

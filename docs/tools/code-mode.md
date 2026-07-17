@@ -434,7 +434,9 @@ type ToolCatalogEntry = {
 ```
 
 `input` is a bounded TypeScript-style signature for the common case. Use
-`tools.describe(...)` when the exact full schema is still needed. `output` is
+`tools.describe(...)` when the exact full schema is still needed. Remote MCP
+and client entries use `input: "unknown"` so their untrusted schemas stay
+deferred until `describe`. `output` is
 present only for a complete compact hint derived from a trusted OpenClaw core
 or plugin `outputSchema`. MCP and client output-schema claims are not promoted
 into this trusted catalog hint.

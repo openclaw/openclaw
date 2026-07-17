@@ -1190,7 +1190,7 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
     description: entry.description,
     // Remote MCP and client schemas are untrusted metadata. Keep them deferred
     // rather than repeatedly traversing attacker-sized property maps on search.
-    ...(entry.source === "openclaw" ? { input: compactToolInputHint(entry.parameters) } : {}),
+    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
     ...(output ? { output } : {}),
   };
 }

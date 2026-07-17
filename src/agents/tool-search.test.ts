@@ -303,8 +303,9 @@ describe("Tool Search", () => {
     const mcpResult = resultDetails(
       await search.execute("call-search-mcp", { query: "remote echo" }),
     );
-    expect(mcpResult).toContainEqual(expect.objectContaining({ name: "remote_echo" }));
-    expect(mcpResult).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
+    expect(mcpResult).toContainEqual(
+      expect.objectContaining({ name: "remote_echo", input: "unknown" }),
+    );
   });
 
   it("exposes and validates trusted OpenClaw output schemas", async () => {
@@ -1250,9 +1251,8 @@ describe("Tool Search", () => {
     );
 
     expect(result).toContainEqual(
-      expect.objectContaining({ name: "client_pick_file", source: "client" }),
+      expect.objectContaining({ name: "client_pick_file", source: "client", input: "unknown" }),
     );
-    expect(result).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
   });
 
   it("keeps client tools visible in directory mode", () => {
