@@ -19,6 +19,7 @@ type GatewayProgramArgs = {
 type GatewayRuntimePreference = "auto" | "node";
 
 export const OPENCLAW_WRAPPER_ENV_KEY = "OPENCLAW_WRAPPER";
+const NODE_BINARY_LOOKUP_TIMEOUT_MS = 5_000;
 
 async function resolveCliEntrypointPathForService(): Promise<string> {
   const argv1 = process.argv[1];
@@ -163,7 +164,11 @@ async function resolveNodePath(): Promise<string> {
 async function resolveBinaryPath(binary: string): Promise<string> {
   const cmd = process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
-    const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
+    const output = execFileSync(cmd, [binary], {
+      encoding: "utf8",
+      timeout: NODE_BINARY_LOOKUP_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
     if (!resolved) {
       throw new Error("empty");

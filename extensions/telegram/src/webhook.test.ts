@@ -238,6 +238,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   clearTelegramRuntime();
   closeOpenClawStateDatabaseForTest();
   const stateDir = webhookStateDir;
@@ -1216,6 +1217,7 @@ describe("startTelegramWebhook", () => {
   });
 
   it("stops claimed completion retries when the webhook stops", async () => {
+    vi.useFakeTimers();
     let completeAttempts = 0;
     setTelegramRuntime({
       state: {
@@ -1253,7 +1255,7 @@ describe("startTelegramWebhook", () => {
     );
     await started.stop();
     const attemptsAfterStop = completeAttempts;
-    await sleep(400);
+    await vi.advanceTimersByTimeAsync(400);
 
     expect(completeAttempts).toBe(attemptsAfterStop);
   });

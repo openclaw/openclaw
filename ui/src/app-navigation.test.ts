@@ -60,6 +60,11 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
+    routeId: "model-setup",
+    path: "/settings/model-setup",
+    alias: "/model-setup",
+  },
+  {
     routeId: "model-providers",
     path: "/settings/model-providers",
     alias: "/model-providers",
@@ -73,6 +78,7 @@ describe("navigationIconForRoute", () => {
     ).toEqual({
       chat: "messageSquare",
       activity: "activity",
+      approvals: "shieldCheck",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
@@ -95,6 +101,7 @@ describe("navigationIconForRoute", () => {
       infrastructure: "globe",
       about: "fileText",
       "ai-agents": "brain",
+      "model-setup": "spark",
       "model-providers": "plug",
       "memory-import": "download",
       debug: "bug",
@@ -124,6 +131,7 @@ describe("titleForRoute", () => {
     ).toEqual({
       chat: "Chat",
       activity: "Activity",
+      approvals: "Approvals",
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
@@ -146,6 +154,7 @@ describe("titleForRoute", () => {
       infrastructure: "Infrastructure",
       about: "About",
       "ai-agents": "AI & Agents",
+      "model-setup": "Model Setup",
       "model-providers": "Model Providers",
       "memory-import": "Import Memory",
       debug: "Debug",
@@ -161,6 +170,7 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       activity: "Browser-local tool activity summaries.",
+      approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
@@ -183,6 +193,7 @@ describe("subtitleForRoute", () => {
       infrastructure: "Gateway, web, browser, and media settings.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
+      "model-setup": "Connect a verified AI model",
       "model-providers": "Configured providers with plan, quota, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       debug: "Snapshots, events, RPC.",
@@ -198,6 +209,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
+    expect(pathForRoute("approvals")).toBe("/settings/approvals");
   });
 
   it("prepends base path", () => {
@@ -357,11 +369,13 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "ai-agents",
       "sessions",
       "memory-import",
+      "model-setup",
       "model-providers",
       "automation",
       "mcp",
       "infrastructure",
       "nodes",
+      "approvals",
       "worktrees",
       "debug",
       "logs",

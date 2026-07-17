@@ -28,11 +28,173 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-const COMPACT_NODE_TEST_JOB_WEIGHT = 256;
+// Fleet-loaded runners inflate measured hints by ~20-25%; a 220s packing cap
+// keeps the slowest bin near the 5-minute PR wall-clock budget under load.
+const COMPACT_NODE_TEST_JOB_SECONDS = 220;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
-const COMPACT_TOOLING_NODE_TEST_GROUPS = 3;
-const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 8;
+const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
+const AUTO_REPLY_COMMANDS_STRIPES = 3;
+const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
+// Advisory runtime estimates (seconds) per split shard, measured from a
+// Blacksmith compact PR run with serial plans and 2 Vitest workers (run
+// 29481835688). Packing only: a stale entry skews job balance but never
+// correctness. Unknown shards fall back to a per-file estimate.
+const COMPACT_GROUP_SECONDS_HINTS = new Map([
+  ["agentic-agents-core-auth", 32],
+  ["agentic-agents-core-isolated", 10],
+  ["agentic-agents-core-models", 66],
+  // Cost-aware striping balances the cli-runner and commands stripes; keep
+  // their hints equalized at the old totals split evenly.
+  ["agentic-agents-core-runner-cli-1", 103],
+  ["agentic-agents-core-runner-cli-2", 103],
+  ["agentic-agents-core-runner-cli-3", 103],
+  ["agentic-agents-core-runner-commands", 30],
+  ["agentic-agents-core-runner-embedded", 20],
+  ["agentic-agents-core-runner-sessions", 18],
+  ["agentic-agents-core-runtime", 81],
+  ["agentic-agents-core-subagents", 37],
+  ["agentic-agents-core-tools", 55],
+  ["agentic-agents-embedded", 59],
+  ["agentic-agents-support", 88],
+  ["agentic-agents-tools", 43],
+  ["agentic-cli", 81],
+  ["agentic-command-support", 28],
+  ["agentic-commands-agent-channel", 47],
+  ["agentic-commands-doctor", 23],
+  ["agentic-commands-doctor-auth", 10],
+  ["agentic-commands-doctor-config-state", 41],
+  ["agentic-commands-doctor-gateway", 7],
+  ["agentic-commands-doctor-plugins-tools", 10],
+  ["agentic-commands-doctor-sessions-cron", 24],
+  ["agentic-commands-models", 21],
+  ["agentic-commands-onboard-config", 15],
+  ["agentic-commands-status-tools", 30],
+  ["agentic-control-plane-agent-chat", 75],
+  ["agentic-control-plane-auth-node", 101],
+  ["agentic-control-plane-http-models", 40],
+  ["agentic-control-plane-http-plugin-ws", 43],
+  ["agentic-control-plane-runtime-config", 28],
+  ["agentic-control-plane-runtime-cron", 29],
+  ["agentic-control-plane-runtime-server", 26],
+  ["agentic-control-plane-runtime-state", 25],
+  ["agentic-control-plane-runtime-ui-tools", 24],
+  ["agentic-control-plane-startup-core", 113],
+  ["agentic-control-plane-startup-health-runtime", 24],
+  ["agentic-control-plane-startup-restart-close", 20],
+  ["agentic-gateway-core", 130],
+  ["agentic-gateway-methods", 79],
+  ["agentic-plugin-sdk", 50],
+  ["auto-reply-core-top-level", 33],
+  ["auto-reply-reply-agent-runner", 52],
+  ["auto-reply-reply-commands-1", 92],
+  ["auto-reply-reply-commands-2", 92],
+  ["auto-reply-reply-commands-3", 92],
+  ["auto-reply-reply-dispatch", 36],
+  ["auto-reply-reply-session", 21],
+  ["auto-reply-reply-state-routing", 21],
+  ["core-runtime-cron-core", 24],
+  ["core-runtime-cron-isolated-agent", 61],
+  ["core-runtime-cron-service", 24],
+  ["core-runtime-hooks", 11],
+  ["core-runtime-infra-approval-exec", 30],
+  ["core-runtime-infra-channel-plugin", 26],
+  ["core-runtime-infra-heartbeat-runner", 77],
+  ["core-runtime-infra-net-install", 14],
+  ["core-runtime-infra-outbound-actions", 21],
+  ["core-runtime-infra-outbound-core", 44],
+  ["core-runtime-infra-process", 83],
+  ["core-runtime-infra-provider-push", 20],
+  ["core-runtime-infra-storage-state", 58],
+  ["core-runtime-infra-system-runtime", 40],
+  ["core-runtime-media-ui", 131],
+  ["core-runtime-secrets", 43],
+  ["core-runtime-shared", 48],
+  // PTY timing tests inflate badly next to co-runners; keep this group in a
+  // lightly packed bin so its lane stays close to solo runtime.
+  ["core-runtime-tui-pty", 200],
+  ["core-tooling-1", 113],
+  ["core-tooling-2", 113],
+  ["core-tooling-3", 113],
+  ["core-tooling-4", 113],
+  ["core-tooling-docker", 6],
+  ["core-tooling-isolated", 55],
+  ["core-unit-fast", 190],
+  ["core-unit-src-security", 138],
+  ["core-unit-support", 19],
+]);
+// Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
+// from single-file local runs (M4 Max) and static import-graph size. Packing
+// only: a stale entry skews stripe balance but never correctness. Unlisted
+// files use the default, which mostly reflects the per-file module-graph
+// re-evaluation cost that dominates these serial suites.
+const STRIPE_FILE_SECONDS_HINTS = new Map([
+  ["src/agents/cli-runner.reliability.test.ts", 7],
+  ["src/agents/cli-runner.spawn.test.ts", 8],
+  ["src/auto-reply/reply/commands-export-session.test.ts", 8],
+  ["src/auto-reply/reply/commands-gating.test.ts", 6],
+  ["src/auto-reply/reply/commands-learn.test.ts", 8],
+  ["src/auto-reply/reply/commands-plugins.install.test.ts", 6],
+  ["src/auto-reply/reply/commands-status.test.ts", 12],
+  ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
+  ["src/scripts/test-projects.test.ts", 21],
+  ["test/scripts/bench-sqlite-reliability.test.ts", 9],
+  ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
+  ["test/scripts/changed-lanes.test.ts", 5],
+  ["test/scripts/ci-workflow-guards.test.ts", 12],
+  ["test/scripts/crabbox-wrapper.test.ts", 19],
+  ["test/scripts/find-reusable-release-validation.test.ts", 8],
+  ["test/scripts/install-sh.test.ts", 6],
+  ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
+  ["test/scripts/openclaw-live-updater.test.ts", 18],
+  ["test/scripts/parallels-smoke-model.test.ts", 8],
+  ["test/scripts/plugin-clawhub-release.test.ts", 5],
+  ["test/scripts/plugin-gateway-gauntlet.test.ts", 5],
+  ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
+  ["test/scripts/pr-operation-lock.test.ts", 27],
+  ["test/scripts/test-projects.test.ts", 8],
+]);
+const DEFAULT_STRIPE_FILE_SECONDS = 3;
+
+const DEFAULT_WHOLE_GROUP_SECONDS = 25;
+const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
+// Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
+// concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
+// into bins the shard runner executes at concurrency 1.
+const EXCLUSIVE_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$/u;
+// Exclusive bins run serially, so their packed estimate is their wall clock.
+const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
+
+function isExclusiveCompactGroup(group) {
+  return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+}
+
+// Spawn/signal/PTY-timing suites also flake under high in-process worker
+// counts; pin them to the proven 2-worker budget while the job-level default
+// scales with the runner class. infra-process spawns child processes per test
+// and hit worker-startup timeouts under contention before serialization.
+const PINNED_WORKER_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
+const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+
+function applyCompactGroupWorkerPins(group) {
+  if (!PINNED_WORKER_COMPACT_GROUP_RE.test(group.shard_name)) {
+    return group;
+  }
+  return { ...group, env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV } };
+}
+
+function estimateCompactGroupSeconds(group) {
+  const hint = COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name);
+  if (hint !== undefined) {
+    return hint;
+  }
+  if (Array.isArray(group.includePatterns)) {
+    return Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE));
+  }
+  return DEFAULT_WHOLE_GROUP_SECONDS;
+}
 const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const TOOLING_DOCKER_TEST_FILE = "test/scripts/docker-build-helper.test.ts";
 const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
@@ -40,7 +202,9 @@ const TOOLING_ISOLATED_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
 // shards first so short alphabetical groups cannot leave them on the tail.
 const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
   ["core-tooling", 0],
-  ["auto-reply-reply-commands", 1],
+  ["auto-reply-reply-commands-1", 1],
+  ["auto-reply-reply-commands-2", 1],
+  ["auto-reply-reply-commands-3", 1],
 ]);
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
@@ -52,14 +216,26 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-subagents",
   "agentic-agents-embedded",
   "agentic-agents-support",
-  "agentic-agents-core-runner",
+  "agentic-agents-core-runner-cli-1",
+  "agentic-agents-core-runner-cli-2",
+  "agentic-agents-core-runner-cli-3",
+  "agentic-agents-core-runner-commands",
+  "agentic-agents-core-runner-embedded",
+  "agentic-agents-core-runner-sessions",
   "agentic-agents-core-tools",
   "agentic-control-plane-startup-core",
   "agentic-gateway-core",
   "agentic-gateway-methods",
   "auto-reply-reply-dispatch",
+  // The commands stripes and security suite are import-bound (30-45s of
+  // module-graph import per file); the 8 vCPU class with a higher Vitest
+  // worker budget cuts their wall clock roughly linearly.
+  "auto-reply-reply-commands-1",
+  "auto-reply-reply-commands-2",
+  "auto-reply-reply-commands-3",
   "core-runtime-media-ui",
   "core-unit-fast",
+  "core-unit-src-security",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
@@ -103,12 +279,28 @@ function createAutoReplyReplySplitShards() {
   }
 
   return Object.entries(groups)
-    .map(([groupName, includePatterns]) => ({
-      configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-      includePatterns,
-      requiresDist: false,
-      shardName: groupName,
-    }))
+    .flatMap(([groupName, includePatterns]) => {
+      // The commands bucket alone serializes ~3 minutes; stripe it so packing
+      // can spread that runtime across jobs.
+      if (groupName === "auto-reply-reply-commands") {
+        return createStripedBatches(includePatterns, AUTO_REPLY_COMMANDS_STRIPES).map(
+          (batch, index) => ({
+            configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+            includePatterns: batch,
+            requiresDist: false,
+            shardName: `${groupName}-${index + 1}`,
+          }),
+        );
+      }
+      return [
+        {
+          configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+          includePatterns,
+          requiresDist: false,
+          shardName: groupName,
+        },
+      ];
+    })
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
@@ -267,15 +459,23 @@ function resolveAgentCoreShardName(file) {
   ) {
     return "agentic-agents-core-subagents";
   }
+  // The former single "core-runner" bucket serialized ~3 minutes of tests in
+  // one group; keep these three slices separate so packing can balance them.
+  if (name.startsWith("embedded-agent-runner")) {
+    return "agentic-agents-core-runner-embedded";
+  }
   if (
-    name.startsWith("embedded-agent-runner") ||
-    name.startsWith("cli-runner") ||
     name.startsWith("agent-command") ||
     name.startsWith("command") ||
-    name.includes("compaction") ||
-    name.includes("session")
+    name.includes("compaction")
   ) {
-    return "agentic-agents-core-runner";
+    return "agentic-agents-core-runner-commands";
+  }
+  if (name.startsWith("cli-runner")) {
+    return "agentic-agents-core-runner-cli";
+  }
+  if (name.includes("session")) {
+    return "agentic-agents-core-runner-sessions";
   }
   return "agentic-agents-core-runtime";
 }
@@ -297,15 +497,36 @@ function createAgentCoreSplitShards() {
     "agentic-agents-core-models",
     "agentic-agents-core-tools",
     "agentic-agents-core-subagents",
-    "agentic-agents-core-runner",
+    "agentic-agents-core-runner-cli",
+    "agentic-agents-core-runner-commands",
+    "agentic-agents-core-runner-embedded",
+    "agentic-agents-core-runner-sessions",
     "agentic-agents-core-runtime",
   ]
-    .map((shardName) => ({
-      configs: ["test/vitest/vitest.agents-core.config.ts"],
-      includePatterns: groups.get(shardName) ?? [],
-      requiresDist: false,
-      shardName,
-    }))
+    .flatMap((shardName) => {
+      const includePatterns = groups.get(shardName) ?? [];
+      // agents-core runs files serially (fileParallelism false guards shared
+      // module state), so the import-heavy cli-runner suite (~35s of module
+      // import per file) stripes across bins to parallelize at the job level.
+      if (shardName === "agentic-agents-core-runner-cli") {
+        return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
+          (batch, index) => ({
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            includePatterns: batch,
+            requiresDist: false,
+            shardName: `${shardName}-${index + 1}`,
+          }),
+        );
+      }
+      return [
+        {
+          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          includePatterns,
+          requiresDist: false,
+          shardName,
+        },
+      ];
+    })
     .filter((shard) => shard.includePatterns.length > 0);
 
   return [
@@ -763,6 +984,7 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "core-unit-fast",
         configs: [
           "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-isolated.config.ts",
           "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         ],
         requiresDist: false,
@@ -1040,12 +1262,35 @@ function compareFullNodeTestAdmissionOrder(a, b) {
   );
 }
 
+function stripeFileWeight(file) {
+  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_STRIPE_FILE_SECONDS;
+}
+
+// Deterministic cost-aware striping (greedy LPT): heaviest files first, each
+// into the currently lightest batch. Round-robin by discovery order packed one
+// whale next to another and left sibling stripes ~10x lighter.
 function createStripedBatches(values, batchCount) {
-  const batches = Array.from({ length: batchCount }, () => []);
-  for (const [index, value] of values.entries()) {
-    batches[index % batchCount].push(value);
+  const entries = values.map((value, index) => ({
+    index,
+    value,
+    weight: stripeFileWeight(value),
+  }));
+  entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
+  const batches = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
+  for (const entry of entries) {
+    let target = batches[0];
+    for (const batch of batches) {
+      if (batch.totalWeight < target.totalWeight) {
+        target = batch;
+      }
+    }
+    target.totalWeight += entry.weight;
+    target.entries.push(entry);
   }
-  return batches;
+  // Keep discovery order inside each stripe so include lists stay stable.
+  return batches.map((batch) =>
+    batch.entries.toSorted((a, b) => a.index - b.index).map((entry) => entry.value),
+  );
 }
 
 function listCompactToolingTestFiles() {
@@ -1174,6 +1419,24 @@ export function createNodeTestShardBundles(options = {}) {
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
 }
 
+/**
+ * Mark one semantic cache producer without coupling persistence to matrix order.
+ * The broad core unit graph is shared by most shards; precise changed plans
+ * fall back to their first (normally only) job.
+ */
+export function assignVitestFsCacheWriter(shards) {
+  const preferredIndex = shards.findIndex(
+    (shard) =>
+      shard.shardName === "core-unit-fast" ||
+      shard.groups?.some((group) => group.shard_name === "core-unit-fast"),
+  );
+  const writerIndex = preferredIndex >= 0 ? preferredIndex : shards.length > 0 ? 0 : -1;
+  return shards.map((shard, index) => ({
+    ...shard,
+    saveVitestFsCache: index === writerIndex,
+  }));
+}
+
 function createCompactNodeTestShardBundles(options = {}) {
   const shards = createNodeTestShards(options);
   const groupsByRunner = new Map();
@@ -1190,66 +1453,43 @@ function createCompactNodeTestShardBundles(options = {}) {
       runner,
       shard_name: shard.shardName,
     };
-    groups.push(...expandCompactNodeTestGroup(group));
+    groups.push(...expandCompactNodeTestGroup(group).map(applyCompactGroupWorkerPins));
     groupsByRunner.set(key, groups);
   }
 
   const compactJobs = [];
   for (const groups of groupsByRunner.values()) {
+    // First-fit decreasing on estimated serial seconds keeps every job near
+    // the same runtime; the old per-file weights let one 3-minute group land
+    // next to nine trivial ones and own the PR wall clock.
     const bins = [];
     const sortedGroups = groups.toSorted(
       (a, b) =>
-        (b.includePatterns?.length ?? 1) - (a.includePatterns?.length ?? 1) ||
+        estimateCompactGroupSeconds(b) - estimateCompactGroupSeconds(a) ||
         a.shard_name.localeCompare(b.shard_name),
     );
-    for (const group of sortedGroups.filter((candidate) => candidate.includePatterns)) {
-      const weight = group.includePatterns.length;
+    for (const group of sortedGroups) {
+      const weight = estimateCompactGroupSeconds(group);
+      const exclusive = isExclusiveCompactGroup(group);
+      const secondsCap = exclusive ? COMPACT_EXCLUSIVE_JOB_SECONDS : COMPACT_NODE_TEST_JOB_SECONDS;
       const bin = bins.find(
         (candidate) =>
+          candidate.exclusive === exclusive &&
           candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-          candidate.weight + weight <= COMPACT_NODE_TEST_JOB_WEIGHT,
+          candidate.weight + weight <= secondsCap,
       );
       if (bin) {
         bin.groups.push(group);
         bin.weight += weight;
+        bin.hasWholeConfigGroup ||= !group.includePatterns;
       } else {
-        bins.push({ groups: [group], weight });
+        bins.push({
+          exclusive,
+          groups: [group],
+          hasWholeConfigGroup: !group.includePatterns,
+          weight,
+        });
       }
-    }
-
-    const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
-    const wholeJobCount = Math.ceil(wholeGroups.length / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
-    // A lone whole-config job serializes every fixed suite and owns PR wall time.
-    // Fold it into same-runner jobs when caps allow, retaining the whole-config timeout.
-    const canSpreadWholeGroups =
-      wholeJobCount === 1 &&
-      bins.length > 1 &&
-      bins.every(
-        (bin) =>
-          bin.groups.length + Math.ceil(wholeGroups.length / bins.length) <=
-          COMPACT_NODE_TEST_JOB_GROUPS,
-      );
-    const wholeGroupBatches = canSpreadWholeGroups
-      ? []
-      : createStripedBatches(wholeGroups, wholeJobCount);
-    if (canSpreadWholeGroups) {
-      for (const [index, group] of wholeGroups.entries()) {
-        const bin = bins[index % bins.length];
-        bin.groups.push(group);
-        bin.timeoutMinutes = COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES;
-      }
-    }
-    for (const [index, groupBatch] of wholeGroupBatches.entries()) {
-      const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
-      const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
-      compactJobs.push({
-        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
-        groups: groupBatch,
-        requiresDist: groupBatch[0].requiresDist,
-        runner: groupBatch[0].runner,
-        shardName: `compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
-        timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES,
-      });
     }
 
     for (const [index, bin] of bins.entries()) {
@@ -1260,8 +1500,17 @@ function createCompactNodeTestShardBundles(options = {}) {
         groups: bin.groups,
         requiresDist: bin.groups[0].requiresDist,
         runner: bin.groups[0].runner,
-        shardName: `compact-${runnerClass}-${index + 1}`,
-        ...(bin.timeoutMinutes ? { timeoutMinutes: bin.timeoutMinutes } : {}),
+        shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
+        // Whole-config groups run entire suites; keep their generous timeout.
+        ...(bin.hasWholeConfigGroup
+          ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
+          : {}),
+        // Every compact bin runs its plans serially. Overlapping two Vitest
+        // runs on one runner starves timing-sensitive tests on both runner
+        // classes (worker-startup timeouts on 4 vCPU, UI-animation and
+        // lock-timing flakes on 8 vCPU), and the packed weights are
+        // contention-inflated so serializing is roughly wall-neutral.
+        planConcurrency: 1,
       });
     }
   }

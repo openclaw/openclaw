@@ -9,11 +9,6 @@ export type CronCreatorToolAllowlistEntry =
       pluginId?: string;
     };
 
-export type NormalizedCronCreatorTool = {
-  name: string;
-  pluginId?: string;
-};
-
 export type CronToolOptions = {
   agentSessionKey?: string;
   currentDeliveryContext?: DeliveryContext;

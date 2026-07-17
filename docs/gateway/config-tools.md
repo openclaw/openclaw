@@ -774,8 +774,8 @@ Interactive custom-provider onboarding infers image input for known vision-model
       env: { SYNTHETIC_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-          models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+          model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+          models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
         },
       },
       models: {
@@ -787,12 +787,12 @@ Interactive custom-provider onboarding infers image input for known vision-model
             api: "anthropic-messages",
             models: [
               {
-                id: "hf:MiniMaxAI/MiniMax-M2.5",
-                name: "MiniMax M2.5",
+                id: "hf:MiniMaxAI/MiniMax-M3",
+                name: "MiniMax M3",
                 reasoning: true,
-                input: ["text"],
+                input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 192000,
+                contextWindow: 262144,
                 maxTokens: 65536,
               },
             ],

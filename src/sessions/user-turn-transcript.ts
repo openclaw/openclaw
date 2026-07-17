@@ -27,6 +27,10 @@ export type {
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
 
+export function buildRunUserTurnIdempotencyKey(runId: string): string {
+  return `${runId}:user`;
+}
+
 type PersistedUserTurnMediaFields = {
   MediaPath?: string;
   MediaPaths?: string[];
@@ -411,7 +415,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
 
 // Store-backed persistence resolves the current session transcript file lazily
 // so callers can pass a session entry/store without knowing the final path.
-export async function persistUserTurnTranscript(
+async function persistUserTurnTranscript(
   params: PersistUserTurnTranscriptParams,
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   const message = resolvePersistedUserTurnMessage(params);
@@ -567,6 +571,9 @@ export function createUserTurnTranscriptRecorder(
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
     cwd?: string;
+    expectedSessionId?: string;
+    expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
+    sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -598,11 +605,17 @@ export function createUserTurnTranscriptRecorder(
         await persistUserTurnTranscript({
           ...resolvedTarget,
           message: candidate,
-          ...(params.sessionLifecyclePatch
-            ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+          ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
+          ...((options.sessionLifecyclePatch ?? params.sessionLifecyclePatch)
+            ? {
+                sessionLifecyclePatch:
+                  options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
+              }
             : {}),
-          ...(params.expectedSessionState
-            ? { expectedSessionState: params.expectedSessionState }
+          ...((options.expectedSessionState ?? params.expectedSessionState)
+            ? {
+                expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
+              }
             : {}),
           updateMode: candidateUpdateMode,
           ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -688,6 +701,9 @@ export function createUserTurnTranscriptRecorder(
         target: options?.target,
         updateMode: options?.updateMode,
         cwd: options?.cwd,
+        expectedSessionId: options?.expectedSessionId,
+        expectedSessionState: options?.expectedSessionState,
+        sessionLifecyclePatch: options?.sessionLifecyclePatch,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
@@ -708,5 +724,11 @@ export function createUserTurnTranscriptRecorder(
         updateMode: options?.updateMode,
         cwd: options?.cwd,
       }),
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.userTurnTranscriptTestApi")] = {
+    persistUserTurnTranscript,
   };
 }

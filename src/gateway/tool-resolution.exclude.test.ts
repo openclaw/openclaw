@@ -150,13 +150,25 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ]);
     expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
     const args = readCreateToolsArgs(1);
-    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "sessions", "nodes", "computer"]);
+    expect(args.pluginToolDenylist).toEqual([
+      "cron",
+      "gateway",
+      "sessions",
+      "screen",
+      "terminal",
+      "nodes",
+      "computer",
+      "openclaw",
+    ]);
     expect(args.inheritedToolDenylist).toEqual([
       "cron",
       "gateway",
       "sessions",
+      "screen",
+      "terminal",
       "nodes",
       "computer",
+      "openclaw",
     ]);
   });
 

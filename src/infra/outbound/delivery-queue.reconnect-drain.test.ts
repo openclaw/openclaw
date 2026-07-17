@@ -1,6 +1,7 @@
 // Covers reconnect-triggered queue drain selection, active claims, backoff
 // bypass, and concurrent drain suppression.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
@@ -25,6 +26,9 @@ const RECOVERY_REPLAY_SPACING_MS = 250;
 const MAX_RETRIES = 5;
 const stubCfg = {} as OpenClawConfig;
 const NO_LISTENER_ERROR = "No active DirectChat listener";
+const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
+
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
@@ -140,6 +144,8 @@ describe("drainPendingDeliveries for reconnect", () => {
 
   beforeEach(() => {
     tmpDir = fixtures.tmpDir();
+    sleepMock.mockReset();
+    sleepMock.mockResolvedValue(undefined);
   });
 
   it("drains entries that failed with 'no listener' error", async () => {
@@ -308,6 +314,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
     try {
+      const controlledSleep = controlNextRecoverySleep(sleepMock);
       const log = createRecoveryLog();
       const startupLog = createRecoveryLog();
       let firstStarted!: () => void;
@@ -344,9 +351,9 @@ describe("drainPendingDeliveries for reconnect", () => {
       });
       releaseFirst();
 
-      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      await expect(controlledSleep.started).resolves.toBe(RECOVERY_REPLAY_SPACING_MS);
       expect(deliver).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
+      controlledSleep.release();
       await Promise.all([reconnectDrain, startupRecovery]);
 
       expect(deliver).toHaveBeenCalledTimes(2);

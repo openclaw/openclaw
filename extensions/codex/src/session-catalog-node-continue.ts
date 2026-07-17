@@ -188,12 +188,10 @@ function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void 
     throw new CatalogParamsError("Codex session is archived on the paired node");
   }
   if (!isInteractiveThreadSource(record.source)) {
-    throw new CatalogParamsError(
-      "Codex session is not a non-archived interactive CLI or VS Code session",
-    );
+    throw new CatalogParamsError("Codex session is not a non-archived interactive Codex session");
   }
   if (record.status === "idle" || record.status === "notLoaded") {
-    // The node App Server is a passive catalog reader, so stored CLI/VS Code
+    // The node App Server is a passive catalog reader, so stored native Codex
     // sessions normally report notLoaded. Node resume serializes OpenClaw turns.
     return;
   }

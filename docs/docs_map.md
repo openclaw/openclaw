@@ -311,6 +311,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
+  - H3: Alternative: manual token
+  - H3: Alternative: env-based token
+  - H3: JSON5 reference
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
@@ -320,6 +323,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
+
+## channels/discord-activities.md
+
+- Route: /channels/discord-activities
+- Headings:
+  - H2: Prerequisites
+  - H2: Setup
+  - H2: Security model
+  - H2: Troubleshooting
+  - H3: The Activity says “Gateway offline”
+  - H3: Discord opens a blank page or reports blocked:csp
+  - H3: “Not authorized”
+  - H3: “Widget unavailable”
+  - H3: “You cannot launch Activities in this channel”
 
 ## channels/discord.md
 
@@ -342,6 +359,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Voice messages
   - H2: Troubleshooting
   - H2: Configuration reference
+  - H3: Discord Activities
   - H2: Safety and operations
   - H2: Related
 
@@ -879,6 +897,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin-owned modal submissions
   - H2: Native approvals in Slack
   - H2: Events and operational behavior
+  - H3: Presence events
   - H2: Configuration reference
   - H2: Troubleshooting
   - H2: Attachment media reference
@@ -1547,6 +1566,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Run the Gateway
   - H3: Options
   - H2: Restart the Gateway
+  - H3: External supervisors
   - H3: Gateway profiling
   - H2: Query a running Gateway
   - H3: gateway health
@@ -2804,7 +2824,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Discord Mantis scenarios
   - H3: Mantis Slack desktop and visual-task runners
   - H3: Credential pool health check
-  - H2: Live transport coverage
+  - H2: Canonical scenario coverage
   - H2: Discord, Slack, Telegram, and WhatsApp QA reference
   - H3: Shared CLI flags
   - H3: Telegram QA
@@ -2820,23 +2840,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Scenario helper names
   - H2: Reporting
   - H2: Related docs
-
-## concepts/qa-matrix.md
-
-- Route: /concepts/qa-matrix
-- Headings:
-  - H2: Quick start
-  - H2: What the lane does
-  - H2: CLI
-  - H3: Common flags
-  - H3: Provider flags
-  - H2: Profiles
-  - H2: Scenarios
-  - H2: Environment variables
-  - H2: Output artifacts
-  - H2: Triage tips
-  - H2: Live transport contract
-  - H2: Related
 
 ## concepts/queue-steering.md
 
@@ -4113,6 +4116,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Env var substitution in config
   - H2: Secret refs vs ${ENV} strings
   - H2: Path-related env vars
+  - H2: Agent helper tool downloads
   - H2: Logging
   - H3: OPENCLAWHOME
   - H2: nvm users: webfetch TLS failures
@@ -4727,8 +4731,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Restart the gateway
   - H3: Verify
   - H2: Rollback
-  - H3: Pin a version (npm)
-  - H3: Pin a commit (source)
+  - H3: Before updating: create a verified backup
+  - H3: Roll back a package install
+  - H3: Roll back a source checkout
+  - H3: Downgrading across the session SQLite migration
+  - H3: Restore state only when necessary
+  - H3: Verify the rollback
   - H2: If you are stuck
   - H2: Related
 
@@ -5984,6 +5992,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Policy tiers and approvals
   - H2: Inspect status and audit history
   - H2: 1Password CLI behavior
+  - H2: Error codes
 
 ## plugins/plugin-inventory.md
 
@@ -6093,6 +6102,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/azure-speech
 - Headings:
   - H1: Azure Speech plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/baseten.md
+
+- Route: /plugins/reference/baseten
+- Headings:
+  - H1: Baseten plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -6892,14 +6910,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
-## plugins/reference/qa-matrix.md
-
-- Route: /plugins/reference/qa-matrix
-- Headings:
-  - H1: QA Matrix plugin
-  - H2: Distribution
-  - H2: Surface
-
 ## plugins/reference/qianfan.md
 
 - Route: /plugins/reference/qianfan
@@ -7285,6 +7295,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Runtime strictness
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
+  - H3: Terminal tool outcomes
   - H2: Current limitations
   - H2: Related
 
@@ -7395,6 +7406,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Capability registration
   - H3: Tools and commands
   - H3: Infrastructure
+  - H4: Post-ack webhook work
   - H4: Requester-scoped MCP connections
   - H3: Host hooks for workflow plugins
   - H3: Gateway discovery registration
@@ -7651,7 +7663,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install plugin
   - H2: Getting started
   - H2: Non-interactive setup
-  - H2: Built-in catalog
+  - H2: Direct Arcee catalog
+  - H2: OpenRouter catalog
   - H2: Supported features
   - H2: Related
 
@@ -7662,6 +7675,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Getting started
   - H2: Configuration options
   - H2: Notes
+  - H2: Related
+
+## providers/baseten.md
+
+- Route: /providers/baseten
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Inkling
+  - H2: Bundled fallback catalog
+  - H2: Manual config
   - H2: Related
 
 ## providers/bedrock-mantle.md
@@ -8219,18 +8243,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Config example
   - H2: Related
 
-## providers/qwen-oauth.md
-
-- Route: /providers/qwen-oauth
-- Headings:
-  - H2: Setup
-  - H2: Defaults
-  - H2: How this differs from Qwen
-  - H2: Models
-  - H2: Migration
-  - H2: Troubleshooting
-  - H2: Related
-
 ## providers/qwen.md
 
 - Route: /providers/qwen
@@ -8320,7 +8332,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Privacy modes
   - H2: Getting started
   - H2: Model selection
-  - H2: Built-in catalog (38 models)
+  - H2: Built-in catalog (30 models)
   - H2: Model discovery
   - H2: DeepSeek V4 replay behavior
   - H2: Streaming and tool support
@@ -9855,6 +9867,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: JSON-only LLM steps (llm-task)
   - H3: Important limitation: embedded Lobster vs openclaw.invoke
   - H2: Workflow files (.lobster)
+  - H3: Injected environment variables
   - H2: Tool parameters
   - H3: run
   - H3: resume
@@ -10059,7 +10072,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/show-widget
 - Headings:
+  - H2: How widgets work
   - H2: Use the tool
+  - H2: Interactive widgets
   - H2: Security and storage
   - H2: Related
 

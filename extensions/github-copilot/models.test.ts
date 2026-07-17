@@ -2,10 +2,11 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CachedCopilotToken } from "./token.js";
-import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
+import type { CachedCopilotToken } from "./token-cache.js";
+import { resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
@@ -762,8 +763,17 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
-  it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(401, {}));
+  it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 401 },
+    );
+    const fetchImpl = vi.fn().mockResolvedValue(response);
 
     await expect(
       fetchCopilotModelCatalog({
@@ -772,6 +782,8 @@ describe("fetchCopilotModelCatalog", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toThrow(/HTTP 401/);
+
+    expect(canceled).toBe(true);
   });
 
   it("throws provider-owned errors for malformed successful /models payloads", async () => {

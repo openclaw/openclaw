@@ -24,9 +24,9 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as embeddedRuns from "./embedded-agent-runner/runs.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
-import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 
 type AgentCallRequest = {
   method?: string;
