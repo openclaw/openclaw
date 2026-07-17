@@ -3,7 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
   promptApiKeyEndpointAndModel,
@@ -37,6 +37,7 @@ const {
 
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -48,6 +49,7 @@ vi.mock("node:child_process", async () => {
   return {
     ...actual,
     execFileSync: execFileSyncMock,
+    spawn: spawnMock,
   };
 });
 
@@ -2044,31 +2046,40 @@ describe("isAnthropicFoundryDeployment", () => {
   );
 });
 describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
-  it("setEncoding prevents multi-byte character corruption across chunk boundaries", async () => {
+  it("reassembles split-byte UTF-8 across spawned process stderr chunks", async () => {
     const { PassThrough } = await import("node:stream");
+    const { EventEmitter } = await import("node:events");
 
-    // Simulate the fix: setEncoding("utf8") on a stream that receives
-    // a multi-byte UTF-8 smiley (U+1F60A, 0xF0 0x9F 0x98 0x8A) split
-    // at exactly the wrong byte boundary.
-    const stream = new PassThrough();
-    stream.setEncoding("utf8");
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
 
-    const chunks: string[] = [];
-    stream.on("data", (chunk: string) => {
-      chunks.push(chunk);
+    // Build a fake ChildProcess that mirrors spawn()'s return shape
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      pid: 99999,
     });
 
-    // Send the emoji split across two writes
-    stream.write(Buffer.from([0xf0, 0x9f]));
-    stream.write(Buffer.from([0x98, 0x8a]));
-    stream.end();
+    spawnMock.mockReturnValue(child as any);
 
-    const result = chunks.join("");
-    // Without setEncoding, each `.toString("utf8")` would produce U+FFFD
-    // on its partial sequence (0xF0 0x9F → incomplete → U+FFFD).
-    // With setEncoding, the decoder reassembles the full code point.
-    expect(result).toBe("\u{1F60A}");
-    expect(result).not.toContain("�");
+    const loginPromise = azLoginDeviceCodeWithOptions({});
+
+    // Write a 4-byte UTF-8 smiley (U+1F60A = 0xF0 0x9F 0x98 0x8A)
+    // split across two stderr writes at the exact byte boundary where
+    // raw Buffer.toString() would produce U+FFFD per chunk.
+    // With setEncoding("utf8") the stream decoder reassembles the full
+    // code point before emitting the data event.
+    stderr.write(Buffer.from([0xf0, 0x9f]));
+    stderr.write(Buffer.from([0x98, 0x8a]));
+    stderr.end();
+    stdout.end();
+
+    child.emit("close", 1);
+
+    const err = await loginPromise.catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    // The error message contains the cleanly reassembled smiley, not U+FFFD
+    expect((err as Error).message).toBe("az login exited with code 1: 😊");
   });
 });
 
