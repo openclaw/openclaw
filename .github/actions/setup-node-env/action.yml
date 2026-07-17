@@ -133,11 +133,16 @@ runs:
         key: ${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}
         path: /var/tmp/openclaw-node-deps
         # Single semantic writer: only the designated trusted-push job may
-        # commit, so pull_request clones stay read-only and cannot poison the
-        # protected snapshot. on-change keeps warm no-op runs from committing
-        # while dependency refreshes still persist. v1.4.0 skips commit after
-        # failed/cancelled steps, so a broken install cannot seed this key.
-        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}
+        # commit, so pull_request clones stay read-only. Like every sticky
+        # disk here, this gate binds cooperating code, not hostile code: the
+        # enforced trust boundary is the fork/dispatch runner gate in ci.yml,
+        # and same-repo PR authors already hold repository write access.
+        # Explicit true (not on-change) because the allocated-byte heuristic
+        # can miss a fingerprint refresh whose reinstall keeps disk usage
+        # stable, permanently stranding consumers on a stale marker. v1.4.0
+        # skips commit after failed/cancelled steps, so a broken install
+        # cannot seed this key.
+        commit: ${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}
 
     - name: Mount protected Vitest transform seed
       if: inputs.vitest-fs-cache == 'true' && (inputs.sticky-disk == 'true' || inputs.runtime-cache-sticky-disk == 'true') && github.event_name == 'pull_request' && runner.os != 'Windows'

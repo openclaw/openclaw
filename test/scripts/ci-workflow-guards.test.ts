@@ -1994,7 +1994,7 @@ describe("ci workflow guards", () => {
       "${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
-      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'on-change' || 'false' }}",
+      "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
     );
     expect(cleanupStep).toMatchObject({
       if: "inputs.sticky-disk == 'true'",
