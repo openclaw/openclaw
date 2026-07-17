@@ -34,8 +34,8 @@ vi.mock("../compaction.js", async () => {
 
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 
-function summaryResult(text: string): compactionModule.CompactionSummaryResult {
-  return { kind: "summary", text };
+function summaryResult(text: string) {
+  return { kind: "summary" as const, text };
 }
 
 const {

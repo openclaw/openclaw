@@ -40,7 +40,7 @@ const log = createSubsystemLogger("compaction");
 
 type PartialSummaryError = Error & { partialSummary?: string };
 
-export type CompactionSummaryResult =
+type CompactionSummaryResult =
   | { kind: "summary"; text: string }
   | { kind: "generic-fallback"; text: string };
 
