@@ -58,6 +58,14 @@ export async function resolveSidePanelTabId(chromeApi, port, panelBindings) {
 }
 
 export async function archiveCopilotSession(gateway, entry) {
+  if (entry.ensureCreated) {
+    // The worker may have stopped after persisting creation intent but before
+    // sending it. sessions.create adopts the same key, making cleanup idempotent.
+    await gateway.request("sessions.create", {
+      key: entry.sessionKey,
+      label: "Browser copilot",
+    });
+  }
   try {
     await gateway.request("sessions.messages.unsubscribe", { key: entry.sessionKey });
   } catch {
@@ -69,6 +77,16 @@ export async function archiveCopilotSession(gateway, entry) {
     // Archive is authoritative; it will reject while a run is still active and retry later.
   }
   await gateway.request("sessions.patch", { key: entry.sessionKey, archived: true });
+}
+
+export function selectCopilotPanelState({ paired, shared, abortPending, gatewayState }) {
+  if (!paired) {
+    return "needs-pairing";
+  }
+  if (!shared) {
+    return "needs-sharing";
+  }
+  return abortPending ? "reconciling" : gatewayState;
 }
 
 function sessionKeyFromEvent(event) {
@@ -121,8 +139,12 @@ export function createCopilotController({
   isTabShared,
   addTabToOpenClawGroup,
   attachDebugger,
+  detachDebugger,
+  revokeDebugger,
+  restoreDebugger,
   scheduleTabsSync,
   gateway = new CopilotGatewayClient(),
+  recoveryGatewayFactory = () => new CopilotGatewayClient(),
 }) {
   const registry = new CopilotSessionRegistry(chromeApi.storage);
   const panelBindings = new CopilotPanelBindingRegistry(chromeApi.storage.session);
@@ -133,26 +155,54 @@ export function createCopilotController({
   const suspendByTab = new Map();
   const tabRevisions = new Map();
   const portRevisions = new Map();
+  const consentRevisions = new Map();
+  const consentByTab = new Map();
   const historyTimers = new Map();
   let gatewayStatus = { state: "off", label: "Pair the extension first" };
   let currentConfig = null;
   let gatewayRevision = 0;
   let gatewayStatusRevision = 0;
+  let reconciledGatewayStatusRevision = 0;
   let lastReadyStatus = null;
   let abortRetryTimer = null;
   let abortRetryDelayMs = 250;
+  let custodyInitialized = null;
   let initialized = null;
+  let lifecycleChain = Promise.resolve();
+  let staleRecovery = null;
+  let staleRecoveryRetryTimer = null;
+  let pendingGatewayRevocation = Promise.resolve();
+  let configTransitioning = false;
+
+  async function initializeCustody() {
+    if (custodyInitialized) {
+      return await custodyInitialized;
+    }
+    custodyInitialized = (async () => {
+      const tabs = await chromeApi.tabs.query({});
+      await registry.initialize(
+        new Set(tabs.map((tab) => tab.id).filter((tabId) => typeof tabId === "number")),
+      );
+      await panelBindings.initialize();
+      const activeScopes = new Set(
+        registry
+          .list()
+          .filter((entry) => entry.activeRunId)
+          .map((entry) => entry.gatewayScope),
+      );
+      // MV3 can discard process memory mid-run. Rebuild the debugger deny set
+      // from durable run custody before relay attachments can resume.
+      await Promise.allSettled([...activeScopes].map((scope) => revokeActiveBindings(scope)));
+    })();
+    return await custodyInitialized;
+  }
 
   async function initialize() {
     if (initialized) {
       return await initialized;
     }
     initialized = (async () => {
-      const tabs = await chromeApi.tabs.query({});
-      await registry.initialize(
-        new Set(tabs.map((tab) => tab.id).filter((tabId) => typeof tabId === "number")),
-      );
-      await panelBindings.initialize();
+      await initializeCustody();
       await refreshConfig();
     })();
     return await initialized;
@@ -172,9 +222,9 @@ export function createCopilotController({
     }
   }
 
-  function broadcastStatus() {
+  function broadcastStatus(options) {
     for (const tabId of portsByTab.keys()) {
-      void refreshPanelState(tabId);
+      void refreshPanelState(tabId, options);
     }
   }
 
@@ -182,23 +232,97 @@ export function createCopilotController({
     return typeof currentConfig?.gatewayUrl === "string" ? currentConfig.gatewayUrl : null;
   }
 
-  async function refreshConfig() {
+  async function restoreDebuggerIfReleased(tabId) {
+    if (registry.list().some((entry) => entry.tabId === tabId && entry.activeRunId)) {
+      return;
+    }
+    await restoreDebugger(tabId);
+  }
+
+  function currentReadyEpoch() {
+    const gatewayScope = currentGatewayScope();
+    if (
+      !gatewayScope ||
+      configTransitioning ||
+      !gateway.ready ||
+      gatewayStatus.state !== "ready" ||
+      reconciledGatewayStatusRevision !== gatewayStatusRevision
+    ) {
+      return null;
+    }
+    return {
+      gatewayScope,
+      configRevision: gatewayRevision,
+      statusRevision: gatewayStatusRevision,
+    };
+  }
+
+  function readyEpochIsCurrent(epoch) {
+    return (
+      epoch?.gatewayScope === currentGatewayScope() &&
+      epoch.configRevision === gatewayRevision &&
+      epoch.statusRevision === gatewayStatusRevision &&
+      reconciledGatewayStatusRevision === epoch.statusRevision &&
+      !configTransitioning &&
+      gateway.ready &&
+      gatewayStatus.state === "ready"
+    );
+  }
+
+  async function applyConfig() {
     const nextConfig = await getConfig();
     const nextGatewayScope = gatewayUrlFromPairing(nextConfig.relayUrl, nextConfig.gatewayUrl);
     const previousGatewayScope = currentGatewayScope();
+    if (!previousGatewayScope) {
+      const staleScopes = registry
+        .gatewayScopes()
+        .filter((scope) => scope !== nextGatewayScope);
+      if (staleScopes.length > 0) {
+        for (const staleScope of staleScopes) {
+          await registry.closeInactiveScope(staleScope);
+        }
+        scheduleStaleRecovery();
+      }
+    }
     if (previousGatewayScope && previousGatewayScope !== nextGatewayScope) {
+      configTransitioning = true;
       clearAbortRetry();
       lastReadyStatus = null;
       gatewayStatusRevision += 1;
+      reconciledGatewayStatusRevision = 0;
       gatewayRevision += 1;
-      await registry.closeScope(previousGatewayScope);
-      await drainArchives(previousGatewayScope);
-      gateway.stop();
-      await Promise.allSettled([...ensureByTab.values()]);
-      sendsByTab.clear();
-      subscribedKeys.clear();
+      gatewayStatus = { state: "connecting", label: "Changing Gateway" };
+      broadcastStatus();
+      let needsStaleRecovery = false;
+      try {
+        await revokeActiveBindings(previousGatewayScope);
+        await Promise.allSettled([...ensureByTab.values()].map((entry) => entry.promise));
+        await drainAborts(previousGatewayScope);
+        const hasPendingAborts = registry.pendingAborts(previousGatewayScope).length > 0;
+        if (hasPendingAborts) {
+          await registry.closeInactiveScope(previousGatewayScope);
+        } else {
+          await registry.closeScope(previousGatewayScope);
+        }
+        await drainArchives(previousGatewayScope);
+        needsStaleRecovery =
+          hasPendingAborts || registry.pendingArchives(previousGatewayScope).length > 0;
+      } catch {
+        // The next Gateway may start, but old-scope custody remains denied and
+        // the recovery client owns cleanup. Never strand the controller mid-switch.
+        needsStaleRecovery = true;
+      } finally {
+        gateway.stop();
+        sendsByTab.clear();
+        subscribedKeys.clear();
+        configTransitioning = false;
+      }
+      if (needsStaleRecovery) {
+        scheduleStaleRecovery();
+      }
     }
     currentConfig = { ...nextConfig, gatewayUrl: nextGatewayScope };
+    configTransitioning = false;
     if (!currentConfig.relayUrl || !nextGatewayScope) {
       gateway.stop();
       gatewayStatus = {
@@ -226,24 +350,37 @@ export function createCopilotController({
     gateway.start(nextGatewayScope);
   }
 
-  async function refreshPanelState(tabId) {
+  function runLifecycle(task) {
+    const pending = lifecycleChain.then(task);
+    lifecycleChain = pending.catch(() => undefined);
+    return pending;
+  }
+
+  function refreshConfig() {
+    // Config changes and stale-scope recovery share one owner. Otherwise a
+    // scope can become current while a recovery client is still destroying it.
+    return runLifecycle(applyConfig);
+  }
+
+  async function refreshPanelState(
+    tabId,
+    { shared: knownShared, ensureSetup = false, hydrateHistory = false, suspended = false } = {},
+  ) {
     let tab;
     try {
       tab = await chromeApi.tabs.get(tabId);
     } catch {
       return;
     }
-    const shared = await isTabShared(tabId);
+    const shared = typeof knownShared === "boolean" ? knownShared : await isTabShared(tabId);
     const entry = registry.get(tabId, currentGatewayScope());
-    const reconcilingRun = Boolean(entry?.activeRunId);
-    const state = !currentConfig?.relayUrl
-      ? "needs-pairing"
-      : !shared
-        ? "needs-sharing"
-        : reconcilingRun
-          ? "reconciling"
-          : gatewayStatus.state;
-    broadcastTab(tabId, {
+    const state = selectCopilotPanelState({
+      paired: Boolean(currentConfig?.relayUrl),
+      shared,
+      abortPending: Boolean(entry?.abortPending),
+      gatewayState: gatewayStatus.state,
+    });
+    const panelState = {
       type: "panel.state",
       state,
       label:
@@ -259,11 +396,40 @@ export function createCopilotController({
         label: safeTabLabel(tab),
       },
       sessionKey: entry?.sessionKey,
+    };
+    if (!shared) {
+      broadcastTab(tabId, panelState);
+      if (!suspended) {
+        await suspendTab(tabId, { detachInactive: true });
+      }
+      return;
+    }
+    if (state !== "ready") {
+      broadcastTab(tabId, panelState);
+      return;
+    }
+    const needsSetup =
+      ensureSetup || !entry || !subscribedKeys.has(entry.sessionKey) || !entry.binding;
+    if (!needsSetup) {
+      broadcastTab(tabId, panelState);
+      return;
+    }
+    broadcastTab(tabId, {
+      ...panelState,
+      state: "connecting",
+      label: "Preparing this tab",
     });
-    if (shared && gatewayStatus.state === "ready") {
-      await ensureSession(tabId);
-    } else if (!shared) {
-      await suspendTab(tabId);
+    try {
+      const prepared = await ensureSession(tabId, { hydrateHistory });
+      if (prepared) {
+        await refreshPanelState(tabId, { shared: await isTabShared(tabId) });
+      }
+    } catch (error) {
+      broadcastTab(tabId, {
+        ...panelState,
+        state: "error",
+        label: error?.message || "Could not prepare this tab",
+      });
     }
   }
 
@@ -287,25 +453,32 @@ export function createCopilotController({
     }
   }
 
-  async function suspendTab(tabId, expectedPortRevision) {
+  async function suspendTab(
+    tabId,
+    { expectedPortRevision, detachInactive = false } = {},
+  ) {
     if (expectedPortRevision !== undefined && portRevisions.get(tabId) !== expectedPortRevision) {
       return;
     }
     const gatewayScope = currentGatewayScope();
     const entry = registry.get(tabId, gatewayScope);
+    // Revoke local delivery and CDP access before any fallible Gateway RPC.
+    const unsubscribing = unsubscribeTab(tabId, gatewayScope);
+    const detaching = entry?.activeRunId
+      ? revokeDebugger(tabId)
+      : detachInactive
+        ? revokeDebugger(tabId).then(() => restoreDebuggerIfReleased(tabId))
+        : Promise.resolve();
     const queued = await registry.queueAbort(tabId, gatewayScope);
     sendsByTab.delete(tabId);
+    await Promise.allSettled([unsubscribing, detaching]);
     if (queued && gateway.ready) {
       await abortEntry(queued);
     }
-    if (expectedPortRevision !== undefined && portRevisions.get(tabId) !== expectedPortRevision) {
-      return;
-    }
-    await unsubscribeTab(tabId, gatewayScope);
   }
 
   function scheduleSuspend(tabId, portRevision) {
-    const pending = suspendTab(tabId, portRevision).finally(() => {
+    const pending = suspendTab(tabId, { expectedPortRevision: portRevision }).finally(() => {
       if (suspendByTab.get(tabId) === pending) {
         suspendByTab.delete(tabId);
       }
@@ -349,6 +522,7 @@ export function createCopilotController({
   function sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope) {
     return (
       (tabRevisions.get(tabId) ?? 0) === tabRevision &&
+      !configTransitioning &&
       gatewayRevision === configRevision &&
       currentGatewayScope() === gatewayScope
     );
@@ -374,7 +548,13 @@ export function createCopilotController({
   }
 
   async function suspendUnauthorizedSetup(tabId) {
-    await suspendTab(tabId);
+    let shared = false;
+    try {
+      shared = await isTabShared(tabId);
+    } catch {
+      // Missing or unreadable tab state is not authorized to retain CDP access.
+    }
+    await suspendTab(tabId, { detachInactive: !shared });
     if (portsByTab.has(tabId)) {
       void refreshPanelState(tabId);
     }
@@ -389,6 +569,15 @@ export function createCopilotController({
   ) {
     if (!gateway.ready || !(await isTabShared(tabId))) {
       return null;
+    }
+    const staleActiveSession = registry
+      .list()
+      .find(
+        (entry) =>
+          entry.tabId === tabId && entry.gatewayScope !== gatewayScope && entry.activeRunId,
+      );
+    if (staleActiveSession) {
+      throw new Error("This tab is still stopping a run from its previous Gateway.");
     }
     const { targetId } = await attachDebugger(tabId);
     if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
@@ -415,17 +604,43 @@ export function createCopilotController({
       if (!sessionKey) {
         throw new Error("Gateway did not provide a main session key.");
       }
-      const created = await gateway.request("sessions.create", {
-        key: sessionKey,
-        label: "Browser copilot",
-      });
       entry = await registry.put(tabId, {
         gatewayScope,
         sessionKey,
-        sessionId: created?.sessionId,
         binding,
         createdAt: Date.now(),
+        provisional: true,
+        creationPending: false,
       });
+    }
+    if (entry?.provisional) {
+      if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
+        await registry.closeTab(tabId);
+        await drainArchives(gatewayScope);
+        return null;
+      }
+      // Persist the generated key before the RPC. Retrying sessions.create with
+      // that key adopts a commit whose response was lost instead of leaking it.
+      entry = await registry.markSessionCreationPending(tabId, gatewayScope);
+      if (!entry) {
+        return null;
+      }
+      let created;
+      try {
+        created = await gateway.request("sessions.create", {
+          key: entry.sessionKey,
+          label: "Browser copilot",
+        });
+      } catch (error) {
+        if (isDefinitiveGatewayRejection(error)) {
+          await registry.discardProvisionalSession(tabId, gatewayScope);
+        }
+        throw error;
+      }
+      entry = await registry.confirmSession(tabId, gatewayScope, created?.sessionId);
+      if (!entry) {
+        return null;
+      }
       try {
         await chromeApi.tabs.get(tabId);
       } catch {
@@ -467,19 +682,14 @@ export function createCopilotController({
       await suspendUnauthorizedSetup(tabId);
       return null;
     }
-    broadcastTab(tabId, {
-      type: "panel.state",
-      state: "ready",
-      label: "Bound to this tab",
-      sessionKey: entry.sessionKey,
-    });
     return entry;
   }
 
   async function ensureSession(tabId, { hydrateHistory = true } = {}) {
     const current = ensureByTab.get(tabId);
     if (current) {
-      return await current;
+      current.hydrateHistory ||= hydrateHistory;
+      return await current.promise;
     }
     const gatewayScope = currentGatewayScope();
     if (!gatewayScope) {
@@ -487,18 +697,21 @@ export function createCopilotController({
     }
     const tabRevision = tabRevisions.get(tabId) ?? 0;
     const configRevision = gatewayRevision;
-    const pending = ensureSessionInner(
-      tabId,
-      tabRevision,
-      configRevision,
-      gatewayScope,
-      hydrateHistory,
-    ).finally(() => {
-      if (ensureByTab.get(tabId) === pending) {
-        ensureByTab.delete(tabId);
-      }
-    });
-    ensureByTab.set(tabId, pending);
+    const request = { hydrateHistory, promise: null };
+    const pending = ensureSessionInner(tabId, tabRevision, configRevision, gatewayScope, false)
+      .then(async (entry) => {
+        if (entry && request.hydrateHistory) {
+          await hydrate(tabId, entry);
+        }
+        return entry;
+      })
+      .finally(() => {
+        if (ensureByTab.get(tabId) === request) {
+          ensureByTab.delete(tabId);
+        }
+      });
+    request.promise = pending;
+    ensureByTab.set(tabId, request);
     return await pending;
   }
 
@@ -513,6 +726,10 @@ export function createCopilotController({
     if (sendsByTab.has(tabId)) {
       throw new Error("Wait for the current turn to finish.");
     }
+    const readyEpoch = currentReadyEpoch();
+    if (!readyEpoch) {
+      throw new Error("Gateway is still reconciling this tab.");
+    }
     if (!(await isTabShared(tabId))) {
       throw new Error("This tab is not shared with OpenClaw.");
     }
@@ -520,37 +737,62 @@ export function createCopilotController({
     if (!entry) {
       throw new Error("This tab no longer exists.");
     }
+    if (!readyEpochIsCurrent(readyEpoch) || entry.gatewayScope !== readyEpoch.gatewayScope) {
+      throw new Error("Gateway connection changed while preparing this tab.");
+    }
     const params = buildCopilotChatSendParams({
       binding: entry.binding,
       message: text,
       sessionId: entry.sessionId,
       sessionKey: entry.sessionKey,
     });
+    if (!readyEpochIsCurrent(readyEpoch)) {
+      throw new Error("Gateway connection changed while preparing this tab.");
+    }
     const started = await registry.startRun(tabId, entry.gatewayScope, params.idempotencyKey);
     if (!started) {
       throw new Error("Wait for the current turn to finish.");
     }
-    const stillShared = await isTabShared(tabId);
-    if (!stillShared || !panelOwnsSend(tabId, port, portRevision)) {
-      await registry.finishRun(entry.gatewayScope, entry.sessionKey, params.idempotencyKey);
-      await suspendTab(tabId);
-      throw new Error(
-        stillShared
-          ? "This panel is no longer attached to the tab."
-          : "This tab is not shared with OpenClaw.",
-      );
-    }
-    sendsByTab.add(tabId);
+    let submitted = false;
     try {
+      const stillShared = await isTabShared(tabId);
+      const stillOwnsPanel = panelOwnsSend(tabId, port, portRevision);
+      const stillOwnsGateway = readyEpochIsCurrent(readyEpoch);
+      if (!stillShared || !stillOwnsPanel || !stillOwnsGateway) {
+        if (!stillShared || !stillOwnsPanel) {
+          await suspendTab(tabId, { detachInactive: !stillShared });
+        }
+        throw new Error(
+          !stillShared
+            ? "This tab is not shared with OpenClaw."
+            : !stillOwnsPanel
+              ? "This panel is no longer attached to the tab."
+              : "Gateway connection changed while preparing this tab.",
+        );
+      }
+      sendsByTab.add(tabId);
+      submitted = true;
       const result = await gateway.request("chat.send", params);
       return result;
     } catch (error) {
       sendsByTab.delete(tabId);
-      if (isDefinitiveGatewayRejection(error)) {
-        await registry.finishRun(entry.gatewayScope, entry.sessionKey, params.idempotencyKey);
+      if (!submitted || isDefinitiveGatewayRejection(error)) {
+        const finished = await registry.finishRun(
+          entry.gatewayScope,
+          entry.sessionKey,
+          params.idempotencyKey,
+        );
+        if (finished) {
+          await restoreDebuggerIfReleased(tabId);
+        }
       } else {
-        await registry.queueAbort(tabId, entry.gatewayScope);
-        scheduleAbortRetry();
+        await revokeDebugger(tabId);
+        const queued = await registry.queueAbort(tabId, entry.gatewayScope);
+        if (queued) {
+          scheduleAbortRetry();
+        } else {
+          await restoreDebuggerIfReleased(tabId);
+        }
       }
       await refreshPanelState(tabId);
       throw error;
@@ -572,6 +814,9 @@ export function createCopilotController({
         await archiveCopilotSession(gateway, entry);
         subscribedKeys.delete(entry.sessionKey);
         await registry.resolveArchive(gatewayScope, entry.sessionKey);
+        if (typeof entry.tabId === "number") {
+          await restoreDebuggerIfReleased(entry.tabId);
+        }
       } catch {
         // The watchdog retries after reconnect or after an active run reaches terminal state.
       }
@@ -585,7 +830,7 @@ export function createCopilotController({
         runId: entry.activeRunId,
       });
     } catch {
-      scheduleAbortRetry();
+      scheduleAbortRetry(entry.gatewayScope);
       return false;
     }
     sendsByTab.delete(entry.tabId);
@@ -595,6 +840,7 @@ export function createCopilotController({
       entry.activeRunId,
     );
     if (finished) {
+      await restoreDebuggerIfReleased(entry.tabId);
       broadcastTab(entry.tabId, { type: "panel.turn-reset" });
       void refreshPanelState(entry.tabId);
     }
@@ -608,14 +854,6 @@ export function createCopilotController({
     for (const entry of registry.pendingAborts(gatewayScope)) {
       await abortEntry(entry);
     }
-    if (
-      registry.pendingAborts(gatewayScope).length === 0 &&
-      gatewayStatus.state === "error" &&
-      lastReadyStatus
-    ) {
-      gatewayStatus = lastReadyStatus;
-      broadcastStatus();
-    }
   }
 
   function clearAbortRetry() {
@@ -626,29 +864,60 @@ export function createCopilotController({
     abortRetryDelayMs = 250;
   }
 
-  function scheduleAbortRetry() {
-    const gatewayScope = currentGatewayScope();
-    if (abortRetryTimer || !gateway.ready || !gatewayScope) {
+  function scheduleAbortRetry(gatewayScope = currentGatewayScope()) {
+    const statusRevision = gatewayStatusRevision;
+    if (
+      abortRetryTimer ||
+      !gateway.ready ||
+      !gatewayScope ||
+      configTransitioning ||
+      currentGatewayScope() !== gatewayScope
+    ) {
       return;
     }
     const delayMs = abortRetryDelayMs;
     abortRetryTimer = setTimeout(() => {
       abortRetryTimer = null;
       void (async () => {
+        if (
+          currentGatewayScope() !== gatewayScope ||
+          gatewayStatusRevision !== statusRevision ||
+          !gateway.ready
+        ) {
+          return;
+        }
         await drainAborts(gatewayScope);
+        if (
+          currentGatewayScope() !== gatewayScope ||
+          gatewayStatusRevision !== statusRevision ||
+          !gateway.ready
+        ) {
+          return;
+        }
         if (registry.pendingAborts(gatewayScope).length > 0) {
           abortRetryDelayMs = Math.min(abortRetryDelayMs * 2, 5_000);
           scheduleAbortRetry();
         } else {
           abortRetryDelayMs = 250;
+          if (gatewayStatus.state === "error" && lastReadyStatus) {
+            gatewayStatus = lastReadyStatus;
+            reconciledGatewayStatusRevision = statusRevision;
+            broadcastStatus({ ensureSetup: true, hydrateHistory: true });
+          }
         }
       })();
     }, delayMs);
   }
 
-  async function reconcileGatewayReady(status, statusRevision) {
-    const gatewayScope = currentGatewayScope();
-    if (!gatewayScope) {
+  async function reconcileGatewayReady(status, statusRevision, gatewayScope, revocation) {
+    await revocation;
+    if (
+      !gatewayScope ||
+      statusRevision !== gatewayStatusRevision ||
+      configTransitioning ||
+      !gateway.ready ||
+      currentGatewayScope() !== gatewayScope
+    ) {
       return;
     }
     // A connection gap loses terminal events. Abort every run whose durable
@@ -658,19 +927,150 @@ export function createCopilotController({
     await drainArchives(gatewayScope);
     if (
       statusRevision !== gatewayStatusRevision ||
+      configTransitioning ||
       !gateway.ready ||
       currentGatewayScope() !== gatewayScope
     ) {
       return;
     }
-    gatewayStatus = registry.pendingAborts(gatewayScope).length
+    const hasPendingAborts = registry.pendingAborts(gatewayScope).length > 0;
+    gatewayStatus = hasPendingAborts
       ? { state: "error", label: "Could not stop the previous tab run" }
       : status;
-    broadcastStatus();
+    reconciledGatewayStatusRevision = hasPendingAborts ? 0 : statusRevision;
+    broadcastStatus(
+      hasPendingAborts ? undefined : { ensureSetup: true, hydrateHistory: true },
+    );
+  }
+
+  async function waitForRecoveryGateway(client, gatewayScope) {
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        unsubscribe();
+        error ? reject(error) : resolve();
+      };
+      const unsubscribe = client.onStatus((status) => {
+        if (status.state === "ready") {
+          finish();
+        } else if (
+          status.state === "approval" ||
+          status.state === "denied" ||
+          status.state === "error"
+        ) {
+          finish(new Error(status.label || "Gateway recovery failed"));
+        }
+      });
+      const timer = setTimeout(() => finish(new Error("Gateway recovery timed out")), 30_000);
+      client.start(gatewayScope);
+    });
+  }
+
+  function scheduleStaleRecovery() {
+    if (staleRecoveryRetryTimer) {
+      return;
+    }
+    staleRecoveryRetryTimer = setTimeout(() => {
+      staleRecoveryRetryTimer = null;
+      void drainStaleScopes();
+    }, 5_000);
+  }
+
+  function drainStaleScopes() {
+    if (staleRecovery) {
+      return staleRecovery;
+    }
+    if (staleRecoveryRetryTimer) {
+      clearTimeout(staleRecoveryRetryTimer);
+      staleRecoveryRetryTimer = null;
+    }
+    let retry = false;
+    const pending = runLifecycle(async () => {
+      const currentScope = currentGatewayScope();
+      const staleScopes = registry.gatewayScopes().filter((scope) => scope !== currentScope);
+      for (const staleScope of staleScopes) {
+        if (await recoverPersistedScope(staleScope)) {
+          continue;
+        }
+        await registry.closeInactiveScope(staleScope);
+        retry = true;
+      }
+      if (gateway.ready && gatewayStatus.state === "ready") {
+        broadcastStatus({ ensureSetup: true, hydrateHistory: true });
+      }
+    }).catch(() => {
+      retry = true;
+    });
+    staleRecovery = pending;
+    void pending.then(() => {
+      if (staleRecovery === pending) {
+        staleRecovery = null;
+      }
+      if (retry) {
+        scheduleStaleRecovery();
+      }
+    });
+    return pending;
+  }
+
+  async function recoverPersistedScope(gatewayScope) {
+    const scopedEntries = registry
+      .list()
+      .filter((entry) => entry.gatewayScope === gatewayScope);
+    const needsGateway =
+      registry.pendingArchives(gatewayScope).length > 0 ||
+      scopedEntries.some(
+        (entry) => !entry.provisional || entry.creationPending || entry.activeRunId,
+      );
+    if (!needsGateway) {
+      await registry.closeScope(gatewayScope);
+      return true;
+    }
+    const recoveryGateway = recoveryGatewayFactory();
+    try {
+      await waitForRecoveryGateway(recoveryGateway, gatewayScope);
+      await registry.queueActiveAborts(gatewayScope);
+      for (const entry of registry.pendingAborts(gatewayScope)) {
+        await recoveryGateway.request("sessions.abort", {
+          key: entry.sessionKey,
+          runId: entry.activeRunId,
+        });
+        const finished = await registry.finishRun(
+          entry.gatewayScope,
+          entry.sessionKey,
+          entry.activeRunId,
+        );
+        if (finished) {
+          await restoreDebuggerIfReleased(entry.tabId);
+        }
+      }
+      await registry.closeScope(gatewayScope);
+      for (const entry of registry.pendingArchives(gatewayScope)) {
+        await archiveCopilotSession(recoveryGateway, entry);
+        await registry.resolveArchive(gatewayScope, entry.sessionKey);
+        if (typeof entry.tabId === "number") {
+          await restoreDebuggerIfReleased(entry.tabId);
+        }
+      }
+      return (
+        registry.pendingAborts(gatewayScope).length === 0 &&
+        registry.pendingArchives(gatewayScope).length === 0
+      );
+    } catch {
+      return false;
+    } finally {
+      recoveryGateway.stop();
+    }
   }
 
   async function onTabRemoved(tabId) {
     tabRevisions.set(tabId, (tabRevisions.get(tabId) ?? 0) + 1);
+    consentRevisions.set(tabId, (consentRevisions.get(tabId) ?? 0) + 1);
     await initialize();
     portsByTab.delete(tabId);
     portRevisions.set(tabId, (portRevisions.get(tabId) ?? 0) + 1);
@@ -681,7 +1081,7 @@ export function createCopilotController({
       historyTimers.delete(tabId);
     }
     try {
-      await ensureByTab.get(tabId);
+      await ensureByTab.get(tabId)?.promise;
     } catch {
       // Closing the tab still owns cleanup when a concurrent session setup failed.
     }
@@ -690,11 +1090,59 @@ export function createCopilotController({
     await drainArchives(currentGatewayScope());
   }
 
-  async function onConsentChanged() {
+  async function onConsentChanged(changedTabId) {
     await initialize();
-    for (const tabId of portsByTab.keys()) {
-      await refreshPanelState(tabId);
-    }
+    const tabIds =
+      typeof changedTabId === "number"
+        ? portsByTab.has(changedTabId)
+          ? [changedTabId]
+          : []
+        : [...portsByTab.keys()];
+    await Promise.all(
+      tabIds.map((tabId) => {
+        const revision = (consentRevisions.get(tabId) ?? 0) + 1;
+        consentRevisions.set(tabId, revision);
+        const previous = consentByTab.get(tabId) ?? Promise.resolve();
+        const pending = previous
+          .catch(() => undefined)
+          .then(async () => {
+            if (consentRevisions.get(tabId) !== revision) {
+              return;
+            }
+            let shared = false;
+            try {
+              shared = await isTabShared(tabId);
+            } catch {
+              // Missing tab state is treated as revoked consent.
+            }
+            if (!shared) {
+              await suspendTab(tabId, { detachInactive: true });
+            }
+            if (consentRevisions.get(tabId) !== revision) {
+              return;
+            }
+            try {
+              shared = await isTabShared(tabId);
+            } catch {
+              shared = false;
+            }
+            if (consentRevisions.get(tabId) !== revision) {
+              return;
+            }
+            if (shared) {
+              await restoreDebuggerIfReleased(tabId);
+            }
+            await refreshPanelState(tabId, { shared, suspended: !shared });
+          })
+          .finally(() => {
+            if (consentByTab.get(tabId) === pending) {
+              consentByTab.delete(tabId);
+            }
+          });
+        consentByTab.set(tabId, pending);
+        return pending;
+      }),
+    );
   }
 
   async function preparePanel(tabId) {
@@ -746,20 +1194,49 @@ export function createCopilotController({
       }
     });
     await suspendByTab.get(tabId);
-    await refreshPanelState(tabId);
+    await refreshPanelState(tabId, { ensureSetup: true, hydrateHistory: true });
+  }
+
+  async function revokeActiveBindings(gatewayScope) {
+    const activeEntries = registry
+      .list()
+      .filter((entry) => entry.gatewayScope === gatewayScope && entry.activeRunId);
+    await Promise.allSettled([
+      registry.queueActiveAborts(gatewayScope),
+      ...activeEntries.map((entry) => revokeDebugger(entry.tabId)),
+    ]);
   }
 
   gateway.onStatus((status) => {
     const statusRevision = ++gatewayStatusRevision;
+    // A new connection epoch owns its own abort retry timer.
+    clearAbortRetry();
     subscribedKeys.clear();
     if (status.state === "ready") {
+      const gatewayScope = currentGatewayScope();
       lastReadyStatus = status;
       gatewayStatus = { state: "connecting", label: "Reconciling previous tab runs" };
       broadcastStatus();
-      void reconcileGatewayReady(status, statusRevision);
+      void runLifecycle(() =>
+        reconcileGatewayReady(status, statusRevision, gatewayScope, pendingGatewayRevocation),
+      ).catch(() => {
+        if (
+          gatewayScope === currentGatewayScope() &&
+          statusRevision === gatewayStatusRevision
+        ) {
+          gatewayStatus = { state: "error", label: "Could not reconcile previous tab runs" };
+          broadcastStatus();
+        }
+      });
       return;
     }
-    clearAbortRetry();
+    reconciledGatewayStatusRevision = 0;
+    const gatewayScope = currentGatewayScope();
+    if (gatewayScope) {
+      pendingGatewayRevocation = revokeActiveBindings(gatewayScope);
+    } else {
+      pendingGatewayRevocation = Promise.resolve();
+    }
     lastReadyStatus = null;
     gatewayStatus = status;
     broadcastStatus();
@@ -772,7 +1249,7 @@ export function createCopilotController({
     }
     for (const [tabId, ports] of portsByTab) {
       const entry = registry.get(tabId, currentGatewayScope());
-      if (entry?.sessionKey !== sessionKey) {
+      if (entry?.sessionKey !== sessionKey || !subscribedKeys.has(sessionKey)) {
         continue;
       }
       for (const port of ports) {
@@ -791,7 +1268,16 @@ export function createCopilotController({
           const gatewayScope = currentGatewayScope();
           sendsByTab.delete(tabId);
           scheduleHydrate(tabId);
-          void registry.finishRun(gatewayScope, entry.sessionKey, runId);
+          if (gatewayScope) {
+            void registry.finishRun(gatewayScope, entry.sessionKey, runId).then(async (finished) => {
+              if (finished) {
+                await restoreDebuggerIfReleased(tabId);
+                void refreshPanelState(tabId);
+              }
+              void drainArchives(gatewayScope);
+            });
+            continue;
+          }
         }
         void drainArchives();
       }
@@ -805,6 +1291,7 @@ export function createCopilotController({
   });
 
   return {
+    initializeCustody,
     initialize,
     preparePanel,
     onConsentChanged,
@@ -812,6 +1299,7 @@ export function createCopilotController({
     refreshConfig,
     drainAborts,
     drainArchives,
+    drainStaleScopes,
     registry,
   };
 }

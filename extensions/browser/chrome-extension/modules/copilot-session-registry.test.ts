@@ -80,8 +80,81 @@ describe("CopilotSessionRegistry", () => {
     await registry.closeTab(8);
 
     expect(registry.get(8, GATEWAY_SCOPE)).toBeNull();
-    expect(registry.pendingArchives(GATEWAY_SCOPE)).toHaveLength(1);
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([
+      expect.objectContaining({ sessionKey: "session-8", tabId: 8 }),
+    ]);
     await registry.resolveArchive(GATEWAY_SCOPE, "session-8");
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
+  });
+
+  it("keeps a provisional session key until Gateway creation is confirmed", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([11]));
+    await registry.put(11, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-provisional",
+      provisional: true,
+    });
+
+    expect(registry.get(11, GATEWAY_SCOPE)).toMatchObject({
+      provisional: true,
+      sessionKey: "session-provisional",
+    });
+    await registry.markSessionCreationPending(11, GATEWAY_SCOPE);
+    expect(registry.get(11, GATEWAY_SCOPE)).toMatchObject({ creationPending: true });
+    await registry.confirmSession(11, GATEWAY_SCOPE, "id-provisional");
+    expect(registry.get(11, GATEWAY_SCOPE)).toMatchObject({
+      sessionId: "id-provisional",
+      sessionKey: "session-provisional",
+    });
+    expect(registry.get(11, GATEWAY_SCOPE)).not.toHaveProperty("provisional");
+    expect(registry.get(11, GATEWAY_SCOPE)).not.toHaveProperty("creationPending");
+  });
+
+  it("archives a provisional key only after its creation RPC can have reached Gateway", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([11, 12]));
+    await registry.put(11, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-not-attempted",
+      provisional: true,
+      creationPending: false,
+    });
+    await registry.closeTab(11);
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
+
+    await registry.put(12, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-attempted",
+      provisional: true,
+      creationPending: false,
+    });
+    await registry.markSessionCreationPending(12, GATEWAY_SCOPE);
+    await registry.closeTab(12);
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([
+      expect.objectContaining({
+        sessionKey: "session-attempted",
+        tabId: 12,
+        ensureCreated: true,
+      }),
+    ]);
+  });
+
+  it("drops a definitively rejected provisional session without archiving it", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([13]));
+    await registry.put(13, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-rejected",
+      provisional: true,
+      creationPending: true,
+    });
+
+    await expect(registry.discardProvisionalSession(13, GATEWAY_SCOPE)).resolves.toBe(true);
+    expect(registry.get(13, GATEWAY_SCOPE)).toBeNull();
     expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
   });
 

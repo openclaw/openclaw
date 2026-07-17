@@ -69,6 +69,7 @@ type PanelTarget = {
   click: (selector: string) => Promise<void>;
   disabled: (selector: string) => Promise<boolean>;
   fill: (selector: string, value: string) => Promise<void>;
+  hidden: (selector: string) => Promise<boolean>;
   screenshot: (targetPath: string) => Promise<void>;
   text: (selector: string) => Promise<string>;
   wakeBackground: () => Promise<void>;
@@ -428,6 +429,10 @@ function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
         input.dispatchEvent(new Event("input", { bubbles: true }));
       })()`);
     },
+    hidden: async (selector) =>
+      await evaluate<boolean>(
+        `document.querySelector(${selectorExpression(selector)})?.classList.contains("hidden") === true`,
+      ),
     screenshot: async (targetPath) => {
       await send("Page.enable");
       const result = await send("Page.captureScreenshot", { format: "png", fromSurface: true });
@@ -716,14 +721,6 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       .poll(() => gateway.connectParams.length, { timeout: 15_000 })
       .toBe(connectionsBeforeSetupRace + 1);
     await expect
-      .poll(async () => !(await betaPanel.disabled("#message-input")), {
-        timeout: 15_000,
-      })
-      .toBe(true);
-    await betaPanel.fill("#message-input", "setup race marker");
-    await expect.poll(async () => !(await betaPanel.disabled("#send-button"))).toBe(true);
-    await betaPanel.click("#send-button");
-    await expect
       .poll(
         () =>
           gateway.requests.filter((request) => request.method === "sessions.messages.subscribe")
@@ -731,6 +728,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         { timeout: 10_000 },
       )
       .toBe(subscriptionsBeforeRace + 1);
+    expect(await betaPanel.disabled("#message-input")).toBe(true);
+    expect(await betaPanel.text("#gate-title")).toBe("Preparing this tab");
     await disableTabPanel(worker, betaTabId);
     releaseSubscription();
     await new Promise((resolve) => setTimeout(resolve, 250));
@@ -758,11 +757,6 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       .poll(() => gateway.connectParams.length, { timeout: 15_000 })
       .toBe(connectionsBeforeConsentRace + 1);
     await expect
-      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
-        timeout: 15_000,
-      })
-      .toBe(true);
-    await expect
       .poll(
         () =>
           gateway.requests.filter((request) => request.method === "sessions.messages.subscribe")
@@ -770,9 +764,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         { timeout: 10_000 },
       )
       .toBe(subscriptionsBeforeConsentRace + 1);
-    await reopenedBetaPanel.fill("#message-input", "consent race marker");
-    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
-    await reopenedBetaPanel.click("#send-button");
+    expect(await reopenedBetaPanel.disabled("#message-input")).toBe(true);
     await unshareTab(worker, betaTabId);
     releaseConsentSubscription();
     await expect
@@ -823,6 +815,23 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
     const panelRunId = String(gateway.chatSends[4]?.idempotencyKey ?? "");
+    const historiesBeforeNavigation = gateway.requests.filter(
+      (request) => request.method === "chat.history",
+    ).length;
+    await betaTab.goto(`${fixture.baseUrl}/beta?during-run=1`);
+    await expect
+      .poll(
+        async () => ({
+          gateHidden: await reopenedBetaPanel.hidden("#gate"),
+          messagesHidden: await reopenedBetaPanel.hidden("#messages"),
+        }),
+        { timeout: 10_000 },
+      )
+      .toEqual({ gateHidden: true, messagesHidden: false });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(
+      gateway.requests.filter((request) => request.method === "chat.history"),
+    ).toHaveLength(historiesBeforeNavigation);
     gateway.failNextAbort();
     await disableTabPanel(worker, betaTabId);
     await expect

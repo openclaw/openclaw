@@ -32,13 +32,22 @@ export function archiveCopilotSession(
   entry: CopilotArchiveEntry,
 ): Promise<void>;
 
+export function selectCopilotPanelState(options: {
+  paired: boolean;
+  shared: boolean;
+  abortPending: boolean;
+  gatewayState: string;
+}): string;
+
 export function createCopilotController(options: Record<string, unknown>): {
+  initializeCustody(): Promise<void>;
   initialize(): Promise<void>;
   preparePanel(tabId: number): Promise<{ path: string }>;
-  onConsentChanged(): Promise<void>;
+  onConsentChanged(changedTabId?: number): Promise<void>;
   onTabRemoved(tabId: number): Promise<void>;
   refreshConfig(): Promise<void>;
   drainAborts(gatewayScope?: string | null): Promise<void>;
   drainArchives(gatewayScope?: string | null): Promise<void>;
+  drainStaleScopes(): Promise<void>;
   registry: CopilotSessionRegistry;
 };

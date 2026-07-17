@@ -147,6 +147,8 @@ Chrome does not have to run on the Gateway host. Three topologies work:
 
 - **Same host** (Gateway + Chrome on one machine): pair on that machine with
   `openclaw browser extension pair`. The relay is loopback-only.
+  If the local Gateway uses TLS, pass its certificate hostname explicitly with
+  `--gateway-url wss://gateway-host.example`; pairing never substitutes a loopback IP.
 - **Direct to a remote Gateway** (Chrome on your laptop, Gateway on a VPS, and
   **nothing else on the laptop**): on the Gateway, run
   `openclaw browser extension pair --gateway-url wss://your-gateway.example.com`.
