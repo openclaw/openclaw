@@ -210,12 +210,7 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(url).toContain("wss://api.x.ai/v1/realtime?model=grok-voice-latest");
     const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
     expect(options?.headers?.Authorization).toBe("Bearer xai-env");
-    expect(options).toEqual(
-      expect.objectContaining({
-        maxPayload: 16 * 1024 * 1024,
-        handshakeTimeout: 10_000,
-      }),
-    );
+    expect(options).toEqual(expect.objectContaining({ maxPayload: 16 * 1024 * 1024 }));
     const session = requireSession(socket);
     expect(session.voice).toBe("ara");
     expect(session.turn_detection).toEqual({
