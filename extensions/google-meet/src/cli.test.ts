@@ -5,7 +5,6 @@ import path from "node:path";
 import { Command } from "commander";
 import JSZip from "jszip";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleMeetCli, testing } from "./cli.js";
 import { resolveGoogleMeetConfig } from "./config.js";
@@ -719,30 +718,30 @@ describe("google-meet CLI", () => {
   it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
     stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
     const stdout = captureStdout();
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
 
     try {
-      await withTempDir("openclaw-google-meet-export-csv-", async (tempDir) => {
-        await setupCli({}).parseAsync(
-          [
-            "googlemeet",
-            "export",
-            "--access-token",
-            "token",
-            "--expires-at",
-            String(Date.now() + 120_000),
-            "--conference-record",
-            "rec-1",
-            "--output",
-            tempDir,
-          ],
-          { from: "user" },
-        );
-        expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
-          "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
-        );
-      });
+      await setupCli({}).parseAsync(
+        [
+          "googlemeet",
+          "export",
+          "--access-token",
+          "token",
+          "--expires-at",
+          String(Date.now() + 120_000),
+          "--conference-record",
+          "rec-1",
+          "--output",
+          tempDir,
+        ],
+        { from: "user" },
+      );
+      expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
+        "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
+      );
     } finally {
       stdout.restore();
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
