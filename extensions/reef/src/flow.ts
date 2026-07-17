@@ -409,7 +409,7 @@ export function createConfiguredGuard(
   if (!config.guard) {
     throw new Error("Reef guard is not configured");
   }
-  const apiKey = process.env[config.guard.apiKeyEnv];
+  const apiKey = process.env[config.guard.apiKeyEnv]?.trim();
   if (!apiKey) {
     throw new Error(
       `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
