@@ -61,9 +61,7 @@ async function expectRejectedRedirectToReleaseDispatcher(
           fetchWithSsrFGuard({
             url: `${origin}${scenario.path}`,
             policy: { allowedOrigins: [origin] },
-            ...(scenario.maxRedirects === undefined
-              ? {}
-              : { maxRedirects: scenario.maxRedirects }),
+            ...(scenario.maxRedirects === undefined ? {} : { maxRedirects: scenario.maxRedirects }),
           }),
         ).rejects.toThrow(scenario.expectedError),
         new Promise<never>((_resolve, reject) => {
