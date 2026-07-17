@@ -148,9 +148,14 @@ function setupDeps(params: {
     runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
     runAppRecommendations: params.runAppRecommendations ?? vi.fn(async ({ config }) => config),
     runBrowserHandoff:
-      params.runBrowserHandoff ?? vi.fn(async () => ({ handedOff: false, reason: "timeout" })),
+      params.runBrowserHandoff ??
+      (vi.fn(async () => ({
+        handedOff: false as const,
+        reason: "timeout" as const,
+      })) as GuidedOnboardingDeps["runBrowserHandoff"]),
     probeBrowserHandoffGateway:
-      params.probeBrowserHandoffGateway ?? vi.fn(async () => ({ ok: false })),
+      params.probeBrowserHandoffGateway ??
+      (vi.fn(async () => ({ ok: false })) as GuidedOnboardingDeps["probeBrowserHandoffGateway"]),
     runSystemAgentChat,
     platform: params.platform ?? "linux",
     ...(params.handoffMode ? { handoffMode: params.handoffMode } : {}),
