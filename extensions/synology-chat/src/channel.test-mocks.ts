@@ -152,7 +152,7 @@ vi.mock("./runtime.js", () => ({
             kind: "message",
             canStartAgentTurn: true,
           });
-          const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
+          const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: mockRuntimeConfig,
             dispatcherOptions: {
@@ -166,7 +166,7 @@ vi.mock("./runtime.js", () => ({
             dispatched: true,
             dispatchResult,
             ctxPayload: resolved.ctxPayload,
-            routeSessionKey: resolved.routeSessionKey,
+            routeSessionKey: resolved.route.sessionKey,
           };
         }),
         buildContext: buildChannelInboundEventContextMock,
