@@ -119,42 +119,106 @@ export class CopilotSessionRegistry {
     return this.instanceId;
   }
 
-  get(tabId) {
-    return this.state.sessions[String(tabId)] ?? null;
+  get(tabId, gatewayScope) {
+    const entry = this.state.sessions[String(tabId)] ?? null;
+    return entry?.gatewayScope === gatewayScope ? entry : null;
   }
 
   list() {
     return Object.values(this.state.sessions);
   }
 
-  pendingArchives() {
-    return [...this.state.pendingArchives];
+  pendingArchives(gatewayScope) {
+    return this.state.pendingArchives.filter((entry) => entry.gatewayScope === gatewayScope);
   }
 
   async put(tabId, entry) {
     await this.#mutate(() => {
+      const current = this.state.sessions[String(tabId)];
+      if (current && current.gatewayScope !== entry.gatewayScope) {
+        this.#queueArchive(current);
+      }
       this.state.sessions[String(tabId)] = {
         ...entry,
         tabId,
         browserInstanceId: this.instanceId,
       };
     });
-    return this.get(tabId);
+    return this.get(tabId, entry.gatewayScope);
   }
 
-  async updateBinding(tabId, binding) {
+  async updateBinding(tabId, gatewayScope, binding) {
     await this.#mutate(() => {
-      const current = this.get(tabId);
+      const current = this.get(tabId, gatewayScope);
       if (current) {
         current.binding = { ...binding };
       }
     });
   }
 
+  async startRun(tabId, gatewayScope, runId) {
+    let started = null;
+    await this.#mutate(() => {
+      const current = this.get(tabId, gatewayScope);
+      if (!current || current.activeRunId) {
+        return;
+      }
+      current.activeRunId = runId;
+      current.abortPending = false;
+      started = current;
+    });
+    return started;
+  }
+
+  async queueAbort(tabId, gatewayScope) {
+    let queued = null;
+    await this.#mutate(() => {
+      const current = this.get(tabId, gatewayScope);
+      if (!current?.activeRunId) {
+        return;
+      }
+      current.abortPending = true;
+      queued = current;
+    });
+    return queued;
+  }
+
+  async queueActiveAborts(gatewayScope) {
+    await this.#mutate(() => {
+      for (const entry of Object.values(this.state.sessions)) {
+        if (entry?.gatewayScope === gatewayScope && entry.activeRunId) {
+          entry.abortPending = true;
+        }
+      }
+    });
+  }
+
+  pendingAborts(gatewayScope) {
+    return this.list().filter(
+      (entry) => entry.gatewayScope === gatewayScope && entry.activeRunId && entry.abortPending,
+    );
+  }
+
+  async finishRun(gatewayScope, sessionKey, runId) {
+    let finished = false;
+    await this.#mutate(() => {
+      const current = this.list().find(
+        (entry) => entry.gatewayScope === gatewayScope && entry.sessionKey === sessionKey,
+      );
+      if (!current || current.activeRunId !== runId) {
+        return;
+      }
+      delete current.activeRunId;
+      delete current.abortPending;
+      finished = true;
+    });
+    return finished;
+  }
+
   async closeTab(tabId) {
     let closed = null;
     await this.#mutate(() => {
-      closed = this.get(tabId);
+      closed = this.state.sessions[String(tabId)] ?? null;
       if (closed) {
         this.#queueArchive(closed);
         delete this.state.sessions[String(tabId)];
@@ -163,23 +227,37 @@ export class CopilotSessionRegistry {
     return closed;
   }
 
-  async resolveArchive(sessionKey) {
+  async closeScope(gatewayScope) {
+    await this.#mutate(() => {
+      for (const [rawTabId, entry] of Object.entries(this.state.sessions)) {
+        if (entry?.gatewayScope !== gatewayScope) {
+          continue;
+        }
+        this.#queueArchive(entry);
+        delete this.state.sessions[rawTabId];
+      }
+    });
+  }
+
+  async resolveArchive(gatewayScope, sessionKey) {
     await this.#mutate(() => {
       this.state.pendingArchives = this.state.pendingArchives.filter(
-        (entry) => entry.sessionKey !== sessionKey,
+        (entry) => entry.gatewayScope !== gatewayScope || entry.sessionKey !== sessionKey,
       );
     });
   }
 
   #queueArchive(entry) {
-    if (!entry?.sessionKey) {
+    if (!entry?.sessionKey || !entry?.gatewayScope) {
       return;
     }
     const existing = this.state.pendingArchives.some(
-      (candidate) => candidate.sessionKey === entry.sessionKey,
+      (candidate) =>
+        candidate.gatewayScope === entry.gatewayScope && candidate.sessionKey === entry.sessionKey,
     );
     if (!existing) {
       this.state.pendingArchives.push({
+        gatewayScope: entry.gatewayScope,
         sessionKey: entry.sessionKey,
         sessionId: entry.sessionId,
         queuedAt: Date.now(),

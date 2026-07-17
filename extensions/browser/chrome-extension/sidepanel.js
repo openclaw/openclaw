@@ -24,6 +24,9 @@ let streamingBubble = null;
 let panelReady = false;
 let sending = false;
 let panelState = "connecting";
+let port = null;
+let reconnectTimer = null;
+let reconnectDelayMs = 250;
 
 function setComposerEnabled(enabled) {
   panelReady = enabled;
@@ -156,26 +159,71 @@ function updateState(state) {
   }
 }
 
-const port = chrome.runtime.connect({ name: "openclaw-copilot-panel" });
-port.onMessage.addListener((message) => {
+function handlePortMessage(message) {
+  reconnectDelayMs = 250;
   if (message?.type === "panel.state") {
     updateState(message);
   } else if (message?.type === "panel.history") {
-    renderHistory(message.messages);
+    if (!sending) {
+      renderHistory(message.messages);
+    }
   } else if (message?.type === "panel.event" && message.event?.event === "chat") {
     handleChatEvent(message.event.payload ?? {});
+  } else if (message?.type === "panel.turn-reset") {
+    if (sending) {
+      addBubble("system", "Previous run stopped after the Gateway reconnected.");
+    }
+    finalizeStream();
   } else if (message?.type === "panel.error") {
     addBubble("system", message.message || "Request failed.");
     sending = false;
     setComposerEnabled(panelReady);
   }
-});
-port.onDisconnect.addListener(() => {
-  finalizeStream();
-  if (panelState !== "denied") {
-    updateState({ state: "error", label: "Extension background disconnected." });
+}
+
+function schedulePortReconnect() {
+  if (reconnectTimer || panelState === "denied") {
+    return;
   }
-});
+  const delayMs = reconnectDelayMs;
+  reconnectDelayMs = Math.min(reconnectDelayMs * 2, 5_000);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    updateState({ state: "connecting", label: "Reconnecting to the extension background" });
+    connectPanelPort();
+  }, delayMs);
+}
+
+function connectPanelPort() {
+  if (port) {
+    return;
+  }
+  let nextPort;
+  try {
+    nextPort = chrome.runtime.connect({ name: "openclaw-copilot-panel" });
+  } catch {
+    schedulePortReconnect();
+    return;
+  }
+  port = nextPort;
+  nextPort.onMessage.addListener((message) => {
+    if (port === nextPort) {
+      handlePortMessage(message);
+    }
+  });
+  nextPort.onDisconnect.addListener(() => {
+    if (port !== nextPort) {
+      return;
+    }
+    port = null;
+    finalizeStream();
+    if (panelState !== "denied") {
+      updateState({ state: "error", label: "Extension background disconnected." });
+      schedulePortReconnect();
+    }
+  });
+  nextPort.postMessage({ type: "panel.refresh" });
+}
 
 async function send() {
   const message = input.value.trim();
@@ -187,7 +235,7 @@ async function send() {
   input.style.height = "auto";
   sending = true;
   setComposerEnabled(true);
-  port.postMessage({ type: "panel.send", message });
+  port?.postMessage({ type: "panel.send", message });
 }
 
 input.addEventListener("input", () => {
@@ -202,5 +250,5 @@ input.addEventListener("keydown", (event) => {
   }
 });
 sendButton.addEventListener("click", () => void send());
-gateAction.addEventListener("click", () => port.postMessage({ type: "panel.share" }));
-port.postMessage({ type: "panel.refresh" });
+gateAction.addEventListener("click", () => port?.postMessage({ type: "panel.share" }));
+connectPanelPort();

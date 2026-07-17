@@ -30,7 +30,13 @@ declare const chrome: {
       }>
     >;
   };
-  tabs: { getCurrent(): Promise<{ id?: number }> };
+  sidePanel: {
+    setOptions(options: { tabId: number; enabled: boolean }): Promise<void>;
+  };
+  tabs: {
+    getCurrent(): Promise<{ id?: number }>;
+    ungroup(tabIds: number[]): Promise<void>;
+  };
 };
 
 const runE2E = process.env.OPENCLAW_BROWSER_COPILOT_E2E === "1";
@@ -51,6 +57,9 @@ type GatewayHarness = {
   port: number;
   requests: RequestFrame[];
   close: () => Promise<void>;
+  disconnectClients: () => void;
+  failNextAbort: () => void;
+  holdNextSubscription: () => () => void;
 };
 
 type TargetInfo = { targetId: string; type: string; url: string };
@@ -62,6 +71,7 @@ type PanelTarget = {
   fill: (selector: string, value: string) => Promise<void>;
   screenshot: (targetPath: string) => Promise<void>;
   text: (selector: string) => Promise<string>;
+  wakeBackground: () => Promise<void>;
 };
 
 function isSidePanelTarget(target: TargetInfo): boolean {
@@ -96,6 +106,17 @@ function sendResponse(socket: WebSocket, id: string, payload: unknown): void {
   socket.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
+function sendError(socket: WebSocket, id: string, message: string): void {
+  socket.send(
+    JSON.stringify({
+      type: "res",
+      id,
+      ok: false,
+      error: { code: "UNAVAILABLE", message, retryable: true },
+    }),
+  );
+}
+
 async function createGatewayHarness(): Promise<GatewayHarness> {
   const server = createServer();
   const port = await listen(server);
@@ -105,7 +126,8 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
   const requests: RequestFrame[] = [];
   const connectParams: Array<Record<string, unknown>> = [];
   const chatSends: Array<Record<string, unknown>> = [];
-  let runIndex = 0;
+  let heldSubscription: Promise<void> | null = null;
+  let rejectNextAbort = false;
 
   wss.on("connection", (socket) => {
     socket.send(
@@ -156,15 +178,31 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
         sendResponse(socket, frame.id, { messages: histories.get(key) ?? [] });
         return;
       }
+      if (frame.method === "sessions.messages.subscribe" && heldSubscription) {
+        const pending = heldSubscription;
+        heldSubscription = null;
+        void pending.then(() => sendResponse(socket, frame.id, { ok: true }));
+        return;
+      }
       if (frame.method === "chat.send") {
         chatSends.push(params);
         const message = String(params.message ?? "");
-        const reply = `Isolated reply: ${message}`;
         const history = histories.get(key) ?? [];
         history.push({ role: "user", content: [{ type: "text", text: message }] });
+        const runId = String(params.idempotencyKey ?? "");
+        if (message === "ambiguous linger marker") {
+          histories.set(key, history);
+          socket.terminate();
+          return;
+        }
+        if (message.endsWith("linger marker")) {
+          histories.set(key, history);
+          sendResponse(socket, frame.id, { runId, status: "started" });
+          return;
+        }
+        const reply = `Isolated reply: ${message}`;
         history.push({ role: "assistant", content: [{ type: "text", text: reply }] });
         histories.set(key, history);
-        const runId = `run-${++runIndex}`;
         sendResponse(socket, frame.id, { runId, status: "started" });
         socket.send(
           JSON.stringify({
@@ -182,6 +220,11 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
         );
         return;
       }
+      if (frame.method === "sessions.abort" && rejectNextAbort) {
+        rejectNextAbort = false;
+        sendError(socket, frame.id, "fixture abort retry");
+        return;
+      }
       if (frame.method === "sessions.patch" && params.archived === true) {
         archived.add(key);
       }
@@ -196,6 +239,21 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
     histories,
     port,
     requests,
+    disconnectClients: () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+    },
+    failNextAbort: () => {
+      rejectNextAbort = true;
+    },
+    holdNextSubscription: () => {
+      let release: () => void = () => void 0;
+      heldSubscription = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
     close: async () => {
       for (const client of wss.clients) {
         client.terminate();
@@ -268,6 +326,31 @@ async function resolveChromiumExecutable(): Promise<string | undefined> {
 
 async function waitForServiceWorker(context: BrowserContext): Promise<Worker> {
   return context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+}
+
+async function restartServiceWorker(
+  browserCdp: CDPSession,
+  worker: Worker,
+  panel: PanelTarget,
+): Promise<void> {
+  const targets = (await browserCdp.send("Target.getTargets")) as {
+    targetInfos: TargetInfo[];
+  };
+  const target = targets.targetInfos.find(
+    (candidate) => candidate.type === "service_worker" && candidate.url === worker.url(),
+  );
+  if (!target) {
+    throw new Error("Chromium did not expose the extension service worker target");
+  }
+  const closed = (await browserCdp.send("Target.closeTarget", {
+    targetId: target.targetId,
+  })) as { success?: boolean };
+  if (closed.success !== true) {
+    throw new Error("Chromium did not stop the extension service worker");
+  }
+  // A real extension message wakes the terminated worker. The panel must then
+  // reconnect its long-lived port before it can become ready again.
+  await panel.wakeBackground();
 }
 
 function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
@@ -354,6 +437,11 @@ function createPanelTarget(root: CDPSession, sessionId: string): PanelTarget {
       await evaluate<string>(
         `document.querySelector(${selectorExpression(selector)})?.textContent ?? ""`,
       ),
+    wakeBackground: async () => {
+      await evaluate(
+        `chrome.runtime.sendMessage({ type: "copilot.e2e.wake" }).catch(() => undefined)`,
+      );
+    },
   };
 }
 
@@ -408,6 +496,28 @@ async function openTabPanel(params: {
     flatten: false,
   })) as { sessionId: string };
   return createPanelTarget(params.browserCdp, attached.sessionId);
+}
+
+async function disableTabPanel(worker: Worker, tabId: number): Promise<void> {
+  await worker.evaluate(async (boundTabId) => {
+    await chrome.sidePanel.setOptions({ tabId: boundTabId, enabled: false });
+  }, tabId);
+  await expect
+    .poll(
+      async () =>
+        await worker.evaluate(async () => {
+          const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
+          return contexts.length;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(0);
+}
+
+async function unshareTab(worker: Worker, tabId: number): Promise<void> {
+  await worker.evaluate(async (boundTabId) => {
+    await chrome.tabs.ungroup([boundTabId]);
+  }, tabId);
 }
 
 describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
@@ -511,18 +621,21 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       .poll(
         async () => ({
           chatSends: gateway.chatSends.length,
-          systems: await alphaPanel.allText(".message.system"),
           users: await alphaPanel.allText(".message.user"),
         }),
         { timeout: 10_000 },
       )
-      .toEqual({ chatSends: 1, systems: [], users: ["alpha marker"] });
+      .toEqual({ chatSends: 1, users: ["alpha marker"] });
     await expect
       .poll(async () => await alphaPanel.allText(".message.assistant"), { timeout: 10_000 })
       .toContain("Isolated reply: alpha marker");
 
     const betaTab = await context.newPage();
     const betaPanel = await openTabPanel({ browserCdp, extensionId, page: betaTab });
+    const betaTabId = await betaTab.evaluate(async () => (await chrome.tabs.getCurrent()).id);
+    if (typeof betaTabId !== "number") {
+      throw new Error("Chrome did not expose the beta tab id");
+    }
     await betaTab.goto(`${fixture.baseUrl}/beta`);
     await expect
       .poll(async () => await betaPanel.text("#gate-title"))
@@ -593,5 +706,172 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       expect.arrayContaining(["sessions.messages.unsubscribe", "sessions.abort", "sessions.patch"]),
     );
     expect(gateway.histories.get(String(alphaSend.sessionKey))).toHaveLength(2);
+    const subscriptionsBeforeRace = gateway.requests.filter(
+      (request) => request.method === "sessions.messages.subscribe",
+    ).length;
+    const releaseSubscription = gateway.holdNextSubscription();
+    const connectionsBeforeSetupRace = gateway.connectParams.length;
+    gateway.disconnectClients();
+    await expect
+      .poll(() => gateway.connectParams.length, { timeout: 15_000 })
+      .toBe(connectionsBeforeSetupRace + 1);
+    await expect
+      .poll(async () => !(await betaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await betaPanel.fill("#message-input", "setup race marker");
+    await expect.poll(async () => !(await betaPanel.disabled("#send-button"))).toBe(true);
+    await betaPanel.click("#send-button");
+    await expect
+      .poll(
+        () =>
+          gateway.requests.filter((request) => request.method === "sessions.messages.subscribe")
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(subscriptionsBeforeRace + 1);
+    await disableTabPanel(worker, betaTabId);
+    releaseSubscription();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(gateway.chatSends).toHaveLength(2);
+
+    let reopenedBetaPanel = await openTabPanel({
+      browserCdp,
+      extensionId,
+      page: betaTab,
+    });
+    await betaTab.goto(`${fixture.baseUrl}/beta`);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+
+    const subscriptionsBeforeConsentRace = gateway.requests.filter(
+      (request) => request.method === "sessions.messages.subscribe",
+    ).length;
+    const releaseConsentSubscription = gateway.holdNextSubscription();
+    const connectionsBeforeConsentRace = gateway.connectParams.length;
+    gateway.disconnectClients();
+    await expect
+      .poll(() => gateway.connectParams.length, { timeout: 15_000 })
+      .toBe(connectionsBeforeConsentRace + 1);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await expect
+      .poll(
+        () =>
+          gateway.requests.filter((request) => request.method === "sessions.messages.subscribe")
+            .length,
+        { timeout: 10_000 },
+      )
+      .toBe(subscriptionsBeforeConsentRace + 1);
+    await reopenedBetaPanel.fill("#message-input", "consent race marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    await reopenedBetaPanel.click("#send-button");
+    await unshareTab(worker, betaTabId);
+    releaseConsentSubscription();
+    await expect
+      .poll(async () => await reopenedBetaPanel.text("#gate-title"), { timeout: 10_000 })
+      .toBe("Keep the boundary visible");
+    expect(gateway.chatSends).toHaveLength(2);
+    await reopenedBetaPanel.click("#gate-action");
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+
+    await reopenedBetaPanel.fill("#message-input", "ambiguous linger marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    const connectionsBeforeAmbiguousSend = gateway.connectParams.length;
+    await reopenedBetaPanel.click("#send-button");
+    await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(3);
+    const networkRunId = String(gateway.chatSends[2]?.idempotencyKey ?? "");
+    await expect
+      .poll(() => gateway.connectParams.length, { timeout: 15_000 })
+      .toBe(connectionsBeforeAmbiguousSend + 1);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    expect(gateway.connectParams.at(-1)?.auth).toEqual(
+      expect.objectContaining({ token: expect.any(String) }),
+    );
+    expect(
+      gateway.requests.some(
+        (request) => request.method === "sessions.abort" && request.params?.runId === networkRunId,
+      ),
+    ).toBe(true);
+    await reopenedBetaPanel.fill("#message-input", "after reconnect marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    await reopenedBetaPanel.click("#send-button");
+    await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(4);
+    await expect
+      .poll(async () => await reopenedBetaPanel.allText(".message.assistant"), {
+        timeout: 10_000,
+      })
+      .toContain("Isolated reply: after reconnect marker");
+
+    await reopenedBetaPanel.fill("#message-input", "panel linger marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    await reopenedBetaPanel.click("#send-button");
+    await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
+    const panelRunId = String(gateway.chatSends[4]?.idempotencyKey ?? "");
+    gateway.failNextAbort();
+    await disableTabPanel(worker, betaTabId);
+    await expect
+      .poll(
+        () => ({
+          aborts: gateway.requests.filter(
+            (request) =>
+              request.method === "sessions.abort" && request.params?.runId === panelRunId,
+          ).length,
+          unsubscribed: gateway.requests.some(
+            (request) =>
+              request.method === "sessions.messages.unsubscribe" &&
+              request.params?.key === betaSend.sessionKey,
+          ),
+        }),
+        { timeout: 10_000 },
+      )
+      .toEqual({ aborts: 2, unsubscribed: true });
+
+    reopenedBetaPanel = await openTabPanel({
+      browserCdp,
+      extensionId,
+      page: betaTab,
+    });
+    await betaTab.goto(`${fixture.baseUrl}/beta`);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await reopenedBetaPanel.fill("#message-input", "reopened marker");
+    await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
+    await reopenedBetaPanel.click("#send-button");
+    await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(6);
+    await expect
+      .poll(async () => await reopenedBetaPanel.allText(".message.assistant"), {
+        timeout: 10_000,
+      })
+      .toContain("Isolated reply: reopened marker");
+
+    const connectionsBeforeWorkerRestart = gateway.connectParams.length;
+    await restartServiceWorker(browserCdp, worker, reopenedBetaPanel);
+    await expect
+      .poll(() => gateway.connectParams.length, { timeout: 15_000 })
+      .toBe(connectionsBeforeWorkerRestart + 1);
+    await expect
+      .poll(async () => !(await reopenedBetaPanel.disabled("#message-input")), {
+        timeout: 15_000,
+      })
+      .toBe(true);
   }, 60_000);
 });

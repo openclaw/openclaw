@@ -113,19 +113,28 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-The extension retains that device identity and the Gateway-issued device token.
-It does not persist the Gateway shared secret. A panel can subscribe only to
-its own tab sessions, and the Gateway filters those events before delivery.
+The extension retains that device identity and the Gateway-issued device token,
+scoped to the canonical Gateway endpoint that issued them. Pairing a different
+Gateway creates separate identity, token, and session custody; credentials and
+sessions are never reused across endpoints. The extension does not persist the
+Gateway shared secret. A panel can subscribe only to its own tab sessions, and
+the Gateway filters those events before delivery.
+
+If the Gateway connection drops during a run, the extension keeps durable
+custody of that run ID. On reconnect it aborts the unresolved run before
+re-enabling any panel, then reloads transcript history. This fail-closed step
+prevents browser actions from continuing unseen across a delivery gap.
 
 Closing a tab immediately removes its live subscription, aborts any visible
 run, and marks that tab's session archived. If the Gateway is temporarily
-offline, the extension persists the pending archive and retries on reconnect;
-after a browser crash, the next launch archives sessions left by the previous
-browser instance. Archived sessions reject new work, while their transcripts
-remain available in session history. Browser-copilot keys are thread sessions,
-so normal age and entry-count maintenance preserves them. The per-agent session
-disk budget still applies (default `2gb`) and may evict the oldest sessions
-under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
+offline, the extension persists the pending archive and retries only when that
+same Gateway endpoint reconnects; it never sends an archive request to a
+different Gateway. After a browser crash, the next launch archives sessions
+left by the previous browser instance. Archived sessions reject new work, while
+their transcripts remain available in session history. Browser-copilot keys are
+thread sessions, so normal age and entry-count maintenance preserves them. The
+per-agent session disk budget still applies (default `2gb`) and may evict the
+oldest sessions under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
 
 The side panel currently requires either a Gateway-hosted extension relay or a
 direct remote Gateway relay. A loopback relay on a browser node cannot yet
