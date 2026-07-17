@@ -285,6 +285,20 @@ describe("push-apns.relay", () => {
       expect(result.environment).toBeUndefined();
     });
 
+    it("cancels a redirect relay response body before returning", async () => {
+      const response = new Response("redirected", { status: 307 });
+      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+      const fetchMock = vi.fn().mockResolvedValue(response);
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      const result = await sendApnsRelayPush(createRelayPushParams());
+
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(307);
+      expect(result.reason).toBe("RelayRedirectNotAllowed");
+      expect(cancel).toHaveBeenCalledOnce();
+    });
+
     it("falls back to fetch status when the relay body is not JSON", async () => {
       // Real Response body so the bounded reader runs end-to-end; non-JSON parse stays a soft null.
       const fetchMock = vi.fn().mockResolvedValue(new Response("not-json-at-all", { status: 202 }));
