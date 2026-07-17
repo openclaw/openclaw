@@ -28,6 +28,7 @@ export const systemChromiumExecutableCandidates = [
 export function canRunChromiumExecutable(executablePath, spawnSync = spawnSyncImpl) {
   const result = spawnSync(executablePath, ["--version"], {
     stdio: "ignore",
+    timeout: 5_000,
   });
   return result.status === 0;
 }
