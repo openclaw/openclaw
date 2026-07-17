@@ -1617,52 +1617,80 @@ export function resolveSkillsPromptForRun(params: {
   eligibility?: SkillEligibilityContext;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+  if (params.skillsSnapshot && !snapshotPrompt) {
+    return "";
+  }
   const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
     (skill) => !skill.skillKey,
   );
-  const snapshotHasUnavailableSkill =
-    params.skillsSnapshot?.skills.some((skill) =>
-      isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
-    ) ||
-    (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
-  if (snapshotPrompt && !snapshotHasUnavailableSkill) {
-    return snapshotPrompt;
+  if (snapshotPrompt) {
+    const snapshotHasUnavailableSkill =
+      params.skillsSnapshot?.skills.some((skill) =>
+        isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
+      ) ||
+      (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners());
+    if (
+      snapshotHasUnavailableSkill &&
+      params.skillsSnapshot?.promptFormatVersion !== WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+    ) {
+      return "";
+    }
+    if (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners()) {
+      return "";
+    }
+    const unavailableNames = new Set(
+      params.skillsSnapshot?.skills
+        .filter(
+          (skill): skill is typeof skill & { skillKey: string } =>
+            Boolean(skill.skillKey) && isSkillSecretOwnerUnavailable(skill.skillKey),
+        )
+        .map((skill) => escapeXml(skill.name)),
+    );
+    if (unavailableNames.size === 0) {
+      return snapshotPrompt;
+    }
+    const catalogOpen = "<available_skills>";
+    const catalogClose = "</available_skills>";
+    const catalogStart = snapshotPrompt.indexOf(catalogOpen);
+    const catalogEnd = snapshotPrompt.indexOf(catalogClose, catalogStart + catalogOpen.length);
+    if (
+      catalogStart < 0 ||
+      catalogEnd < 0 ||
+      snapshotPrompt.indexOf(catalogOpen, catalogStart + catalogOpen.length) >= 0 ||
+      snapshotPrompt.indexOf(catalogClose, catalogEnd + catalogClose.length) >= 0
+    ) {
+      return "";
+    }
+    const bodyStart = catalogStart + catalogOpen.length;
+    const catalogBody = snapshotPrompt.slice(bodyStart, catalogEnd);
+    const blockPattern = /\n  <skill>\n[\s\S]*?\n  <\/skill>/g;
+    let cursor = 0;
+    let filteredBody = "";
+    for (const match of catalogBody.matchAll(blockPattern)) {
+      const gap = catalogBody.slice(cursor, match.index);
+      const block = match[0];
+      const name = /^    <name>(.*)<\/name>$/m.exec(block)?.[1];
+      if (gap.trim() || !name) {
+        return "";
+      }
+      filteredBody += gap;
+      if (!unavailableNames.has(name)) {
+        filteredBody += block;
+      }
+      cursor = (match.index ?? 0) + block.length;
+    }
+    const tail = catalogBody.slice(cursor);
+    if (tail.trim()) {
+      return "";
+    }
+    return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
   }
-  const loadedEntries =
-    params.entries !== undefined
-      ? params.entries
-      : snapshotHasUnavailableSkill
-        ? loadVisibleWorkspaceSkillEntries(params.workspaceDir, {
-            config: params.config,
-            agentId: params.agentId,
-            eligibility: params.eligibility,
-            skillFilter: params.skillsSnapshot?.skillFilter,
-          })
-        : undefined;
-  const snapshotSkillKeys = new Set(
-    params.skillsSnapshot?.skills.flatMap((skill) => (skill.skillKey ? [skill.skillKey] : [])) ??
-      [],
-  );
-  const legacySnapshotSkillNames = new Set(
-    params.skillsSnapshot?.skills.filter((skill) => !skill.skillKey).map((skill) => skill.name) ??
-      [],
-  );
-  // Rebuild only the catalog captured for this session. A degraded owner must
-  // not make newly installed or newly eligible skills appear mid-session.
-  const entries = params.skillsSnapshot
-    ? loadedEntries?.filter(
-        (entry) =>
-          snapshotSkillKeys.has(resolveSkillKey(entry.skill, entry)) ||
-          legacySnapshotSkillNames.has(entry.skill.name),
-      )
-    : loadedEntries;
-  if (entries && entries.length > 0) {
+  if (params.entries && params.entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
-      entries,
+      entries: params.entries,
       config: params.config,
       agentId: params.agentId,
       eligibility: params.eligibility,
-      skillFilter: params.skillsSnapshot?.skillFilter,
     });
     return prompt.trim() ? prompt : "";
   }
