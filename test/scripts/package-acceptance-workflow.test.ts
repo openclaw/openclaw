@@ -1271,6 +1271,18 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('blocking: ($releaseProfile != "beta")');
   });
 
+  it("keeps beta performance advisory at the publish gate", () => {
+    const validationStep = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target"),
+      "Validate full release validation manifest",
+    );
+
+    expectTextToIncludeAll(validationStep.run, [
+      'if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]',
+      "Full release validation manifest does not record blocking product performance evidence.",
+    ]);
+  });
+
   it("keeps child-job fail-fast polling best-effort", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     expect(workflow.match(/continuing with authoritative workflow conclusion\./gu)).toHaveLength(3);
@@ -3619,7 +3631,6 @@ describe("package artifact reuse", () => {
   });
 
   it("accepts tag-matched frozen release branches in OpenClaw npm preflight", () => {
-    const workflow = readWorkflow(OPENCLAW_NPM_RELEASE_WORKFLOW);
     const preflight = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "preflight_openclaw_npm");
     const metadata = workflowStep(preflight, "Validate release metadata");
 

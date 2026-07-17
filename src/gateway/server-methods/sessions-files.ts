@@ -6,11 +6,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  isCloudWorkerPlacementState,
   type SessionFileBrowserEntry,
   type SessionFileBrowserResult,
   type SessionFileEntry,
   type SessionFileRelevance,
   type SessionsFilesGetParams,
+  validateSessionsFilesRevealParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
@@ -21,6 +23,13 @@ import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
 import { loadSessionEntry } from "../session-utils.js";
+import {
+  execOpenPath,
+  formatOpenPathError,
+  isHeadlessOpenPathError,
+  resolveOpenPathCommand,
+  sanitizePathForLog,
+} from "./open-path.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
@@ -776,6 +785,61 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         hash: update.hash,
       },
     });
+  },
+  "sessions.files.reveal": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsFilesRevealParams,
+        "sessions.files.reveal",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const loaded = loadSessionFileRoot({ sessionKey: params.key, agentId: params.agentId });
+    const workspaceRoot = loaded.root;
+    if (!workspaceRoot) {
+      respond(true, {
+        ok: false,
+        error: "No workspace root is available for this session.",
+      });
+      return;
+    }
+    if (loaded.entry?.execNode) {
+      respond(true, {
+        ok: false,
+        path: workspaceRoot,
+        error: "Cannot reveal this workspace because the session runs on an exec node.",
+      });
+      return;
+    }
+    const placement = loaded.entry?.sessionId
+      ? context.workerSessionPlacementService
+          ?.getMany([loaded.entry.sessionId])
+          .get(loaded.entry.sessionId)
+      : undefined;
+    if (isCloudWorkerPlacementState(placement?.state)) {
+      respond(true, {
+        ok: false,
+        path: workspaceRoot,
+        error: `Cannot reveal this workspace because the session runs remotely (${placement.state}).`,
+      });
+      return;
+    }
+    try {
+      await execOpenPath(resolveOpenPathCommand(workspaceRoot));
+      respond(true, { ok: true, path: workspaceRoot });
+    } catch (error) {
+      const errorMessage = formatOpenPathError(error);
+      const detailedError = isHeadlessOpenPathError(errorMessage)
+        ? `Cannot open path in headless environment. Path: ${workspaceRoot}. This environment appears to lack a graphical or terminal browser handler.`
+        : `Failed to reveal session workspace: ${errorMessage}`;
+      context.logGateway.warn(
+        `sessions.files.reveal failed path=${sanitizePathForLog(workspaceRoot)}: ${errorMessage}`,
+      );
+      respond(true, { ok: false, path: workspaceRoot, error: detailedError });
+    }
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -108,6 +108,8 @@ export const PluginCatalogEntrySchema = closedObject({
   ]),
   featured: Type.Optional(Type.Boolean()),
   order: Type.Optional(Type.Number()),
+  /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
+  hasIcon: Type.Optional(Type.Boolean()),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
   /** Coarse manifest-derived grouping (channel, provider, memory, ...) for catalog UIs. */

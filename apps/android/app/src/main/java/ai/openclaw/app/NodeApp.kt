@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import ai.openclaw.app.wear.GoogleWearMessageSender
+import ai.openclaw.app.wear.GoogleWearPeerResolver
 import ai.openclaw.app.wear.WearProxyBridge
 import android.app.Application
 import android.content.res.Configuration
@@ -37,6 +38,7 @@ class NodeApp : Application() {
     WearProxyBridge(
       scope = runtimeScope,
       sender = GoogleWearMessageSender(this),
+      peerResolver = GoogleWearPeerResolver(this),
       handleRequest = { request -> ensureBackgroundRuntime().handleWearProxyRequest(request) },
     )
   }

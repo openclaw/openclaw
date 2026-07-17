@@ -41,6 +41,15 @@ describe("googlechat secret contract", () => {
       context,
     });
 
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "unknown",
+        ownerId: "channels.googlechat.accounts.work.serviceAccount",
+        requiredForGateway: false,
+        disposition: "fail-closed",
+      },
+    ]);
+
     const resolved = await resolveSecretRefValues(
       context.assignments.map((assignment) => assignment.ref),
       {

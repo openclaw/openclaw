@@ -36,11 +36,13 @@ vi.mock("./runtime-prepare.runtime.js", () => {
     }),
     collectConfigAssignments: () => undefined,
     collectAuthStoreAssignments: () => undefined,
-    resolveSecretRefValues: async () => new Map(),
-    applyResolvedAssignments: () => undefined,
     resolveRuntimeWebTools: resolveRuntimeWebToolsMock,
   };
 });
+
+vi.mock("./runtime-owner-assignments.js", () => ({
+  resolveAndApplySecretAssignments: async () => [],
+}));
 
 function emptyAuthStore(): AuthProfileStore {
   return { version: 1, profiles: {} };

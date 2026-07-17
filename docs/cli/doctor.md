@@ -10,6 +10,8 @@ title: "Doctor"
 
 Health checks and quick fixes for the gateway, channels, plugins, skills, model routing, local state, and config migrations. Use it whenever something is not behaving as expected and you want one command to explain what is wrong.
 
+When Gateway status reports SecretRef owners isolated during cold startup, doctor prints a **Secret owners unavailable** warning with every owner and affected config path.
+
 Related:
 
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)

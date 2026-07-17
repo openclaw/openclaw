@@ -72,6 +72,8 @@ export const BUILTIN_WIDGET_KINDS = [
   "builtin:instances",
   "builtin:activity",
   "builtin:chart",
+  "builtin:agent-status",
+  "builtin:custom-widget-approvals",
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);

@@ -11,6 +11,8 @@ import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js"
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
   collectSecretInputAssignment,
+  collectRuntimeSecretInputAssignment,
+  type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
@@ -42,7 +44,13 @@ function collectModelProviderAssignments(params: {
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
     const providerIsActive = provider.enabled !== false;
-    collectSecretInputAssignment({
+    const owner = {
+      ownerKind: "provider",
+      ownerId: normalizeOptionalLowercaseString(providerId) ?? providerId,
+      requiredForGateway: false,
+      disposition: "isolate",
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: provider.apiKey,
       path: `models.providers.${providerId}.apiKey`,
       expected: "string",
@@ -50,6 +58,7 @@ function collectModelProviderAssignments(params: {
       context: params.context,
       active: providerIsActive,
       inactiveReason: "provider is disabled.",
+      owner,
       apply: (value) => {
         provider.apiKey = value;
       },
@@ -57,7 +66,7 @@ function collectModelProviderAssignments(params: {
     const headers = isRecord(provider.headers) ? provider.headers : undefined;
     if (headers) {
       for (const [headerKey, headerValue] of Object.entries(headers)) {
-        collectSecretInputAssignment({
+        collectRuntimeSecretInputAssignment({
           value: headerValue,
           path: `models.providers.${providerId}.headers.${headerKey}`,
           expected: "string",
@@ -65,6 +74,7 @@ function collectModelProviderAssignments(params: {
           context: params.context,
           active: providerIsActive,
           inactiveReason: "provider is disabled.",
+          owner,
           apply: (value) => {
             headers[headerKey] = value;
           },
@@ -82,6 +92,7 @@ function collectModelProviderAssignments(params: {
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
         collectTransportSecrets: true,
+        owner,
       });
     }
   }
@@ -270,7 +281,13 @@ function collectGatewayAssignments(params: {
     defaults: params.defaults,
   });
   if (auth) {
-    collectSecretInputAssignment({
+    const ingressAuthOwner = {
+      ownerKind: "gateway",
+      ownerId: "ingress-auth",
+      requiredForGateway: true,
+      disposition: "fail-closed",
+    } satisfies SecretAssignmentOwner;
+    collectRuntimeSecretInputAssignment({
       value: auth.token,
       path: "gateway.auth.token",
       expected: "string",
@@ -278,11 +295,12 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.token"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.token"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.token = value;
       },
     });
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
       expected: "string",
@@ -290,6 +308,7 @@ function collectGatewayAssignments(params: {
       context: params.context,
       active: gatewaySurfaceStates["gateway.auth.password"].active,
       inactiveReason: gatewaySurfaceStates["gateway.auth.password"].reason,
+      owner: ingressAuthOwner,
       apply: (value) => {
         auth.password = value;
       },
@@ -331,11 +350,12 @@ function collectProviderRequestAssignments(params: {
   active?: boolean;
   inactiveReason?: string;
   collectTransportSecrets?: boolean;
+  owner?: SecretAssignmentOwner;
 }): void {
   const headers = isRecord(params.request.headers) ? params.request.headers : undefined;
   if (headers) {
     for (const [headerKey, headerValue] of Object.entries(headers)) {
-      collectSecretInputAssignment({
+      collectRuntimeSecretInputAssignment({
         value: headerValue,
         path: `${params.pathPrefix}.headers.${headerKey}`,
         expected: "string",
@@ -343,6 +363,7 @@ function collectProviderRequestAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: params.inactiveReason,
+        owner: params.owner,
         apply: (value) => {
           headers[headerKey] = value;
         },
@@ -352,7 +373,7 @@ function collectProviderRequestAssignments(params: {
 
   const auth = isRecord(params.request.auth) ? params.request.auth : undefined;
   if (auth) {
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.token,
       path: `${params.pathPrefix}.auth.token`,
       expected: "string",
@@ -360,11 +381,12 @@ function collectProviderRequestAssignments(params: {
       context: params.context,
       active: params.active,
       inactiveReason: params.inactiveReason,
+      owner: params.owner,
       apply: (value) => {
         auth.token = value;
       },
     });
-    collectSecretInputAssignment({
+    collectRuntimeSecretInputAssignment({
       value: auth.value,
       path: `${params.pathPrefix}.auth.value`,
       expected: "string",
@@ -372,6 +394,7 @@ function collectProviderRequestAssignments(params: {
       context: params.context,
       active: params.active,
       inactiveReason: params.inactiveReason,
+      owner: params.owner,
       apply: (value) => {
         auth.value = value;
       },
@@ -383,7 +406,7 @@ function collectProviderRequestAssignments(params: {
       return;
     }
     for (const key of ["ca", "cert", "key", "passphrase"] as const) {
-      collectSecretInputAssignment({
+      collectRuntimeSecretInputAssignment({
         value: tls[key],
         path: `${pathPrefix}.${key}`,
         expected: "string",
@@ -391,6 +414,7 @@ function collectProviderRequestAssignments(params: {
         context: params.context,
         active: params.active,
         inactiveReason: params.inactiveReason,
+        owner: params.owner,
         apply: (value) => {
           tls[key] = value;
         },
