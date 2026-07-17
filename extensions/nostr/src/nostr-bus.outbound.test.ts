@@ -7,22 +7,14 @@ const GOOD_RELAY = "wss://good-relay.example";
 const RECIPIENT_PUBKEY = "b".repeat(64);
 
 const mocks = vi.hoisted(() => ({
-  ensureRelay: vi.fn(),
   poolPublish: vi.fn(),
-  relayPublish: vi.fn(),
   close: vi.fn(),
 }));
 
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
-    maxWaitForConnection = 3000;
-
     subscribeMany() {
       return { close: vi.fn() };
-    }
-
-    ensureRelay(relay: string, options?: { connectionTimeout?: number }) {
-      return mocks.ensureRelay(relay, options);
     }
 
     publish(relays: string[]) {
@@ -65,12 +57,6 @@ vi.mock("./nostr-profile.js", () => ({
 
 describe("Nostr outbound relay failover", () => {
   beforeEach(() => {
-    mocks.ensureRelay.mockReset().mockImplementation(async (relay: string) => {
-      if (relay === BAD_RELAY) {
-        throw new Error("connection failed");
-      }
-      return { publish: mocks.relayPublish };
-    });
     mocks.poolPublish
       .mockReset()
       .mockImplementation((relays: string[]) => [
@@ -78,7 +64,6 @@ describe("Nostr outbound relay failover", () => {
           relays[0] === BAD_RELAY ? "connection failure: connection failed" : "saved",
         ),
       ]);
-    mocks.relayPublish.mockReset().mockResolvedValue("saved");
     mocks.close.mockReset();
   });
 
@@ -92,19 +77,14 @@ describe("Nostr outbound relay failover", () => {
 
     await bus.sendDm(RECIPIENT_PUBKEY, "hello");
 
-    expect(mocks.ensureRelay).toHaveBeenNthCalledWith(1, BAD_RELAY, {
-      connectionTimeout: 3000,
-    });
-    expect(mocks.ensureRelay).toHaveBeenNthCalledWith(2, GOOD_RELAY, {
-      connectionTimeout: 3000,
-    });
-    expect(mocks.relayPublish).toHaveBeenCalledTimes(1);
-
+    expect(mocks.poolPublish.mock.calls.map(([relays]) => relays)).toEqual([
+      [BAD_RELAY],
+      [GOOD_RELAY],
+    ]);
     bus.close();
   });
 
   it("preserves string connection failures when every relay fails", async () => {
-    mocks.ensureRelay.mockRejectedValue("connection failed");
     const onError = vi.fn();
     const bus = await startNostrBus({
       privateKey: "1".repeat(64),

@@ -11,12 +11,10 @@ const TEST_PUBKEY = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
 async function publishTestProfile(profile: NostrProfile, lastPublishedAt?: number): Promise<Event> {
   let publishedEvent: Event | undefined;
   const pool = {
-    ensureRelay: vi.fn(async () => ({
-      publish: vi.fn(async (event: Event) => {
-        publishedEvent = event;
-        return "saved";
-      }),
-    })),
+    publish: vi.fn((_relays: string[], event: Event) => {
+      publishedEvent = event;
+      return [Promise.resolve("saved")];
+    }),
   } as unknown as SimplePool;
 
   await publishProfile(
@@ -294,16 +292,14 @@ describe("publishProfile", () => {
 
   function createFakePool(publishResult: unknown): SimplePool {
     return {
-      ensureRelay: vi.fn(async () => ({
-        publish: vi.fn(() => publishResult),
-      })),
+      publish: vi.fn(() => [publishResult]),
     } as unknown as SimplePool;
   }
 
   it("clears the per-relay timeout timer after a successful publish", async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const profile: NostrProfile = { name: "test" };
-    const pool = createFakePool(Promise.resolve());
+    const pool = createFakePool(Promise.resolve("saved"));
 
     const result = await publishProfile(
       pool,
@@ -319,9 +315,6 @@ describe("publishProfile", () => {
   it("reports relay connection failures instead of successful publishes", async () => {
     const profile: NostrProfile = { name: "test" };
     const pool = {
-      ensureRelay: vi.fn(async () => {
-        throw new Error("connection failed");
-      }),
       publish: vi.fn(() => [Promise.resolve("connection failure: connection failed")]),
     } as unknown as SimplePool;
 
@@ -359,7 +352,7 @@ describe("publishProfile", () => {
     vi.spyOn(globalThis, "setTimeout").mockClear();
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     const profile: NostrProfile = { name: "test" };
-    const pool = createFakePool(Promise.resolve());
+    const pool = createFakePool(Promise.resolve("saved"));
 
     await publishProfile(
       pool,
