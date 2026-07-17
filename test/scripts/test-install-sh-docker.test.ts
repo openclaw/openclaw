@@ -662,6 +662,9 @@ describe("test-install-sh-docker", () => {
     expect(cliSmokeBlock).toContain(
       'curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "$OPENCLAW_INSTALL_CLI_URL"',
     );
+    expect(cliSmokeBlock).toMatch(
+      /curl -fsSL --connect-timeout 10 --max-time 120 -o "\$installer" "\$OPENCLAW_INSTALL_CLI_URL"\s*&&\s*bash "\$installer"/u,
+    );
     expect(cliSmokeBlock).toContain('bash "$installer" --set-npm-prefix --no-onboard');
     expect(cliSmokeBlock).not.toMatch(/curl[^\n]+\|\s*bash/u);
   });

@@ -591,5 +591,5 @@ run_install_smoke_container --rm -t \
   -e DEBIAN_FRONTEND=noninteractive \
   "$NONROOT_IMAGE" -lc 'installer="$(mktemp)"
 trap '"'"'rm -f "$installer"'"'"' EXIT
-curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "$OPENCLAW_INSTALL_CLI_URL"
+curl -fsSL --connect-timeout 10 --max-time 120 -o "$installer" "$OPENCLAW_INSTALL_CLI_URL" &&
 bash "$installer" --set-npm-prefix --no-onboard'
