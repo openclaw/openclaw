@@ -127,6 +127,58 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("publishes a text Status to the explicit audience", async () => {
+    const result = await api.sendStatus("Release shipped", undefined, undefined, {
+      audience: ["+1555", "+1666", "+1555"],
+      backgroundColor: "#112233",
+      font: 6,
+    });
+
+    expectFirstSendJid("status@broadcast");
+    expectSendContentFields(0, { text: "Release shipped" });
+    expectRecordFields(requireSendOptions(0), {
+      broadcast: true,
+      statusJidList: ["1555@s.whatsapp.net", "1666@s.whatsapp.net"],
+      backgroundColor: "#112233",
+      font: 6,
+    });
+    expectSendResultFields(result, { kind: "text", messageId: "msg-1" });
+  });
+
+  it("publishes supported Status media and rejects documents", async () => {
+    const image = Buffer.from("image");
+    await api.sendStatus("caption", image, "image/jpeg", { audience: ["+1555"] });
+    expectFirstSendJid("status@broadcast");
+    expectSendContentFields(0, {
+      image,
+      caption: "caption",
+      mimetype: "image/jpeg",
+    });
+
+    await expect(
+      api.sendStatus("", Buffer.from("pdf"), "application/pdf", { audience: ["+1555"] }),
+    ).rejects.toThrow("supports only image, video, or audio media");
+  });
+
+  it.each([
+    {
+      mediaType: "video/mp4",
+      expected: { video: Buffer.from("media"), caption: "caption", mimetype: "video/mp4" },
+    },
+    {
+      mediaType: "audio/ogg",
+      expected: { audio: Buffer.from("media"), ptt: true, mimetype: "audio/ogg" },
+    },
+  ])("publishes $mediaType Status media", async ({ mediaType, expected }) => {
+    const media = Buffer.from("media");
+    await api.sendStatus(mediaType.startsWith("audio/") ? "" : "caption", media, mediaType, {
+      audience: ["+1555"],
+    });
+
+    expectFirstSendJid("status@broadcast");
+    expectSendContentFields(0, expected);
+  });
+
   it("falls back to a MIME-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");

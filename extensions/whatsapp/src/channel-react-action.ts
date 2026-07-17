@@ -2,16 +2,22 @@
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import {
+  createActionGate,
   isWhatsAppGroupJid,
+  isWhatsAppNewsletterJid,
   resolveAuthorizedWhatsAppOutboundTarget,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
   resolveReactionMessageId,
   handleWhatsAppAction,
   normalizeWhatsAppTarget,
+  readNumberParam,
+  readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
   sendMessageWhatsApp,
+  sendStatusWhatsApp,
+  ToolAuthorizationError,
   type OpenClawConfig,
 } from "./channel-react-action.runtime.js";
 
@@ -23,6 +29,7 @@ type WhatsAppMessageActionParams = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   requesterSenderId?: string | null;
+  senderIsOwner?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -180,7 +187,87 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
   });
 }
 
+async function handleWhatsAppPostStatusAction(params: WhatsAppMessageActionParams) {
+  const whatsAppConfig = params.cfg.channels?.whatsapp;
+  const gate = createActionGate(whatsAppConfig?.actions);
+  if (!whatsAppConfig || !gate("status", false)) {
+    throw new Error("WhatsApp Status publishing is disabled.");
+  }
+  if (!params.senderIsOwner) {
+    throw new ToolAuthorizationError("WhatsApp Status publishing requires a trusted owner.");
+  }
+  const audience = readStringArrayParam(params.params, "audience", { required: true });
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  const resolvedAudience = audience.map((target) =>
+    resolveAuthorizedWhatsAppOutboundTarget({
+      cfg: params.cfg,
+      chatJid: target,
+      accountId: account.accountId,
+      actionLabel: "Status audience",
+    }),
+  );
+  const allowedTargets = new Set(
+    (account.allowFrom ?? [])
+      .filter((entry) => entry.trim() !== "*")
+      .map((entry) => normalizeWhatsAppTarget(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  for (const entry of resolvedAudience) {
+    if (isWhatsAppGroupJid(entry.to) || isWhatsAppNewsletterJid(entry.to)) {
+      throw new ToolAuthorizationError(
+        `WhatsApp Status audience blocked: "${entry.to}" is not a direct-user target.`,
+      );
+    }
+    if (!allowedTargets.has(entry.to)) {
+      throw new ToolAuthorizationError(
+        `WhatsApp Status audience blocked: "${entry.to}" is not explicitly listed in allowFrom for account "${account.accountId}".`,
+      );
+    }
+  }
+
+  const mediaUrl = readUploadFileMediaSource(params.params);
+  const encodedPayload = readStringParam(params.params, "buffer", { trim: false });
+  const mediaPayload = encodedPayload
+    ? decodeUploadFileMediaPayload({
+        args: params.params,
+        encoded: encodedPayload,
+        maxBytes: resolveWhatsAppMediaMaxBytes(account),
+      })
+    : undefined;
+  const font = readNumberParam(params.params, "font", {
+    nonNegativeInteger: true,
+    strict: true,
+  });
+  const statusAudience = [...new Set(resolvedAudience.map((entry) => entry.to))];
+  const result = await sendStatusWhatsApp(readUploadFileCaptionText(params.params), {
+    cfg: params.cfg,
+    audience: statusAudience,
+    ...(mediaUrl && !mediaPayload ? { mediaUrl } : {}),
+    ...(mediaPayload ? { mediaPayload } : {}),
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+    backgroundColor: readStringParam(params.params, "backgroundColor"),
+    font,
+    accountId: account.accountId,
+  });
+  return jsonResult({
+    ok: true,
+    channel: WHATSAPP_CHANNEL,
+    action: "post-status",
+    messageId: result.messageId,
+    toJid: result.toJid,
+    audienceCount: statusAudience.length,
+  });
+}
+
 export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
+  if (params.action === "post-status") {
+    return await handleWhatsAppPostStatusAction(params);
+  }
   if (params.action === "upload-file") {
     return await handleWhatsAppUploadFileAction(params);
   }

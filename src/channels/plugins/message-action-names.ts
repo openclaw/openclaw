@@ -58,6 +58,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "set-presence",
   "download-file",
   "upload-file",
+  "post-status",
 ] as const;
 
 /**

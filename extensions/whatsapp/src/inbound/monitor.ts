@@ -1813,6 +1813,7 @@ export async function attachWebInboxToSocket(
     assertSendReady: assertCanSendTo,
     sendComposingTo: sendApi.sendComposingTo,
     sendMessage: sendApi.sendMessage,
+    sendStatus: sendApi.sendStatus,
     sendPoll: sendApi.sendPoll,
     sendReaction: sendApi.sendReaction,
   } as const;

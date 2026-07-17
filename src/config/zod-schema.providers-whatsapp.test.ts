@@ -3,6 +3,14 @@ import { describe, it, expect } from "vitest";
 import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 describe("WhatsApp prompt config Zod validation", () => {
+  it("accepts opt-in Status publishing", () => {
+    const result = WhatsAppConfigSchema.safeParse({ actions: { status: true } });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.actions?.status).toBe(true);
+    }
+  });
+
   it("validates group-level systemPrompt", () => {
     const config = {
       groups: {

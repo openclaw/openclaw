@@ -24,6 +24,10 @@ export const whatsAppChannelConfigUiHints = {
     label: "WhatsApp Voice Calls",
     help: "Expose the experimental requester-bound WhatsApp voice-call tool. Default: false. Requires a separately paired MeowCaller CLI.",
   },
+  "actions.status": {
+    label: "WhatsApp Status Publishing",
+    help: "Allow trusted owners to publish WhatsApp Status updates to an explicit allowlisted audience. Default: false.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "WhatsApp",
     mentionPatterns: {

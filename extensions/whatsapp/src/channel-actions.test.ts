@@ -23,15 +23,20 @@ vi.mock("./channel-actions.runtime.js", async () => {
   return {
     listWhatsAppAccountIds: hoisted.listWhatsAppAccountIds,
     resolveWhatsAppAccount: hoisted.resolveWhatsAppAccount,
-    createActionGate: (actions?: { reactions?: boolean; polls?: boolean }) => (name: string) => {
-      if (name === "reactions") {
-        return actions?.reactions !== false;
-      }
-      if (name === "polls") {
-        return actions?.polls !== false;
-      }
-      return true;
-    },
+    createActionGate:
+      (actions?: { reactions?: boolean; polls?: boolean; status?: boolean }) =>
+      (name: string, defaultValue = true) => {
+        if (name === "reactions") {
+          return actions?.reactions !== false;
+        }
+        if (name === "polls") {
+          return actions?.polls !== false;
+        }
+        if (name === "status") {
+          return actions?.status ?? defaultValue;
+        }
+        return defaultValue;
+      },
     resolveWhatsAppReactionLevel: ({
       cfg,
       accountId,
@@ -57,6 +62,28 @@ describe("whatsapp channel action helpers", () => {
   beforeEach(() => {
     hoisted.listWhatsAppAccountIds.mockClear();
     hoisted.resolveWhatsAppAccount.mockClear();
+  });
+
+  it("exposes owner-gated Status publishing only when explicitly enabled", () => {
+    const cfg = {
+      channels: { whatsapp: { allowFrom: ["+1555"], actions: { status: true } } },
+    } as OpenClawConfig;
+
+    expect(
+      describeWhatsAppMessageActions({ cfg, accountId: "default", senderIsOwner: true })?.actions,
+    ).toContain("post-status");
+    expect(
+      describeWhatsAppMessageActions({ cfg, accountId: "default", senderIsOwner: false })?.actions,
+    ).not.toContain("post-status");
+    expect(
+      describeWhatsAppMessageActions({
+        cfg: {
+          channels: { whatsapp: { allowFrom: ["+1555"] } },
+        } as OpenClawConfig,
+        accountId: "default",
+        senderIsOwner: true,
+      })?.actions,
+    ).not.toContain("post-status");
   });
 
   it("defaults to minimal reaction guidance when reactions are available", () => {

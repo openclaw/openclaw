@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements send behavior.
+import { STORIES_JID } from "baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
@@ -271,6 +272,85 @@ export async function sendMessageWhatsApp(
     logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
     throw err;
   }
+}
+
+export async function sendStatusWhatsApp(
+  body: string,
+  options: {
+    cfg: OpenClawConfig;
+    audience: readonly string[];
+    mediaUrl?: string;
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
+    mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    mediaPayload?: {
+      buffer: Buffer;
+      contentType?: string;
+      kind?: "image" | "audio" | "video" | "document";
+      fileName?: string;
+    };
+    backgroundColor?: string;
+    font?: number;
+    accountId?: string;
+  },
+): Promise<{ messageId: string; toJid: string }> {
+  let text = normalizeWhatsAppPayloadText(body);
+  const cfg = requireRuntimeConfig(options.cfg, "WhatsApp Status send");
+  const { listener: active, accountId: resolvedAccountId } = requireOutboundActiveWebListener({
+    cfg,
+    accountId: options.accountId,
+  });
+  if (!active.sendStatus) {
+    throw new Error("The active WhatsApp listener does not support Status publishing");
+  }
+  const account = resolveWhatsAppAccount({
+    cfg,
+    accountId: resolvedAccountId ?? options.accountId,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "whatsapp",
+    accountId: resolvedAccountId ?? options.accountId,
+  });
+  text = markdownToWhatsApp(convertMarkdownTables(text, tableMode));
+
+  const primaryMediaUrl = options.mediaUrl ?? options.mediaPayload?.fileName;
+  let media: PreparedWhatsAppOutboundMedia | undefined;
+  if (options.mediaPayload) {
+    media = await prepareWhatsAppOutboundMedia(options.mediaPayload, primaryMediaUrl);
+  } else if (primaryMediaUrl) {
+    media = await prepareWhatsAppOutboundMedia(
+      await loadOutboundMediaFromUrl(primaryMediaUrl, {
+        maxBytes: resolveWhatsAppMediaMaxBytes(account),
+        mediaAccess: options.mediaAccess,
+        mediaLocalRoots: options.mediaLocalRoots,
+        mediaReadFile: options.mediaReadFile,
+      }),
+      primaryMediaUrl,
+    );
+  }
+  if (!text && !media) {
+    throw new Error("WhatsApp Status requires message text or media");
+  }
+  if (media?.kind === "document") {
+    throw new Error("WhatsApp Status supports only text, image, video, or audio");
+  }
+  if (media?.kind === "audio" && text) {
+    throw new Error("WhatsApp audio Status updates do not support captions");
+  }
+
+  const result = await active.sendStatus(text, media?.buffer, media?.mimetype, {
+    audience: options.audience,
+    ...(options.backgroundColor ? { backgroundColor: options.backgroundColor } : {}),
+    ...(options.font !== undefined ? { font: options.font } : {}),
+  });
+  return {
+    messageId: result.messageId,
+    toJid: result.keys[0]?.remoteJid ?? STORIES_JID,
+  };
 }
 
 export async function sendTypingWhatsApp(

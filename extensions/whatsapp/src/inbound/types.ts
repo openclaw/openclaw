@@ -29,6 +29,12 @@ export type ActiveWebSendOptions = {
   asDocument?: boolean;
 };
 
+export type ActiveWebStatusOptions = {
+  audience: readonly string[];
+  backgroundColor?: string;
+  font?: number;
+};
+
 export type ActiveWebListener = {
   assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
@@ -45,6 +51,12 @@ export type ActiveWebListener = {
     emoji: string,
     fromMe: boolean,
     participant?: string,
+  ) => Promise<WhatsAppSendResult>;
+  sendStatus?: (
+    text: string,
+    mediaBuffer: Buffer | undefined,
+    mediaType: string | undefined,
+    options: ActiveWebStatusOptions,
   ) => Promise<WhatsAppSendResult>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
