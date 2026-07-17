@@ -102,6 +102,7 @@ const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
 );
 
 const OPENAI_CODEX_PROVIDER = "openai";
+const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
@@ -122,7 +123,11 @@ export function resolveCodexCliBin(): string | null {
     const lookupCmd =
       process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
     // `where` on Windows can return multiple lines; take the first match.
-    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
+    const raw = execFileSync(lookupCmd, ["codex"], {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: CODEX_CLI_LOOKUP_TIMEOUT_MS,
+    }).trim();
     return raw.split(/\r?\n/)[0] || null;
   } catch {
     return null;
