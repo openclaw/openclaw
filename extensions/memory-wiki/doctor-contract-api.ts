@@ -53,7 +53,7 @@ async function safeLegacyCacheFileExists(
 ): Promise<boolean> {
   try {
     const stat = await vaultRoot.stat(relativePath);
-    return stat.isFile === true;
+    return stat.isFile;
   } catch (error) {
     if (isMissingPathError(error) || error instanceof FsSafeError) {
       return false;

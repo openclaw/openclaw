@@ -1,7 +1,6 @@
 // Memory Wiki compiled cache tests cover compile, prepare, query, restart, and owner cleanup.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import type { OpenBlobStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -30,7 +29,7 @@ import { getMemoryWikiPage } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const { createVault } = createMemoryWikiTestHarness();
+const { createTempDir, createVault } = createMemoryWikiTestHarness();
 let blobStateDir = "";
 let blobStoreEnv: NodeJS.ProcessEnv = {};
 
@@ -104,7 +103,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   beforeEach(async () => {
     resetPluginBlobStoreForTests();
     resetMemoryWikiCompiledCacheOwnersForTests();
-    blobStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compiled-cache-state-"));
+    blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
     blobStoreEnv = { ...process.env, OPENCLAW_STATE_DIR: blobStateDir };
     configureMemoryWikiCompiledCacheStore(createCacheStore());
   });
@@ -113,7 +112,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     configureMemoryWikiCompiledCacheStore(undefined);
     resetMemoryWikiCompiledCacheOwnersForTests();
     resetPluginBlobStoreForTests();
-    await fs.rm(blobStateDir, { recursive: true, force: true });
     blobStateDir = "";
     blobStoreEnv = {};
   });

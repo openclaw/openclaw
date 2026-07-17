@@ -1175,8 +1175,7 @@ function buildCompiledCacheSnapshot(
     .flatMap((page) =>
       sortClaims(page).map((claim) => {
         const freshness = assessClaimFreshness({ page, claim });
-        return {
-          ...(claim.id ? { id: claim.id } : {}),
+        return Object.assign({}, claim.id ? { id: claim.id } : {}, {
           pageId: page.id,
           pageTitle: page.title,
           pageKind: page.kind,
@@ -1201,7 +1200,7 @@ function buildCompiledCacheSnapshot(
           ],
           freshnessLevel: freshness.level,
           lastTouchedAt: freshness.lastTouchedAt,
-        };
+        });
       }),
     )
     .toSorted(

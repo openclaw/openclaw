@@ -75,11 +75,9 @@ async function seedCompiledDigest(params: {
         notEnoughFor: page.notEnoughFor ?? [],
         relationshipCount: page.relationshipCount ?? 0,
         topRelationships: page.topRelationships ?? [],
-        topClaims: (page.topClaims ?? []).map((claim) => ({
-          status: "supported",
-          freshnessLevel: "unknown",
-          ...claim,
-        })),
+        topClaims: (page.topClaims ?? []).map((claim) =>
+          Object.assign({ status: "supported", freshnessLevel: "unknown" }, claim),
+        ),
       })),
     },
     claims: [],
