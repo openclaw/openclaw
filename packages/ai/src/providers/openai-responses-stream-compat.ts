@@ -61,7 +61,8 @@ type ResponsesMessageSnapshotLineage = {
 export function allowsResponsesCrossItemSnapshotCollapse(model: { compat?: unknown }): boolean {
   const compat = model.compat;
   return (
-    !!compat &&
+    compat !== undefined &&
+    compat !== null &&
     typeof compat === "object" &&
     (compat as { collapseRotatingMessageSnapshots?: unknown }).collapseRotatingMessageSnapshots ===
       true
