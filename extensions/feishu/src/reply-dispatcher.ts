@@ -903,9 +903,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
     },
     // The shipped SDK declaration stays void; core still awaits the runtime promise.
-    onError: handleDeliveryError as NonNullable<
-      ChannelInboundTurnPlan["delivery"]["onError"]
-    >,
+    onError: handleDeliveryError as NonNullable<ChannelInboundTurnPlan["delivery"]["onError"]>,
   };
 
   return {

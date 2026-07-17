@@ -221,10 +221,9 @@ describe("handleQaInbound", () => {
       const assembled = firstRunAssembledParams(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
       await Promise.resolve(
-        assembled.delivery.onError?.(
-          new Error(`dispatch\r\nforged${paragraphSeparator}next`),
-          { kind: "final" },
-        ),
+        assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
+          kind: "final",
+        }),
       );
 
       await vi.waitFor(() => {

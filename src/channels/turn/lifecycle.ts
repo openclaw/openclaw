@@ -13,7 +13,6 @@ import { runPreparedChannelTurnCore } from "./execution.js";
 import type {
   AssembledChannelTurn,
   ChannelEventDeliveryAdapter,
-  ChannelTurnPlan,
   ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
@@ -223,25 +222,6 @@ export async function dispatchAssembledChannelTurn(
         ),
     },
     { suppressObserveOnlyDispatch: false },
-  );
-}
-
-export const dispatchChannelInboundReply = dispatchAssembledChannelTurn;
-
-export function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan & {
-    botLoopProtection: NonNullable<ChannelTurnPlan["botLoopProtection"]>;
-  },
-): Promise<ChannelTurnResult>;
-export function dispatchChannelInboundTurn(
-  plan: Omit<ChannelTurnPlan, "botLoopProtection"> & { botLoopProtection?: undefined },
-): Promise<DispatchedChannelTurnResult>;
-export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<ChannelTurnResult>;
-export async function dispatchChannelInboundTurn(
-  plan: ChannelTurnPlan,
-): Promise<ChannelTurnResult> {
-  return await dispatchAssembledChannelTurn(
-    assembleResolvedChannelTurn(plan) as AssembledChannelTurn,
   );
 }
 
