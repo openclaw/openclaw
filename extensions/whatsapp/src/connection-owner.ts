@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/file-lock";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
-export const WHATSAPP_CONNECTION_OWNER_BUSY_CODE = "whatsapp_connection_owner_busy";
+const WHATSAPP_CONNECTION_OWNER_BUSY_CODE = "whatsapp_connection_owner_busy";
 
 export class WhatsAppConnectionOwnerBusyError extends Error {
   readonly code = WHATSAPP_CONNECTION_OWNER_BUSY_CODE;
