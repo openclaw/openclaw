@@ -12,6 +12,7 @@ const fileCache = new Map<string, CacheEntry>();
 /** Maximum number of template file paths to cache concurrently. */
 const MAX_CACHED_TEMPLATE_FILES = 64;
 const warnedTemplateOverrides = new Set<string>();
+const MAX_WARNED_TEMPLATE_OVERRIDES = 256;
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
 function expandPath(p: string): string {
@@ -87,6 +88,10 @@ function getErrorCode(error: unknown): string | undefined {
 
 function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, path?: string): void {
   const key = `${source}:${reason}:${path ?? ""}`;
+  if (warnedTemplateOverrides.size >= MAX_WARNED_TEMPLATE_OVERRIDES) {
+    const oldest = warnedTemplateOverrides.values().next().value;
+    if (oldest !== undefined) warnedTemplateOverrides.delete(oldest);
+  }
   if (warnedTemplateOverrides.has(key)) {
     return;
   }
