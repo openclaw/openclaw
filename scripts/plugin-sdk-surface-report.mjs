@@ -251,7 +251,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
-      8010,
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      8012,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -277,7 +278,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: unified implicit-mention policy resolver.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
-      4476,
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      4478,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -118,7 +118,9 @@ client-provided app tools.
 `openclaw.tools.search(query, options?)`
 
 Searches the effective catalog for the current run. Results are compact and safe
-to put back into prompt context.
+to put back into prompt context. Each hit includes a bounded TypeScript-style
+`input` signature, such as `{ id: string; mode?: "drip" | "flood" }`, so the
+model can skip `describe` when that signature is sufficient.
 
 ```js
 const hits = await openclaw.tools.search("calendar event", { limit: 5 });
@@ -134,7 +136,9 @@ const calendarCreate = await openclaw.tools.describe("mcp:calendar:create_event"
 
 `openclaw.tools.call(id, args)`
 
-Calls a selected tool through OpenClaw.
+Calls a selected tool through OpenClaw and returns the raw `{ tool, result }`
+envelope. JSON-returning tools normally place their value in
+`result.details`.
 
 ```js
 await openclaw.tools.call(calendarCreate.id, {
