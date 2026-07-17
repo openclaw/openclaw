@@ -1,7 +1,5 @@
 // DashScope-compatible download regressions: body idle after headers.
-import { once } from "node:events";
-import http from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { downloadDashscopeGeneratedVideos } from "./dashscope-compatible.js";
 
 function neverChunkingVideoResponse(): Response {
@@ -100,56 +98,46 @@ describe("downloadDashscopeGeneratedVideos", () => {
     // Exhausted deadline is checked before fetch — no network I/O is initiated.
     expect(fetchFn).not.toHaveBeenCalled();
   });
-});
 
-describe("downloadDashscopeGeneratedVideos loopback HTTP", () => {
-  let server: http.Server | undefined;
+  it("releases the guarded fetch when the remaining-budget resolver throws", async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | undefined;
+      const cancelBody = vi.fn();
+      const timeoutMs = vi
+        .fn<() => number>()
+        .mockReturnValueOnce(100)
+        .mockImplementationOnce(() => {
+          throw new Error("remaining-budget resolver failed");
+        });
+      const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(new ReadableStream({ cancel: cancelBody }), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        });
+      });
 
-  afterEach(async () => {
-    if (!server) {
-      return;
+      await expect(
+        downloadDashscopeGeneratedVideos({
+          providerLabel: "Alibaba Wan",
+          urls: ["https://example.com/out.mp4"],
+          timeoutMs,
+          fetchFn: fetchFn as typeof fetch,
+          maxBytes: 10 * 1024 * 1024,
+        }),
+      ).rejects.toThrow("remaining-budget resolver failed");
+
+      expect(timeoutMs).toHaveBeenCalledTimes(2);
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(cancelBody.mock.calls[0]?.[0]).toMatchObject({
+        message: "remaining-budget resolver failed",
+      });
+      expect(requestSignal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(requestSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
-    server.closeAllConnections?.();
-    server.close();
-    await once(server, "close").catch(() => undefined);
-    server = undefined;
-  });
-
-  it("bounds a stalled loopback HTTP body with a real server", async () => {
-    server = http.createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "video/mp4" });
-      // Write one chunk so fetch resolves (Node fetch hangs until first body byte).
-      // Then never write more — simulates stalled CDN.
-      res.write("first-chunk");
-    });
-    server.on("clientError", (_err, socket) => socket.destroy());
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
-    const port = address.port;
-
-    const timeoutMs = 200;
-    const startedAt = Date.now();
-
-    // Accept either error because the fetch-level AbortSignal timeout and
-    // the post-header chunk-idle timeout race; both are bounded within the
-    // configured budget.
-    await expect(
-      downloadDashscopeGeneratedVideos({
-        providerLabel: "Alibaba Wan",
-        urls: [`http://127.0.0.1:${port}/out.mp4`],
-        timeoutMs,
-        fetchFn: fetch,
-        allowPrivateNetwork: true,
-        maxBytes: 10 * 1024 * 1024,
-      }),
-    ).rejects.toThrow();
-
-    const elapsedMs = Date.now() - startedAt;
-    // Bounded proof: the download rejects within 5s, not an indefinite hang.
-    expect(elapsedMs).toBeLessThan(5_000);
   });
 });

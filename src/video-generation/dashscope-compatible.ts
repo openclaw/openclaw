@@ -344,23 +344,25 @@ export async function runDashscopeVideoGenerationTask(params: {
 }
 
 function resolveDashscopeVideoDownloadTimeoutMs(
+  providerLabel: string,
   timeoutMs: ProviderOperationTimeoutMs | undefined,
   defaultTimeoutMs: number | undefined,
 ): number {
   const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  if (typeof resolved === "number" && Number.isFinite(resolved)) {
-    // Preserve exhausted budgets (0 or negative) so a function-valued remaining
-    // deadline that the header fetch consumed fails closed instead of getting
-    // reset to the full default timeout.
-    return Math.max(0, Math.floor(resolved));
+  const downloadTimeoutMs =
+    typeof resolved === "number" && Number.isFinite(resolved)
+      ? Math.max(0, Math.floor(resolved))
+      : (defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS);
+  if (downloadTimeoutMs <= 0) {
+    throw new Error(
+      `${providerLabel} generated video download stalled: remaining budget exhausted`,
+    );
   }
-  return defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
+  return downloadTimeoutMs;
 }
 
 // Downloads task result URLs into generated video assets. The byte limit comes
 // from OpenClaw media config so provider URLs cannot overfill memory.
-// chunkTimeoutMs is required after headers: fetchWithTimeoutGuarded clears its
-// abort once the response arrives, so a dripping CDN body would hang forever.
 export async function downloadDashscopeGeneratedVideos(params: {
   providerLabel: string;
   urls: string[];
@@ -378,16 +380,10 @@ export async function downloadDashscopeGeneratedVideos(params: {
       stage: "download",
       operation: async () => {
         const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
+          params.providerLabel,
           params.timeoutMs,
           params.defaultTimeoutMs,
         );
-        // Reject a non-positive remaining budget before starting fetch so an
-        // already-exhausted operation does not initiate network I/O.
-        if (downloadTimeoutMs <= 0) {
-          throw new Error(
-            `${params.providerLabel} generated video download stalled: remaining budget exhausted`,
-          );
-        }
         const guarded = await fetchWithTimeoutGuarded(
           url,
           { method: "GET" },
@@ -410,14 +406,23 @@ export async function downloadDashscopeGeneratedVideos(params: {
         }
       },
     });
-    // Resolve after headers so a function timeout still sees remaining budget.
-    const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
-      params.timeoutMs,
-      params.defaultTimeoutMs,
-    );
     let buffer: Buffer;
     let mimeType: string;
     try {
+      // Re-resolve after headers so the body uses the remaining operation budget.
+      let downloadTimeoutMs: number;
+      try {
+        downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
+          params.providerLabel,
+          params.timeoutMs,
+          params.defaultTimeoutMs,
+        );
+      } catch (error) {
+        // The body reader normally owns cancellation. If deadline resolution
+        // fails first, cancel here before release clears the guarded abort.
+        await result.response.body?.cancel(error).catch(() => undefined);
+        throw error;
+      }
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>
