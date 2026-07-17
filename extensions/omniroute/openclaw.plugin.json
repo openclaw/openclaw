@@ -1,0 +1,81 @@
+{
+  "id": "omniroute",
+  "name": "OmniRoute",
+  "description": "OpenClaw OmniRoute text inference provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["omniroute"],
+  "providerRequest": {
+    "providers": {
+      "omniroute": {
+        "family": "openai-compatible",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "omniroute",
+        "authMethods": ["api-key"],
+        "envVars": ["OMNIROUTE_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "omniroute",
+      "method": "api-key",
+      "choiceId": "omniroute-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "OmniRoute API key",
+      "choiceHint": "OpenAI-compatible OmniRoute gateway",
+      "groupId": "omniroute",
+      "groupLabel": "OmniRoute",
+      "groupHint": "OpenAI-compatible OmniRoute gateway",
+      "optionKey": "omnirouteApiKey",
+      "cliFlag": "--omniroute-api-key",
+      "cliOption": "--omniroute-api-key <key>",
+      "cliDescription": "OmniRoute API key"
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "omniroute": {
+        "baseUrl": "http://localhost:20128/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "Auto (OmniRoute)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 128000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "omniroute": "static"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
