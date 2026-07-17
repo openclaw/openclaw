@@ -456,16 +456,22 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  // Session lifecycle uses `fresh` for rollover / sessionId reuse only.
-  // Stored /think and /verbose preferences must still apply on every turn
-  // while the entry remains in the store (including after implicit rotation
-  // or when a terminal transcript is newer than the registry snapshot).
-  const persistedThinking = sessionEntry?.thinkingLevel
-    ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-    : undefined;
-  const persistedVerbose = sessionEntry?.verboseLevel
-    ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-    : undefined;
+  // Preference carryover is intentionally narrower than session-id reuse:
+  // keep /think and /verbose for genuine continuation and for terminal
+  // transcript-registry recovery (new sessionId, same stored prefs), but do
+  // not inherit them across a configured daily/idle new-session boundary.
+  // Without this split, not-fresh configured resets would silently reuse the
+  // prior session's choices (CS: preserve configured session-reset boundary).
+  const carryPersistedPreferences =
+    Boolean(sessionEntry) && (!isNewSession || terminalMainTranscriptNewerThanRegistry);
+  const persistedThinking =
+    carryPersistedPreferences && sessionEntry?.thinkingLevel
+      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+      : undefined;
+  const persistedVerbose =
+    carryPersistedPreferences && sessionEntry?.verboseLevel
+      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
+      : undefined;
 
   return {
     sessionId,
