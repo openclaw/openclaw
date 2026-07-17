@@ -1003,6 +1003,12 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return getDiagnosticEventsState().enabled;
 }
 
+/** Returns whether the active dispatcher has any listener that can consume internal events. */
+export function hasActiveInternalDiagnosticEventListeners(): boolean {
+  const state = getDiagnosticEventsState();
+  return state.enabled && (state.listeners.size > 0 || state.trustedListeners.size > 0);
+}
+
 function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,

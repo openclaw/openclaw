@@ -1,6 +1,7 @@
 /** Trusted turn-level model-call diagnostics for the Claude Code CLI runtime. */
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   diagnosticErrorCategory,
   diagnosticErrorFailureKind,
@@ -8,6 +9,7 @@ import {
 } from "../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
+  hasActiveInternalDiagnosticEventListeners,
   type DiagnosticEventPrivateData,
   type DiagnosticModelCallContent,
 } from "../../infra/diagnostic-events.js";
@@ -29,15 +31,97 @@ type ModelCallFailureKind = Extract<
   { type: "model.call.error" }
 >["failureKind"];
 
-function assistantContentBlock(block: unknown): Record<string, unknown> | undefined {
+const MAX_CAPTURED_CONTENT_BYTES = 128 * 1024;
+const FALLBACK_RESPONSE_RESERVE_BYTES = 16 * 1024;
+const MAX_CAPTURED_OUTPUT_MESSAGES = 200;
+const MAX_CAPTURED_OUTPUT_BLOCKS = 200;
+const TRUNCATED_CONTENT_SUFFIX = "...(truncated)";
+const TRUNCATED_CONTENT_SUFFIX_BYTES = Buffer.byteLength(TRUNCATED_CONTENT_SUFFIX, "utf8");
+
+type DiagnosticContentBudget = {
+  remainingBytes: number;
+  remainingItems: number;
+  fallbackReserveBytes: number;
+  fallbackReserveItems: number;
+  truncated: boolean;
+};
+
+function truncateUtf8Safe(value: string, maxBytes: number): string {
+  if (maxBytes <= 0) {
+    return "";
+  }
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  let low = 0;
+  let high = Math.min(value.length, maxBytes);
+  let captured = "";
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = truncateUtf16Safe(value, middle);
+    if (Buffer.byteLength(candidate, "utf8") <= maxBytes) {
+      captured = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return captured;
+}
+
+function releaseFallbackReserve(budget: DiagnosticContentBudget): void {
+  budget.remainingBytes += budget.fallbackReserveBytes;
+  budget.remainingItems += budget.fallbackReserveItems;
+  budget.fallbackReserveBytes = 0;
+  budget.fallbackReserveItems = 0;
+}
+
+function captureTextWithinBudget(
+  value: string,
+  budget: DiagnosticContentBudget,
+): string | undefined {
+  if (budget.remainingBytes <= 0) {
+    budget.truncated = true;
+    return undefined;
+  }
+  const valueBytes = Buffer.byteLength(value, "utf8");
+  if (valueBytes <= budget.remainingBytes) {
+    budget.remainingBytes -= valueBytes;
+    return value;
+  }
+  const suffix = truncateUtf8Safe(TRUNCATED_CONTENT_SUFFIX, budget.remainingBytes);
+  const prefixBudget = Math.max(0, budget.remainingBytes - Buffer.byteLength(suffix, "utf8"));
+  const captured = `${truncateUtf8Safe(value, prefixBudget)}${suffix}`;
+  budget.remainingBytes -= Buffer.byteLength(captured, "utf8");
+  budget.truncated = true;
+  return captured;
+}
+
+function captureBoundedText(value: string): string {
+  const budget = {
+    remainingBytes: MAX_CAPTURED_CONTENT_BYTES,
+    remainingItems: 1,
+    fallbackReserveBytes: 0,
+    fallbackReserveItems: 0,
+    truncated: false,
+  };
+  return captureTextWithinBudget(value, budget) ?? "";
+}
+
+function assistantContentBlock(
+  block: unknown,
+  budget: DiagnosticContentBudget,
+): Record<string, unknown> | undefined {
   if (!isRecord(block)) {
     return undefined;
   }
-  if (block.type === "text" && typeof block.text === "string") {
-    return { type: "text", text: block.text };
+  if (block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+    const text = captureTextWithinBudget(block.text, budget);
+    return text === undefined ? undefined : { type: "text", text };
   }
   if (block.type === "thinking" && typeof block.thinking === "string") {
-    return { type: "thinking", thinking: block.thinking };
+    const thinking = captureTextWithinBudget(block.thinking, budget);
+    return thinking === undefined ? undefined : { type: "thinking", thinking };
   }
   if (
     (block.type === "tool_use" ||
@@ -45,37 +129,122 @@ function assistantContentBlock(block: unknown): Record<string, unknown> | undefi
       block.type === "mcp_tool_use") &&
     typeof block.name === "string"
   ) {
+    const name = captureTextWithinBudget(block.name, budget);
+    if (name === undefined) {
+      return undefined;
+    }
+    const id = typeof block.id === "string" ? captureTextWithinBudget(block.id, budget) : undefined;
     return {
       type: "tool_call",
-      name: block.name,
-      ...(typeof block.id === "string" ? { id: block.id } : {}),
+      name,
+      ...(id !== undefined ? { id } : {}),
     };
   }
   return undefined;
 }
 
+function isCapturableAssistantContentBlock(block: unknown): boolean {
+  if (!isRecord(block)) {
+    return false;
+  }
+  return (
+    (block.type === "text" && typeof block.text === "string") ||
+    (block.type === "thinking" && typeof block.thinking === "string") ||
+    ((block.type === "tool_use" ||
+      block.type === "server_tool_use" ||
+      block.type === "mcp_tool_use") &&
+      typeof block.name === "string")
+  );
+}
+
+function isTextAssistantContentBlock(block: unknown): boolean {
+  return (
+    isRecord(block) &&
+    block.type === "text" &&
+    typeof block.text === "string" &&
+    block.text.length > 0
+  );
+}
+
+function assistantMessageHasText(message: unknown): boolean {
+  if (!isRecord(message)) {
+    return false;
+  }
+  if (typeof message.content === "string") {
+    return message.content.length > 0;
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  const limit = Math.min(message.content.length, MAX_CAPTURED_OUTPUT_BLOCKS);
+  for (let index = 0; index < limit; index += 1) {
+    if (isTextAssistantContentBlock(message.content[index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Claude's assistant envelopes can contain native tool arguments and opaque
 // thinking signatures. Keep only the visible response blocks OpenClaw can
 // represent accurately; external harness tool spans stay metadata-only.
-function normalizeClaudeAssistantMessage(message: unknown): Record<string, unknown> | undefined {
+function normalizeClaudeAssistantMessage(
+  message: unknown,
+  budget: DiagnosticContentBudget,
+): Record<string, unknown> | undefined {
   if (!isRecord(message)) {
     return undefined;
   }
-  const content =
-    typeof message.content === "string"
-      ? [{ type: "text", text: message.content }]
-      : Array.isArray(message.content)
-        ? message.content
-            .map(assistantContentBlock)
-            .filter((block): block is Record<string, unknown> => Boolean(block))
-        : [];
+  const content: Record<string, unknown>[] = [];
+  if (typeof message.content === "string") {
+    if (message.content.length === 0) {
+      return undefined;
+    }
+    releaseFallbackReserve(budget);
+    const text = captureTextWithinBudget(message.content, budget);
+    if (text !== undefined && budget.remainingItems > 0) {
+      content.push({ type: "text", text });
+      budget.remainingItems -= 1;
+    } else if (text !== undefined) {
+      budget.truncated = true;
+    }
+  } else if (Array.isArray(message.content)) {
+    const sourceBlocks = message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS);
+    if (sourceBlocks.length < message.content.length) {
+      budget.truncated = true;
+    }
+    for (const [index, sourceBlock] of sourceBlocks.entries()) {
+      if (isTextAssistantContentBlock(sourceBlock)) {
+        releaseFallbackReserve(budget);
+      }
+      const block = assistantContentBlock(sourceBlock, budget);
+      if (block) {
+        if (budget.remainingItems > 0) {
+          content.push(block);
+          budget.remainingItems -= 1;
+        } else {
+          budget.truncated = true;
+        }
+      }
+      if (budget.remainingBytes <= 0 || budget.remainingItems <= 0) {
+        if (sourceBlocks.slice(index + 1).some(isCapturableAssistantContentBlock)) {
+          budget.truncated = true;
+        }
+        break;
+      }
+    }
+  }
   if (content.length === 0) {
     return undefined;
   }
+  const stopReason =
+    typeof message.stop_reason === "string"
+      ? captureTextWithinBudget(message.stop_reason, budget)
+      : undefined;
   return {
     role: "assistant",
     content,
-    ...(typeof message.stop_reason === "string" ? { stopReason: message.stop_reason } : {}),
+    ...(stopReason !== undefined ? { stopReason } : {}),
   };
 }
 
@@ -84,9 +253,27 @@ function hasTextContent(messages: readonly Record<string, unknown>[]): boolean {
     (message) =>
       Array.isArray(message.content) &&
       message.content.some(
-        (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
+        (block) =>
+          isRecord(block) &&
+          block.type === "text" &&
+          typeof block.text === "string" &&
+          block.text.length > 0,
       ),
   );
+}
+
+function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
+  const marker = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
+  if (messages.length < MAX_CAPTURED_OUTPUT_MESSAGES) {
+    messages.push({ role: "assistant", content: [marker] });
+    return;
+  }
+  const lastIndex = messages.length - 1;
+  const lastMessage = messages[lastIndex];
+  messages[lastIndex] = {
+    ...lastMessage,
+    content: [...(Array.isArray(lastMessage?.content) ? lastMessage.content : []), marker],
+  };
 }
 
 function privateData(params: {
@@ -128,7 +315,12 @@ export function createClaudeCliModelCallDiagnostics(params: {
   transport: "paired-node-cli" | "stdio" | "stdio-live";
   now?: () => number;
 }) {
-  if (params.context.backendResolved.id !== "claude-cli") {
+  // Listener registration is process-stable after plugin startup. This attempt-local
+  // snapshot avoids trace ids, capture buffers, and byte accounting when nobody consumes them.
+  if (
+    params.context.backendResolved.id !== "claude-cli" ||
+    !hasActiveInternalDiagnosticEventListeners()
+  ) {
     return undefined;
   }
 
@@ -169,6 +361,16 @@ export function createClaudeCliModelCallDiagnostics(params: {
     trace,
   };
   const capturedAssistantMessages: Record<string, unknown>[] = [];
+  const outputContentBudget: DiagnosticContentBudget = {
+    remainingBytes:
+      MAX_CAPTURED_CONTENT_BYTES - TRUNCATED_CONTENT_SUFFIX_BYTES - FALLBACK_RESPONSE_RESERVE_BYTES,
+    // One item stays available for the truncation marker; one more is held
+    // separately for the final visible fallback until normal text arrives.
+    remainingItems: MAX_CAPTURED_OUTPUT_BLOCKS - 2,
+    fallbackReserveBytes: FALLBACK_RESPONSE_RESERVE_BYTES,
+    fallbackReserveItems: 1,
+    truncated: false,
+  };
   let started = false;
   let terminalEmitted = false;
   let startedAt = 0;
@@ -186,19 +388,37 @@ export function createClaudeCliModelCallDiagnostics(params: {
       ...(capture.inputMessages
         ? {
             inputMessages: cloneDiagnosticContentValue([
-              { role: "user", content: [{ type: "text", text: params.prompt }] },
+              {
+                role: "user",
+                content: [{ type: "text", text: captureBoundedText(params.prompt) }],
+              },
             ]),
           }
         : {}),
-      ...(capture.systemPrompt && params.systemPrompt ? { systemPrompt: params.systemPrompt } : {}),
+      ...(capture.systemPrompt && params.systemPrompt
+        ? { systemPrompt: captureBoundedText(params.systemPrompt) }
+        : {}),
     };
     return Object.keys(content).length > 0 ? content : undefined;
   };
   const outputMessages = (output?: CliOutput): unknown => {
     const messages = capturedAssistantMessages.slice();
     const responseText = output?.rawText ?? output?.text;
-    if (!hasTextContent(messages) && responseText) {
-      messages.push({ role: "assistant", content: [{ type: "text", text: responseText }] });
+    if (
+      !hasTextContent(messages) &&
+      responseText &&
+      messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
+    ) {
+      const fallback = normalizeClaudeAssistantMessage(
+        { content: responseText },
+        outputContentBudget,
+      );
+      if (fallback) {
+        messages.push(fallback);
+      }
+    }
+    if (outputContentBudget.truncated) {
+      appendOutputTruncationMarker(messages);
     }
     return cloneDiagnosticContentValue(messages);
   };
@@ -238,20 +458,32 @@ export function createClaudeCliModelCallDiagnostics(params: {
     observeRequestPayload: (payload: string): void => {
       requestPayloadBytes = Buffer.byteLength(payload, "utf8");
     },
-    observeCliOutput: (chunk: string, stream: "stderr" | "stdout"): void => {
+    observeCliOutput: (
+      chunk: string,
+      stream: "stderr" | "stdout",
+      knownByteLength?: number,
+    ): void => {
       if (!chunk) {
         return;
       }
       firstCliOutputAt ??= now();
       if (stream === "stdout") {
-        responseStreamBytes += Buffer.byteLength(chunk, "utf8");
+        responseStreamBytes += knownByteLength ?? Buffer.byteLength(chunk, "utf8");
       }
     },
     observeAssistantMessage: (message: unknown): void => {
-      if (!capture.outputMessages) {
+      if (
+        !capture.outputMessages ||
+        ((outputContentBudget.remainingBytes <= 0 || outputContentBudget.remainingItems <= 0) &&
+          !(outputContentBudget.fallbackReserveItems > 0 && assistantMessageHasText(message))) ||
+        capturedAssistantMessages.length >= MAX_CAPTURED_OUTPUT_MESSAGES - 1
+      ) {
+        if (capture.outputMessages) {
+          outputContentBudget.truncated = true;
+        }
         return;
       }
-      const normalized = normalizeClaudeAssistantMessage(message);
+      const normalized = normalizeClaudeAssistantMessage(message, outputContentBudget);
       if (normalized) {
         capturedAssistantMessages.push(normalized);
       }

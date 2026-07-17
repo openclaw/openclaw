@@ -8,6 +8,7 @@ import {
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   formatDiagnosticTraceparentForPropagation,
+  hasActiveInternalDiagnosticEventListeners,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,
@@ -45,6 +46,23 @@ describe("diagnostic-events", () => {
     expect(typeof message).toBe("string");
     expect((message as string).startsWith(prefix)).toBe(true);
   }
+
+  it("reports active internal diagnostic listeners only while dispatch is enabled", () => {
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+
+    const stopInternal = onInternalDiagnosticEvent(() => undefined);
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(true);
+    setDiagnosticsEnabledForProcess(false);
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+    setDiagnosticsEnabledForProcess(true);
+    stopInternal();
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+
+    const stopTrusted = onTrustedInternalDiagnosticEvent(() => undefined);
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(true);
+    stopTrusted();
+    expect(hasActiveInternalDiagnosticEventListeners()).toBe(false);
+  });
 
   it("emits monotonic seq and timestamps to subscribers", () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
