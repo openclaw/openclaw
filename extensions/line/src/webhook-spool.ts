@@ -290,13 +290,15 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
         await options.deliver(claim.payload.event, claim.payload.destination, {
           abortSignal: abortController.signal,
           onTurnAdopted: async () => {
+            // Stop the refresh fence before the completion write: a refresh that
+            // observes the just-completed row would abort the adopted turn.
+            stopRefresh();
             await persistClaimTransition({
               claim,
               label: "adoption completion",
               transition: async () => await queue.complete(claim),
             });
             adopted = true;
-            stopRefresh();
           },
         });
       } catch (error) {

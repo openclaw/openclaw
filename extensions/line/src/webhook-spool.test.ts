@@ -321,6 +321,49 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  it("does not abort an adopting delivery when claim refresh races the completion write", async () => {
+    await withQueue(async (queue) => {
+      let completeStarted = false;
+      const complete = vi.fn(async (...args: Parameters<typeof queue.complete>) => {
+        completeStarted = true;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return await queue.complete(...args);
+      });
+      const refreshClaim = vi.fn(async () => !completeStarted);
+      let abortedAfterAdoption = false;
+      const deliver = vi.fn(
+        async (
+          _event: webhook.Event,
+          _destination: string,
+          control: { abortSignal: AbortSignal; onTurnAdopted: () => Promise<void> },
+        ) => {
+          await control.onTurnAdopted();
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          if (control.abortSignal.aborted) {
+            abortedAfterAdoption = true;
+            throw new Error("aborted after adoption");
+          }
+        },
+      );
+      const outcomes: LineWebhookDeliveryOutcome[] = [];
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue: { ...queue, complete, refreshClaim },
+        claimRefreshMs: 5,
+        deliver,
+        onOutcome: (outcome) => outcomes.push(outcome),
+      });
+      spool.start();
+      await spool.accept(callback(createEvent("event-adoption-race")));
+
+      await waitForOutcome(outcomes, "completed");
+      expect(abortedAfterAdoption).toBe(false);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      await spool.stop();
+    });
+  });
+
   it("completes at durable turn adoption without replaying later failures", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_event, _destination, control) => {
