@@ -357,6 +357,20 @@ describe("secrets CLI", () => {
     });
   });
 
+  it("rejects oversized secrets plan files before parsing", async () => {
+    await withPlanFile(async (planPath) => {
+      await fs.truncate(planPath, 16 * 1024 * 1024 + 1);
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runSecretsApply).not.toHaveBeenCalled();
+      expect(runtimeErrors.at(-1)).toContain("Secrets plan file exceeds 16777216 bytes");
+    });
+  });
+
   it("forwards --allow-exec to secrets apply dry-run", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult());

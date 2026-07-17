@@ -48,22 +48,40 @@ const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
 
 class SecretsPlanFileNotFoundError extends Error {}
 
+const SECRETS_APPLY_PLAN_MAX_BYTES = 16 * 1024 * 1024;
+
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
-  const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
-    fsModuleLoader.load(),
-    import("../secrets/plan.js"),
-  ]);
-  let raw: string;
-  try {
-    raw = readFileSync(pathname, "utf8");
-  } catch (err) {
+  const [{ promises: fs }, { readFileDescriptorBounded }, { isSecretsApplyPlan }] =
+    await Promise.all([
+      fsModuleLoader.load(),
+      import("../infra/file-descriptor-read.js"),
+      import("../secrets/plan.js"),
+    ]);
+  const file = await fs.open(pathname, "r").catch((err: unknown) => {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
         cause: err,
       });
     }
     throw err;
+  });
+  let raw: string;
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Secrets plan path is not a regular file: ${pathname}`);
+    }
+    if (stat.size > SECRETS_APPLY_PLAN_MAX_BYTES) {
+      throw new RangeError(
+        `Secrets plan file exceeds ${SECRETS_APPLY_PLAN_MAX_BYTES} bytes: ${pathname}`,
+      );
+    }
+    raw = (await readFileDescriptorBounded(file.fd, SECRETS_APPLY_PLAN_MAX_BYTES)).toString(
+      "utf8",
+    );
+  } finally {
+    await file.close();
   }
   let parsed: unknown;
   try {
@@ -307,7 +325,7 @@ export function registerSecretsCli(program: Command): void {
   secrets
     .command("apply")
     .description("Apply a previously generated secrets plan")
-    .requiredOption("--from <path>", "Path to plan JSON")
+    .requiredOption("--from <path>", "Path to plan JSON (max 16 MiB)")
     .option("--dry-run", "Validate/preflight only", false)
     .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)
