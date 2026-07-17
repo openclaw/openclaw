@@ -12,11 +12,14 @@ class FakeChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   killedWith: NodeJS.Signals | null = null;
+  readonly killSignals: NodeJS.Signals[] = [];
+  readonly ignoredSignals = new Set<NodeJS.Signals>();
   closeOnKill = true;
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killedWith = signal;
-    if (this.closeOnKill) {
+    this.killSignals.push(signal);
+    if (this.closeOnKill && !this.ignoredSignals.has(signal)) {
       queueMicrotask(() => this.emit("close", null));
     }
     return true;
@@ -187,6 +190,25 @@ describe("voice-call tunnels", () => {
 
       await expect(stop).resolves.toBeUndefined();
       expect(proc.killedWith).toBe("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-kills ngrok before rejecting a startup timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = nextProcess();
+      proc.ignoredSignals.add("SIGTERM");
+      const result = startNgrokTunnel({ port: 3334, path: "/voice/webhook" });
+      const rejection = expect(result).rejects.toThrow("ngrok startup timed out (30s)");
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(proc.killSignals).toEqual(["SIGTERM"]);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await rejection;
+      expect(proc.killSignals).toEqual(["SIGTERM", "SIGKILL"]);
     } finally {
       vi.useRealTimers();
     }

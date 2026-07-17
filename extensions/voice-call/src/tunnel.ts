@@ -16,6 +16,47 @@ const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 const NGROK_STOP_GRACE_MS = 2_000;
 const NGROK_FORCE_KILL_WAIT_MS = 1_000;
 
+async function terminateNgrokProcess(
+  proc: Pick<ChildProcessWithoutNullStreams, "kill" | "once" | "off">,
+  isClosed: () => boolean,
+): Promise<void> {
+  if (isClosed()) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    let finished = false;
+    let forceKillWaitTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      if (forceKillWaitTimer) {
+        clearTimeout(forceKillWaitTimer);
+      }
+      proc.off("close", finish);
+      resolve();
+    };
+    proc.once("close", finish);
+    // Give ngrok a graceful window before forcing termination. The final bounded
+    // close wait avoids returning before SIGKILL normally reaps the child without
+    // letting an unobservable close event hang cleanup forever.
+    const forceKillTimer = setTimeout(() => {
+      forceKillWaitTimer = setTimeout(finish, NGROK_FORCE_KILL_WAIT_MS);
+      if (!isClosed()) {
+        proc.kill("SIGKILL");
+      }
+    }, NGROK_STOP_GRACE_MS);
+    proc.kill("SIGTERM");
+    if (isClosed()) {
+      finish();
+    }
+  });
+}
+
 function listenForChildStreamErrors(
   proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
   onError: (stream: "stdout" | "stderr", error: Error) => void,
@@ -99,8 +140,9 @@ async function startNgrokTunnel(config: {
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        proc.kill("SIGTERM");
-        reject(new Error("ngrok startup timed out (30s)"));
+        void terminateNgrokProcess(proc, () => closed).then(() => {
+          reject(new Error("ngrok startup timed out (30s)"));
+        });
       }
     }, 30000);
 
@@ -143,41 +185,7 @@ async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
-              if (closed) {
-                return;
-              }
-              await new Promise<void>((res) => {
-                let finished = false;
-                let forceKillWaitTimer: ReturnType<typeof setTimeout> | undefined;
-                const finish = () => {
-                  if (finished) {
-                    return;
-                  }
-                  finished = true;
-                  if (forceKillTimer) {
-                    clearTimeout(forceKillTimer);
-                  }
-                  if (forceKillWaitTimer) {
-                    clearTimeout(forceKillWaitTimer);
-                  }
-                  proc.off("close", finish);
-                  res();
-                };
-                proc.once("close", finish);
-                // Give ngrok a graceful window before forcing termination. The final bounded
-                // close wait avoids returning before SIGKILL normally reaps the child without
-                // letting an unobservable close event hang runtime cleanup forever.
-                const forceKillTimer = setTimeout(() => {
-                  if (!closed) {
-                    proc.kill("SIGKILL");
-                  }
-                  forceKillWaitTimer = setTimeout(finish, NGROK_FORCE_KILL_WAIT_MS);
-                }, NGROK_STOP_GRACE_MS);
-                proc.kill("SIGTERM");
-                if (closed) {
-                  finish();
-                }
-              });
+              await terminateNgrokProcess(proc, () => closed);
             },
           });
         }

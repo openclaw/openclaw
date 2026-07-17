@@ -93,4 +93,72 @@ describe.skipIf(process.platform === "win32")("voice-call tunnel child shutdown"
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("force-kills ngrok before rejecting a startup timeout", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ngrok-timeout-"));
+    const pidPath = path.join(tempDir, "ngrok.pid");
+    const signalPath = path.join(tempDir, "ngrok.signal");
+    const ngrokPath = path.join(tempDir, "ngrok");
+    const previousPath = process.env.PATH;
+    const previousPidPath = process.env.OPENCLAW_NGROK_PID_FILE;
+    const previousSignalPath = process.env.OPENCLAW_NGROK_SIGNAL_FILE;
+    let childPid: number | undefined;
+
+    await fs.writeFile(
+      ngrokPath,
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        'process.on("SIGTERM", () => fs.writeFileSync(process.env.OPENCLAW_NGROK_SIGNAL_FILE, "SIGTERM"));',
+        "fs.writeFileSync(process.env.OPENCLAW_NGROK_PID_FILE, String(process.pid));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${tempDir}${path.delimiter}${previousPath ?? ""}`;
+    process.env.OPENCLAW_NGROK_PID_FILE = pidPath;
+    process.env.OPENCLAW_NGROK_SIGNAL_FILE = signalPath;
+
+    try {
+      const result = startTunnel({
+        provider: "ngrok",
+        port: 3334,
+        path: "/voice/webhook",
+      });
+      childPid = await readPid(pidPath);
+
+      await expect(result).rejects.toThrow("ngrok startup timed out (30s)");
+
+      await expect
+        .poll(
+          async () => {
+            try {
+              return await fs.readFile(signalPath, "utf8");
+            } catch {
+              return "";
+            }
+          },
+          { timeout: 1_000, interval: 20 },
+        )
+        .toBe("SIGTERM");
+      expect(await waitForProcessExit(childPid, 1_000)).toBe(true);
+    } finally {
+      process.env.PATH = previousPath;
+      if (previousPidPath === undefined) {
+        delete process.env.OPENCLAW_NGROK_PID_FILE;
+      } else {
+        process.env.OPENCLAW_NGROK_PID_FILE = previousPidPath;
+      }
+      if (previousSignalPath === undefined) {
+        delete process.env.OPENCLAW_NGROK_SIGNAL_FILE;
+      } else {
+        process.env.OPENCLAW_NGROK_SIGNAL_FILE = previousSignalPath;
+      }
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+        await waitForProcessExit(childPid, 1_000);
+      }
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 40_000);
 });
