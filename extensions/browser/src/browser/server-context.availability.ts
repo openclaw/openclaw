@@ -19,6 +19,7 @@ import {
   isChromeReachable,
   launchOpenClawChrome,
   ManagedChromeCleanupError,
+  stopOwnedOpenClawChrome,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -584,14 +585,24 @@ export function createProfileAvailability({
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
-    assertProfileLifecycleContext({ state: state(), runtime, configRevision });
+    const current = state();
+    assertProfileLifecycleContext({ state: current, runtime, configRevision });
     resetManagedLaunchFailure(runtime);
+    let stoppedOwnedProcess = false;
     const result = await beginProfileTransition({
-      state: state(),
+      state: current,
       runtime,
       reason: "stop requested",
+      afterCleanup: async () => {
+        if (profile.attachOnly || capabilities.mode !== "local-managed") {
+          return;
+        }
+        stoppedOwnedProcess = await stopOwnedOpenClawChrome(current.resolved, profile);
+      },
     });
-    return { stopped: result.stopped || profile.attachOnly || capabilities.isRemote };
+    return {
+      stopped: result.stopped || stoppedOwnedProcess || profile.attachOnly || capabilities.isRemote,
+    };
   };
 
   return {
