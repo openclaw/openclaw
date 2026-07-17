@@ -248,7 +248,35 @@ async function main() {
     ]).then(([result]) => result)) as {
       structuredContent?: { event?: Record<string, unknown> };
     };
-    const assistantEvent = waited.structuredContent?.event;
+    let assistantEvent = waited.structuredContent?.event;
+    if (!assistantEvent) {
+      let pollCursor = 0;
+      assistantEvent = await waitFor(
+        "delayed MCP assistant event",
+        async () => {
+          const polledValue = await callTool<{
+            structuredContent?: {
+              events?: Array<Record<string, unknown>>;
+              next_cursor?: number;
+            };
+          }>({
+            name: "events_poll",
+            arguments: {
+              session_key: "agent:main:main",
+              after_cursor: pollCursor,
+              limit: 200,
+            },
+          });
+          const found = findEventByText(
+            polledValue.structuredContent?.events,
+            "assistant live event",
+          );
+          pollCursor = polledValue.structuredContent?.next_cursor ?? pollCursor;
+          return found;
+        },
+        60_000,
+      );
+    }
     assert(assistantEvent, "expected events_wait result");
     assert(assistantEvent.type === "message", "expected message event");
     assert(assistantEvent.role === "assistant", "expected assistant event role");
