@@ -285,7 +285,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
         : undefined;
     const debounceMs =
       decision?.action === "debounce"
-        ? resolveNonNegativeIntegerOption(decision.debounceMs, defaultDebounceMs)
+        ? resolveNonNegativeIntegerOption(decision.debounceMs, resolveDebounceMs(item))
         : resolveDebounceMs(item);
     const canDebounce =
       debounceMs > 0 &&

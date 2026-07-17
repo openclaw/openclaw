@@ -781,6 +781,26 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("uses the per-item window when a debounce decision omits its duration", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      resolveDecision: () => ({ action: "debounce" }),
+      onFlush: async (items) => calls.push(items.map((entry) => entry.id)),
+    });
+
+    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
+    expect(calls).toStrictEqual([]);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1"]]);
+
+    vi.useRealTimers();
+  });
+
   it("keeps later same-key work behind a timer-backed flush that already started", async () => {
     const started: string[] = [];
     const finished: string[] = [];
