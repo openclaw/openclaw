@@ -8,14 +8,14 @@
       "name": "@openclaw/tenki-sandbox",
       "version": "2026.6.11",
       "dependencies": {
-        "@tenkicloud/sandbox": "0.3.3",
+        "@tenkicloud/sandbox": "0.4.0",
         "zod": "4.4.3"
       }
     },
     "node_modules/@bufbuild/protobuf": {
-      "version": "2.12.0",
-      "resolved": "https://registry.npmjs.org/@bufbuild/protobuf/-/protobuf-2.12.0.tgz",
-      "integrity": "sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==",
+      "version": "2.12.1",
+      "resolved": "https://registry.npmjs.org/@bufbuild/protobuf/-/protobuf-2.12.1.tgz",
+      "integrity": "sha512-BvAMfS6LrgZiryOAZ4pBYucu4wG/Ei/9o9DZ9akbREnMLbPJiom2i8b9C8IsKErQoiKqVhrerzt3kOT/RrzLHg==",
       "license": "(Apache-2.0 AND BSD-3-Clause)"
     },
     "node_modules/@connectrpc/connect": {
@@ -41,12 +41,12 @@
       }
     },
     "node_modules/@tenkicloud/sandbox": {
-      "version": "0.3.3",
-      "resolved": "https://registry.npmjs.org/@tenkicloud/sandbox/-/sandbox-0.3.3.tgz",
-      "integrity": "sha512-SHPMLwlwYnKY93QlLMwJP8QzlmPwNyyRu0gJTM9Olk5q9mHr0fnhlxmUMY5+WiQ0rlwfOAVcnXZl3kHNijPE6w==",
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tenkicloud/sandbox/-/sandbox-0.4.0.tgz",
+      "integrity": "sha512-p9GiQutfqEhEEAQlEOph/wuP2Vk0kDof4GjhIvnV96TbvzoqPFp1pD6iEjUcJMri6sJsEXBGf0Grsyl+X52GiA==",
       "license": "MIT",
       "dependencies": {
-        "@bufbuild/protobuf": "2.12.0",
+        "@bufbuild/protobuf": "2.12.1",
         "@connectrpc/connect": "2.1.2",
         "@connectrpc/connect-node": "2.1.2",
         "ws": "8.21.0"
