@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
   applyClawAddPlan,
@@ -6,6 +7,7 @@ import {
 } from "../claws/add.js";
 import { assertExperimentalClawsEnabled } from "../claws/experimental.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
+import { readClawInstallRecord } from "../claws/provenance.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import {
   CLAW_INSPECT_RESULT_SCHEMA_VERSION,
@@ -47,6 +49,26 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   if (plan.summary.blockedActions > 0) {
     runtime.log(`Blocked actions: ${plan.summary.blockedActions}`);
   }
+}
+
+function matchingResumeRecord(plan: ClawAddPlan, opts: ClawsAddOptions) {
+  if (opts.dryRun || !opts.yes || !opts.planIntegrity) {
+    return undefined;
+  }
+  const record = readClawInstallRecord(plan.agent.finalId);
+  if (
+    !record ||
+    record.status === "complete" ||
+    record.planIntegrity !== opts.planIntegrity ||
+    record.workspace !== plan.agent.workspace ||
+    record.claw.kind !== plan.claw.kind ||
+    record.claw.name !== plan.claw.name ||
+    record.claw.version !== plan.claw.version ||
+    record.claw.integrity !== plan.claw.integrity
+  ) {
+    return undefined;
+  }
+  return record;
 }
 
 function failNonDryRun(opts: ClawsAddOptions, runtime: RuntimeEnv): boolean {
@@ -144,24 +166,41 @@ export async function runClawsAddCommand(
 
   const config = getRuntimeConfig();
   const existingAgentIds = listAgentIds(config);
+  const existingWorkspacePaths = existingAgentIds.map((agentId) =>
+    resolveAgentWorkspaceDir(config, agentId),
+  );
   const cronStore = await loadCronJobsStoreWithConfigJobsReadOnly(
     resolveCronJobsStorePath(config.cron?.store),
   );
-  const plan = await buildClawAddPlan({
+  const basePlanContext = {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts.workspace ? { workspace: opts.workspace } : {}),
+    existingAgentIds,
+    existingWorkspacePaths,
+    existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
+    existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
+  };
+  let plan = await buildClawAddPlan({
     manifest: result.manifest,
     source: result.source,
     diagnostics: result.diagnostics,
-    context: {
-      ...(opts.agentId ? { agentId: opts.agentId } : {}),
-      ...(opts.workspace ? { workspace: opts.workspace } : {}),
-      existingAgentIds,
-      existingWorkspacePaths: existingAgentIds.map((agentId) =>
-        resolveAgentWorkspaceDir(config, agentId),
-      ),
-      existingMcpServerNames: Object.keys(config.mcp?.servers ?? {}),
-      existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
-    },
+    context: basePlanContext,
   });
+  const resumeRecord = matchingResumeRecord(plan, opts);
+  if (resumeRecord && plan.blockers.length > 0) {
+    plan = await buildClawAddPlan({
+      manifest: result.manifest,
+      source: result.source,
+      diagnostics: result.diagnostics,
+      context: {
+        ...basePlanContext,
+        existingAgentIds: existingAgentIds.filter((agentId) => agentId !== resumeRecord.agentId),
+        existingWorkspacePaths: existingWorkspacePaths.filter(
+          (workspacePath) => resolve(workspacePath) !== resolve(resumeRecord.workspace),
+        ),
+      },
+    });
+  }
 
   if (plan.blockers.length > 0) {
     if (opts.json) {

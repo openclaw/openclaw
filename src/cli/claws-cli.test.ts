@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { persistClawInstallRecord } from "../claws/provenance.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => {
   const logs: string[] = [];
@@ -125,6 +127,10 @@ describe("claws cli", () => {
     }));
   });
 
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("does not register without the process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     const program = new Command();
@@ -236,6 +242,39 @@ describe("claws cli", () => {
       status: "complete",
       agent: { finalId: "demo-agent", workspace },
     });
+  });
+
+  it("resumes consented add when config already reflects the matching in-flight record", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
+    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
+
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    persistClawInstallRecord(plan, { status: "workspace_ready", nowMs: 1 });
+    mocks.logs.length = 0;
+    mocks.runtime.exit.mockClear();
+    mocks.applyClawAddPlan.mockClear();
+    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent", workspace }] } });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
+      { consentPlanIntegrity: plan.planIntegrity },
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("requires the exact dry-run plan identity with explicit consent", async () => {

@@ -1,5 +1,5 @@
 // Tests root Claw install ownership and the narrow agent/workspace mutation slice.
-import { access, mkdir, mkdtemp } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { persistClawInstallRecord } from "./provenance.js";
+import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
@@ -18,7 +18,10 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function makePlan(manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } }) {
+async function makePlan(
+  manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },
+  options: { workspace?: string } = {},
+) {
   const root = await mkdtemp(join(tmpdir(), "openclaw-claw-add-"));
   const parsed = parseClawManifest(manifestValue);
   if (!parsed.ok) {
@@ -37,7 +40,7 @@ async function makePlan(manifestValue: unknown = { schemaVersion: 1, agent: { id
   const plan = await buildClawAddPlan({
     manifest: parsed.manifest,
     source,
-    context: { workspace: join(root, "workspace-worker") },
+    context: { workspace: options.workspace ?? join(root, "workspace-worker") },
   });
   return { root, plan };
 }
@@ -104,12 +107,34 @@ describe("Claw root install provenance", () => {
     });
   });
 
-  it("does not overwrite an existing install record for the same agent", async () => {
+  it("does not overwrite a completed install record for the same agent", async () => {
     const { root, plan } = await makePlan();
     persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 1 });
 
     expect(() => persistClawInstallRecord(plan, { env: stateEnv(root), nowMs: 2 })).toThrow();
     expect(Number(readInstallRow("worker", root)?.added_at_ms)).toBe(1);
+  });
+
+  it("resumes a matching non-complete install record without inserting again", async () => {
+    const { root, plan } = await makePlan();
+    const first = persistClawInstallRecord(plan, {
+      env: stateEnv(root),
+      status: "pending",
+      nowMs: 1,
+    });
+
+    const resumed = persistClawInstallRecord(plan, {
+      env: stateEnv(root),
+      status: "pending",
+      nowMs: 2,
+    });
+
+    expect(resumed).toEqual(first);
+    expect(readClawInstallRecord("worker", { env: stateEnv(root) })).toMatchObject({
+      agentId: "worker",
+      status: "pending",
+      addedAtMs: 1,
+    });
   });
 });
 
@@ -187,6 +212,61 @@ describe("applyClawAddPlan", () => {
       }),
     ).rejects.toMatchObject({ code: "workspace_collision" });
     expect(readInstallRow("worker", root)?.status).toBe("partial");
+  });
+
+  it("records parent-directory creation failures before workspace mutation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-add-"));
+    const blockedParent = join(root, "blocked-parent");
+    await writeFile(blockedParent, "not a directory", "utf8");
+    const { plan } = await makePlan(undefined, {
+      workspace: join(blockedParent, "workspace-worker"),
+    });
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: stateEnv(root),
+      }),
+    ).rejects.toMatchObject({ code: "workspace_parent_failed" });
+    expect(readInstallRow("worker", root)?.status).toBe("partial");
+  });
+
+  it("resumes a matching partial add with an existing non-empty workspace", async () => {
+    const { root, plan } = await makePlan();
+    let config: OpenClawConfig = {};
+    let attempts = 0;
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: stateEnv(root),
+        commitConfig: async (transform) => {
+          attempts += 1;
+          if (attempts === 1) {
+            await writeFile(join(plan.agent.workspace, "leftover.txt"), "keep", "utf8");
+            throw new Error("config unavailable");
+          }
+          config = transform(config);
+        },
+      }),
+    ).rejects.toThrow("config unavailable");
+    expect(readInstallRow("worker", root)?.status).toBe("workspace_ready");
+
+    const retry = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: stateEnv(root),
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    expect(retry).toMatchObject({
+      status: "complete",
+      workspaceCreated: true,
+      configCommitted: true,
+    });
+    expect(config.agents?.list).toContainEqual(expect.objectContaining({ id: "worker" }));
+    expect(readInstallRow("worker", root)?.status).toBe("complete");
   });
 
   it("blocks declared components that this lifecycle slice cannot yet create", async () => {
