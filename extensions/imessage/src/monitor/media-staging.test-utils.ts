@@ -19,6 +19,7 @@ describe("stageIMessageAttachments", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -96,7 +97,11 @@ describe("stageIMessageAttachments", () => {
       { maxBytes: 1024, deps: { saveMediaBuffer, convertHeicToJpeg } },
     );
 
-    expect(convertHeicToJpeg).toHaveBeenCalledWith(sourcePath, 1024);
+    expect(convertHeicToJpeg).toHaveBeenCalledOnce();
+    const [convertedPath, convertedMaxBytes] = convertHeicToJpeg.mock.calls[0] ?? [];
+    expect(convertedPath).not.toBe(sourcePath);
+    expect(path.basename(String(convertedPath))).toBe("IMG_0001.HEIC");
+    expect(convertedMaxBytes).toBe(1024);
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("jpeg-bytes"),
       "image/jpeg",
@@ -120,6 +125,92 @@ describe("stageIMessageAttachments", () => {
 
     expect(saveMediaBuffer).not.toHaveBeenCalled();
     expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("failed to stage"));
+  });
+
+  it("drops allowed attachments that grow after stat before read", async () => {
+    const sourcePath = await writeTempFile("growing.png", Buffer.from("1234"));
+    const realOpen = fs.open.bind(fs);
+    let grewBeforeRead = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (!grewBeforeRead && path.resolve(String(args[0])) === path.resolve(sourcePath)) {
+        grewBeforeRead = true;
+        await fs.appendFile(sourcePath, Buffer.from("56789"));
+      }
+      return await realOpen(...args);
+    });
+
+    const saveMediaBuffer = vi.fn();
+    const logVerbose = vi.fn();
+
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
+        { maxBytes: 4, allowedRoots: [tempDir], deps: { saveMediaBuffer, logVerbose } },
+      ),
+    ).resolves.toEqual({ attachments: [], unavailableCount: 1 });
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("attachment exceeds"));
+  });
+
+  it("drops HEIC attachments that grow after stat before conversion", async () => {
+    const sourcePath = await writeTempFile("growing.HEIC", Buffer.from("1234"));
+    const realOpen = fs.open.bind(fs);
+    let grewBeforeRead = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (!grewBeforeRead && path.resolve(String(args[0])) === path.resolve(sourcePath)) {
+        grewBeforeRead = true;
+        await fs.appendFile(sourcePath, Buffer.from("56789"));
+      }
+      return await realOpen(...args);
+    });
+
+    const saveMediaBuffer = vi.fn();
+    const convertHeicToJpeg = vi.fn(async () => Buffer.from("jpeg-bytes"));
+    const logVerbose = vi.fn();
+
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
+        {
+          maxBytes: 4,
+          allowedRoots: [tempDir],
+          deps: { saveMediaBuffer, convertHeicToJpeg, logVerbose },
+        },
+      ),
+    ).resolves.toEqual({ attachments: [], unavailableCount: 1 });
+
+    expect(convertHeicToJpeg).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("attachment exceeds"));
+  });
+
+  it("stages allowed attachments exactly at the inbound media limit", async () => {
+    const sourcePath = await writeTempFile("boundary.png", Buffer.from("1234"));
+    const saveMediaBuffer = vi.fn(async () => ({
+      id: "boundary.png",
+      path: "/state/media/inbound/boundary.png",
+      size: 4,
+      contentType: "image/png",
+    }));
+
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
+        { maxBytes: 4, allowedRoots: [tempDir], deps: { saveMediaBuffer } },
+      ),
+    ).resolves.toEqual({
+      attachments: [{ path: "/state/media/inbound/boundary.png", contentType: "image/png" }],
+      unavailableCount: 0,
+    });
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("1234"),
+      "image/png",
+      "inbound",
+      4,
+      "boundary.png",
+    );
   });
 
   it("counts attachments already marked missing", async () => {

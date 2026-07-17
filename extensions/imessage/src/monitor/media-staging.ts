@@ -1,5 +1,6 @@
 // Imessage plugin module implements media staging behavior.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
@@ -36,6 +37,52 @@ function isHeicAttachment(attachmentPath: string, mimeType?: string | null): boo
 function jpegFilenameForAttachment(attachmentPath: string): string {
   const parsed = path.parse(attachmentPath);
   return `${parsed.name || "imessage-attachment"}.jpg`;
+}
+
+function attachmentLimitMessage(maxBytes: number): string {
+  return `attachment exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`;
+}
+
+async function readFileWithinLimit(filePath: string, maxBytes: number): Promise<Buffer> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const readLimit = Math.max(0, Math.floor(maxBytes)) + 1;
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let position = 0;
+    while (totalBytes <= maxBytes) {
+      const chunkSize = Math.min(64 * 1024, Math.max(1, readLimit - totalBytes));
+      const chunk = Buffer.allocUnsafe(chunkSize);
+      const { bytesRead } = await handle.read(chunk, 0, chunkSize, position);
+      if (bytesRead === 0) {
+        break;
+      }
+      totalBytes += bytesRead;
+      if (totalBytes > maxBytes) {
+        throw new Error(attachmentLimitMessage(maxBytes));
+      }
+      chunks.push(chunk.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    return Buffer.concat(chunks, totalBytes);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function withHeicSnapshot<T>(
+  sourcePath: string,
+  buffer: Buffer,
+  fn: (snapshotPath: string, snapshotDir: string) => Promise<T>,
+): Promise<T> {
+  const snapshotDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-heic-"));
+  try {
+    const snapshotPath = path.join(snapshotDir, path.basename(sourcePath));
+    await fs.writeFile(snapshotPath, buffer, { flag: "wx" });
+    return await fn(snapshotPath, snapshotDir);
+  } finally {
+    await fs.rm(snapshotDir, { recursive: true, force: true });
+  }
 }
 
 function hasWildcardSegment(root: string): boolean {
@@ -87,7 +134,7 @@ async function readAttachmentBuffer(params: {
     throw new Error("attachment path is not a file");
   }
   if (stat.size > params.maxBytes) {
-    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
+    throw new Error(attachmentLimitMessage(params.maxBytes));
   }
 
   const canonicalPath = await resolveAllowedCanonicalAttachmentPath({
@@ -99,21 +146,24 @@ async function readAttachmentBuffer(params: {
     throw new Error("attachment path is not a file");
   }
   if (canonicalStat.size > params.maxBytes) {
-    throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
+    throw new Error(attachmentLimitMessage(params.maxBytes));
   }
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
+      const sourceBuffer = await readFileWithinLimit(canonicalPath, params.maxBytes);
       const convert = params.deps.convertHeicToJpeg;
-      const converted = convert
-        ? {
-            buffer: await convert(canonicalPath, params.maxBytes),
-            fileName: jpegFilenameForAttachment(params.attachmentPath),
-          }
-        : await loadWebMedia(canonicalPath, {
-            maxBytes: params.maxBytes,
-            localRoots: [path.dirname(canonicalPath)],
-          });
+      const converted = await withHeicSnapshot(canonicalPath, sourceBuffer, async (snapshotPath, snapshotDir) =>
+        convert
+          ? {
+              buffer: await convert(snapshotPath, params.maxBytes),
+              fileName: jpegFilenameForAttachment(params.attachmentPath),
+            }
+          : await loadWebMedia(snapshotPath, {
+              maxBytes: params.maxBytes,
+              localRoots: [snapshotDir],
+            }),
+      );
       return {
         buffer: converted.buffer,
         contentType: "image/jpeg",
@@ -127,7 +177,7 @@ async function readAttachmentBuffer(params: {
   }
 
   return {
-    buffer: await fs.readFile(canonicalPath),
+    buffer: await readFileWithinLimit(canonicalPath, params.maxBytes),
     contentType: params.mimeType ?? undefined,
     originalFilename: path.basename(params.attachmentPath),
   };
