@@ -1,4 +1,6 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { unknownItemStatus } from "./event-projector-items.js";
 import {
   readCodexNotificationThreadId,
@@ -25,6 +27,10 @@ export function isKnownNoopCodexNotificationMethod(method: string): boolean {
   return KNOWN_NOOP_NOTIFICATION_METHODS.has(method);
 }
 
+export function redactCodexEventKind(method: string): string {
+  return redactSensitiveText(sanitizeTerminalText(method));
+}
+
 export class CodexProjectionDiagnostics {
   private readonly warningKeys = new Set<string>();
 
@@ -41,26 +47,28 @@ export class CodexProjectionDiagnostics {
     if (!status) {
       return;
     }
+    const safeStatus = redactCodexEventKind(status);
+    const safeItemType = redactCodexEventKind(item.type);
     this.warnOnce(
-      `status:${item.type}:${status}`,
-      "codex app-server item reported unknown status",
+      JSON.stringify(["status", item.type, status]),
+      "codex app-server item reported unknown status; continuing projection",
       {
         itemId: item.id,
-        itemType: item.type,
-        status,
+        itemType: safeItemType,
+        status: safeStatus,
       },
     );
   }
 
-  warnUnknownNotification(notification: CodexServerNotification, params: JsonObject): void {
+  warnUnknownEvent(notification: CodexServerNotification, params: JsonObject): void {
     const notificationThreadId = readCodexNotificationThreadId(params);
     const notificationTurnId = readCodexNotificationTurnId(params);
+    const eventKind = redactCodexEventKind(notification.method);
     this.warnOnce(
-      `method:${notification.method}`,
-      "codex app-server notification ignored with unknown method",
+      JSON.stringify(["method", notification.method]),
+      `codex app-server projector received unknown event kind; continuing: ${eventKind}`,
       {
-        method: notification.method,
-        paramsKeys: Object.keys(params).toSorted(),
+        eventKind,
         activeThreadId: this.threadId,
         activeTurnId: this.turnId,
         threadId: notificationThreadId,

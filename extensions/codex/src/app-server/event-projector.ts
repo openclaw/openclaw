@@ -290,7 +290,7 @@ export class CodexAppServerEventProjector {
         break;
       default:
         if (!isKnownNoopCodexNotificationMethod(notification.method)) {
-          this.diagnostics.warnUnknownNotification(notification, params);
+          this.diagnostics.warnUnknownEvent(notification, params);
         }
         break;
     }

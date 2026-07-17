@@ -51,9 +51,6 @@ export function itemTitle(item: CodexThreadItem): string {
 
 export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
-  if (status === undefined || status === "completed") {
-    return "completed";
-  }
   if (status === "failed" || status === "error") {
     return "failed";
   }
@@ -63,7 +60,7 @@ export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "run
   if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
-  return "failed";
+  return "completed";
 }
 
 export function unknownItemStatus(item: CodexThreadItem): string | undefined {

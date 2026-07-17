@@ -154,8 +154,7 @@ describe("CodexAppServerTurnRouter", () => {
     );
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("codex app-server notification ignored for inactive turn", {
-      method: "item/agentMessage/delta",
-      paramsKeys: ["delta", "itemId", "threadId", "turnId"],
+      eventKind: "item/agentMessage/delta",
       activeThreadId: "thread-1",
       activeTurnId: "turn-current",
       threadId: "thread-1",

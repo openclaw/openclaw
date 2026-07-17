@@ -1,6 +1,7 @@
 /** Keyed routing for all turn traffic on one shared Codex app-server client. */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
+import { redactCodexEventKind } from "./event-projector-diagnostics.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -435,16 +436,14 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
     if (notification.method === "turn/completed" || !scope.turnId || !route.turnId) {
       return;
     }
-    const key = `${notification.method}:${scope.turnId}`;
+    const eventKind = redactCodexEventKind(notification.method);
+    const key = JSON.stringify([notification.method, scope.turnId]);
     if (route.ignoredTurnNotificationKeys.has(key)) {
       return;
     }
     route.ignoredTurnNotificationKeys.add(key);
     embeddedAgentLog.warn("codex app-server notification ignored for inactive turn", {
-      method: notification.method,
-      paramsKeys: isJsonObject(notification.params)
-        ? Object.keys(notification.params).toSorted()
-        : [],
+      eventKind,
       activeThreadId: route.threadId,
       activeTurnId: route.turnId,
       threadId: scope.threadId,
