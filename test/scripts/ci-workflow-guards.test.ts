@@ -1927,6 +1927,18 @@ describe("ci workflow guards", () => {
       (entry) => entry.step.with["save-sticky-disk"] === "true",
     );
     expect(ciWriters.map((entry) => entry.jobName)).toEqual(["build-artifacts"]);
+    // The disk key is partitioned by node-version and both writers rely on
+    // the action default; a consumer pinning any other version would split
+    // onto a writerless key and silently regress to permanently cold installs.
+    for (const { jobName, step } of stickyConsumers) {
+      const nodeVersion = step.with["node-version"];
+      expect(
+        nodeVersion === undefined ||
+          nodeVersion === "24.x" ||
+          nodeVersion === "${{ matrix.node_version || '24.x' }}",
+        `${jobName} must resolve to the writer's 24.x snapshot key (got ${String(nodeVersion)})`,
+      ).toBe(true);
+    }
     const warmWorkflow = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
     const warmSetupStep = warmWorkflow.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
@@ -1967,6 +1979,8 @@ describe("ci workflow guards", () => {
       );
     }
     expect(action.inputs["sticky-disk"].default).toBe("false");
+    // Writers omit node-version, so the default is the writers' key segment.
+    expect(action.inputs["node-version"].default).toBe("24.x");
     expect(action.inputs["save-sticky-disk"].default).toBe("false");
     expect(validateLayoutStep.if).toBe("inputs.sticky-disk == 'true'");
     expect(validateLayoutStep.run).toContain("for config_name in modules-dir virtual-store-dir");
