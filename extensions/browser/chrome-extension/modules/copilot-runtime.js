@@ -1,3 +1,4 @@
+/* oxlint-disable -- generated bundle; lint the TypeScript source instead. */
 function b(t) {
   return (typeof t == "string" && t.trim()) || void 0;
 }

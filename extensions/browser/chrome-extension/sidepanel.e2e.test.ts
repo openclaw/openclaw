@@ -11,12 +11,13 @@ import {
   type Worker,
 } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import { useAutoCleanupTempDirTracker } from "../test-support.js";
 
 declare const chrome: {
   runtime: {
@@ -83,10 +84,22 @@ function isSidePanelTarget(target: TargetInfo): boolean {
   }
 }
 
+function textValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function rawDataText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
 const cleanups: Array<() => Promise<void>> = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0).reverse()) {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup().catch(() => undefined);
   }
 });
@@ -139,7 +152,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       }),
     );
     socket.on("message", (data) => {
-      const frame = JSON.parse(data.toString()) as RequestFrame;
+      const frame = JSON.parse(rawDataText(data)) as RequestFrame;
       requests.push(frame);
       const params = frame.params ?? {};
       if (frame.method === "connect") {
@@ -169,7 +182,7 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
         });
         return;
       }
-      const key = String(params.key ?? params.sessionKey ?? "");
+      const key = textValue(params.key) || textValue(params.sessionKey);
       if (frame.method === "sessions.create") {
         histories.set(key, []);
         sendResponse(socket, frame.id, { ok: true, key, sessionId: `id-${histories.size}` });
@@ -187,10 +200,10 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       }
       if (frame.method === "chat.send") {
         chatSends.push(params);
-        const message = String(params.message ?? "");
+        const message = textValue(params.message);
         const history = histories.get(key) ?? [];
         history.push({ role: "user", content: [{ type: "text", text: message }] });
-        const runId = String(params.idempotencyKey ?? "");
+        const runId = textValue(params.idempotencyKey);
         if (message === "ambiguous linger marker") {
           histories.set(key, history);
           socket.terminate();
@@ -259,8 +272,12 @@ async function createGatewayHarness(): Promise<GatewayHarness> {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }
@@ -276,12 +293,15 @@ async function createFixtureServer(): Promise<{ baseUrl: string; close: () => Pr
   const port = await listen(server);
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    close: async () => await new Promise<void>((resolve) => server.close(() => resolve())),
+    close: async () =>
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      }),
   };
 }
 
 async function copyExtension(): Promise<string> {
-  const target = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-extension-"));
+  const target = tempDirs.make("openclaw-copilot-extension-");
   await fs.cp(extensionDir, target, {
     recursive: true,
     filter: (source) => !source.endsWith(".test.ts"),
@@ -532,9 +552,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const fixture = await createFixtureServer();
     cleanups.push(fixture.close);
     const unpackedExtension = await copyExtension();
-    cleanups.push(async () => await fs.rm(unpackedExtension, { recursive: true, force: true }));
-    const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-copilot-profile-"));
-    cleanups.push(async () => await fs.rm(userDataDir, { recursive: true, force: true }));
+    const userDataDir = tempDirs.make("openclaw-copilot-profile-");
     const executablePath = await resolveChromiumExecutable();
     const context = await chromium.launchPersistentContext(userDataDir, {
       ...(executablePath ? { executablePath } : { channel: "chromium" }),
@@ -576,12 +594,12 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
       const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] });
       return {
         currentTabId: tab?.id,
-        contexts: contexts.map((context) => ({
-          contextType: context.contextType,
-          hasDocumentId: Boolean(context.documentId),
-          pathname: new URL(context.documentUrl).pathname,
-          queryKeys: [...new URL(context.documentUrl).searchParams.keys()],
-          tabId: context.tabId,
+        contexts: contexts.map((panelContext) => ({
+          contextType: panelContext.contextType,
+          hasDocumentId: Boolean(panelContext.documentId),
+          pathname: new URL(panelContext.documentUrl).pathname,
+          queryKeys: [...new URL(panelContext.documentUrl).searchParams.keys()],
+          tabId: panelContext.tabId,
         })),
       };
     });
@@ -682,8 +700,8 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         }),
       });
     }
-    expect(gateway.histories.get(String(alphaSend.sessionKey))).not.toEqual(
-      gateway.histories.get(String(betaSend.sessionKey)),
+    expect(gateway.histories.get(textValue(alphaSend.sessionKey))).not.toEqual(
+      gateway.histories.get(textValue(betaSend.sessionKey)),
     );
     expect(gateway.connectParams[0]).toEqual(
       expect.objectContaining({
@@ -702,15 +720,15 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
 
     await alphaTab.close();
     await expect
-      .poll(() => gateway.archived.has(String(alphaSend.sessionKey)), { timeout: 15_000 })
+      .poll(() => gateway.archived.has(textValue(alphaSend.sessionKey)), { timeout: 15_000 })
       .toBe(true);
     const alphaLifecycle = gateway.requests
-      .filter((request) => String(request.params?.key ?? "") === alphaSend.sessionKey)
+      .filter((request) => textValue(request.params?.key) === alphaSend.sessionKey)
       .map((request) => request.method);
     expect(alphaLifecycle).toEqual(
       expect.arrayContaining(["sessions.messages.unsubscribe", "sessions.abort", "sessions.patch"]),
     );
-    expect(gateway.histories.get(String(alphaSend.sessionKey))).toHaveLength(2);
+    expect(gateway.histories.get(textValue(alphaSend.sessionKey))).toHaveLength(2);
     const subscriptionsBeforeRace = gateway.requests.filter(
       (request) => request.method === "sessions.messages.subscribe",
     ).length;
@@ -732,7 +750,9 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     expect(await betaPanel.text("#gate-title")).toBe("Preparing this tab");
     await disableTabPanel(worker, betaTabId);
     releaseSubscription();
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
     expect(gateway.chatSends).toHaveLength(2);
 
     let reopenedBetaPanel = await openTabPanel({
@@ -783,7 +803,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     const connectionsBeforeAmbiguousSend = gateway.connectParams.length;
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(3);
-    const networkRunId = String(gateway.chatSends[2]?.idempotencyKey ?? "");
+    const networkRunId = textValue(gateway.chatSends[2]?.idempotencyKey);
     await expect
       .poll(() => gateway.connectParams.length, { timeout: 15_000 })
       .toBe(connectionsBeforeAmbiguousSend + 1);
@@ -814,7 +834,7 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
     await expect.poll(async () => !(await reopenedBetaPanel.disabled("#send-button"))).toBe(true);
     await reopenedBetaPanel.click("#send-button");
     await expect.poll(() => gateway.chatSends.length, { timeout: 10_000 }).toBe(5);
-    const panelRunId = String(gateway.chatSends[4]?.idempotencyKey ?? "");
+    const panelRunId = textValue(gateway.chatSends[4]?.idempotencyKey);
     const historiesBeforeNavigation = gateway.requests.filter(
       (request) => request.method === "chat.history",
     ).length;
@@ -828,7 +848,9 @@ describe.runIf(runE2E)("browser copilot Chromium side panel", () => {
         { timeout: 10_000 },
       )
       .toEqual({ gateHidden: true, messagesHidden: false });
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
     expect(gateway.requests.filter((request) => request.method === "chat.history")).toHaveLength(
       historiesBeforeNavigation,
     );

@@ -116,6 +116,18 @@ async function isTabShared(tabId) {
   return shared.some((tab) => tab.id === tabId);
 }
 
+async function isOpenClawGroupId(groupId) {
+  if (!Number.isInteger(groupId) || groupId < 0) {
+    return false;
+  }
+  try {
+    const group = await chrome.tabGroups.get(groupId);
+    return group.title === OPENCLAW_TAB_GROUP_TITLE;
+  } catch {
+    return false;
+  }
+}
+
 function scheduleTabsSync() {
   if (tabsSyncTimer) {
     return;
@@ -512,9 +524,17 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   scheduleTabsSync();
   void copilot.onTabRemoved(tabId);
 });
-chrome.tabs.onUpdated.addListener((tabId) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   scheduleTabsSync();
-  void copilot.onConsentChanged(tabId);
+  if (typeof changeInfo.groupId !== "number") {
+    void copilot.onConsentChanged(tabId);
+    return;
+  }
+  // changeInfo.groupId is the event-time membership snapshot. Preserve a
+  // revocation even if a later event re-shares the tab before async cleanup.
+  void isOpenClawGroupId(changeInfo.groupId).then((shared) =>
+    copilot.onConsentChanged(tabId, { revoked: !shared }),
+  );
 });
 chrome.tabGroups.onUpdated.addListener(() => {
   scheduleTabsSync();

@@ -193,7 +193,9 @@ describe("browser copilot Gateway custody", () => {
         },
       });
       await clearStarted;
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(FakeWebSocket.instances).toHaveLength(1);
 
       releaseClear?.();

@@ -125,6 +125,38 @@ export function isDefinitiveGatewayRejection(error) {
   return error instanceof GatewayProtocolRequestError;
 }
 
+export async function waitForCopilotGatewayReady(client, gatewayScope) {
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      if (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      } else {
+        resolve();
+      }
+    };
+    const unsubscribe = client.onStatus((status) => {
+      if (status.state === "ready") {
+        finish();
+      } else if (
+        status.state === "approval" ||
+        status.state === "denied" ||
+        status.state === "error"
+      ) {
+        finish(new Error(status.label || "Gateway recovery failed"));
+      }
+    });
+    const timer = setTimeout(() => finish(new Error("Gateway recovery timed out")), 30_000);
+    client.start(gatewayScope);
+  });
+}
+
 function createBrowserSocket(url, handlers, WebSocketImpl) {
   const socket = new WebSocketImpl(url);
   socket.addEventListener("open", handlers.open);
@@ -257,29 +289,31 @@ export class CopilotGatewayClient {
         }
         const recovery = this.tokenRecovery;
         if (!decision.retry && recovery?.protocol === protocol) {
-          void recovery.cleared.then(
-            () => {
-              if (
-                this.tokenRecovery !== recovery ||
-                this.protocol ||
-                this.url !== recovery.gatewayScope
-              ) {
-                return;
-              }
-              this.tokenRecovery = null;
-              this.start(recovery.gatewayScope);
-            },
-            (error) => {
-              if (this.tokenRecovery !== recovery) {
-                return;
-              }
-              this.tokenRecovery = null;
-              this.#emitStatus({
-                state: "error",
-                label: error?.message || "Could not clear the rejected device token",
-              });
-            },
-          );
+          /** @param {unknown} error */
+          const onClearRejected = (error) => {
+            if (this.tokenRecovery !== recovery) {
+              return;
+            }
+            this.tokenRecovery = null;
+            this.#emitStatus({
+              state: "error",
+              label:
+                error instanceof Error
+                  ? error.message
+                  : "Could not clear the rejected device token",
+            });
+          };
+          void recovery.cleared.then(() => {
+            if (
+              this.tokenRecovery !== recovery ||
+              this.protocol ||
+              this.url !== recovery.gatewayScope
+            ) {
+              return;
+            }
+            this.tokenRecovery = null;
+            this.start(recovery.gatewayScope);
+          }, onClearRejected);
         }
         if (decision.notify) {
           this.#emitStatus({ state: "connecting", label: "Gateway reconnecting" });

@@ -331,6 +331,52 @@ describe("browser copilot background", () => {
     await expect(controller.refreshConfig()).resolves.toBeUndefined();
   });
 
+  it("processes an observed revocation before a later re-share", async () => {
+    const gatewayScope = "ws://127.0.0.1:18789/";
+    const revokeDebugger = vi.fn(async () => undefined);
+    const gateway = {
+      ready: false,
+      onEvent: vi.fn(),
+      onStatus: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    const controller = createCopilotController({
+      chromeApi: {
+        runtime: { onConnect: eventHook() },
+        tabs: {
+          query: vi.fn(async () => [{ id: 12 }]),
+          get: vi.fn(async () => ({ id: 12, title: "Fixture", url: "https://example.test" })),
+        },
+        storage: { local: storageArea(), session: storageArea() },
+      } as never,
+      getConfig: vi.fn(async () => ({
+        relayUrl: "ws://127.0.0.1:18792/browser/extension",
+        gatewayUrl: gatewayScope,
+      })),
+      isTabShared: vi.fn(async () => true),
+      addTabToOpenClawGroup: vi.fn(),
+      attachDebugger: vi.fn(),
+      detachDebugger: vi.fn(),
+      revokeDebugger,
+      restoreDebugger: vi.fn(async () => undefined),
+      scheduleTabsSync: vi.fn(),
+      gateway: gateway as never,
+    });
+    await controller.initialize();
+    await controller.registry.put(12, { gatewayScope, sessionKey: "session-12" });
+    await controller.registry.startRun(12, gatewayScope, "run-12");
+
+    const revoked = controller.onConsentChanged(12, { revoked: true });
+    const reshared = controller.onConsentChanged(12);
+    await Promise.all([revoked, reshared]);
+
+    expect(revokeDebugger).toHaveBeenCalledWith(12);
+    expect(controller.registry.pendingAborts(gatewayScope)).toEqual([
+      expect.objectContaining({ activeRunId: "run-12", abortPending: true }),
+    ]);
+  });
+
   it("keeps ordinary active runs visible and gates only abort reconciliation", () => {
     expect(
       selectCopilotPanelState({

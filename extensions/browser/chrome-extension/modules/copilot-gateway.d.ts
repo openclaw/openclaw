@@ -47,6 +47,10 @@ export function resolveCopilotClose(context: {
 };
 
 export function isDefinitiveGatewayRejection(error: unknown): boolean;
+export function waitForCopilotGatewayReady(
+  client: CopilotGatewayClient,
+  gatewayScope: string,
+): Promise<void>;
 
 export class CopilotGatewayClient {
   constructor(options?: { storage?: StorageArea; WebSocketImpl?: typeof WebSocket });

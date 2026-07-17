@@ -43,7 +43,7 @@ export function createCopilotController(options: Record<string, unknown>): {
   initializeCustody(): Promise<void>;
   initialize(): Promise<void>;
   preparePanel(tabId: number): Promise<{ path: string }>;
-  onConsentChanged(changedTabId?: number): Promise<void>;
+  onConsentChanged(changedTabId?: number, options?: { revoked?: boolean }): Promise<void>;
   onTabRemoved(tabId: number): Promise<void>;
   refreshConfig(): Promise<void>;
   drainAborts(gatewayScope?: string | null): Promise<void>;
