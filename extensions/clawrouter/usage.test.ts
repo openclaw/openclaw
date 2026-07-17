@@ -240,7 +240,7 @@ describe("ClawRouter usage", () => {
 
     await expect(
       fetchClawRouterUsage({
-        token: "proxy-key",
+        token: "test-auth-token",
         baseUrl,
         timeoutMs: 5000,
       }),
