@@ -516,6 +516,13 @@ describe("runGatewayConversationTurn", () => {
 
   it("rejects unsupported channels before registering or sending", async () => {
     const deps = createDeps();
+    const {
+      sessionId: _sessionId,
+      sessionKey: _sessionKey,
+      role: _role,
+      ...unbound
+    } = conversation;
+    deps.resolveConversation.mockReturnValue(unbound);
     deps.resolveOutboundChannelPlugin.mockReturnValueOnce({ outbound: {} } as never);
 
     await expect(
@@ -532,6 +539,9 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(deps.ensureOutboundSessionEntry).not.toHaveBeenCalled();
+    expect(deps.beginOperation).not.toHaveBeenCalled();
     expect(deps.registerPendingConversationTurn).not.toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });

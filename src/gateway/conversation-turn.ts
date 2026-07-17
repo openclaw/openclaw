@@ -262,6 +262,19 @@ export async function runGatewayConversationTurn(
     channel: discoveredConversation.channel,
     cfg: params.config,
   });
+  const candidatePreparedMessageId = begun
+    ? begun.record.preparedMessageId
+    : prepareConversationMessageId({
+        plugin,
+        config: params.config,
+        conversation: discoveredConversation,
+        message: params.message,
+      });
+  if (!candidatePreparedMessageId) {
+    throw new ConversationInputError(
+      `Conversation turn ${params.turnId} is missing its prepared message id`,
+    );
+  }
   const conversation = await ensureConversationContextBinding({
     deps,
     scope,
@@ -271,12 +284,6 @@ export async function runGatewayConversationTurn(
     plugin,
   });
   if (!begun) {
-    const candidatePreparedMessageId = prepareConversationMessageId({
-      plugin,
-      config: params.config,
-      conversation,
-      message: params.message,
-    });
     try {
       begun = deps.beginOperation(scope, {
         operationId: params.turnId,
