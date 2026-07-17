@@ -1,8 +1,10 @@
 // Codex tests cover user input bridge plugin behavior.
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexUserInputAction } from "./user-input-actions.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+
+const AUTO_RESOLUTION_MS = 60_000;
 
 function createParams(): EmbeddedRunAttemptParams {
   return {
@@ -24,6 +26,36 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   }
   return payload.text;
 }
+
+function createAutoResolutionRequest(params: {
+  id: string;
+  itemId: string;
+  autoResolutionMs?: number;
+}) {
+  return {
+    id: params.id,
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: params.itemId,
+      autoResolutionMs: params.autoResolutionMs ?? AUTO_RESOLUTION_MS,
+      questions: [
+        {
+          id: "choice",
+          header: "Mode",
+          question: "Pick a mode",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Fast", description: "Use less reasoning" }],
+        },
+      ],
+    },
+  };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Codex app-server user input bridge", () => {
   it("prompts the originating chat and resolves request_user_input from the next queued message", async () => {
@@ -63,6 +95,112 @@ describe("Codex app-server user input bridge", () => {
     await expect(response).resolves.toEqual({
       answers: { choice: { answers: ["Deep"] } },
     });
+  });
+
+  it("auto-resolves non-blocking requests after the requested window", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    let settled = false;
+    const response = bridge.handleRequest(
+      createAutoResolutionRequest({ id: "input-timeout", itemId: "tool-timeout" }),
+    );
+    void response.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(AUTO_RESOLUTION_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(response).resolves.toEqual({ answers: {} });
+    expect(bridge.handleQueuedMessage("too late")).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears auto-resolution after a human answer", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const response = bridge.handleRequest(
+      createAutoResolutionRequest({ id: "input-answer", itemId: "tool-answer" }),
+    );
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(bridge.handleQueuedMessage("1")).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { choice: { answers: ["Fast"] } },
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    const eventCount = vi.mocked(params.onAgentEvent!).mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(AUTO_RESOLUTION_MS);
+    expect(vi.mocked(params.onAgentEvent!).mock.calls).toHaveLength(eventCount);
+    expect(bridge.handleQueuedMessage("too late")).toBe(false);
+  });
+
+  it("clears auto-resolution when the run aborts", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      signal: controller.signal,
+    });
+    const response = bridge.handleRequest(
+      createAutoResolutionRequest({ id: "input-abort", itemId: "tool-abort" }),
+    );
+
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort();
+    await expect(response).resolves.toEqual({ answers: {} });
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(AUTO_RESOLUTION_MS);
+    expect(bridge.handleQueuedMessage("too late")).toBe(false);
+  });
+
+  it("clears the replaced request timer without shortening the replacement window", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const firstResponse = bridge.handleRequest(
+      createAutoResolutionRequest({ id: "input-first-timer", itemId: "tool-first-timer" }),
+    );
+    let replacementSettled = false;
+    const replacementResponse = bridge.handleRequest(
+      createAutoResolutionRequest({
+        id: "input-second-timer",
+        itemId: "tool-second-timer",
+        autoResolutionMs: AUTO_RESOLUTION_MS * 2,
+      }),
+    );
+    void replacementResponse.then(() => {
+      replacementSettled = true;
+    });
+
+    await expect(firstResponse).resolves.toEqual({ answers: {} });
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(AUTO_RESOLUTION_MS);
+    expect(replacementSettled).toBe(false);
+    await vi.advanceTimersByTimeAsync(AUTO_RESOLUTION_MS);
+
+    await expect(replacementResponse).resolves.toEqual({ answers: {} });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("emits a web question card and typed channel actions", async () => {

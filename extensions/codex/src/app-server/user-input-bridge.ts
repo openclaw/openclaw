@@ -97,8 +97,13 @@ export function createCodexUserInputBridge(params: {
       return new Promise<JsonValue>((resolve) => {
         const abortListener = () => resolvePending(emptyUserInputResponse());
         let disposeAction = () => {};
+        let autoResolutionTimer: ReturnType<typeof setTimeout> | undefined;
         const cleanup = () => {
           params.signal?.removeEventListener("abort", abortListener);
+          if (autoResolutionTimer !== undefined) {
+            clearTimeout(autoResolutionTimer);
+            autoResolutionTimer = undefined;
+          }
           disposeAction();
           emitQuestionEvent(params.paramsForRun, "resolved", requestParams.itemId);
         };
@@ -124,6 +129,14 @@ export function createCodexUserInputBridge(params: {
         if (params.signal?.aborted) {
           resolvePending(emptyUserInputResponse());
           return;
+        }
+        if (requestParams.autoResolutionMs !== undefined) {
+          // The app-server wire value is the client auto-resolution window. Route
+          // expiry through cleanup so a late timer cannot settle a replacement.
+          autoResolutionTimer = setTimeout(() => {
+            autoResolutionTimer = undefined;
+            resolvePendingIfCurrent(current, emptyUserInputResponse());
+          }, requestParams.autoResolutionMs);
         }
         emitQuestionEvent(
           params.paramsForRun,
@@ -190,6 +203,7 @@ function readUserInputParams(value: JsonValue | undefined):
       turnId: string;
       itemId: string;
       questions: AgentHarnessUserInputQuestion[];
+      autoResolutionMs?: number;
     }
   | undefined {
   if (!isJsonObject(value)) {
@@ -205,7 +219,14 @@ function readUserInputParams(value: JsonValue | undefined):
   const questions = questionsRaw
     .map(readQuestion)
     .filter((question): question is AgentHarnessUserInputQuestion => Boolean(question));
-  return { threadId, turnId, itemId, questions };
+  const rawAutoResolutionMs = value.autoResolutionMs;
+  const autoResolutionMs =
+    typeof rawAutoResolutionMs === "number" &&
+    Number.isSafeInteger(rawAutoResolutionMs) &&
+    rawAutoResolutionMs >= 0
+      ? rawAutoResolutionMs
+      : undefined;
+  return { threadId, turnId, itemId, questions, autoResolutionMs };
 }
 
 function readQuestion(value: JsonValue): AgentHarnessUserInputQuestion | undefined {
