@@ -58,7 +58,7 @@ function isIdentityPlaceholder(value: string): boolean {
 }
 
 /** Parse rich identity fields from human-authored markdown content. */
-export function parseIdentityMarkdown(content: string): AgentIdentityFile {
+function parseIdentityMarkdown(content: string): AgentIdentityFile {
   const identity: AgentIdentityFile = {};
   const lines = content.split(/\r?\n/);
   for (const line of lines) {

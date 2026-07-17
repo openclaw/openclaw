@@ -7,14 +7,27 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  loadAgentIdentityFromFile,
   loadAgentIdentityFromWorkspace,
   mergeIdentityMarkdownContent,
-  parseIdentityMarkdown,
 } from "./identity-file.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace.js";
 
+async function parseIdentityFromContent(
+  content: string,
+): Promise<import("./identity-file.js").AgentIdentityFile | null> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-identity-parse-"));
+  const filePath = path.join(tempDir, "IDENTITY.md");
+  fs.writeFileSync(filePath, content, "utf-8");
+  try {
+    return await loadAgentIdentityFromFile(filePath);
+  } finally {
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 describe("parseIdentityMarkdown", () => {
-  it("ignores identity template placeholders", () => {
+  it("ignores identity template placeholders", async () => {
     const content = `
 # IDENTITY.md - Who Am I?
 
@@ -24,11 +37,11 @@ describe("parseIdentityMarkdown", () => {
 - **Emoji:** *(your signature - pick one that feels right)*
 - **Avatar:** *(workspace-relative path, http(s) URL, or data URI)*
     `;
-    const parsed = parseIdentityMarkdown(content);
-    expect(parsed).toStrictEqual({});
+    const parsed = await parseIdentityFromContent(content);
+    expect(parsed).toBeNull();
   });
 
-  it("parses explicit identity values", () => {
+  it("parses explicit identity values", async () => {
     const content = `
 - **Name:** Samantha
 - **Creature:** Robot
@@ -36,7 +49,7 @@ describe("parseIdentityMarkdown", () => {
 - **Emoji:** :robot:
 - **Avatar:** avatars/openclaw.png
 `;
-    const parsed = parseIdentityMarkdown(content);
+    const parsed = await parseIdentityFromContent(content);
     expect(parsed).toEqual({
       name: "Samantha",
       creature: "Robot",
@@ -46,13 +59,13 @@ describe("parseIdentityMarkdown", () => {
     });
   });
 
-  it("strips markdown code spans from values and labels", () => {
+  it("strips markdown code spans from values and labels", async () => {
     const content = [
       "- **Name:** `Samantha`",
       "- `Creature`: Robot",
       "- **`Avatar`**: `avatars/openclaw.png`",
     ].join("\n");
-    const parsed = parseIdentityMarkdown(content);
+    const parsed = await parseIdentityFromContent(content);
     expect(parsed).toEqual({
       name: "Samantha",
       creature: "Robot",
@@ -60,15 +73,15 @@ describe("parseIdentityMarkdown", () => {
     });
   });
 
-  it("still treats code-span-wrapped template placeholders as placeholders", () => {
+  it("still treats code-span-wrapped template placeholders as placeholders", async () => {
     const content = "- **Avatar:** `(workspace-relative path, http(s) URL, or data URI)`";
-    const parsed = parseIdentityMarkdown(content);
-    expect(parsed).toStrictEqual({});
+    const parsed = await parseIdentityFromContent(content);
+    expect(parsed).toBeNull();
   });
 
-  it("ignores an italic not-set placeholder", () => {
-    const parsed = parseIdentityMarkdown("- **Avatar:** *(not set yet)*");
-    expect(parsed).toStrictEqual({});
+  it("ignores an italic not-set placeholder", async () => {
+    const parsed = await parseIdentityFromContent("- **Avatar:** *(not set yet)*");
+    expect(parsed).toBeNull();
   });
 });
 
