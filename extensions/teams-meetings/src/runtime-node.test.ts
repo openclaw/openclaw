@@ -56,7 +56,8 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
           return { payload: { result: { ok: true } } };
         }
         if (params.path === "/act") {
-          const script = String((params.body as { fn?: unknown } | undefined)?.fn ?? "");
+          const scriptValue = (params.body as { fn?: unknown } | undefined)?.fn;
+          const script = typeof scriptValue === "string" ? scriptValue : "";
           if (script.includes("leaveAction")) {
             return {
               payload: {

@@ -11,6 +11,7 @@ import {
 
 const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_test%40thread.v2/0?context=%7b%7d";
+const MEETING_STATE_KEY = "__openclawTeamsMeeting";
 
 function status(manualActionReason: string, manualActionMessage = "manual action") {
   const health = TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({
@@ -136,10 +137,9 @@ async function runStatusScript(params: {
       return [];
     },
   };
-  const meetingStateKey = "__openclawTeamsMeeting";
   const window: Record<string, unknown> = {};
   if (params.priorMeeting) {
-    window[meetingStateKey] = params.priorMeeting;
+    window[MEETING_STATE_KEY] = params.priorMeeting;
   }
   const script = teamsMeetingStatusScript({
     allowMicrophone: params.allowMicrophone,
@@ -193,7 +193,7 @@ function runLeaveScript(params: {
   };
   const window: Record<string, unknown> = {};
   if (params.priorMeeting) {
-    window.__openclawTeamsMeeting = params.priorMeeting;
+    window[MEETING_STATE_KEY] = params.priorMeeting;
   }
   const run = runInNewContext(`(${teamsMeetingLeaveScript(URL)})`, {
     URL: globalThis.URL,
@@ -368,7 +368,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
 
     expect(result.inCall).toBe(true);
-    expect(window["__openclawTeamsMeeting"]).toMatchObject(priorMeeting);
+    expect(window[MEETING_STATE_KEY]).toMatchObject(priorMeeting);
   });
 
   it("adopts the first live hang-up control during the verified join transition", async () => {
@@ -378,11 +378,11 @@ describe("Microsoft Teams meeting platform adapter", () => {
       allowMicrophone: false,
       currentUrl: "https://teams.microsoft.com/v2/",
       leave,
-      priorMeeting: prejoin.window.__openclawTeamsMeeting as Record<string, unknown>,
+      priorMeeting: prejoin.window[MEETING_STATE_KEY] as Record<string, unknown>,
     });
 
     expect(admitted.result.inCall).toBe(true);
-    expect(admitted.window.__openclawTeamsMeeting).toMatchObject({
+    expect(admitted.window[MEETING_STATE_KEY]).toMatchObject({
       identity: "teams-work:19:meeting_test@thread.v2",
       inCallControl: leave,
       inCallUrl: "https://teams.microsoft.com/v2/",
@@ -407,7 +407,7 @@ describe("Microsoft Teams meeting platform adapter", () => {
     });
 
     expect(result.inCall).toBe(true);
-    expect(window.__openclawTeamsMeeting).toMatchObject({
+    expect(window[MEETING_STATE_KEY]).toMatchObject({
       inCallControl: currentLeave,
       inCallUrl,
     });

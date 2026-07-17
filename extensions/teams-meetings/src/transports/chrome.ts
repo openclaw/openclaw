@@ -562,7 +562,7 @@ export async function leaveTeamsMeetingInBrowser(params: {
             timeoutMs: request.timeoutMs,
           })
       : await resolveLocalMeetingBrowserRequest(params.runtime),
-    launch: params.config.chrome.launch || params.tab.openedByPlugin === false,
+    launch: params.config.chrome.launch || !params.tab.openedByPlugin,
     meetingUrl: params.meetingUrl,
     tab: params.tab,
     timeoutMs: params.config.chrome.joinTimeoutMs,
