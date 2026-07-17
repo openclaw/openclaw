@@ -1,5 +1,11 @@
 import { consume } from "@lit/context";
-import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
+import {
+  AppBridge,
+  type McpUiMessageRequest,
+  McpUiMessageRequestSchema,
+  type McpUiMessageResult,
+  PostMessageTransport,
+} from "@modelcontextprotocol/ext-apps/app-bridge";
 import {
   type CallToolResult,
   type ListToolsRequest,
@@ -81,6 +87,12 @@ function hostContext(element: Element | undefined, height: number): HostContext 
 }
 
 class OpenClawAppBridge extends AppBridge {
+  setMessageHandler(
+    handler: (params: McpUiMessageRequest["params"]) => Promise<McpUiMessageResult>,
+  ) {
+    this.replaceRequestHandler(McpUiMessageRequestSchema, (request) => handler(request.params));
+  }
+
   setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
     this.replaceRequestHandler(ListToolsRequestSchema, (request) => handler(request.params));
   }
@@ -252,15 +264,14 @@ export class McpAppView extends LitElement {
       );
       if (payload.messageSupported === true) {
         const promptRateKey = `${this.sessionKey}\0${this.viewId}`;
-        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- AppBridge.onmessage is a JSON-RPC request handler, not an EventTarget slot.
-        bridge.onmessage = async ({ content }) => {
+        bridge.setMessageHandler(async ({ content }) => {
           const block = content.length === 1 ? content[0] : undefined;
           const text = block?.type === "text" ? block.text : null;
           const accepted = dispatchWidgetPrompt(iframe, text, promptRateKey, (prompt) =>
             window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
           );
           return accepted ? {} : { isError: true };
-        };
+        });
       }
       bridge.oncalltool = async (params) =>
         (await this.request("mcp.app.callTool", {

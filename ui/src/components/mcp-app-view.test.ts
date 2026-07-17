@@ -5,6 +5,8 @@ import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./mcp-app-sec
 const bridgeMocks = vi.hoisted(() => ({ instances: [] as Array<Record<string, unknown>> }));
 
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
+  const McpUiMessageRequestSchema = Symbol("McpUiMessageRequestSchema");
+
   class AppBridge {
     oninitialized?: () => void;
     onmessage?: (params: {
@@ -27,7 +29,14 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
       bridgeMocks.instances.push(this as unknown as Record<string, unknown>);
     }
 
-    protected replaceRequestHandler() {}
+    protected replaceRequestHandler(
+      schema: unknown,
+      handler: (request: { params: unknown }) => Promise<unknown>,
+    ) {
+      if (schema === McpUiMessageRequestSchema) {
+        this.onmessage = (params) => handler({ params }) as Promise<{ isError?: boolean }>;
+      }
+    }
 
     async connect() {
       this.oninitialized?.();
@@ -38,7 +47,7 @@ vi.mock("@modelcontextprotocol/ext-apps/app-bridge", () => {
     async close() {}
   }
 
-  return { AppBridge, PostMessageTransport };
+  return { AppBridge, McpUiMessageRequestSchema, PostMessageTransport };
 });
 
 const { McpAppView } = await import("./mcp-app-view.ts");
