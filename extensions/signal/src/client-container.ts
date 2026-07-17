@@ -88,18 +88,78 @@ function normalizeBaseUrl(url: string): string {
   return `${parsed.protocol}//${parsed.host}${pathname}`;
 }
 
+/**
+ * Keep one AbortController armed from request start through body consumption.
+ * fetch() resolves at headers; clearing the timer there would let a slow-drip
+ * body exceed the caller timeoutMs while never tripping the idle chunk guard.
+ */
+async function withSignalRestDeadline<T>(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
+  return await withSignalRestDeadline(timeoutMs, async (signal) =>
+    fetchImpl(url, { ...init, signal }),
+  );
+}
+
+function signalRestRequestTimeoutError(): Error {
+  return new Error("Signal REST request timed out");
+}
+
+/**
+ * fetch() resolves at headers, so a body read otherwise keeps only the per-chunk
+ * idle guard and a slow-drip body can outlive the caller timeoutMs. Race the read
+ * against the request signal so timeoutMs stays a total deadline, and cancel the
+ * body on abort so the stalled stream is released. undici already aborts the body
+ * with the fetch signal in production; this also covers readers (including test
+ * mocks) whose streams are not linked to the signal.
+ */
+async function readBodyWithinDeadline<T>(
+  res: Response,
+  signal: AbortSignal,
+  read: () => Promise<T>,
+): Promise<T> {
+  if (signal.aborted) {
+    void res.body?.cancel().catch(() => undefined);
+    throw signalRestRequestTimeoutError();
+  }
+  const bodyPromise = read();
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+    return await new Promise<T>((resolve, reject) => {
+      const onAbort = () => {
+        void res.body?.cancel().catch(() => undefined);
+        reject(signalRestRequestTimeoutError());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      bodyPromise.then(
+        (value) => {
+          signal.removeEventListener("abort", onAbort);
+          resolve(value);
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(toLintErrorObject(error, "Non-Error rejection"));
+        },
+      );
+    });
+  } catch (error) {
+    void bodyPromise.catch(() => undefined);
+    throw error;
   }
 }
 
@@ -281,32 +341,44 @@ async function containerRestRequest<T = unknown>(
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-  const res = await fetchWithTimeout(url, init, timeoutMs);
-
-  if (res.status === 204) {
-    return undefined as T;
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
 
-  if (!res.ok) {
-    // Bound the error body: signal-cli-rest-api is an untrusted external container,
-    // and a hostile/buggy response must not let an error path buffer an unbounded body.
-    const errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs).catch(() => "");
-    throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
-  }
+  return await withSignalRestDeadline(timeoutMs, async (signal) => {
+    const res = await fetchImpl(url, { ...init, signal });
+    if (res.status === 204) {
+      return undefined as T;
+    }
 
-  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
-  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
-  // funnel through here). Reuse the same bounded reader family as the attachment path.
-  const text = await readSignalRestText(res, bodyIdleTimeoutMs);
-  if (!text) {
-    return undefined as T;
-  }
+    if (!res.ok) {
+      // Bound the error body: signal-cli-rest-api is an untrusted external container,
+      // and a hostile/buggy response must not let an error path buffer an unbounded body.
+      const errorText = await readBodyWithinDeadline(res, signal, () =>
+        readSignalRestErrorText(res, bodyIdleTimeoutMs),
+      ).catch(() => "");
+      throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
+    }
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error("Signal REST returned malformed JSON");
-  }
+    // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+    // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+    // funnel through here). timeoutMs stays a total request+body deadline (localhost
+    // container, 10s default), so a slow-drip body cannot outlive it even while the idle
+    // chunk guard keeps resetting.
+    const text = await readBodyWithinDeadline(res, signal, () =>
+      readSignalRestText(res, bodyIdleTimeoutMs),
+    );
+    if (!text) {
+      return undefined as T;
+    }
+
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error("Signal REST returned malformed JSON");
+    }
+  });
 }
 
 /**
@@ -318,25 +390,34 @@ async function containerFetchAttachment(
 ): Promise<Buffer | null> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
-  let res: Response | undefined;
-
-  try {
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
-    res = await fetchWithTimeout(url, { method: "GET" }, timeoutMs);
-
-    if (!res.ok) {
-      return null;
-    }
-
-    return await readCappedResponseBuffer(
-      res,
-      normalizeMaxResponseBytes(opts.maxResponseBytes),
-      bodyIdleTimeoutMs,
-    );
-  } finally {
-    await releaseUnreadResponseBody(res);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const bodyIdleTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  const fetchImpl = resolveFetch();
+  if (!fetchImpl) {
+    throw new Error("fetch is not available");
   }
+
+  return await withSignalRestDeadline(timeoutMs, async (signal) => {
+    let res: Response | undefined;
+    try {
+      const fetched = await fetchImpl(url, { method: "GET", signal });
+      res = fetched;
+
+      if (!fetched.ok) {
+        return null;
+      }
+
+      return await readBodyWithinDeadline(fetched, signal, () =>
+        readCappedResponseBuffer(
+          fetched,
+          normalizeMaxResponseBytes(opts.maxResponseBytes),
+          bodyIdleTimeoutMs,
+        ),
+      );
+    } finally {
+      await releaseUnreadResponseBody(res);
+    }
+  });
 }
 
 /**
