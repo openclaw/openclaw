@@ -84,7 +84,8 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
 }): NormalizeChatSendRequestResult {
   const chatSendReceivedAtMs = performance.now();
-  const clientInfo = params.client?.connect?.client;
+  const client = params.client;
+  const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
     isOperatorUiClient(clientInfo) &&
     params.client?.connect?.scopes?.includes("operator.admin") === true &&
@@ -138,10 +139,14 @@ export function normalizeChatSendRequest(params: {
   const systemProvenanceReceipt = systemReceiptResult.receipt;
   const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
   if (p.toolBindings) {
-    if (!isBrowserCopilotClient(clientInfo) || params.client?.pairedClientId !== clientInfo?.id) {
+    if (
+      !client ||
+      !isBrowserCopilotClient(clientInfo) ||
+      client.pairedClientId !== clientInfo?.id
+    ) {
       return { ok: false, error: "run tool bindings require a paired browser copilot" };
     }
-    if (!hasGatewayClientCap(params.client.connect.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS)) {
+    if (!hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS)) {
       return { ok: false, error: "run tool bindings require client capability" };
     }
   }
