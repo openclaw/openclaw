@@ -86,6 +86,7 @@ const {
   clearManagedPluginOfficialCatalogCache,
   installManagedPlugin,
   listManagedPlugins,
+  resolveManagedPluginIconUrl,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } = await import("./management-service.js");
@@ -113,6 +114,7 @@ function metadataSnapshot(params: {
   name?: string;
   origin?: "bundled" | "global";
   installRecord?: Record<string, unknown>;
+  icon?: string;
 }) {
   const id = params.id ?? "workboard";
   const manifest = {
@@ -120,6 +122,7 @@ function metadataSnapshot(params: {
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",
     catalog: { featured: true, order: 10 },
+    ...(params.icon ? { icon: params.icon } : {}),
     channels: [],
     providers: [],
     cliBackends: [],
@@ -175,6 +178,7 @@ const hostedFeedDiffsEntry = {
   id: "@openclaw/diffs",
   title: "Diffs",
   state: "available",
+  featured: true,
   publisher: { id: "openclaw", trust: "official" },
   install: {
     candidates: [
@@ -212,13 +216,12 @@ describe("plugin management service", () => {
     });
   });
 
-  it("overlays bundled curation through the hosted catalog load path", async () => {
+  it("keeps bundled curation when the hosted catalog falls back offline", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.officialCatalog.mockResolvedValue({
-      source: "hosted",
+      source: "bundled-fallback",
       entries: [hostedDiffsEntry],
-      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+      error: "offline",
     });
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
@@ -344,6 +347,75 @@ describe("plugin management service", () => {
       }),
     ]);
     expect(catalog.mutationAllowed).toBe(true);
+  });
+
+  it("projects and resolves installed manifest icons by plugin identity", async () => {
+    const icon = "https://cdn.example.test/workboard.svg";
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false, icon }));
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    const resolved = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "workboard",
+      officialCatalog: { entries: [] },
+    });
+
+    expect(catalog.plugins[0]).toMatchObject({ id: "workboard", hasIcon: true });
+    expect(resolved).toBe(icon);
+  });
+
+  it("projects and resolves official catalog icons without exposing their URL", async () => {
+    const icon = "https://cdn.example.test/firecrawl.svg";
+    const officialCatalog = {
+      entries: [
+        {
+          name: "@openclaw/firecrawl",
+          description: "Web extraction and crawling.",
+          openclaw: {
+            plugin: { id: "firecrawl", label: "FireCrawl" },
+            catalog: { featured: true, order: 60 },
+            icon,
+          },
+        },
+      ],
+    };
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+
+    const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
+    const resolved = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "firecrawl",
+      officialCatalog,
+    });
+
+    expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl", hasIcon: true });
+    expect(catalog.plugins[0]).not.toHaveProperty("icon");
+    expect(resolved).toBe(icon);
+  });
+
+  it("omits icon capability when neither manifest nor catalog has one", async () => {
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    const resolved = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "workboard",
+      officialCatalog: { entries: [] },
+    });
+
+    expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
+    expect(resolved).toBeUndefined();
   });
 
   it("refuses mutation in Nix mode before reading or writing config", async () => {

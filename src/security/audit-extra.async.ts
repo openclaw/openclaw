@@ -167,6 +167,35 @@ async function getCodeSafetySummary(params: {
     : await scan();
 }
 
+async function getSkillCodeSafetySummary(params: {
+  dirPath: string;
+  skillFilePath: string;
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<SkillScanSummary> {
+  const [summary, skillContent, skillScanner] = await Promise.all([
+    getCodeSafetySummary({
+      dirPath: params.dirPath,
+      summaryCache: params.summaryCache,
+    }),
+    fs.readFile(params.skillFilePath, "utf-8"),
+    loadSkillScannerModule(),
+  ]);
+  const skillFindings = [
+    ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),
+    ...skillScanner.scanSource(skillContent, params.skillFilePath),
+  ];
+
+  return {
+    ...summary,
+    scannedFiles: summary.scannedFiles + 1,
+    critical:
+      summary.critical + skillFindings.filter((finding) => finding.severity === "critical").length,
+    warn: summary.warn + skillFindings.filter((finding) => finding.severity === "warn").length,
+    info: summary.info + skillFindings.filter((finding) => finding.severity === "info").length,
+    findings: [...summary.findings, ...skillFindings],
+  };
+}
+
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
@@ -877,8 +906,9 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await getCodeSafetySummary({
+      const summary = await getSkillCodeSafetySummary({
         dirPath: skillDir,
+        skillFilePath: entry.skill.filePath,
         summaryCache: params.summaryCache,
       }).catch((err: unknown) => {
         findings.push({

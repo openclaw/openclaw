@@ -13,6 +13,7 @@ import {
   type CustomWidgetHostContext,
 } from "../../components/workspace-custom-widget.ts";
 import {
+  renderWorkspaceWidgetBody,
   renderWidgetCell,
   type WorkspaceCustomWidgetContext,
   type WorkspaceWidgetCellCallbacks,
@@ -63,6 +64,7 @@ import type {
   WorkspaceDocument,
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
+import { buildCustomWidgetApprovalsSource } from "../../lib/workspace/widgets/custom-widget-approvals.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import type { PreviewViewport } from "../../lib/workspace/widgets/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -80,6 +82,10 @@ type WorkspaceProps = {
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
   sessionKey?: string;
+  /** Advances when the shared session capability publishes a canonical list. */
+  sessionListRevision?: number;
+  /** Controls custom-widget decisions; reads remain available without this scope. */
+  canApproveWidgets?: boolean;
 };
 
 const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
@@ -94,6 +100,10 @@ type WorkspaceViewState = {
   drag: WorkspaceDragState | null;
   /** Per-host preview viewport choices; intentionally not persisted in workspace data. */
   previewViewports: Map<string, PreviewViewport>;
+  /** Last shared sessions.list revision folded into the binding cache. */
+  sessionListRevision: number | undefined;
+  sessionListRevisionSeen: boolean;
+  sessionBindingGeneration: number;
   /** Resolved binding cache keyed by widgetId; refreshed when the doc changes. */
   bindingResults: Map<string, WorkspaceBindingResult>;
   bindingLoads: Set<string>;
@@ -223,6 +233,9 @@ function getViewState(host: object): WorkspaceViewState {
       openMenuWidgetId: null,
       drag: null,
       previewViewports: new Map(),
+      sessionListRevision: undefined,
+      sessionListRevisionSeen: false,
+      sessionBindingGeneration: 0,
       bindingResults: new Map(),
       bindingLoads: new Set(),
       bindingVersion: -1,
@@ -273,6 +286,25 @@ function primaryBinding(widget: WorkspaceWidget): WorkspaceBinding | null {
   return first ?? null;
 }
 
+function isCanonicalSessionBinding(binding: WorkspaceBinding | null): boolean {
+  return binding?.source === "rpc" && binding.method === "sessions.list";
+}
+
+function invalidateCanonicalSessionBindings(
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument | null,
+): void {
+  for (const tab of workspace?.tabs ?? []) {
+    for (const widget of tab.widgets) {
+      if (!isCanonicalSessionBinding(primaryBinding(widget))) {
+        continue;
+      }
+      viewState.bindingResults.delete(widget.id);
+      viewState.bindingLoads.delete(widget.id);
+    }
+  }
+}
+
 /**
  * Cache key mixing the workspace version with the data-refresh counter: a doc
  * change OR a poll tick both invalidate resolved bindings. Overflow-safe: only
@@ -306,8 +338,15 @@ function ensureBindings(
       continue;
     }
     viewState.bindingLoads.add(widget.id);
+    const sessionBindingGeneration = isCanonicalSessionBinding(binding)
+      ? viewState.sessionBindingGeneration
+      : undefined;
     void resolveBinding(client, binding).then((result) => {
-      if (viewState.bindingVersion !== key) {
+      if (
+        viewState.bindingVersion !== key ||
+        (sessionBindingGeneration !== undefined &&
+          viewState.sessionBindingGeneration !== sessionBindingGeneration)
+      ) {
         return;
       }
       viewState.bindingResults.set(widget.id, result);
@@ -513,6 +552,36 @@ function buildCustomContext(
   };
 }
 
+/** Shared ambient builtin state; full-bleed tabs must preserve every grid capability. */
+function buildBuiltinContext(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+): BuiltinWidgetContext {
+  const decideCustomWidget = props.canApproveWidgets
+    ? (name: string, decision: "approved" | "rejected") => {
+        void approveWidget(state, props.client, { name, decision });
+      }
+    : undefined;
+  return {
+    basePath: props.basePath ?? "",
+    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    preview: {
+      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
+      setViewport: (widgetId, viewport) => {
+        viewState.previewViewports.set(widgetId, viewport);
+        props.onRequestUpdate?.();
+      },
+    },
+    customWidgetApprovals: buildCustomWidgetApprovalsSource(
+      workspace,
+      state.pendingApprovalNames,
+      decideCustomWidget,
+    ),
+  };
+}
+
 function renderGrid(
   props: WorkspaceProps,
   state: WorkspaceUiState,
@@ -533,18 +602,11 @@ function renderGrid(
       </div>
     `;
   }
+  if (tab.layout === "full") {
+    return renderFullBleed(props, state, viewState, workspace, tab);
+  }
   const callbacks = makeCallbacks(props, state, viewState, tab);
-  const builtinContext: BuiltinWidgetContext = {
-    basePath: props.basePath ?? "",
-    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
-    preview: {
-      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
-      setViewport: (widgetId, viewport) => {
-        viewState.previewViewports.set(widgetId, viewport);
-        props.onRequestUpdate?.();
-      },
-    },
-  };
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
   return html`
@@ -565,6 +627,33 @@ function renderGrid(
       ${renderDragGhost(viewState, tab)}
     </div>
   `;
+}
+
+/** App-like tabs render their first widget through the same approval and sandbox path. */
+function renderFullBleed(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  tab: WorkspaceTab,
+): TemplateResult {
+  const widget = tab.widgets[0]!;
+  const callbacks = makeCallbacks(props, state, viewState, tab);
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
+  const custom = buildCustomContext(props, state, viewState, workspace, widget);
+  return html`<div
+    class="workspace-fullbleed"
+    data-test-id="workspace-fullbleed"
+    data-widget-id=${widget.id}
+  >
+    ${renderWorkspaceWidgetBody(
+      widget,
+      viewState.bindingResults.get(widget.id) ?? null,
+      builtinContext,
+      callbacks,
+      custom ?? undefined,
+    )}
+  </div>`;
 }
 
 /**
@@ -856,6 +945,15 @@ function renderDialog(
 export function renderWorkspace(props: WorkspaceProps): TemplateResult {
   const state = getWorkspaceState(props.host);
   const viewState = getViewState(props.host);
+  const sessionListRevision = props.sessionListRevision;
+  if (viewState.sessionListRevisionSeen && sessionListRevision !== viewState.sessionListRevision) {
+    // The shared session capability already coalesced the canonical event refresh.
+    // Drop only sessions.list values; unrelated data widgets keep their caches.
+    viewState.sessionBindingGeneration += 1;
+    invalidateCanonicalSessionBindings(viewState, state.workspace);
+  }
+  viewState.sessionListRevision = sessionListRevision;
+  viewState.sessionListRevisionSeen = true;
   state.requestUpdate = props.onRequestUpdate ?? null;
   // Keep the outside-click / Escape dismiss listeners in sync with the open kebab
   // menu (#3). Cheap no-op when the open state is unchanged.

@@ -18,7 +18,6 @@ import {
   loadSettings,
   normalizeCatalogOpenTarget,
   normalizeTextScale,
-  normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   patchSettings,
   saveLocalUserIdentity,
@@ -29,6 +28,7 @@ import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
@@ -799,7 +799,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      chatFollowUpMode: normalizeChatFollowUpMode(this.settings.chatFollowUpMode),
+      chatFollowUpMode: this.settings.chatFollowUpMode,
+      serverQueueMode: configState.configSnapshot
+        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
+            configNeedsApply: configState.configNeedsApply,
+          })
+        : undefined,
       setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),

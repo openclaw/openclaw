@@ -591,9 +591,13 @@ class FakeWorkerGateway {
     const toolCallId = "local-exec-call";
     const args = background
       ? {
-          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-            "setInterval(() => undefined, 1000)",
-          )}`,
+          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
+          command:
+            process.platform === "win32"
+              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                  "setInterval(() => undefined, 1000)",
+                )}`
+              : "exec sleep 60",
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };

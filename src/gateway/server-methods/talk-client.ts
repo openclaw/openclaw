@@ -18,6 +18,7 @@ import {
 } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { formatForLog } from "../ws-log.js";
@@ -59,6 +60,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       mode?: string;
       transport?: string;
       brain?: string;
+      capabilities?: string[];
     };
     try {
       const runtimeConfig = context.getRuntimeConfig();
@@ -128,11 +130,19 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         defaults: realtimeConfig,
       });
       if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
+        const tools = [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL];
+        if (
+          resolution.provider.id === "openai" &&
+          transport === "webrtc" &&
+          typedParams.capabilities?.includes("camera-frame")
+        ) {
+          tools.push(REALTIME_VOICE_DESCRIBE_VIEW_TOOL);
+        }
         const session = await resolution.provider.createBrowserSession({
           cfg: runtimeConfig,
           providerConfig: resolution.providerConfig,
           instructions: buildRealtimeInstructions(realtimeConfig.instructions),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
+          tools,
           ...launchOptions,
         });
         if (

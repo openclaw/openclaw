@@ -2049,6 +2049,9 @@ describe("ci workflow guards", () => {
     const buildSetupNodeStep = workflow.jobs["build-artifacts"].steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
+    const buildStepCache = workflow.jobs["build-artifacts"].steps.find(
+      (step: WorkflowStep) => step.name === "Restore build-all step cache",
+    );
 
     expect(setupNodeStep.with).toMatchObject({
       "node-compile-cache": "true",
@@ -2118,6 +2121,12 @@ describe("ci workflow guards", () => {
     expect(buildSetupNodeStep.with["node-compile-cache-scope"]).not.toBe(
       setupNodeStep.with["node-compile-cache-scope"],
     );
+    expect(buildStepCache.with.key).toContain("build-all-v4-");
+    expect(buildStepCache.with.key).toContain("'src/**'");
+    expect(buildStepCache.with.key).toContain("'packages/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/dist/**'");
+    expect(buildStepCache.with.key).toContain("'!packages/**/node_modules/**'");
+    expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
   });
 
   it("warms protected caches without main-run cancellation and cleans closed PR archives", () => {
@@ -2302,10 +2311,16 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      const expectedDepth = jobName === "skills-python" ? 1 : 2;
+      // preflight fetches the head at depth 1 and supplements the parents
+      // blob-less; security-fast keeps depth 2 for its diff-base needs.
+      const expectedDepth = jobName === "security-fast" ? 2 : 1;
       expect(checkoutStep.run, jobName).toContain(
         `fetch --no-tags --prune --no-recurse-submodules --depth=${expectedDepth} origin`,
       );
+      if (jobName === "preflight") {
+        expect(checkoutStep.run, jobName).toContain("--filter=blob:none");
+        expect(checkoutStep.run, jobName).toContain("fetch_parent_metadata");
+      }
       if (jobName !== "skills-python") {
         expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
         expect(checkoutStep.run, jobName).toContain("timed out");
@@ -2943,7 +2958,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
 
@@ -2965,7 +2982,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toEqual([
       { check_name: "android-test-play", task: "test-play" },
       { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-test-wear", task: "test-wear" },
       { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-build-wear", task: "build-wear" },
       { check_name: "android-ktlint", task: "ktlint" },
     ]);
     expect(

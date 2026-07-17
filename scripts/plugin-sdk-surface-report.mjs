@@ -162,8 +162,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // Registry sweep: 77 packages, zero fetch failures; channel-ingress and dead aliases
   // had zero consumers.
-  "channel-message": 230,
-  "channel-message-runtime": 227,
+  // +11 each: durable channel-ingress drain seam (drain/lifecycle/claim/retry) mirrored by compat (#108656).
+  "channel-message": 241,
+  "channel-message-runtime": 238,
   "channel-pairing-paths": 1,
   // Deprecated pairing/conversation exports from the SQLite pairing migration
   // landed on main (#105802) without entrypoint pins; not touched by this PR.
@@ -251,7 +252,12 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +6: shared progress receipt tracker + compositor snapshot across channel barrels.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
-      8010,
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +2: shared realtime voice session harness through realtime-voice.
+      // +24: narrowed durable channel-ingress drain seam — factory, lifecycle binding,
+      // tuning constants, and telegram-consumed claim helpers with compat mirrors,
+      // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
+      8038,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -277,7 +283,11 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: unified implicit-mention policy resolver.
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
-      4476,
+      // +2: supplemental sender decision and outbound text chunk sequencer.
+      // +1: shared realtime voice session harness through realtime-voice.
+      // +9: narrowed drain seam functions and compat mirrors after the
+      // WhatsApp-split harvest (#108656).
+      4488,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -294,7 +304,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +8: shared channel helpers mirrored by deprecated barrels.
       // +3: receipt/snapshot exports through deprecated channel barrels.
       // +1: unified implicit-mention config type through deprecated config-types.
-      2990,
+      // +24: narrowed drain seam compat mirrors in the channel-message
+      // deprecation-window barrels (#108656).
+      3014,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
