@@ -385,9 +385,17 @@ function parsePath(raw: string): PathSegment[] {
   // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
   // whitespace-only segments) are rejected instead of silently collapsed.
   let segmentEmitted = false;
+  // After `]`, only `.`, `[`, or end-of-input are legal. Bare text, whitespace, or
+  // escape continuations would invent a next segment (e.g. `foo[0]id`, `foo[0] id`).
+  let requireSeparatorAfterBracket = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
+    // Reject every post-bracket continuation before escape/text handling so
+    // whitespace and backslash cannot bypass the separator requirement.
+    if (requireSeparatorAfterBracket && ch !== "." && ch !== "[") {
+      throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
+    }
     if (ch === "\\") {
       const next = trimmed[i + 1];
       if (next) {
@@ -397,6 +405,7 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      requireSeparatorAfterBracket = false;
       assertNotWhitespaceSegment(current, raw);
       if (!segmentEmitted && !current.trim()) {
         throw new Error(`Invalid path (empty segment): ${raw}`);
@@ -413,6 +422,8 @@ function parsePath(raw: string): PathSegment[] {
       // A bracket may start the path ("[0]"), follow a key ("foo[0]"), or follow
       // another bracket ("foo[0][1]"), but a bracket right after a "." boundary with
       // no key (e.g. "gateway.[port]") is an empty segment, same as a double dot.
+      // Post-bracket separator requirement is already satisfied by `ch === "["`
+      // above; the flag is re-armed after this bracket closes.
       assertNotWhitespaceSegment(current, raw);
       if (!current.trim() && !segmentEmitted && parts.length > 0) {
         throw new Error(`Invalid path (empty segment): ${raw}`);
@@ -431,6 +442,7 @@ function parsePath(raw: string): PathSegment[] {
       }
       parts.push(parseBracketPathSegment(inside, raw));
       segmentEmitted = true;
+      requireSeparatorAfterBracket = true;
       i = close + 1;
       continue;
     }
