@@ -217,6 +217,37 @@ describe("custodian page", () => {
     expect(page.textContent).toContain("Hello from OpenClaw.");
   });
 
+  it("keeps the device-token session scope while hello is gone during a drop", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Device-token conversation.",
+      action: "none",
+    });
+    const { context, setGatewaySnapshot, setGatewayDeviceToken } = createContext(request);
+    setGatewayDeviceToken("stored-device-token");
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Device-token conversation."));
+
+    // Transient drop: the retrying client stays but hello is cleared.
+    setGatewaySnapshot({ client: null, connected: false, reconnecting: true, hello: null });
+    await page.updateComplete;
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+      hello: {
+        type: "hello-ok" as const,
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "stored-device-token" },
+        features: { methods: ["openclaw.chat"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await page.updateComplete;
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.textContent).toContain("Device-token conversation.");
+  });
+
   it("offers retry when a connected client is replaced mid-request", async () => {
     const request = vi
       .fn()

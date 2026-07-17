@@ -59,6 +59,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   private retryParams: SystemAgentChatParams | null = null;
   private sessionScopeKey: string | null = null;
   private sessionStarted = false;
+  private lastHelloDeviceToken = "";
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
     (gateway, notify) => gateway.subscribe(notify),
@@ -90,8 +91,15 @@ export class CustodianPage extends OpenClawLightDomElement {
    */
   private connectionScopeKey(): string {
     const { gatewayUrl, token, password, bootstrapToken } = this.context.gateway.connection;
-    const deviceToken = this.context.gateway.snapshot.hello?.auth?.deviceToken ?? "";
-    return JSON.stringify([gatewayUrl, token, password, bootstrapToken, deviceToken]);
+    // Hello vanishes while the client retries a transient drop; keep the last
+    // authenticated device token so a drop alone never crosses the session
+    // boundary, while a new hello carrying a different stored-device token
+    // still rotates the scope (shared-browser operator change).
+    const hello = this.context.gateway.snapshot.hello;
+    if (hello) {
+      this.lastHelloDeviceToken = hello.auth?.deviceToken ?? "";
+    }
+    return JSON.stringify([gatewayUrl, token, password, bootstrapToken, this.lastHelloDeviceToken]);
   }
 
   private synchronizeClient(): void {
