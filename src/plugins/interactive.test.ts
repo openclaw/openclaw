@@ -35,7 +35,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         TelegramInteractiveHandlerContext,
         | "callback"
@@ -58,7 +60,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         DiscordInteractiveHandlerContext,
         | "interaction"
@@ -80,7 +84,9 @@ type InteractiveDispatchParams =
       data: string;
       dedupeId: string;
       onMatched?: () => Promise<void> | void;
-      afterInvoke?: (result: { handled?: boolean } | void) => Promise<void> | void;
+      afterInvoke?: (
+        result: { handled?: boolean; submitText?: string } | void,
+      ) => Promise<void> | void;
       ctx: Omit<
         SlackInteractiveHandlerContext,
         | "interaction"

@@ -6,6 +6,7 @@ import {
   type PluginConversationBinding,
   type PluginConversationBindingRequestParams,
   type PluginConversationBindingRequestResult,
+  type PluginInteractiveHandlerResult,
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
 
@@ -73,12 +74,17 @@ export async function dispatchDiscordPluginInteractiveHandler(params: {
   ctx: DiscordInteractiveDispatchContext;
   respond: DiscordInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
+  afterInvoke?: (result: PluginInteractiveHandlerResult) => Promise<void> | void;
 }) {
-  return await dispatchPluginInteractiveHandler<DiscordInteractiveHandlerRegistration>({
+  return await dispatchPluginInteractiveHandler<
+    DiscordInteractiveHandlerRegistration,
+    PluginInteractiveHandlerResult
+  >({
     channel: "discord",
     data: params.data,
     dedupeId: params.interactionId,
     onMatched: params.onMatched,
+    afterInvoke: params.afterInvoke,
     invoke: ({ registration, namespace, payload }) =>
       registration.handler({
         ...params.ctx,

@@ -31,6 +31,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   values?: string[];
   fields?: Array<{ id: string; name: string; values: string[] }>;
   messageId?: string;
+  submitText: (text: string) => Promise<void>;
 }): Promise<"handled" | "unmatched"> {
   const normalizedConversationId =
     params.interactionCtx.rawGuildId || params.channelCtx.channelType === ChannelType.GroupDM
@@ -166,6 +167,15 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
         await respond.acknowledge();
       } catch {
         // Interaction may have expired before the plugin handler ran.
+      }
+    },
+    afterInvoke: async (result) => {
+      if (result?.handled === false || !params.isAuthorizedSender) {
+        return;
+      }
+      const submitText = typeof result?.submitText === "string" ? result.submitText.trim() : "";
+      if (submitText) {
+        await params.submitText(submitText);
       }
     },
   });

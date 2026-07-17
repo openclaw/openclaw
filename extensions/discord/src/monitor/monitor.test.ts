@@ -140,6 +140,18 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as ComponentContext;
 
+  const mockPluginDispatchResult = (result: { handled?: boolean; submitText?: string }) => {
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        afterInvoke?: (value: typeof result) => Promise<void>;
+        onMatched?: () => Promise<void>;
+      };
+      await typedParams.onMatched?.();
+      await typedParams.afterInvoke?.(result);
+      return { matched: true, handled: result.handled ?? true, duplicate: false, result };
+    });
+  };
+
   const createComponentInteractionBase = () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
@@ -522,6 +534,92 @@ describe("discord component interactions", () => {
     expect(pluginDispatch.ctx?.interaction?.values).toEqual(["Inspect"]);
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
+  });
+
+  it("submits handled plugin text through the source component route exactly once", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:continue" })],
+      modals: [],
+    });
+    mockPluginDispatchResult({ handled: true, submitText: "  Continue here  " });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(dispatchReplyMock).toHaveBeenCalledOnce();
+    expect(lastDispatchCtx).toMatchObject({
+      BodyForAgent: "Continue here",
+      SessionKey: "session-1",
+      AccountId: "default",
+      MessageSid: "interaction-1",
+      To: "channel:dm-channel",
+      OriginatingTo: "user:123456789",
+    });
+  });
+
+  it.each([
+    {
+      title: "unauthorized submitText",
+      result: { handled: true, submitText: "Do not run this" },
+      authorized: false,
+    },
+    {
+      title: "submitText from a declining handler",
+      result: { handled: false, submitText: "Do not run this" },
+      authorized: true,
+    },
+  ])("does not submit $title", async ({ result, authorized }) => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:unsafe" })],
+      modals: [],
+    });
+    mockPluginDispatchResult(result);
+
+    const button = createDiscordComponentButton(
+      authorized ? createComponentContext() : createComponentContext({ allowFrom: ["owner-1"] }),
+    );
+    const { interaction } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(lastDispatchCtx?.BodyForAgent).not.toBe("Do not run this");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(result.handled ? 0 : 1);
+  });
+
+  it("routes handled plugin text through the originating Discord thread", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "quick-replies:thread" })],
+      modals: [],
+    });
+    mockPluginDispatchResult({ handled: true, submitText: "Stay in thread" });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "thread-1",
+        guild_id: "guild-1",
+        id: "interaction-thread-1",
+        member: { roles: [] },
+      } as unknown as ButtonInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ButtonInteraction["guild"],
+      channel: {
+        id: "thread-1",
+        parentId: "parent-1",
+        name: "topic",
+        type: ChannelType.PublicThread,
+      } as unknown as ButtonInteraction["channel"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(lastDispatchCtx).toMatchObject({
+      BodyForAgent: "Stay in thread",
+      SessionKey: "session-1",
+      To: "channel:thread-1",
+      OriginatingTo: "channel:thread-1",
+    });
   });
 
   it("keeps reusable buttons active after use", async () => {

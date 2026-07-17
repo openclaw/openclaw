@@ -130,6 +130,22 @@ export class DiscordComponentModal extends Modal {
         kind: "modal",
         fields,
         messageId: consumed.messageId,
+        submitText: async (text) => {
+          await dispatchDiscordComponentEvent({
+            ctx: this.ctx,
+            interaction,
+            interactionCtx,
+            channelCtx,
+            guildInfo,
+            eventText: text,
+            replyToId: consumed.messageId,
+            routeOverrides: {
+              sessionKey: consumed.sessionKey,
+              agentId: consumed.agentId,
+              accountId: consumed.accountId,
+            },
+          });
+        },
       });
       if (pluginDispatch === "handled") {
         return;
