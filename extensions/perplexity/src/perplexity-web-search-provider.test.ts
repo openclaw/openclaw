@@ -1,33 +1,15 @@
 // Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
-type EndpointCall = {
-  url: string;
-  timeoutSeconds: number;
-  init: RequestInit;
-};
-
-const endpointMockState = vi.hoisted(() => ({
-  calls: [] as EndpointCall[],
-  responses: [] as Response[],
-}));
+const withTrustedWebSearchEndpointMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
   return {
     ...actual,
-    withTrustedWebSearchEndpoint: vi.fn(
-      async (params: EndpointCall, run: (response: Response) => Promise<unknown>) => {
-        endpointMockState.calls.push(params);
-        const response = endpointMockState.responses.shift();
-        if (!response) {
-          throw new Error("Missing mocked Perplexity response.");
-        }
-        return await run(response);
-      },
-    ),
+    withTrustedWebSearchEndpoint: withTrustedWebSearchEndpointMock,
   };
 });
 
@@ -41,11 +23,6 @@ const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
 describe("perplexity web search provider", () => {
-  beforeEach(() => {
-    endpointMockState.calls = [];
-    endpointMockState.responses = [];
-  });
-
   it("points missing-key users to fetch/browser alternatives", async () => {
     await withEnvAsync(
       { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
@@ -174,11 +151,17 @@ describe("perplexity web search provider", () => {
   });
 
   it("sends official date filter fields in the Search API request body", async () => {
-    endpointMockState.responses.push(
-      new Response(JSON.stringify({ results: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    withTrustedWebSearchEndpointMock.mockImplementationOnce(
+      async (
+        _params: { init: RequestInit },
+        run: (response: Response) => Promise<unknown>,
+      ) =>
+        await run(
+          new Response(JSON.stringify({ results: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
     );
 
     await withEnvAsync(
@@ -198,8 +181,11 @@ describe("perplexity web search provider", () => {
       },
     );
 
-    expect(endpointMockState.calls).toHaveLength(1);
-    expect(JSON.parse(endpointMockState.calls[0]?.init.body as string)).toEqual({
+    expect(withTrustedWebSearchEndpointMock).toHaveBeenCalledOnce();
+    const [request] = withTrustedWebSearchEndpointMock.mock.calls[0] as [
+      { init: RequestInit },
+    ];
+    expect(JSON.parse(request.init.body as string)).toEqual({
       query: "OpenClaw releases",
       max_results: 5,
       search_after_date_filter: "1/1/2024",
