@@ -12,7 +12,7 @@ function createPrompter(selected: string[] = []): WizardPrompter {
     note: vi.fn(async () => undefined),
     plain: vi.fn(async () => undefined),
     select: vi.fn(),
-    multiselect: vi.fn(async () => selected),
+    multiselect: vi.fn(async () => selected) as WizardPrompter["multiselect"],
     text: vi.fn(),
     confirm: vi.fn(async () => true),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),

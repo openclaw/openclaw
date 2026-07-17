@@ -9421,6 +9421,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Remote mode details
   - H2: Auth and model options
   - H2: Outputs and internals
+  - H3: Installed app recommendations
   - H2: Non-interactive setup
   - H2: Gateway wizard RPC
   - H2: Signal setup behavior

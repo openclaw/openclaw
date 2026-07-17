@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  gatherSetupAppCandidates,
-  getSetupAppRecommendations,
-  normalizeNodeAppsInventory,
-} from "./setup-app-recommendations.js";
+import { getSetupAppRecommendations } from "./setup-app-recommendations.js";
+
+/** Force an "ok" result so the returned candidate `groups` can be asserted. */
+function completeMatching(
+  pairs: Array<{ appLabel: string; candidateId: string }>,
+): (prompt: string) => Promise<{ ok: true; text: string }> {
+  return async () => ({
+    ok: true,
+    text: JSON.stringify({
+      matches: pairs.map((pair) => ({ ...pair, tier: "optional", reason: "match" })),
+    }),
+  });
+}
 
 function officialEntry(params: {
   id: string;
@@ -42,21 +50,27 @@ describe("setup app recommendation candidates", () => {
       { score: 1, slug: "notes-tools", displayName: "Notes Tools", summary: "Work with notes" },
     ]);
 
-    const groups = await gatherSetupAppCandidates({
-      apps: [{ label: "Notes" }, { label: "Chat Desktop" }],
+    const result = await getSetupAppRecommendations({
+      inventorySource: async () => [{ label: "Notes" }, { label: "Chat Desktop" }],
+      runtime: defaultRuntime,
       deps: {
         listPlugins: () => [generic, channel],
         listChannels: () => [channel],
         listProviders: () => [],
         searchSkills,
+        complete: completeMatching([{ appLabel: "Notes", candidateId: "notes" }]),
       },
     });
 
-    expect(groups.map((group) => group.app.label)).toEqual(["Chat Desktop", "Notes"]);
-    expect(groups[1]?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
-      ["official-plugin", "notes"],
-      ["clawhub-skill", "notes-tools"],
-    ]);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.groups.map((group) => group.app.label)).toEqual(["Chat Desktop", "Notes"]);
+      const notes = result.groups.find((group) => group.app.label === "Notes");
+      expect(notes?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
+        ["official-plugin", "notes"],
+        ["clawhub-skill", "notes-tools"],
+      ]);
+    }
     expect(searchSkills).toHaveBeenCalledTimes(2);
   });
 
@@ -67,17 +81,24 @@ describe("setup app recommendation candidates", () => {
       }
       return [{ score: 1, slug: "working", displayName: "Working" }];
     });
-    const groups = await gatherSetupAppCandidates({
-      apps: [{ label: "Broken" }, { label: "Working" }],
+    const result = await getSetupAppRecommendations({
+      inventorySource: async () => [{ label: "Broken" }, { label: "Working" }],
+      runtime: defaultRuntime,
       deps: {
         listPlugins: () => [],
         listChannels: () => [],
         listProviders: () => [],
         searchSkills,
+        complete: completeMatching([{ appLabel: "Working", candidateId: "working" }]),
       },
     });
-    expect(groups[0]?.candidates).toEqual([]);
-    expect(groups[1]?.candidates).toHaveLength(1);
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.groups.find((group) => group.app.label === "Broken")?.candidates).toEqual([]);
+      expect(result.groups.find((group) => group.app.label === "Working")?.candidates).toHaveLength(
+        1,
+      );
+    }
   });
 });
 
@@ -85,18 +106,28 @@ describe("official catalog candidates", () => {
   it("produces channel candidates from the real package-shaped catalogs", async () => {
     // Regression: real catalog entries carry no top-level id; keying by it
     // used to collapse the whole catalog and drop every official candidate.
-    const groups = await gatherSetupAppCandidates({
-      apps: [{ label: "Discord" }, { label: "WhatsApp" }],
-      deps: { searchSkills: async () => [] },
+    const result = await getSetupAppRecommendations({
+      inventorySource: async () => [{ label: "Discord" }, { label: "WhatsApp" }],
+      runtime: defaultRuntime,
+      deps: {
+        searchSkills: async () => [],
+        complete: completeMatching([
+          { appLabel: "Discord", candidateId: "discord" },
+          { appLabel: "WhatsApp", candidateId: "whatsapp" },
+        ]),
+      },
     });
-    const discord = groups.find((group) => group.app.label === "Discord");
-    const whatsapp = groups.find((group) => group.app.label === "WhatsApp");
-    expect(discord?.candidates).toContainEqual(
-      expect.objectContaining({ id: "discord", source: "official-channel" }),
-    );
-    expect(whatsapp?.candidates).toContainEqual(
-      expect.objectContaining({ id: "whatsapp", source: "official-channel" }),
-    );
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      const discord = result.groups.find((group) => group.app.label === "Discord");
+      const whatsapp = result.groups.find((group) => group.app.label === "WhatsApp");
+      expect(discord?.candidates).toContainEqual(
+        expect.objectContaining({ id: "discord", source: "official-channel" }),
+      );
+      expect(whatsapp?.candidates).toContainEqual(
+        expect.objectContaining({ id: "whatsapp", source: "official-channel" }),
+      );
+    }
   });
 });
 
@@ -206,19 +237,5 @@ describe("setup app recommendation matcher", () => {
         },
       }),
     ).resolves.toEqual({ status: "skipped", reason: "no-matches" });
-  });
-
-  it("normalizes Android and macOS node app identifiers", () => {
-    expect(
-      normalizeNodeAppsInventory({
-        apps: [
-          { label: "Mac", bundleId: "com.example.mac" },
-          { label: "Android", packageName: "com.example.android" },
-        ],
-      }),
-    ).toEqual([
-      { label: "Android", bundleId: "com.example.android" },
-      { label: "Mac", bundleId: "com.example.mac" },
-    ]);
   });
 });

@@ -16,14 +16,14 @@ const DeviceAppsParamsSchema = z
   })
   .strict();
 
-export type DeviceAppsPayload = {
+type DeviceAppsPayload = {
   count: number;
   totalMatched: number;
   truncated: boolean;
   apps: InstalledApp[];
 };
 
-export type DeviceAppsInvokeResult =
+type DeviceAppsInvokeResult =
   | { ok: true; payload: DeviceAppsPayload }
   | { ok: false; code: string; message: string };
 

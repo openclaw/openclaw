@@ -28,18 +28,18 @@ const CANDIDATE_SOURCE_ORDER: Record<SetupAppCandidateSource, number> = {
   "clawhub-skill": 3,
 };
 
-export type SetupAppInventoryItem = {
+type SetupAppInventoryItem = {
   label: string;
   bundleId?: string;
 };
 
-export type SetupAppCandidateSource =
+type SetupAppCandidateSource =
   | "official-plugin"
   | "official-channel"
   | "official-provider"
   | "clawhub-skill";
 
-export type SetupAppCandidate = {
+type SetupAppCandidate = {
   id: string;
   displayName: string;
   summary: string;
@@ -47,7 +47,7 @@ export type SetupAppCandidate = {
   downloads?: number;
 };
 
-export type SetupAppCandidateGroup = {
+type SetupAppCandidateGroup = {
   app: SetupAppInventoryItem;
   candidates: SetupAppCandidate[];
 };
@@ -71,20 +71,6 @@ export type SetupAppRecommendationsResult =
       status: "skipped";
       reason: "unsupported" | "no-apps" | "no-candidates" | "model-failed" | "no-matches";
     };
-
-const NodeAppsPayloadSchema = z
-  .object({
-    apps: z.array(
-      z
-        .object({
-          label: z.string().trim().min(1),
-          bundleId: z.string().trim().min(1).optional(),
-          packageName: z.string().trim().min(1).optional(),
-        })
-        .passthrough(),
-    ),
-  })
-  .passthrough();
 
 // Tolerant on purpose: models add extra keys and overlong reasons; a strict
 // schema here would turn one sloppy field into a feature-wide "model-failed".
@@ -135,22 +121,25 @@ function normalizeInventory(apps: readonly SetupAppInventoryItem[]): SetupAppInv
   return [...byLabel.values()].toSorted(compareInventory);
 }
 
-export function normalizeNodeAppsInventory(payload: unknown): SetupAppInventoryItem[] {
-  const parsed = NodeAppsPayloadSchema.parse(payload);
-  return normalizeInventory(
-    parsed.apps.map((app) => ({
-      label: app.label,
-      ...(app.bundleId || app.packageName ? { bundleId: app.bundleId ?? app.packageName } : {}),
-    })),
-  );
-}
-
 function inventoryTokens(label: string): string[] {
   return label
     .toLocaleLowerCase("en-US")
     .split(/[^\p{L}\p{N}]+/u)
     .filter((token) => token.length >= 3)
     .toSorted();
+}
+
+function providerSearchTokens(
+  manifest: ReturnType<typeof getOfficialExternalPluginCatalogManifest>,
+): Array<string | undefined> {
+  const tokens: Array<string | undefined> = [];
+  for (const provider of manifest?.providers ?? []) {
+    tokens.push(provider.id, provider.name);
+    for (const alias of provider.aliases ?? []) {
+      tokens.push(alias);
+    }
+  }
+  return tokens;
 }
 
 function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
@@ -164,11 +153,7 @@ function entrySearchText(entry: OfficialExternalPluginCatalogEntry): string {
     manifest?.plugin?.label,
     manifest?.channel?.id,
     manifest?.channel?.label,
-    ...(manifest?.providers ?? []).flatMap((provider) => [
-      provider.id,
-      provider.name,
-      ...(provider.aliases ?? []),
-    ]),
+    ...providerSearchTokens(manifest),
   ]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join(" ")
@@ -222,7 +207,7 @@ function dedupeCandidates(candidates: SetupAppCandidate[]): SetupAppCandidate[] 
   });
 }
 
-export async function gatherSetupAppCandidates(params: {
+async function gatherSetupAppCandidates(params: {
   apps: SetupAppInventoryItem[];
   deps?: RecommendationDeps;
 }): Promise<SetupAppCandidateGroup[]> {

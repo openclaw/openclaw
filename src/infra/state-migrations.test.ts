@@ -2306,6 +2306,7 @@ describe("state migrations", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/doctor",
       },
+      installedAppsSharing: false,
     });
     await expectMissingPath(sourcePath);
   });
