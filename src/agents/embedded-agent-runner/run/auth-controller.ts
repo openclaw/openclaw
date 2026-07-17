@@ -452,6 +452,10 @@ export function createEmbeddedRunAuthController(params: {
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
       allowAuthProfileFallback,
+      // Provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook,
+      // not stored-profile discovery. Keep it reachable so a direct/gateway
+      // attempt (allowAuthProfileFallback: false) still resolves it.
+      allowPluginSyntheticAuth: true,
       secretSentinels: true,
     });
   };

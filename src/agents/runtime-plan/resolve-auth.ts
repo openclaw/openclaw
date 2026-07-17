@@ -271,11 +271,15 @@ export async function resolvePreparedRuntimeModelAuth(
   if (candidates.length === 0) {
     // The planner selected direct auth. Resolve only env/config material so an
     // unrelated full store cannot replace or pre-reject that immutable source.
+    // Stored-profile discovery stays off (empty store + fallback disabled), but
+    // provider plugin synthetic-auth (e.g. GCP-ADC) is a provider-owned hook the
+    // gateway route still depends on, so keep it reachable on its own flag.
     const auth = await getApiKeyForModel({
       ...authParams,
       store: { version: 1, profiles: {} },
       lockedProfile: false,
       allowAuthProfileFallback: false,
+      allowPluginSyntheticAuth: true,
       skipSetupProviderFallback: plan.modelRoute?.provider === "openai",
     });
     assertResolvedAuthMatchesPreparedRoute({ plan, auth });
