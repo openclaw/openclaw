@@ -15,12 +15,22 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
-    // Drop parent Vitest state so the child run resolves its own config.
-    if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_VITEST")) {
+    // Drop parent Vitest state so the child run resolves its own config, and
+    // drop GITHUB_ACTIONS so the child's github-actions reporter cannot emit
+    // ::error annotations that the parent CI job renders as its own failures.
+    if (
+      key.startsWith("VITEST") ||
+      key.startsWith("OPENCLAW_VITEST") ||
+      key === "GITHUB_ACTIONS" ||
+      key === "FORCE_COLOR"
+    ) {
       continue;
     }
     env[key] = value;
   }
+  // "CI" in env alone turns tinyrainbow colors on; NO_COLOR overrides every
+  // enable path, keeping the plain-text substring assertions below stable.
+  env.NO_COLOR = "1";
   return env;
 }
 
