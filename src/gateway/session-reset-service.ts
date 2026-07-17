@@ -17,7 +17,11 @@ import {
 } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
-import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
+import {
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "../agents/embedded-agent.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionPlacementResetBlock } from "../agents/session-placement-admission.js";
@@ -83,7 +87,7 @@ import {
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
-const mcpRunEndWatchers = new Map<string, Promise<boolean>>();
+const mcpRunEndWatchers = new Map<string, Promise<void>>();
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
 
@@ -388,22 +392,29 @@ async function ensureSessionRuntimeCleanup(params: {
     if (mcpRunEndWatchers.has(sessionId)) {
       return;
     }
-    const runEnd = waitForEmbeddedAgentRunEnd(sessionId, null);
-    mcpRunEndWatchers.set(sessionId, runEnd);
-    void runEnd
-      .then(async (eventuallyEnded) => {
-        if (mcpRunEndWatchers.get(sessionId) === runEnd) {
+    const watcher = (async () => {
+      while (await waitForEmbeddedAgentRunEnd(sessionId, null)) {
+        // A replacement can register after the wait promise settles but before
+        // this continuation runs. Keep the required retirement armed for it.
+        if (isEmbeddedAgentRunActive(sessionId)) {
+          continue;
+        }
+        if (mcpRunEndWatchers.get(sessionId) === watcher) {
           mcpRunEndWatchers.delete(sessionId);
         }
-        if (eventuallyEnded) {
-          await retireMcpRuntime(false);
-        }
-      })
+        await retireMcpRuntime(false);
+        return;
+      }
+    })();
+    mcpRunEndWatchers.set(sessionId, watcher);
+    void watcher
       .catch((error: unknown) => {
-        if (mcpRunEndWatchers.get(sessionId) === runEnd) {
+        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
+      })
+      .finally(() => {
+        if (mcpRunEndWatchers.get(sessionId) === watcher) {
           mcpRunEndWatchers.delete(sessionId);
         }
-        logVerbose(`sessions cleanup: failed to disarm deferred MCP retirement: ${String(error)}`);
       });
   };
   // Register against the run being stopped before abort or any await allows a
