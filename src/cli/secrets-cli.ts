@@ -62,13 +62,15 @@ function serializePlanFile(plan: SecretsApplyPlan, pathname: string): string {
 
 async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
   // Apply consumes a generated plan shape, not arbitrary JSON.
-  const [{ promises: fs }, { readFileDescriptorBounded }, { isSecretsApplyPlan }] =
-    await Promise.all([
-      fsModuleLoader.load(),
-      import("../infra/file-descriptor-read.js"),
-      import("../secrets/plan.js"),
-    ]);
-  const file = await fs.open(pathname, "r").catch((err: unknown) => {
+  const [fsModule, { readFileDescriptorBounded }, { isSecretsApplyPlan }] = await Promise.all([
+    fsModuleLoader.load(),
+    import("../infra/file-descriptor-read.js"),
+    import("../secrets/plan.js"),
+  ]);
+  const fsConstants = fsModule.constants as typeof fsModule.constants & { O_NONBLOCK?: number };
+  // Non-blocking open lets descriptor stat reject special files without a FIFO stalling first.
+  const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
+  const file = await fsModule.promises.open(pathname, openFlags).catch((err: unknown) => {
     if (hasErrnoCode(err, "ENOENT")) {
       throw new SecretsPlanFileNotFoundError(`Secrets plan file not found: ${pathname}`, {
         cause: err,

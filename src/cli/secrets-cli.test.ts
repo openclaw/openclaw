@@ -1,7 +1,9 @@
 // Secrets CLI tests cover secret command registration, reads, writes, and redaction.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +12,8 @@ import {
   mockFirstObjectArg,
 } from "../test-utils/mock-call-assertions.js";
 import { registerSecretsCli } from "./secrets-cli.js";
+
+const execFileAsync = promisify(execFile);
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -441,6 +445,58 @@ describe("secrets CLI", () => {
       expect(runtimeErrors.at(-1)).toContain("Secrets plan file exceeds 16777216 bytes");
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects FIFO secrets plan paths without blocking",
+    async () => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult());
+      await withPlanFile(async (planPath) => {
+        await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+          from: "user",
+        });
+      });
+      runSecretsApply.mockReset();
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-cli-fifo-"));
+      const fifoPath = path.join(tmpDir, "plan.json");
+      await execFileAsync("mkfifo", [fifoPath]);
+
+      let timedOut = false;
+      let timeout: NodeJS.Timeout | undefined;
+      const parse = createProgram().parseAsync(
+        ["secrets", "apply", "--from", fifoPath, "--dry-run"],
+        { from: "user" },
+      );
+
+      try {
+        await expect(
+          Promise.race([
+            parse,
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(() => {
+                timedOut = true;
+                reject(new Error("Timed out waiting for FIFO plan rejection"));
+              }, 1_000);
+            }),
+          ]),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(runSecretsApply).not.toHaveBeenCalled();
+        expect(runtimeErrors.at(-1)).toContain("Secrets plan path is not a regular file");
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        if (timedOut) {
+          const releaseWriter = execFileAsync("sh", ["-c", 'printf x > "$1"', "sh", fifoPath]);
+          await Promise.allSettled([parse, releaseWriter]);
+        }
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("forwards --allow-exec to secrets apply dry-run", async () => {
     await withPlanFile(async (planPath) => {
