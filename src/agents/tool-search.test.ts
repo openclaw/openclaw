@@ -427,7 +427,7 @@ describe("Tool Search", () => {
     );
 
     const call = await runtime.call("orchard_empty_details");
-    expect(Object.prototype.hasOwnProperty.call(call.result, "details")).toBe(true);
+    expect(Object.hasOwn(call.result, "details")).toBe(true);
     await expect(runtime.callValue("orchard_empty_details")).resolves.toBeUndefined();
   });
 
