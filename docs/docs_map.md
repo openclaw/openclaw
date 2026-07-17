@@ -3990,6 +3990,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Secret scanning
   - H2: Reporting security issues
 
+## gateway/security/rate-limiting.md
+
+- Route: /gateway/security/rate-limiting
+- Headings:
+  - H2: Authentication attempts (pre-auth)
+  - H2: Control-plane writes (post-auth backstop)
+
 ## gateway/security/secure-file-operations.md
 
 - Route: /gateway/security/secure-file-operations
