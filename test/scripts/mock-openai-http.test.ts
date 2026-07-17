@@ -43,6 +43,20 @@ describe("mock OpenAI HTTP helpers", () => {
     });
   });
 
+  it("does not split emoji in request-log previews", () => {
+    const bodyText = `${"a".repeat(4095)}😀tail`;
+
+    expect(
+      boundedRequestLogBody({ full: bodyText }, bodyText, {
+        requestLogBodyMaxBytes: 8,
+      }),
+    ).toEqual({
+      truncated: true,
+      byteLength: Buffer.byteLength(bodyText, "utf8"),
+      preview: "a".repeat(4095),
+    });
+  });
+
   it("keeps small request-log bodies intact", () => {
     const body = { ok: true };
     expect(boundedRequestLogBody(body, JSON.stringify(body), { requestLogBodyMaxBytes: 64 })).toBe(

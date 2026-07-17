@@ -1,5 +1,6 @@
 // Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -76,7 +77,7 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
   return {
     truncated: true,
     byteLength,
-    preview: bodyText.slice(0, REQUEST_LOG_PREVIEW_CHARS),
+    preview: truncateUtf16Safe(bodyText, REQUEST_LOG_PREVIEW_CHARS),
   };
 }
 
