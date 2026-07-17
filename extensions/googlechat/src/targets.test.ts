@@ -746,7 +746,12 @@ describe("verifyGoogleChatRequest", () => {
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
+    const cancelOrder = cancel.mock.invocationCallOrder[0];
+    const releaseOrder = release.mock.invocationCallOrder[0];
+    if (cancelOrder === undefined || releaseOrder === undefined) {
+      throw new Error("expected cancellation and guard release call-order records");
+    }
+    expect(cancelOrder).toBeLessThan(releaseOrder);
   });
 
   it("reports malformed Chat cert JSON with a stable auth error", async () => {
