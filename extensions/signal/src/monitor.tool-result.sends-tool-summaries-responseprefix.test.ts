@@ -51,6 +51,10 @@ async function receiveSignalPayloads(params: {
         data: JSON.stringify(payload),
       });
     }
+    // Durable receive returns after append; let the drain start before simulating shutdown.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     abortController.abort();
   });
 
@@ -508,58 +512,48 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
   });
 
-  it("quotes the last inbound message for multi-message batched-mode turns", async () => {
-    vi.useFakeTimers();
-    try {
-      setSignalToolResultTestConfig({
-        ...createSignalToolResultConfig({
-          autoStart: false,
-          replyToMode: "batched",
-        }),
-        messages: { inbound: { debounceMs: 10 } },
-      });
-      replyMock.mockResolvedValue([{ text: "first reply" }, { text: "second reply" }]);
-      const abortController = new AbortController();
-      streamMock.mockImplementation(async ({ onEvent }) => {
-        for (const [timestamp, message] of [
-          [1700000000001, "first debounced message"],
-          [1700000000002, "second debounced message"],
-        ] as const) {
-          await onEvent({
-            event: "receive",
-            data: JSON.stringify({
-              envelope: {
-                sourceNumber: "+15550001111",
-                sourceName: "Ada",
-                timestamp,
-                dataMessage: { message },
-              },
-            }),
-          });
-        }
-        await vi.advanceTimersByTimeAsync(10);
-        abortController.abort();
-      });
-
-      await runMonitorWithMocks({
+  it("keeps durable conversation events separate in batched reply mode", async () => {
+    setSignalToolResultTestConfig({
+      ...createSignalToolResultConfig({
         autoStart: false,
-        baseUrl: SIGNAL_BASE_URL,
-        abortSignal: abortController.signal,
-      });
+        replyToMode: "batched",
+      }),
+      messages: { inbound: { debounceMs: 10 } },
+    });
+    replyMock.mockResolvedValue({ text: "reply" });
+    const abortController = new AbortController();
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      for (const [timestamp, message] of [
+        [1700000000001, "first message"],
+        [1700000000002, "second message"],
+      ] as const) {
+        await onEvent({
+          event: "receive",
+          data: JSON.stringify({
+            envelope: {
+              sourceNumber: "+15550001111",
+              sourceName: "Ada",
+              timestamp,
+              dataMessage: { message },
+            },
+          }),
+        });
+      }
+      await vi.waitFor(() => expect(replyMock).toHaveBeenCalledTimes(2));
+      abortController.abort();
+    });
 
-      await vi.waitFor(() => {
-        expect(sendMock).toHaveBeenCalledTimes(2);
-      });
-      expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
-        replyToId: "1700000000002",
-        replyToAuthor: "+15550001111",
-        replyToBody: "second debounced message",
-      });
-      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
-      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToAuthor");
-      expect(sendMock.mock.calls[1]?.[2]).not.toHaveProperty("replyToBody");
-    } finally {
-      vi.useRealTimers();
+    await runMonitorWithMocks({
+      autoStart: false,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+    });
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    for (const call of sendMock.mock.calls) {
+      expect(call[2]).not.toHaveProperty("replyToId");
+      expect(call[2]).not.toHaveProperty("replyToAuthor");
+      expect(call[2]).not.toHaveProperty("replyToBody");
     }
   });
 
