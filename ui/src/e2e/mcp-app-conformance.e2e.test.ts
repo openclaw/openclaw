@@ -224,10 +224,9 @@ async function mountControlUiHost(page: Page): Promise<void> {
   });
   await page.goto(`${controlUiServer.baseUrl}mcp-conformance`);
   await page.evaluate(
-    async ({ gatewayUrl, authValue, sessionKey, viewId }) => {
-      const importModule = new Function("specifier", "return import(specifier)") as (
-        specifier: string,
-      ) => Promise<Record<string, unknown>>;
+    async (params) => {
+      const importModule = async (specifier: string): Promise<Record<string, unknown>> =>
+        await import(/* @vite-ignore */ specifier);
       const [gatewayModule] = await Promise.all([
         importModule("/src/api/gateway.ts"),
         importModule("/src/components/mcp-app-view-registration.ts"),
@@ -245,8 +244,8 @@ async function mountControlUiHost(page: Page): Promise<void> {
         rejectHello = reject;
       });
       const client = new GatewayBrowserClient({
-        url: gatewayUrl,
-        token: authValue,
+        url: params.gatewayUrl,
+        token: params.authValue,
         onHello: () => resolveHello(),
         onClose: (info: { reason: string }) =>
           rejectHello(new Error(`Gateway connection closed: ${info.reason}`)),
@@ -254,19 +253,19 @@ async function mountControlUiHost(page: Page): Promise<void> {
       client.start();
       await Promise.race([
         connected,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 10_000),
-        ),
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("Gateway connection timed out")), 10_000);
+        }),
       ]);
       const view = document.createElement("mcp-app-view");
       Reflect.set(view, "context", {
         gateway: {
           snapshot: { client },
-          connection: { gatewayUrl },
+          connection: { gatewayUrl: params.gatewayUrl },
         },
       });
-      view.sessionKey = sessionKey;
-      view.viewId = viewId;
+      view.sessionKey = params.sessionKey;
+      view.viewId = params.viewId;
       view.title = "Conformance app";
       document.getElementById("mount")?.appendChild(view);
       Object.assign(window, { mcpConformanceClient: client, mcpConformanceView: view });
@@ -282,11 +281,14 @@ async function mountControlUiHost(page: Page): Promise<void> {
 
 async function requestStandaloneUrl(page: Page): Promise<string> {
   return await page.evaluate(
-    async ({ sessionKey, viewId }) => {
+    async (params) => {
       const client = Reflect.get(window, "mcpConformanceClient") as {
         request(method: string, params: unknown): Promise<unknown>;
       };
-      const payload = (await client.request("mcp.app.view", { sessionKey, viewId })) as {
+      const payload = (await client.request("mcp.app.view", {
+        sessionKey: params.sessionKey,
+        viewId: params.viewId,
+      })) as {
         standaloneUrl: string;
       };
       return payload.standaloneUrl;
@@ -333,9 +335,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       response.end(appModuleSource);
     });
     appAssetServer = fixtureAssetServer;
-    await new Promise<void>((resolve) =>
-      fixtureAssetServer.listen(appAssetPort, "127.0.0.1", resolve),
-    );
+    await new Promise<void>((resolve) => {
+      fixtureAssetServer.listen(appAssetPort, "127.0.0.1", resolve);
+    });
     const appModuleUrl = `http://127.0.0.1:${appAssetPort}/app.js`;
     const resourceOrigin = new URL(appModuleUrl).origin;
     const controlUiOrigin = new URL(controlUiServer.baseUrl).origin;
@@ -405,9 +407,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     await gateway?.close({ reason: "MCP App conformance complete" });
     await disposeAllSessionMcpRuntimes();
     if (appAssetServer) {
-      await new Promise<void>((resolve, reject) =>
-        appAssetServer?.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+      });
     }
     await controlUiServer?.close();
     clearConfigCache();
@@ -439,7 +441,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     try {
       app = await findAppFrame(controlPage);
     } catch (error) {
-      throw new Error(`${String(error)}; browser=${JSON.stringify(browserDiagnostics)}`);
+      throw new Error(`${String(error)}; browser=${JSON.stringify(browserDiagnostics)}`, {
+        cause: error,
+      });
     }
     await waitForText(app.locator("#input"), '{"city":"Paris"}');
     await waitForTextContaining(app.locator("#result"), "initial-result");
@@ -503,7 +507,9 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     lease.expiresAtMs = expiresAtMs;
     const expiring = await requestStandaloneUrl(controlPage);
     const expiringUrl = `http://127.0.0.1:${gatewayPort}${expiring}`;
-    await new Promise((resolve) => setTimeout(resolve, Math.max(0, expiresAtMs - Date.now() + 50)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(0, expiresAtMs - Date.now() + 50));
+    });
     await standalonePage.goto(expiringUrl);
     await standalonePage.reload();
     await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
