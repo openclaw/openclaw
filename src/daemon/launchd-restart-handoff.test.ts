@@ -95,7 +95,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
-  it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
+  it("outwaits the drain budget after bootout and retries bootstrap for reload mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
@@ -111,12 +111,19 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
-    // polls until launchd finishes the async unload before re-bootstrapping
-    expect(args[1]).toContain("bootout_wait_count=");
+    // The unload poll must outlast the gateway's 300s drain-before-exit budget
+    // (#110137): 315 × 1s vs the old 15 × 0.2s that stranded active-run restarts.
+    expect(args[1]).toContain('bootout_wait_count="315"');
     expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
+    expect(args[1]).toContain("sleep 1");
+    // Bootstrap failures retry; kickstart -k only fires while the label is
+    // registered, because it cannot succeed on a booted-out label.
+    expect(args[1]).toContain('bootstrap_retry_count="15"');
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    // fallback: kickstart -k on bootstrap failure so service isn't left deregistered
-    expect(args[1]).toContain('launchctl kickstart -k "$service_target"');
+    expect(args[1]).toContain(
+      'if launchctl print "$service_target" >/dev/null 2>&1; then\n    launchctl kickstart -k "$service_target"',
+    );
+    expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {
