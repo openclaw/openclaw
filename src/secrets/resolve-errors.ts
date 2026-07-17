@@ -1,16 +1,14 @@
 /** Typed errors for SecretRef provider and ref-level resolution failures. */
 import type { SecretRef, SecretRefSource } from "../config/types.secrets.js";
 
-export type SecretRefResolutionCode =
+type SecretRefResolutionCode =
   | "SECRET_REF_NOT_FOUND"
   | "SECRET_REF_POLICY_DENIED"
   | "SECRET_REF_INVALID"
   | "SECRET_REF_PROVIDER_ERROR"
   | "SECRET_REF_PROVIDER_CONTRACT";
 
-export type SecretProviderResolutionCode =
-  | "SECRET_PROVIDER_INVALID"
-  | "SECRET_PROVIDER_UNAVAILABLE";
+type SecretProviderResolutionCode = "SECRET_PROVIDER_INVALID" | "SECRET_PROVIDER_UNAVAILABLE";
 
 /** Error for failures that affect an entire configured secret provider. */
 class SecretProviderResolutionError extends Error {
