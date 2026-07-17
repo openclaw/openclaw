@@ -166,7 +166,7 @@ function slackAccountConfigPath(accountId: string): string {
   return accountId === "default" ? "channels.slack" : `channels.slack.accounts.${accountId}`;
 }
 
-export async function collectSlackUserIdentityWarnings(params: {
+async function collectSlackUserIdentityWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {

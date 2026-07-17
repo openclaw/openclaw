@@ -294,7 +294,7 @@ export function createSlackSetupWizardBase(handlers: {
       // Configured implicit-bot accounts historically skip this step. An
       // explicit user identity still needs the selector to return to bot.
       if (currentAccount.configured && currentAccount.config.identity !== "user") {
-        return;
+        return { cfg };
       }
       const identity = await prompter.select<"bot" | "user">({
         message: "How should OpenClaw appear in Slack?",
