@@ -134,6 +134,7 @@ function formatMultipleConfiguredChannelsMessage(configured: readonly string[]):
 }
 
 const loggedChannelSelectionErrors = new Set<string>();
+const MAX_LOGGED_CHANNEL_SELECTION_ERRORS = 512;
 
 function logChannelSelectionError(params: {
   pluginId: string;
@@ -143,7 +144,10 @@ function logChannelSelectionError(params: {
 }) {
   const message = formatErrorMessage(params.error);
   const key = `${params.pluginId}:${params.accountId}:${params.operation}:${message}`;
-  if (loggedChannelSelectionErrors.has(key)) {
+  if (
+    loggedChannelSelectionErrors.has(key) ||
+    loggedChannelSelectionErrors.size >= MAX_LOGGED_CHANNEL_SELECTION_ERRORS
+  ) {
     return;
   }
   loggedChannelSelectionErrors.add(key);
