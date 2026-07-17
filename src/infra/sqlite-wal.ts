@@ -196,9 +196,7 @@ function readMountEntries(): Result<MountEntry[], "timeout"> {
       ),
     };
   } catch (error) {
-    return isMountCommandTimeout(error)
-      ? { ok: false, error: "timeout" }
-      : { ok: true, value: [] };
+    return isMountCommandTimeout(error) ? { ok: false, error: "timeout" } : { ok: true, value: [] };
   }
 }
 
