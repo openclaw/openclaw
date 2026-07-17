@@ -1122,6 +1122,10 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
+    "./plugin-sdk/meeting-runtime": {
+      "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
+      "default": "./dist/plugin-sdk/meeting-runtime.js"
+    },
     "./plugin-sdk/transcripts": {
       "types": "./dist/plugin-sdk/transcripts.d.ts",
       "default": "./dist/plugin-sdk/transcripts.js"

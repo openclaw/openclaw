@@ -2,11 +2,13 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { callBrowserProxyOnNode } from "./chrome-browser-proxy.js";
 import {
-  callBrowserProxyOnNode,
   forceMeetEnglishUi,
   isEnglishMeetTab,
-} from "./chrome-browser-proxy.js";
+  isSameMeetUrlForReuse,
+  normalizeMeetUrlForReuse,
+} from "./google-meet-urls.js";
 
 describe("forceMeetEnglishUi", () => {
   it("pins hl=en on Meet URLs", () => {
@@ -32,6 +34,21 @@ describe("isEnglishMeetTab", () => {
     expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij")).toBe(false);
     expect(isEnglishMeetTab("https://meet.google.com/abc-defg-hij?hl=ja")).toBe(false);
     expect(isEnglishMeetTab("https://example.com/?hl=en")).toBe(false);
+  });
+});
+
+describe("normalizeMeetUrlForReuse", () => {
+  it("keeps /new launchable but excludes it from reusable meeting identity", () => {
+    expect(forceMeetEnglishUi("https://meet.google.com/new")).toBe(
+      "https://meet.google.com/new?hl=en",
+    );
+    expect(normalizeMeetUrlForReuse("https://meet.google.com/new")).toBeUndefined();
+    expect(
+      isSameMeetUrlForReuse("https://meet.google.com/new", "https://meet.google.com/new"),
+    ).toBe(false);
+    expect(normalizeMeetUrlForReuse("https://meet.google.com/abc-defg-hij?authuser=1")).toBe(
+      "https://meet.google.com/abc-defg-hij",
+    );
   });
 });
 
