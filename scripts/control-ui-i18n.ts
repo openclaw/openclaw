@@ -629,7 +629,10 @@ export async function runProcess(
       if (force) {
         taskkillArgs.push("/F");
       }
-      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
+      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, {
+        stdio: "ignore",
+        timeout: 5_000,
+      });
       return result.status === 0;
     };
     const signalChild = (signal: NodeJS.Signals) => {
