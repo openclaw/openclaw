@@ -107,6 +107,12 @@ export default definePluginEntry({
     };
     const bindingStore = createLazyCodexAppServerBindingStore(lazyBindingStateStore);
     registerCodexCliMetadata(api);
+    // Lightweight CLI commands (help, status) use a reduced runtime where
+    // api.runtime.state is absent. Skip state-dependent registration so
+    // the plugin does not crash with "Cannot read properties of undefined".
+    if (typeof api.runtime.state?.openSyncKeyedStore !== "function") {
+      return;
+    }
     const sessionCatalogControl = createCodexSessionCatalogControl({
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,
