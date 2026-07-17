@@ -1,5 +1,7 @@
 // Runtime proxy tests cover SSE parsing, terminal error handling, and request
 // payload scrubbing before proxying model streams.
+import { once } from "node:events";
+import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -597,5 +599,83 @@ describe("streamProxy", () => {
       stopReason: "error",
       errorMessage: "Proxy stream ended before terminal event",
     });
+  });
+});
+
+describe("streamProxy loopback /api/stream", () => {
+  let server: http.Server | undefined;
+  const dripTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  afterEach(async () => {
+    for (const timer of dripTimers) {
+      clearTimeout(timer);
+    }
+    dripTimers.clear();
+    if (!server) {
+      return;
+    }
+    server.closeAllConnections?.();
+    server.close();
+    await once(server, "close").catch(() => undefined);
+    server = undefined;
+  });
+
+  async function listenDripProxy(): Promise<number> {
+    server = http.createServer((req, res) => {
+      res.on("error", () => {});
+      if (req.method !== "POST" || req.url !== "/api/stream") {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Transfer-Encoding": "chunked",
+      });
+      // Keepalive-style drip resets chunk-idle; outer abort must win.
+      const drip = () => {
+        if (res.writableEnded || res.destroyed) {
+          return;
+        }
+        res.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
+        const timer = setTimeout(drip, 20);
+        dripTimers.add(timer);
+      };
+      drip();
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    return address.port;
+  }
+
+  it("cancels a dripping native SSE body when the outer abort signal fires", async () => {
+    const port = await listenDripProxy();
+    const controller = new AbortController();
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: `http://127.0.0.1:${port}`,
+      // Idle well above drip cadence so only the outer abort can terminate.
+      timeoutMs: 10_000,
+      signal: controller.signal,
+    });
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 120);
+    });
+    const startedAt = performance.now();
+    controller.abort();
+    const result = await stream.result();
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(result).toMatchObject({
+      stopReason: "aborted",
+      errorMessage: "Request aborted by user",
+    });
+    expect(elapsedMs).toBeLessThan(1_500);
   });
 });
