@@ -1403,20 +1403,16 @@ describe("agentCommand", () => {
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
       ]);
 
-      await expect(
-        agentCommand(
-          {
-            message: "hi",
-            sessionKey: "agent:main:subagent:locked-legacy-auto",
-          },
-          runtime,
-        ),
-      ).rejects.toMatchObject({
-        name: "ModelSelectionLockedError",
-        message: MODEL_SELECTION_LOCKED_MESSAGE,
-      });
+      await agentCommand(
+        {
+          message: "hi",
+          sessionKey: "agent:main:subagent:locked-legacy-auto",
+        },
+        runtime,
+      );
 
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
       const persisted = readSessionStore<{
         providerOverride?: string;
         modelOverride?: string;
@@ -1537,7 +1533,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("rejects a locked disallowed stored override without clearing it", async () => {
+  it("allows a locked disallowed stored override to run without clearing it", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-disallowed-override.json");
       const sessionKey = "agent:main:subagent:locked-disallowed";
@@ -1555,6 +1551,7 @@ describe("agentCommand", () => {
       mockConfig(home, store, {
         model: { primary: "openai/gpt-4.1-mini" },
         models: {
+          "anthropic/claude-opus-4-6": {},
           "openai/gpt-4.1-mini": {},
         },
       });
@@ -1563,11 +1560,9 @@ describe("agentCommand", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
 
-      await expect(runAgentWithSessionKey(sessionKey)).rejects.toMatchObject({
-        name: "ModelSelectionLockedError",
-        message: MODEL_SELECTION_LOCKED_MESSAGE,
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      await runAgentWithSessionKey(sessionKey);
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+      expectLastRunProviderModel("anthropic", "claude-opus-4-6");
       expect(
         readSessionStore<{
           providerOverride?: string;

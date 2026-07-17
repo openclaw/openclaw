@@ -158,6 +158,7 @@ export async function resolveEmbeddedModelSelection(params: {
     params.sessionStore &&
     params.sessionKey &&
     hasStoredOverride &&
+    !isModelSelectionLocked(sessionEntry) &&
     !isValidAgentHarnessSessionStoreEntry(params.sessionKey, sessionEntry) &&
     !params.suppressVisibleSessionEffects
   ) {
@@ -218,6 +219,10 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
+  if (isModelSelectionLocked(sessionEntry)) {
+    hasLegacyAutoFallbackOverrideWithoutOrigin = false;
+  }
+
   const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? undefined
     : sessionEntry?.providerOverride?.trim();
@@ -276,7 +281,10 @@ export async function resolveEmbeddedModelSelection(params: {
       storedModelOverride,
       params.modelManifestContext,
     );
-    if (visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))) {
+    if (
+      isModelSelectionLocked(sessionEntry) ||
+      visibilityPolicy.allowsKey(modelKey(normalizedStored.provider, normalizedStored.model))
+    ) {
       provider = normalizedStored.provider;
       model = normalizedStored.model;
     }
@@ -332,7 +340,9 @@ export async function resolveEmbeddedModelSelection(params: {
     provider = explicitRef.provider;
     model = explicitRef.model;
   }
-  const allowedInitialSelection = visibilityPolicy.resolveSelection({ provider, model });
+  const allowedInitialSelection = isModelSelectionLocked(sessionEntry)
+    ? { provider, model }
+    : visibilityPolicy.resolveSelection({ provider, model });
   if (!allowedInitialSelection) {
     throw new Error(
       `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,

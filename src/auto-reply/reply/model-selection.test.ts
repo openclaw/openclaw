@@ -14,7 +14,6 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
@@ -1153,7 +1152,7 @@ describe("createModelSelectionState respects session model override", () => {
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 
-  it("rejects automatic repair of a locked disallowed override", async () => {
+  it("preserves a locked disallowed override without resetting it", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -1173,23 +1172,20 @@ describe("createModelSelectionState respects session model override", () => {
     });
     const sessionStore = { [sessionKey]: sessionEntry };
 
-    await expect(
-      createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o",
-        provider: "openai",
-        model: "gpt-4o",
-        hasModelDirective: false,
-      }),
-    ).rejects.toMatchObject({
-      name: "ModelSelectionLockedError",
-      message: MODEL_SELECTION_LOCKED_MESSAGE,
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      provider: "openai",
+      model: "gpt-4o",
+      hasModelDirective: false,
     });
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-4o-mini");
     expect(sessionStore[sessionKey]).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
