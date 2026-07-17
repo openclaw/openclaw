@@ -352,53 +352,45 @@ describe("sqlite WAL maintenance", () => {
   });
 
   it("uses rollback journaling when mount classification times out", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-mount-timeout-"));
-    try {
-      const db = createMockDb();
-      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
-      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
-        throw new Error("no proc mountinfo");
-      });
-      vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-        throw Object.assign(new Error("spawnSync mount ETIMEDOUT"), { code: "ETIMEDOUT" });
-      });
+    const tempDir = tempDirs.make("openclaw-sqlite-mount-timeout-");
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw new Error("no proc mountinfo");
+    });
+    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync mount ETIMEDOUT"), { code: "ETIMEDOUT" });
+    });
 
-      configureSqliteWalMaintenance(db, {
-        checkpointIntervalMs: 0,
-        databasePath: path.join(tempDir, "openclaw.sqlite"),
-      });
+    configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 0,
+      databasePath: path.join(tempDir, "openclaw.sqlite"),
+    });
 
-      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
-      expect(db["exec"]).not.toHaveBeenCalled();
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
+    expect(db["exec"]).not.toHaveBeenCalled();
   });
 
   it("preserves WAL policy when mount classification fails without timing out", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-mount-error-"));
-    try {
-      const db = createMockDb();
-      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
-      vi.spyOn(fs, "readFileSync").mockImplementation(() => {
-        throw new Error("no proc mountinfo");
-      });
-      vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-        throw Object.assign(new Error("spawnSync mount ENOENT"), { code: "ENOENT" });
-      });
+    const tempDir = tempDirs.make("openclaw-sqlite-mount-error-");
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw new Error("no proc mountinfo");
+    });
+    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync mount ENOENT"), { code: "ENOENT" });
+    });
 
-      configureSqliteWalMaintenance(db, {
-        checkpointIntervalMs: 0,
-        databasePath: path.join(tempDir, "openclaw.sqlite"),
-      });
+    configureSqliteWalMaintenance(db, {
+      checkpointIntervalMs: 0,
+      databasePath: path.join(tempDir, "openclaw.sqlite"),
+    });
 
-      expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-      expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
   });
 
   it("uses macOS SMB mount filesystem names", () => {
