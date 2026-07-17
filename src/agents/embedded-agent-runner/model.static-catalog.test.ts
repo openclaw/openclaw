@@ -335,9 +335,8 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
             provider: "openai",
             api: "azure-openai-responses",
           },
-          "azure-openai-fixed-endpoint": {
+          "openai-fixed-endpoint": {
             provider: "openai",
-            api: "azure-openai-responses",
             baseUrl: "https://manifest-alias.example.com/openai/v1",
           },
         },
@@ -373,14 +372,14 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     );
     expectManifestAliasResolution(
       {
-        provider: "azure-openai-fixed-endpoint",
+        provider: "openai-fixed-endpoint",
         modelId: "gpt-5.5",
         cfg: {},
       },
       {
-        provider: "azure-openai-fixed-endpoint",
+        provider: "openai-fixed-endpoint",
         transport: {
-          api: "azure-openai-responses",
+          api: "openai-responses",
           baseUrl: "https://manifest-alias.example.com/openai/v1",
         },
       },

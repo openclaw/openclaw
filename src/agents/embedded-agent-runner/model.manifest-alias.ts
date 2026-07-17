@@ -108,6 +108,7 @@ export type ManifestModelCatalogProviderAliasMetadata = {
 };
 
 type ManifestModelCatalogProviderAliasClaim = {
+  readonly incompleteTransport: boolean;
   readonly targetProvider: string;
   readonly retainsTransportAlias: boolean;
   readonly transport: ManifestModelCatalogProviderTransport;
@@ -116,6 +117,7 @@ type ManifestModelCatalogProviderAliasClaim = {
 type ManifestModelCatalogProviderAliasResolution =
   | { readonly kind: "none" }
   | { readonly kind: "conflict" }
+  | { readonly kind: "incomplete-transport" }
   | { readonly kind: "canonical"; readonly provider: string }
   | {
       readonly kind: "transport";
@@ -143,6 +145,30 @@ function listEligibleManifestModelCatalogAliasPlugins(params: {
       hasExplicitManifestOwnerTrust({ plugin, normalizedConfig })
     );
   });
+}
+
+function resolveManifestAliasTargetApi(params: {
+  plugin: ManifestModelCatalogAliasPlugin;
+  provider: string;
+  modelId?: string;
+}): ModelCatalogAlias["api"] {
+  const providerCatalog = Object.entries(params.plugin.modelCatalog?.providers ?? {}).find(
+    ([provider]) => normalizeProviderId(provider) === params.provider,
+  )?.[1];
+  if (!providerCatalog) {
+    return undefined;
+  }
+  const modelId = params.modelId?.trim();
+  const model = modelId
+    ? providerCatalog.models.find((candidate) =>
+        staticModelIdMatches({
+          candidateId: candidate.id,
+          provider: params.provider,
+          modelId,
+        }),
+      )
+    : undefined;
+  return model?.api ?? providerCatalog.api;
 }
 
 function resolveManifestModelCatalogProviderAlias(params: {
@@ -186,16 +212,29 @@ function resolveManifestModelCatalogProviderAlias(params: {
           modelId: params.modelId,
           cfg: params.cfg,
         });
+      const transportApi =
+        alias.api ??
+        resolveManifestAliasTargetApi({
+          plugin,
+          provider: normalizedTarget,
+          modelId: params.modelId,
+        });
+      const hasTransportOverride = hasModelCatalogAliasTransportOverride(alias);
       const retainsTransportAlias =
-        hasModelCatalogAliasTransportOverride(alias) &&
+        hasTransportOverride &&
         hasEndpointSurface &&
+        Boolean(transportApi) &&
         !hasApplicableSuppression;
       const baseUrl = alias.baseUrl?.trim();
       claims.push({
+        // A retained endpoint needs an explicit wire adapter. Otherwise the generic
+        // model fallback would silently choose OpenAI Responses for another provider.
+        incompleteTransport:
+          hasTransportOverride && hasEndpointSurface && !transportApi && !hasApplicableSuppression,
         targetProvider: normalizedTarget,
         retainsTransportAlias,
         transport: {
-          ...(alias.api ? { api: alias.api } : {}),
+          ...(transportApi ? { api: transportApi } : {}),
           ...(baseUrl ? { baseUrl } : {}),
         },
       });
@@ -210,6 +249,9 @@ function resolveManifestModelCatalogProviderAlias(params: {
   const claim = claims[0];
   if (!claim) {
     return { kind: "none" };
+  }
+  if (claim.incompleteTransport) {
+    return { kind: "incomplete-transport" };
   }
   if (claim.retainsTransportAlias) {
     return {
@@ -265,6 +307,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
     case "transport":
       return { provider: params.provider, transport: resolved.transport };
     case "conflict":
+    case "incomplete-transport":
       return { provider: params.provider, ambiguous: true };
     case "none":
       return { provider: params.provider };
