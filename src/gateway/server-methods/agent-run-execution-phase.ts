@@ -395,9 +395,7 @@ export function startAgentRunExecution(params: {
           ...(params.mainRestartRecoveryOwnerLease
             ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
             : {}),
-          ...(params.isRestartRecoveryResumeRun
-            ? { mainRestartRecoveryAdmitted: true }
-            : {}),
+          ...(params.isRestartRecoveryResumeRun ? { mainRestartRecoveryAdmitted: true } : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,

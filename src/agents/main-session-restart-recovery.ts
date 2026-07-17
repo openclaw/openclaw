@@ -2022,11 +2022,15 @@ export async function retryRestartAbortedMainSessionRecoveryAfterOwnerRelease(pa
     sessionKey: params.sessionKey,
   };
   const assertTargetCurrent = () => {
-    if (!loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })) {
+    if (
+      !loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })
+    ) {
       throw new Error("restart recovery session ownership changed before owner-release retry");
     }
   };
-  if (!loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })) {
+  if (
+    !loadExpectedRestartRecoveryTarget({ expected: expectedTarget, storePath: params.storePath })
+  ) {
     return { recovered: 0, failed: 0, skipped: 0 };
   }
   const admission = await beginSessionWorkAdmission({

@@ -4,8 +4,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import type { AgentCommandOpts } from "./command/types.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
+import type { AgentCommandOpts } from "./command/types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:main";

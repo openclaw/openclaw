@@ -115,10 +115,10 @@ export async function commitMainSessionRecovery(params: {
   const reservationCleanup = cancellation ?? abandonment;
   const scansAliases = Boolean(
     reservationCleanup ||
-      recoveryAdmission ||
-      (ownerClaim && params.scanAliases) ||
-      ownerValidation ||
-      ownerRelease,
+    recoveryAdmission ||
+    (ownerClaim && params.scanAliases) ||
+    ownerValidation ||
+    ownerRelease,
   );
   return await applySessionEntryReplacements<MainSessionRecoveryStoreResult>({
     requireWriteSuccess: params.requireWriteSuccess,
