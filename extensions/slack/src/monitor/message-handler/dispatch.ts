@@ -2203,7 +2203,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (payload.phase !== "update") {
             return;
           }
-          await pushPlanProgress(payload.planSteps, payload.explanation);
+          await pushPlanProgress(payload.steps, payload.explanation);
         },
         onApprovalEvent: async (payload) => {
           if (payload.phase !== "requested") {

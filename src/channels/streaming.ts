@@ -186,10 +186,6 @@ export type AgentPlanStep = {
   status: AgentPlanStepStatus;
 };
 
-/**
- * Plan-event ingress shape for the SDK deprecation window: shipped producers
- * through 2026.7.x sent `steps: string[]`. Remove with the string form.
- */
 export type AgentPlanStepInput = AgentPlanStep | string;
 
 function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
@@ -197,25 +193,9 @@ function isAgentPlanStepStatus(value: unknown): value is AgentPlanStepStatus {
 }
 
 /**
- * Normalizes plan-event steps at public ingress boundaries. Legacy string
- * steps become pending typed steps; malformed entries are dropped.
+ * Older installed @openclaw/codex releases emit plan steps as strings.
+ * Normalize that external-plugin version skew to pending typed steps.
  */
-/**
- * Builds both plan-step payload fields for `onPlanUpdate` during the SDK
- * deprecation window: canonical `planSteps` plus the shipped pre-2026.8
- * `steps: string[]` form. Collapse to `planSteps` when the window closes.
- */
-export function buildPlanUpdateStepFields(value: unknown): {
-  steps?: string[];
-  planSteps?: AgentPlanStep[];
-} {
-  const planSteps = normalizeAgentPlanSteps(value);
-  if (!planSteps) {
-    return {};
-  }
-  return { steps: planSteps.map((entry) => entry.step), planSteps };
-}
-
 export function normalizeAgentPlanSteps(value: unknown): AgentPlanStep[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

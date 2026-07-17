@@ -167,8 +167,7 @@ type DispatchInboundParams = {
     onPlanUpdate?: (payload: {
       phase?: string;
       explanation?: string;
-      steps?: string[];
-      planSteps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
+      steps?: Array<{ step: string; status: "pending" | "in_progress" | "completed" }>;
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
@@ -3243,8 +3242,7 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onPlanUpdate?.({
         phase: "update",
         explanation: "Implementing the change.",
-        steps: ["Inspect", "Patch", "Test"],
-        planSteps: [
+        steps: [
           { step: "Inspect", status: "completed" },
           { step: "Patch", status: "in_progress" },
           { step: "Test", status: "pending" },

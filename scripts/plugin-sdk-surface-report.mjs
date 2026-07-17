@@ -235,7 +235,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired qa-live-transport-scenarios subpath -6.
       // +12: typed plan step/status and checklist formatter across channel barrels.
       // +8: plan-step ingress union and normalizer across channel barrels.
-      // +4: dual-field plan payload builder for the steps deprecation window.
+      // Harvest: retired dual-field plan payload builder -1.
       // +12: active plan-step consumers pinned through channel-outbound and mirrors.
       // +6: app-guided provider setup types retained by plugin-entry and mirrors.
       // +3: widget HTML validation helpers and tool input error.
@@ -258,7 +258,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // tuning constants, and telegram-consumed claim helpers with compat mirrors,
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
-      8046,
+      // Harvest: retired dual-field plan payload builder -1.
+      8045,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -271,7 +272,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // Harvest: retired qa-live-transport-scenarios subpath -3.
       // +4: shared plan checklist formatter across channel barrels.
       // +4: plan-step normalizer across channel barrels.
-      // +4: dual-field plan payload builder for the steps deprecation window.
+      // Harvest: retired dual-field plan payload builder -1.
       // +6: active plan-step helpers pinned through channel-outbound and mirrors.
       // +2: widget HTML document detection and size assertion.
       // Used-union narrowing of the 31 wildcard barrels.
@@ -289,7 +290,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +9: narrowed drain seam functions and compat mirrors after the
       // WhatsApp-split harvest (#108656).
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
-      4489,
+      // Harvest: retired dual-field plan payload builder -1.
+      4488,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -299,7 +301,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +77: five zero-consumer subpaths enter their removal window.
       // +9: typed plan exports and formatter through deprecated channel barrels.
       // +6: plan-step ingress union and normalizer through deprecated channel barrels.
-      // +3: dual-field plan payload builder through deprecated channel barrels.
+      // Harvest: retired dual-field plan payload builder -1.
       // +8: channel-outbound plan pins mirrored through deprecated barrels.
       // Used-union narrowing drops inherited deprecated exports.
       // +1: Telegram runner alias retained for plugin SDK compatibility.
@@ -308,7 +310,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: unified implicit-mention config type through deprecated config-types.
       // +24: narrowed drain seam compat mirrors in the channel-message
       // deprecation-window barrels (#108656).
-      3014,
+      3013,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

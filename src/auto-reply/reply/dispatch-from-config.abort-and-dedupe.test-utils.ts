@@ -63,7 +63,7 @@ describe("dispatchReplyFromConfig", () => {
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code.",
-        planSteps: [{ step: "Patch code", status: "in_progress" }],
+        steps: [{ step: "Patch code", status: "in_progress" }],
       });
       await opts?.onApprovalEvent?.({
         phase: "requested",
