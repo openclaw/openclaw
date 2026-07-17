@@ -2693,10 +2693,29 @@ describe("memory plugin e2e", () => {
     }
   });
 
-  test("passes configured dimensions to OpenAI embeddings API", async () => {
-    const embeddingsCreate = vi.fn(async () => ({
-      data: [{ embedding: [0.1, 0.2, 0.3] }],
-    }));
+  test("retries without rejected dimensions and truncates the fallback vector", async () => {
+    const rejectedDimensions = Object.assign(
+      new Error("422 Extra inputs are not permitted: body.dimensions"),
+      {
+        status: 422,
+        error: {
+          detail: [
+            {
+              type: "extra_forbidden",
+              loc: ["body", "dimensions"],
+              msg: "Extra inputs are not permitted",
+            },
+          ],
+        },
+      },
+    );
+    const embeddingsCreate = vi.fn(async (body: unknown) => {
+      const request = body as Record<string, unknown>;
+      if (request.dimensions === 1024) {
+        throw rejectedDimensions;
+      }
+      return { data: [{ embedding: [3, 4, ...Array.from({ length: 1023 }, () => 0)] }] };
+    });
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const toArray = vi.fn(async () => []);
     const limit = vi.fn(() => ({ toArray }));
@@ -2773,7 +2792,7 @@ describe("memory plugin e2e", () => {
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
-      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+      expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledTimes(2);
       expect(
         expectDefined(
           ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
@@ -2782,11 +2801,21 @@ describe("memory plugin e2e", () => {
       ).toBeLessThan(
         expectDefined(embeddingsCreate.mock.invocationCallOrder[0], "LanceDB embedding invocation"),
       );
-      expect(embeddingsCreate).toHaveBeenCalledWith({
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(1, {
         model: "text-embedding-3-small",
         input: "hello dimensions",
         dimensions: 1024,
       });
+      expect(embeddingsCreate).toHaveBeenNthCalledWith(2, {
+        model: "text-embedding-3-small",
+        input: "hello dimensions",
+      });
+      const truncatedVector = expectDefined(
+        vectorSearch.mock.calls[0]?.[0],
+        "truncated LanceDB search vector",
+      );
+      expect(truncatedVector).toHaveLength(1024);
+      expect(truncatedVector.slice(0, 2)).toEqual([0.6, 0.8]);
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/runtime-env");
       vi.doUnmock("openai");
@@ -3065,6 +3094,67 @@ describe("memory plugin e2e", () => {
     );
     expect(() => normalizeEmbeddingVector(undefined)).toThrow(
       "Embedding response is missing a vector",
+    );
+  });
+
+  test("recognizes only structured dimensions-field rejections", () => {
+    expect(
+      testing.isEmbeddingDimensionsRejectedError({
+        status: 400,
+        param: "dimensions",
+        code: "unknown_parameter",
+      }),
+    ).toBe(true);
+    expect(
+      testing.isEmbeddingDimensionsRejectedError(
+        Object.assign(
+          new Error(
+            "422 [{'type': 'extra_forbidden', 'loc': ('body', 'dimensions'), 'msg': 'Extra inputs are not permitted'}]",
+          ),
+          { status: 422 },
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isEmbeddingDimensionsRejectedError({
+        status: 422,
+        error: {
+          detail: [
+            {
+              type: "value_error.extra",
+              loc: ["body", "dimensions"],
+              msg: "extra fields not permitted",
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      testing.isEmbeddingDimensionsRejectedError({
+        status: 400,
+        param: "dimensions",
+        error: { message: "Unsupported dimensions value: 4" },
+      }),
+    ).toBe(false);
+    expect(
+      testing.isEmbeddingDimensionsRejectedError(
+        new Error("400 Unknown parameter: dimensions"),
+      ),
+    ).toBe(false);
+    expect(
+      testing.isEmbeddingDimensionsRejectedError({
+        status: 500,
+        param: "dimensions",
+        code: "unknown_parameter",
+      }),
+    ).toBe(false);
+  });
+
+  test("normalizes locally truncated embeddings and rejects short vectors", () => {
+    expect(testing.truncateEmbeddingVector([3, 4, 12], 2, "test-model")).toEqual([0.6, 0.8]);
+    expect(testing.truncateEmbeddingVector([0, 0, 1], 2, "test-model")).toEqual([0, 0]);
+    expect(() => testing.truncateEmbeddingVector([1], 2, "test-model")).toThrow(
+      "Embedding model test-model returned 1 dimensions, need at least 2 for local truncation",
     );
   });
 

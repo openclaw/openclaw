@@ -300,25 +300,19 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    if (
-      typeof this.dimensions === "number" &&
-      (!Number.isInteger(this.dimensions) || this.dimensions <= 0)
-    ) {
-      throw new Error("Embedding dimensions must be a positive integer");
-    }
-
+    const dimensions = this.dimensions;
     try {
       const response = await this.postEmbedding(text, { includeDimensions: true, options });
       return normalizeEmbeddingVector(response.data?.[0]?.embedding);
     } catch (error) {
-      if (typeof this.dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
+      if (typeof dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
         throw error;
       }
     }
 
     const response = await this.postEmbedding(text, { includeDimensions: false, options });
     const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
-    return this.trimEmbedding(embedding);
+    return truncateEmbeddingVector(embedding, dimensions, this.model);
   }
 
   private async postEmbedding(
@@ -348,68 +342,62 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
       ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
     });
   }
-
-  private trimEmbedding(embedding: number[]): number[] {
-    if (typeof this.dimensions !== "number") {
-      return embedding;
-    }
-    if (embedding.length < this.dimensions) {
-      throw new Error(
-        `Embedding model ${this.model} returned ${embedding.length} dimensions, need at least ${this.dimensions} for local truncation`,
-      );
-    }
-    return embedding.slice(0, this.dimensions);
-  }
 }
 
 function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
-  const message = stringifyErrorLike(error).toLowerCase();
-  if (!mentionsEmbeddingDimensionsField(message)) {
+  const record = asRecord(error);
+  if (record?.status !== 400 && record?.status !== 422) {
     return false;
   }
+  const details = stringifyEmbeddingApiError(error).toLowerCase();
+  return /\bdimensions\b/.test(details) && isUnsupportedEmbeddingFieldError(details);
+}
+
+function isUnsupportedEmbeddingFieldError(details: string): boolean {
   return (
-    message.includes("extra_forbidden") ||
-    message.includes("extra inputs") ||
-    message.includes("not permitted") ||
-    message.includes("not allowed") ||
-    message.includes("unknown parameter") ||
-    message.includes("unknown field") ||
-    message.includes("unrecognized parameter") ||
-    message.includes("unrecognized field") ||
-    message.includes("unexpected parameter") ||
-    message.includes("unexpected field")
+    /\bextra[_ -]forbidden\b/.test(details) ||
+    /\bextra inputs? (?:are )?not permitted\b/.test(details) ||
+    /\bextra fields? (?:are )?not permitted\b/.test(details) ||
+    /\b(?:unknown|unrecognized|unexpected|unsupported)[_ -](?:request[_ -])?(?:parameter|field|argument)\b/.test(
+      details,
+    )
   );
 }
 
-function mentionsEmbeddingDimensionsField(message: string): boolean {
-  return (
-    /\bbody\.dimensions\b/.test(message) ||
-    /\binput\.dimensions\b/.test(message) ||
-    /\bparam(?:eter)?\s*[:=]\s*["'`]?dimensions["'`]?\b/.test(message) ||
-    /\b(?:param(?:eter)?|field|argument)\s+["'`]?dimensions["'`]?\b/.test(message) ||
-    /\b["'`]?dimensions["'`]?\s+(?:param(?:eter)?|field|argument)\b/.test(message) ||
-    /(?:\(|\[)\s*['"](?:body|input)['"]\s*,\s*['"]dimensions['"]\s*(?:\)|\])/.test(message)
-  );
-}
-
-function stringifyErrorLike(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!value || typeof value !== "object") {
-    return String(value);
-  }
-  const parts: string[] = value instanceof Error ? [value.message] : [];
-  const record = value as Record<string, unknown>;
-  for (const key of ["message", "type", "code", "param", "error"]) {
-    const item = record[key];
-    if (typeof item === "string" || typeof item === "number") {
-      parts.push(String(item));
-    } else if (item && typeof item === "object") {
-      parts.push(stringifyErrorLike(item));
+function stringifyEmbeddingApiError(error: unknown): string {
+  const record = asRecord(error);
+  const parts = error instanceof Error ? [error.message] : [];
+  for (const value of [record?.code, record?.type, record?.param, record?.error]) {
+    if (typeof value === "string" || typeof value === "number") {
+      parts.push(String(value));
+      continue;
+    }
+    if (value && typeof value === "object") {
+      try {
+        parts.push(JSON.stringify(value));
+      } catch {
+        // The SDK error message and scalar fields still provide bounded detection.
+      }
     }
   }
   return parts.join("\n");
+}
+
+function truncateEmbeddingVector(
+  embedding: number[],
+  dimensions: number,
+  model: string,
+): number[] {
+  if (embedding.length < dimensions) {
+    throw new Error(
+      `Embedding model ${model} returned ${embedding.length} dimensions, need at least ${dimensions} for local truncation`,
+    );
+  }
+  const truncated = embedding.slice(0, dimensions);
+  // Prefix truncation changes vector magnitude. Re-normalize so LanceDB distance
+  // ranking compares fallback query and stored vectors on the same scale.
+  const magnitude = Math.sqrt(truncated.reduce((sum, value) => sum + value * value, 0));
+  return magnitude > 0 ? truncated.map((value) => value / magnitude) : truncated;
 }
 
 class ProviderAdapterEmbeddings implements Embeddings {
@@ -542,7 +530,9 @@ class MemoryRecallEmbeddingError extends Error {
 }
 
 export const testing = {
+  isEmbeddingDimensionsRejectedError,
   runWithTimeout,
+  truncateEmbeddingVector,
 } as const;
 
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
