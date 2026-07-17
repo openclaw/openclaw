@@ -1576,7 +1576,10 @@ describe("runDoctorSessionSqlite", () => {
         targets: Array.from({ length: targetCount }, (_, index) => {
           const targetMessages = index === targetCount - 1 ? messages : ["x".repeat(500)];
           return {
-            agentId: `agent-${index}-${"long-name-".repeat(10)}`,
+            agentId:
+              targetCount === 1
+                ? "agent-with-long-name-".repeat(10)
+                : `agent-${index}-${"long-name-".repeat(10)}`,
             completedMoves: [],
             issues: targetMessages.map((message) => ({ code: "startup_failure", message })),
             plannedMoves: [],
