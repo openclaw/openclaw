@@ -1209,6 +1209,7 @@ function compactInputHint(parameters: unknown): string {
       parameters.required.some((value) => typeof value === "string");
     return hasRequired || parameters.additionalProperties !== false ? "{ ... }" : "{}";
   }
+  const properties = parameters.properties;
   const requiredValues = Array.isArray(parameters.required) ? parameters.required : [];
   const required = new Set(
     requiredValues
@@ -1220,7 +1221,7 @@ function compactInputHint(parameters: unknown): string {
   const selected = new Set<string>();
   const keys: string[] = [];
   for (const key of required) {
-    if (Object.hasOwn(parameters.properties, key)) {
+    if (Object.hasOwn(properties, key)) {
       selected.add(key);
       keys.push(key);
     }
@@ -1229,10 +1230,10 @@ function compactInputHint(parameters: unknown): string {
     requiredValues.length > MAX_COMPACT_INPUT_PROPERTIES ||
     requiredValues
       .slice(0, MAX_COMPACT_INPUT_PROPERTIES)
-      .some((value) => typeof value === "string" && !Object.hasOwn(parameters.properties, value)) ||
+      .some((value) => typeof value === "string" && !Object.hasOwn(properties, value)) ||
     parameters.additionalProperties === true;
-  for (const key in parameters.properties) {
-    if (!Object.hasOwn(parameters.properties, key) || selected.has(key)) {
+  for (const key in properties) {
+    if (!Object.hasOwn(properties, key) || selected.has(key)) {
       continue;
     }
     if (keys.length >= MAX_COMPACT_INPUT_PROPERTIES) {
@@ -1246,7 +1247,7 @@ function compactInputHint(parameters: unknown): string {
   const parts: string[] = [];
   for (const key of keys) {
     const name = /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) ? key : JSON.stringify(key);
-    const part = `${name}${required.has(key) ? "" : "?"}: ${compactSchemaType(parameters.properties[key])}`;
+    const part = `${name}${required.has(key) ? "" : "?"}: ${compactSchemaType(properties[key])}`;
     const next = `{ ${[...parts, part].join("; ")} }`;
     if (next.length > MAX_COMPACT_INPUT_HINT_CHARS) {
       omitted = true;
