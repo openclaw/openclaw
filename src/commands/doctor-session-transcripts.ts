@@ -38,6 +38,7 @@ type TranscriptRepairResult = {
   originalEntries: number;
   activeEntries: number;
   legacyOpenAICodexEntries: number;
+  legacyNullCompactionTokensBeforeEntries: number;
   backupPath?: string;
   reason?: string;
 };
@@ -110,6 +111,21 @@ function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]
       touched = true;
     }
     if (touched) {
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
+function normalizeLegacyNullCompactionTokensBefore(entries: TranscriptEntry[]): number {
+  let changed = 0;
+  for (const entry of entries) {
+    if (
+      entry.type === "compaction" &&
+      Object.hasOwn(entry, "tokensBefore") &&
+      entry.tokensBefore === null
+    ) {
+      entry.tokensBefore = 0;
       changed += 1;
     }
   }
@@ -270,7 +286,7 @@ async function writeTranscriptEntries(params: {
   filePath: string;
   entries: TranscriptEntry[];
 }): Promise<string> {
-  const backupPath = `${params.filePath}.pre-doctor-openai-codex-repair-${new Date()
+  const backupPath = `${params.filePath}.pre-doctor-transcript-repair-${new Date()
     .toISOString()
     .replace(/[:.]/g, "-")}.bak`;
   await fs.copyFile(params.filePath, backupPath);
@@ -288,9 +304,14 @@ async function repairBrokenSessionTranscriptFile(params: {
     const raw = await fs.readFile(params.filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
     const legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
+    const legacyNullCompactionTokensBeforeEntries =
+      normalizeLegacyNullCompactionTokensBefore(entries);
     const activePath = selectActivePath(entries);
     if (!activePath) {
-      if (legacyOpenAICodexEntries > 0 && params.shouldRepair) {
+      if (
+        (legacyOpenAICodexEntries > 0 || legacyNullCompactionTokensBeforeEntries > 0) &&
+        params.shouldRepair
+      ) {
         const backupPath = await writeTranscriptEntries({ filePath: params.filePath, entries });
         return {
           filePath: params.filePath,
@@ -299,22 +320,28 @@ async function repairBrokenSessionTranscriptFile(params: {
           originalEntries: entries.length,
           activeEntries: 0,
           legacyOpenAICodexEntries,
+          legacyNullCompactionTokensBeforeEntries,
           backupPath,
           reason: "no active branch",
         };
       }
       return {
         filePath: params.filePath,
-        broken: legacyOpenAICodexEntries > 0,
+        broken: legacyOpenAICodexEntries > 0 || legacyNullCompactionTokensBeforeEntries > 0,
         repaired: false,
         originalEntries: entries.length,
         activeEntries: 0,
         legacyOpenAICodexEntries,
+        legacyNullCompactionTokensBeforeEntries,
         reason: "no active branch",
       };
     }
     const broken = hasBrokenPromptRewriteBranch(entries, activePath.entries);
-    if (!broken && legacyOpenAICodexEntries === 0) {
+    if (
+      !broken &&
+      legacyOpenAICodexEntries === 0 &&
+      legacyNullCompactionTokensBeforeEntries === 0
+    ) {
       return {
         filePath: params.filePath,
         broken: false,
@@ -322,6 +349,7 @@ async function repairBrokenSessionTranscriptFile(params: {
         originalEntries: entries.length,
         activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
+        legacyNullCompactionTokensBeforeEntries,
       };
     }
     if (!params.shouldRepair) {
@@ -332,6 +360,7 @@ async function repairBrokenSessionTranscriptFile(params: {
         originalEntries: entries.length,
         activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
+        legacyNullCompactionTokensBeforeEntries,
       };
     }
     const backupPath = broken
@@ -348,6 +377,7 @@ async function repairBrokenSessionTranscriptFile(params: {
       originalEntries: entries.length,
       activeEntries: activePath.entries.length,
       legacyOpenAICodexEntries,
+      legacyNullCompactionTokensBeforeEntries,
       backupPath,
     };
   } catch (err) {
@@ -358,6 +388,7 @@ async function repairBrokenSessionTranscriptFile(params: {
       originalEntries: 0,
       activeEntries: 0,
       legacyOpenAICodexEntries: 0,
+      legacyNullCompactionTokensBeforeEntries: 0,
       reason: String(err),
     };
   }
@@ -405,19 +436,29 @@ export async function detectSessionTranscriptHealthIssues(params?: {
 export function sessionTranscriptIssueToHealthFinding(
   issue: SessionTranscriptHealthIssue,
 ): HealthFinding {
-  const metadata =
+  const metadata = [
     issue.legacyOpenAICodexEntries > 0
-      ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
+      ? `${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
           issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
         }`
-      : "";
+      : "",
+    issue.legacyNullCompactionTokensBeforeEntries > 0
+      ? `${issue.legacyNullCompactionTokensBeforeEntries} legacy null compaction token entr${
+          issue.legacyNullCompactionTokensBeforeEntries === 1 ? "y" : "ies"
+        }`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
   return {
     checkId: SESSION_TRANSCRIPTS_CHECK_ID,
     severity: "info",
-    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
+    message: `Session transcript has legacy branch, provider metadata, or compaction telemetry that can be cleaned up.${
+      metadata ? ` ${metadata}` : ""
+    }`,
     path: issue.filePath,
     fixHint:
-      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts into their canonical form.",
   };
 }
 
@@ -470,7 +511,11 @@ export async function noteSessionTranscriptHealth(params?: {
           result.legacyOpenAICodexEntries > 0
             ? ` openai-codex=${result.legacyOpenAICodexEntries}`
             : "";
-        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
+        const compactionTelemetry =
+          result.legacyNullCompactionTokensBeforeEntries > 0
+            ? ` compaction-null-tokens=${result.legacyNullCompactionTokensBeforeEntries}`
+            : "";
+        return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${compactionTelemetry}${backup}`;
       }),
     ];
     if (broken.length > 20) {

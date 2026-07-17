@@ -97,6 +97,20 @@ describe("calculateContextTokens", () => {
     ).toBe(927_907);
   });
 
+  it("normalizes OpenAI-style transcript usage without producing NaN", () => {
+    expect(
+      calculateContextTokens({
+        input: 0,
+        output: 0,
+        total: 45,
+        prompt_tokens: 40,
+        completion_tokens: 5,
+        total_tokens: 45,
+        cache: { read: 0, write: 0 },
+      } as unknown as Usage),
+    ).toBe(45);
+  });
+
   it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
     const estimate = estimateContextTokens([
       { role: "user", content: "hello", timestamp: 0 },
@@ -124,6 +138,51 @@ describe("calculateContextTokens", () => {
     expect(estimate.tokens).toBeGreaterThan(0);
     expect(estimate.usageTokens).toBe(0);
     expect(estimate.lastUsageIndex).toBeNull();
+  });
+
+  it("skips delivery-mirror usage and uses the previous real assistant snapshot", () => {
+    const estimate = estimateContextTokens([
+      { role: "user", content: "hello", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real answer" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: {
+          input: 20,
+          output: 10,
+          cacheRead: 3_000,
+          cacheWrite: 0,
+          totalTokens: 3_030,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "channel mirror" }],
+        api: "openclaw-transcript",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          total: 0,
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+          cache: { read: 0, write: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        } as unknown as Usage,
+        stopReason: "stop",
+        timestamp: 2,
+      } as AssistantMessage,
+    ]);
+
+    expect(estimate.usageTokens).toBe(3_030);
+    expect(estimate.lastUsageIndex).toBe(1);
+    expect(estimate.tokens).toBeGreaterThan(3_030);
   });
 
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
@@ -251,6 +310,77 @@ describe("session-entry compaction budgeting", () => {
         keepRecentTokens: 10_000,
       }),
     ).toEqual({ ok: true, value: undefined });
+  });
+});
+
+describe("prepareCompaction", () => {
+  it("keeps tokensBefore finite when delivery-mirror usage is the last assistant row", () => {
+    const entries: SessionTreeEntry[] = [
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-07-06T00:00:00.000Z",
+        message: { role: "user", content: "hello", timestamp: 0 },
+      },
+      {
+        type: "message",
+        id: "assistant-1",
+        parentId: "user-1",
+        timestamp: "2026-07-06T00:00:01.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "real answer" }],
+          api: "anthropic-messages",
+          provider: "anthropic",
+          model: "claude-fable-5",
+          usage: {
+            input: 20,
+            output: 10,
+            cacheRead: 3_000,
+            cacheWrite: 0,
+            totalTokens: 3_030,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 1,
+        },
+      },
+      {
+        type: "message",
+        id: "mirror-1",
+        parentId: "assistant-1",
+        timestamp: "2026-07-06T00:00:02.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "channel mirror" }],
+          api: "openclaw-transcript",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          usage: {
+            input: 0,
+            output: 0,
+            total: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0,
+            cache: { read: 0, write: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          } as unknown as Usage,
+          stopReason: "stop",
+          timestamp: 2,
+        } as AssistantMessage,
+      },
+    ];
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 0,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok ? Number.isFinite(result.value?.tokensBefore) : false).toBe(true);
+    expect(result.ok ? result.value?.tokensBefore : 0).toBeGreaterThan(3_030);
   });
 });
 

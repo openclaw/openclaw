@@ -208,7 +208,10 @@ function isAgentMessage(value: unknown): boolean {
   }
 }
 
-function hasSessionEntryBase(entry: FileEntry): boolean {
+function hasSessionEntryBase(entry: unknown): boolean {
+  if (!isRecord(entry)) {
+    return false;
+  }
   const candidate = entry as {
     id?: unknown;
     parentId?: unknown;
@@ -223,9 +226,15 @@ function hasSessionEntryBase(entry: FileEntry): boolean {
   );
 }
 
-function isSessionEntry(entry: FileEntry): entry is SessionEntry {
+function isCanonicalCompactionTokensBefore(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isSessionEntry(entry: unknown): entry is SessionEntry {
   if (
+    !isRecord(entry) ||
     entry.type === "session" ||
+    typeof entry.type !== "string" ||
     !sessionEntryTypes.has(entry.type) ||
     !hasSessionEntryBase(entry)
   ) {
@@ -245,7 +254,7 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
       return (
         isString(candidate.firstKeptEntryId) &&
         typeof candidate.summary === "string" &&
-        typeof candidate.tokensBefore === "number"
+        isCanonicalCompactionTokensBefore(candidate.tokensBefore)
       );
     }
     case "custom":
@@ -494,7 +503,8 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
       }
       continue;
     }
-    if (!isSessionEntry(entry)) {
+    const sessionEntry = isSessionEntry(entry) ? entry : undefined;
+    if (!sessionEntry) {
       if (isString(id)) {
         rejectedIds.add(id);
         rejectedParentById.set(id, isString(rawParentId) ? rawParentId : null);
@@ -511,24 +521,24 @@ function readableSessionState(fileEntries: FileEntry[]): ReadableSessionState {
       }
       continue;
     }
-    if (entry.type === "label" && !acceptedIds.has(entry.targetId)) {
-      rejectedIds.add(entry.id);
-      rejectedParentById.set(entry.id, entry.parentId);
+    if (sessionEntry.type === "label" && !acceptedIds.has(sessionEntry.targetId)) {
+      rejectedIds.add(sessionEntry.id);
+      rejectedParentById.set(sessionEntry.id, sessionEntry.parentId);
       continue;
     }
-    if (acceptedIds.has(entry.id)) {
+    if (acceptedIds.has(sessionEntry.id)) {
       continue;
     }
     const hasSerializedParent = Object.hasOwn(rawRecord, "parentId");
     if (
       !hasSerializedParent ||
       (!isSessionTranscriptSideAppendEntry(rawRecord) &&
-        entry.parentId === effectiveAppendParentId &&
+        sessionEntry.parentId === effectiveAppendParentId &&
         effectiveLeafId !== effectiveAppendParentId)
     ) {
-      logicalParentsById.set(entry.id, effectiveLeafId);
+      logicalParentsById.set(sessionEntry.id, effectiveLeafId);
     }
-    const repaired = repairEntryLinks(entry);
+    const repaired = repairEntryLinks(sessionEntry);
     entries.push(repaired);
     acceptedIds.add(repaired.id);
     acceptedEntryById.set(repaired.id, repaired);
