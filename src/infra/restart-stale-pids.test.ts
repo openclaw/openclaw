@@ -836,6 +836,20 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     });
 
+    it("swallows ESRCH but re-throws non-ESRCH errors from terminateStaleProcessesSync", () => {
+      const stalePid = process.pid + 199;
+      installInitialBusyPoll(stalePid, () => createLsofResult({ status: 1 }));
+
+      const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+      const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw epermErr;
+      });
+
+      // Outer catch in cleanStaleGatewayProcessesSync returns [] on re-throw.
+      expect(cleanStaleGatewayProcessesSync()).toStrictEqual([]);
+      expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
+    });
+
     it("does not kill a protected gateway pid after reparenting", () => {
       const protectedPid = process.pid + 4001;
       const stalePid = process.pid + 4002;

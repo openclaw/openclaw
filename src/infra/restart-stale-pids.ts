@@ -497,7 +497,10 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
     try {
       process.kill(pid, "SIGTERM");
       killed.push(pid);
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw err;
+      }
       // ESRCH — already gone
     }
   }
@@ -509,7 +512,10 @@ function terminateStaleProcessesSync(pids: number[]): number[] {
     try {
       process.kill(pid, 0);
       process.kill(pid, "SIGKILL");
-    } catch {
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw err;
+      }
       // already gone
     }
   }
