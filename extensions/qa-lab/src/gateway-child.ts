@@ -1754,7 +1754,7 @@ export async function startQaGatewayChild(params: {
       keepTemp || !processStopped
         ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
         : formatErrorMessage(error);
-    throwQaGatewayStartupError({ error, message, cleanupErrors });
+    return throwQaGatewayStartupError({ error, message, cleanupErrors });
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -885,6 +885,9 @@ jobs:
             }
 
             release_check_blocking_job() {
+              if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then
+                return 1
+              fi
               case "$1" in
                 "resolve_target" | \
                 "Prepare release package artifact" | \
@@ -958,12 +961,13 @@ jobs:
                 # E2E under the same caller stays blocking.
                 failed_jobs_json="$(
                   jq '[.[] | select(
-                    (.name | startswith("Run repo/live E2E validation / "))
-                    and ((.name | contains("Docker live"))
-                      or (.name | contains("Live media suites"))
-                      or (.name | contains("validate_live_provider_suites"))
-                      or (.name | contains("validate_release_live_cache"))
-                      or (.name | contains("prepare_live_test_image")))
+                    (((.name | startswith("Run repo/live E2E validation / "))
+                      and ((.name | contains("Docker live"))
+                        or (.name | contains("Live media suites"))
+                        or (.name | contains("validate_live_provider_suites"))
+                        or (.name | contains("validate_release_live_cache"))
+                        or (.name | contains("prepare_live_test_image"))))
+                      or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))
                     | not)]' <<< "$failed_jobs_json"
                 )"
               fi

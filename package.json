@@ -330,6 +330,10 @@
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"
     },
+    "./plugin-sdk/question-gateway-runtime": {
+      "types": "./dist/plugin-sdk/question-gateway-runtime.d.ts",
+      "default": "./dist/plugin-sdk/question-gateway-runtime.js"
+    },
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
