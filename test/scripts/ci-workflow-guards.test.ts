@@ -506,14 +506,15 @@ function runGeneratedPublisherScenario(
   baseChangePath: "a" | "b" | null,
   options: {
     autoMerge?: boolean;
-    existingAutoMerge?: boolean;
+    existingAutoMergeMethod?: "MERGE" | "REBASE" | "SQUASH";
     existingPr?: boolean;
     expectFailure?: boolean;
     failGeneratedPush?: boolean;
-    movePrHeadAfterDisable?: boolean;
+    mergeGeneratedPush?: boolean;
     noGeneratedChange?: boolean;
     overlapPolicy?: string;
     stalePrHeadOnce?: boolean;
+    stalePrViewHeadOnce?: boolean;
     updateSource?: boolean;
   } = {},
 ) {
@@ -527,9 +528,9 @@ function runGeneratedPublisherScenario(
     const fakeBin = path.join(root, "bin");
     const runnerTemp = path.join(root, "runner-temp");
     const prState = path.join(root, "pr-open");
-    const prHeadOverride = path.join(root, "pr-head-override");
     const mergeCalls = path.join(root, "merge-calls");
     const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
+    const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
     const summary = path.join(root, "summary.md");
 
     mkdirSync(generatedDir, { recursive: true });
@@ -539,6 +540,9 @@ function runGeneratedPublisherScenario(
     writeFileSync(summary, "", "utf8");
     if (options.stalePrHeadOnce) {
       writeFileSync(stalePrHeadOnce, "", "utf8");
+    }
+    if (options.stalePrViewHeadOnce) {
+      writeFileSync(stalePrViewHeadOnce, "", "utf8");
     }
     runGit(root, ["init", "--bare", origin]);
     runGit(root, ["init", "--initial-branch=main", worktree]);
@@ -589,6 +593,17 @@ function runGeneratedPublisherScenario(
         "exit 1",
       ]);
     }
+    if (options.mergeGeneratedPush) {
+      writeExecutable(path.join(origin, "hooks", "post-receive"), [
+        "#!/bin/sh",
+        "while read -r old_head new_head ref; do",
+        '  if [ "$ref" = "refs/heads/automation/locale" ]; then',
+        '    git update-ref refs/heads/main "$new_head"',
+        '    git update-ref -d refs/heads/automation/locale "$new_head"',
+        "  fi",
+        "done",
+      ]);
+    }
 
     writeExecutable(path.join(fakeBin, "timeout"), [
       "#!/usr/bin/env bash",
@@ -609,9 +624,7 @@ function runGeneratedPublisherScenario(
       "  auth:setup-git) exit 0 ;;",
       "  api:*)",
       '    if [[ -f "$FAKE_PR_STATE" ]]; then',
-      '      if [[ -s "$FAKE_PR_HEAD_OVERRIDE" ]]; then',
-      '        head="$(cat "$FAKE_PR_HEAD_OVERRIDE")"',
-      '      elif [[ -f "$FAKE_STALE_HEAD_ONCE" ]]; then',
+      '      if [[ -f "$FAKE_STALE_HEAD_ONCE" ]]; then',
       '        head="0000000000000000000000000000000000000000"',
       '        rm -f "$FAKE_STALE_HEAD_ONCE"',
       "      else",
@@ -627,14 +640,18 @@ function runGeneratedPublisherScenario(
       "  pr:edit) exit 0 ;;",
       "  pr:view)",
       '    [[ -n "${GH_TOKEN:-}" ]]',
-      '    printf "%s\\n" "$FAKE_AUTO_MERGE_ENABLED"',
+      '    [[ -f "$FAKE_PR_STATE" ]]',
+      '    if [[ -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE" ]]; then',
+      '      head="0000000000000000000000000000000000000000"',
+      '      rm -f "$FAKE_STALE_PR_VIEW_HEAD_ONCE"',
+      "    else",
+      '      head="$(git --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
+      "    fi",
+      '    printf "%s\\t%s\\n" "$head" "$FAKE_AUTO_MERGE_METHOD"',
       "    ;;",
       "  pr:merge)",
       '    [[ "$GH_TOKEN" == "test-token" ]]',
       '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
-      '    if [[ "$*" == *"--disable-auto"* && "$FAKE_MOVE_PR_HEAD_AFTER_DISABLE" == "true" ]]; then',
-      '      printf "%s\\n" "1111111111111111111111111111111111111111" > "$FAKE_PR_HEAD_OVERRIDE"',
-      "    fi",
       "    ;;",
       '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
       "esac",
@@ -652,13 +669,12 @@ function runGeneratedPublisherScenario(
         BASE_BRANCH: "main",
         COMMIT_MESSAGE: "chore(test): refresh generated output",
         AUTO_MERGE: String(options.autoMerge ?? false),
-        FAKE_AUTO_MERGE_ENABLED: String(options.existingAutoMerge ?? false),
+        FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
         FAKE_ORIGIN: origin,
         FAKE_MERGE_CALLS: mergeCalls,
-        FAKE_MOVE_PR_HEAD_AFTER_DISABLE: String(options.movePrHeadAfterDisable ?? false),
-        FAKE_PR_HEAD_OVERRIDE: prHeadOverride,
         FAKE_PR_STATE: prState,
         FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
+        FAKE_STALE_PR_VIEW_HEAD_ONCE: stalePrViewHeadOnce,
         GENERATED_PATHS: "generated",
         INVALIDATION_PATHS: "source",
         OVERLAP_POLICY: options.overlapPolicy ?? "defer",
@@ -704,6 +720,12 @@ function runGeneratedPublisherScenario(
       generatedB: branchExists
         ? runGit(root, ["--git-dir", origin, "show", `${branchRef}:generated/b.txt`])
         : "",
+      mainGeneratedA: runGit(root, [
+        "--git-dir",
+        origin,
+        "show",
+        "refs/heads/main:generated/a.txt",
+      ]),
       mainHead: runGit(root, ["--git-dir", origin, "rev-parse", "refs/heads/main"]),
       mergeCalls: existsSync(mergeCalls) ? readFileSync(mergeCalls, "utf8") : "",
       publishOutput,
@@ -1178,7 +1200,7 @@ describe("ci workflow guards", () => {
       default: "defer",
     });
     expect(publishAction.inputs["auto-merge"]).toEqual({
-      description: "Enable squash auto-merge for the exact generated PR head after publication.",
+      description: "Enable squash auto-merge; false rejects an inherited auto-merge request.",
       required: false,
       default: "false",
     });
@@ -1252,9 +1274,11 @@ describe("ci workflow guards", () => {
     expect(actionPublishStep.run).toContain('--base "${BASE_BRANCH}"');
     expect(actionPublishStep.run).toContain('--head "${HEAD_BRANCH}"');
     expect(actionPublishStep.run).toContain('--body-file "${body_file}"');
+    expect(actionPublishStep.run).toContain("ensure_auto_merge_compatible");
     expect(actionPublishStep.run).toContain("enable_auto_merge");
-    expect(actionPublishStep.run).toContain("disable_existing_auto_merge");
-    expect(actionPublishStep.run).toContain("--disable-auto");
+    expect(actionPublishStep.run).not.toContain("disable_existing_auto_merge");
+    expect(actionPublishStep.run).not.toContain("--disable-auto");
+    expect(actionPublishStep.run).toContain("--json autoMergeRequest");
     expect(actionPublishStep.run).not.toContain('GH_TOKEN="${CONTENTS_TOKEN}"');
     expect(actionPublishStep.run).toContain(
       '--auto --squash --match-head-commit "${published_commit}"',
@@ -1366,50 +1390,14 @@ describe("ci workflow guards", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "clears inherited auto-merge before replacing a generated pull request head",
+    "waits for the published pull request head before enabling auto-merge",
     () => {
       const result = runGeneratedPublisherScenario(null, {
         autoMerge: true,
-        existingAutoMerge: true,
-        existingPr: true,
+        stalePrViewHeadOnce: true,
       });
-      const mergeCalls = result.mergeCalls.trim().split("\n");
 
-      expect(mergeCalls[0]).toContain("--disable-auto");
-      expect(mergeCalls.at(-1)).toContain("--auto --squash --match-head-commit");
-      expect(result.summary).toContain("Disabled inherited auto-merge");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "keeps inherited auto-merge disabled when the publisher option is false",
-    () => {
-      const result = runGeneratedPublisherScenario(null, {
-        autoMerge: false,
-        existingAutoMerge: true,
-        existingPr: true,
-      });
-      const mergeCalls = result.mergeCalls.trim().split("\n");
-
-      expect(mergeCalls).toHaveLength(1);
-      expect(mergeCalls[0]).toContain("--disable-auto");
-      expect(result.summary).not.toContain("Enabled squash auto-merge");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "waits for a stale pull request head before clearing inherited auto-merge",
-    () => {
-      const result = runGeneratedPublisherScenario(null, {
-        autoMerge: false,
-        existingAutoMerge: true,
-        existingPr: true,
-        stalePrHeadOnce: true,
-      });
-      const mergeCalls = result.mergeCalls.trim().split("\n");
-
-      expect(mergeCalls).toHaveLength(1);
-      expect(mergeCalls[0]).toContain("--disable-auto");
+      expect(result.mergeCalls).toContain("--auto --squash --match-head-commit");
       expect(result.publishOutput).toContain(
         "Generated pull request head has not converged yet; rechecking",
       );
@@ -1417,45 +1405,105 @@ describe("ci workflow guards", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "leaves the stale previous head disabled when generated publication fails",
+    "preserves inherited auto-merge while replacing a generated pull request head",
     () => {
       const result = runGeneratedPublisherScenario(null, {
         autoMerge: true,
-        existingAutoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
         existingPr: true,
-        expectFailure: true,
-        failGeneratedPush: true,
       });
-      const mergeCalls = result.mergeCalls.trim().split("\n");
 
-      expect(result.generatedA).toBe("stale-pr-a");
-      expect(mergeCalls[0]).toContain("--disable-auto");
-      expect(mergeCalls).toHaveLength(1);
-      expect(result.summary).not.toContain("Restored auto-merge");
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Squash auto-merge already enabled for generated pull request",
+      );
     },
   );
 
   it.skipIf(process.platform === "win32")(
-    "restores auto-merge on a successor that moves during disable",
+    "accepts inherited auto-merge completing immediately after publication",
     () => {
       const result = runGeneratedPublisherScenario(null, {
         autoMerge: true,
-        existingAutoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        mergeGeneratedPush: true,
+      });
+
+      expect(result.branchExists).toBe(false);
+      expect(result.mainGeneratedA).toBe("desired-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toContain(
+        "Generated output was merged before pull request reconciliation",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "waits for the existing pull request head before replacing it",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        stalePrHeadOnce: true,
+      });
+
+      expect(result.generatedA).toBe("desired-a");
+      expect(result.publishOutput).toContain(
+        "Generated pull request head has not converged yet; rechecking",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to replace an auto-merge-enabled head when publication opts out",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: false,
+        existingAutoMergeMethod: "SQUASH",
         existingPr: true,
         expectFailure: true,
-        movePrHeadAfterDisable: true,
       });
-      const mergeCalls = result.mergeCalls.trim().split("\n");
 
-      expect(mergeCalls[0]).toContain("--disable-auto");
-      expect(mergeCalls.at(-1)).toContain(
-        "--auto --squash --match-head-commit 1111111111111111111111111111111111111111",
-      );
-      expect(result.summary).toContain(
-        "Restored auto-merge for concurrently published generated head",
-      );
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.publishOutput).toContain("auto-merge enabled while publication opted out");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not mutate inherited auto-merge when generated publication fails",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        failGeneratedPush: true,
+      });
+
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).not.toContain("auto-merge");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an incompatible inherited auto-merge method without mutating it",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "MERGE",
+        existingPr: true,
+        expectFailure: true,
+      });
+
+      expect(result.generatedA).toBe("stale-pr-a");
+      expect(result.mergeCalls).toBe("");
       expect(result.publishOutput).toContain(
-        "Generated branch moved while inherited auto-merge was being disabled",
+        "Generated pull request already uses incompatible MERGE auto-merge",
       );
     },
   );
