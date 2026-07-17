@@ -14,11 +14,21 @@ function downloadTextFile(filename: string, content: string, type = "text/plain"
   URL.revokeObjectURL(url);
 }
 
+// Session labels and ids are user/agent-controlled: a cell starting with a
+// spreadsheet formula prefix (optionally after whitespace) executes on open, and a
+// bare \r breaks the row boundary. Neutralize with a leading ' and quote \r like \n.
+function neutralizeSpreadsheetFormulaCell(text: string): string {
+  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(text) || /^[\t\r\n]/.test(text)
+    ? `'${text}`
+    : text;
+}
+
 function csvEscape(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replaceAll('"', '""')}"`;
+  const safeValue = neutralizeSpreadsheetFormulaCell(value);
+  if (/[",\r\n]/.test(safeValue)) {
+    return `"${safeValue.replaceAll('"', '""')}"`;
   }
-  return value;
+  return safeValue;
 }
 
 function toCsvRow(values: Array<string | number | undefined | null>): string {
