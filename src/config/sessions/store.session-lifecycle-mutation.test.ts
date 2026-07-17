@@ -333,17 +333,17 @@ describe("session store lifecycle mutations", () => {
       [createTranscriptEvent("durable-delete-session", "durable archive first")],
     );
 
-    const originalWriteFileSync = fs.writeFileSync;
+    const originalOpenSync = fs.openSync;
     const entryObservedDuringArchiveWrite: boolean[] = [];
-    const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((...args) => {
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args) => {
       const filePath = String(args[0]);
-      if (filePath.includes("durable-delete-session.jsonl.deleted.")) {
+      if (filePath.includes("durable-delete-session.jsonl.deleted.") && filePath.endsWith(".tmp")) {
         entryObservedDuringArchiveWrite.push(
           loadSessionEntry({ sessionKey: "agent:main:durable-delete", storePath })?.sessionId ===
             "durable-delete-session",
         );
       }
-      return originalWriteFileSync(...args);
+      return originalOpenSync(...args);
     });
 
     try {
@@ -360,7 +360,7 @@ describe("session store lifecycle mutations", () => {
       expect(result.archivedTranscripts).toHaveLength(1);
       expect(entryObservedDuringArchiveWrite).toEqual([true]);
     } finally {
-      writeSpy.mockRestore();
+      openSpy.mockRestore();
     }
   });
 

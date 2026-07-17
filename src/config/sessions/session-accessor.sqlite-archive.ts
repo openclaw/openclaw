@@ -102,8 +102,17 @@ function writeSqliteTranscriptArchive(params: {
     }
     const tempPath = `${archivePath}.${randomUUID()}.tmp`;
     try {
-      fs.writeFileSync(tempPath, encoded.bytes, { flag: "wx", mode: 0o600 });
-      fsyncRegularFile(tempPath);
+      // Keep one exclusive writable descriptor through write+fsync. Reopening
+      // the temp file read-only for fsync fails with EPERM on Windows (Node
+      // fsync on an "r" handle), which aborts archive materialization before
+      // the row-delete transaction and retries forever on the event loop.
+      const fd = fs.openSync(tempPath, "wx", 0o600);
+      try {
+        fs.writeSync(fd, encoded.bytes);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
       fs.renameSync(tempPath, archivePath);
       fsyncDirectory(params.archiveDirectory);
       return archivePath;
@@ -116,15 +125,6 @@ function writeSqliteTranscriptArchive(params: {
     }
   }
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
-}
-
-function fsyncRegularFile(filePath: string): void {
-  const fd = fs.openSync(filePath, "r");
-  try {
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function fsyncDirectory(dirPath: string): void {
