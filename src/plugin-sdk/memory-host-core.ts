@@ -4,14 +4,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  listStoredMemoryHostEvents,
-  memoryHostWorkspacePrefix,
-} from "../memory-host-sdk/event-store.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
+import { listStoredMemoryHostEvents } from "../memory-host-sdk/event-store.js";
 import type { MemoryPluginPublicArtifact } from "../plugins/memory-state.js";
 import { resolveMemoryDreamingWorkspaces } from "./memory-core-host-status.js";
 
-const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.json";
+const MEMORY_HOST_EVENTS_RELATIVE_PATH = "memory/events/memory-host-events.jsonl";
+const MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS = 1_000;
+const MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES = 1024 * 1024;
 
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
@@ -44,6 +44,48 @@ async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
     }
   }
   return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+function serializeMemoryHostEventExport(
+  storedEvents: ReturnType<typeof listStoredMemoryHostEvents>,
+): string {
+  const lines: string[] = [];
+  let sizeBytes = 0;
+  for (const entry of storedEvents.toReversed()) {
+    const line = JSON.stringify(entry.value.event);
+    const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+    if (sizeBytes + lineBytes > MAX_MEMORY_HOST_PUBLIC_EXPORT_BYTES) {
+      break;
+    }
+    lines.push(line);
+    sizeBytes += lineBytes;
+  }
+  return lines.toReversed().join("\n") + "\n";
+}
+
+async function materializeMemoryHostEventExport(params: {
+  workspaceDir: string;
+  content: string;
+}): Promise<string> {
+  const absolutePath = path.join(
+    params.workspaceDir,
+    ...MEMORY_HOST_EVENTS_RELATIVE_PATH.split("/"),
+  );
+  // SQLite is authoritative. Reading this bounded export only avoids replacing
+  // an unchanged named artifact and preserves stable mtimes for bridge consumers.
+  const existing = await fs.readFile(absolutePath, "utf8").catch(() => undefined);
+  if (existing !== params.content) {
+    await replaceFileAtomic({
+      filePath: absolutePath,
+      content: params.content,
+      dirMode: 0o700,
+      mode: 0o600,
+      tempPrefix: `${path.basename(absolutePath)}.export`,
+      syncParentDir: true,
+      syncTempFile: true,
+    });
+  }
+  return absolutePath;
 }
 
 /** Lists public memory artifacts for one workspace, including notes and event logs. */
@@ -83,21 +125,22 @@ async function listMemoryWorkspacePublicArtifacts(params: {
     });
   }
 
-  const storedEvents = listStoredMemoryHostEvents({ workspaceDir: params.workspaceDir });
+  const storedEvents = listStoredMemoryHostEvents({
+    workspaceDir: params.workspaceDir,
+    limit: MAX_MEMORY_HOST_PUBLIC_EXPORT_EVENTS,
+  });
   if (storedEvents.length > 0) {
-    const events = storedEvents.map((entry) => entry.value.event);
-    const content = JSON.stringify(events, null, 2);
-    const updatedAtMs = Math.max(...storedEvents.map((entry) => entry.createdAt));
+    const absolutePath = await materializeMemoryHostEventExport({
+      workspaceDir: params.workspaceDir,
+      content: serializeMemoryHostEventExport(storedEvents),
+    });
     artifacts.push({
       kind: "event-log",
       workspaceDir: params.workspaceDir,
       relativePath: MEMORY_HOST_EVENTS_RELATIVE_PATH,
-      absolutePath: `sqlite:plugin_state_entries/memory-core/memory-host.events/${memoryHostWorkspacePrefix(params.workspaceDir)}`,
+      absolutePath,
       agentIds: [...params.agentIds],
       contentType: "json",
-      content,
-      updatedAtMs,
-      sizeBytes: Buffer.byteLength(content),
     });
   }
 

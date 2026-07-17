@@ -164,6 +164,43 @@ describe("memory host event journal helpers", () => {
       "memory.recall.skipped",
     ]);
   });
+
+  it("bounds oversized diagnostic detail without failing the parent operation", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-bounded-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const results = Array.from({ length: 100 }, (_, index) => ({
+      path: `memory/${"wide-path-".repeat(100)}${index}.md`,
+      startLine: index + 1,
+      endLine: index + 2,
+      score: 0.9,
+    }));
+
+    await expect(
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.recorded",
+          timestamp: "2026-04-05T12:00:00.000Z",
+          query: "🔥".repeat(20_000),
+          resultCount: results.length,
+          results,
+        },
+        { env },
+      ),
+    ).resolves.toBeUndefined();
+
+    const [event] = await readMemoryHostEventRecords({ workspaceDir, env });
+    expect(event).toMatchObject({
+      type: "memory.recall.recorded",
+      resultCount: 100,
+      storageTruncated: true,
+    });
+    if (event?.type !== "memory.recall.recorded") {
+      throw new Error("expected bounded recall event");
+    }
+    expect(event.results).toHaveLength(10);
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(8 * 1024);
+  });
 });
 
 describe("createPersistentDedupe", () => {

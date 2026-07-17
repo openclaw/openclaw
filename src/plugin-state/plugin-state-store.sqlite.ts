@@ -222,6 +222,33 @@ function selectPluginStateEntries(
   ).rows;
 }
 
+function selectPluginStateEntriesInKeyRange(
+  db: DatabaseSync,
+  params: {
+    pluginId: string;
+    namespace: string;
+    keyStartInclusive: string;
+    keyEndExclusive: string;
+    limit: number;
+    order: "asc" | "desc";
+    now: number;
+  },
+): PluginStateRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("entry_key", ">=", params.keyStartInclusive)
+      .where("entry_key", "<", params.keyEndExclusive)
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
+      .orderBy("entry_key", params.order)
+      .limit(params.limit),
+  ).rows;
+}
+
 function deletePluginStateEntry(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string },
@@ -852,6 +879,51 @@ export function pluginStateEntries(params: {
   }
 }
 
+/** Internal bounded key-range read for core owners with sortable plugin-state keys. */
+export function pluginStateEntriesInKeyRange(params: {
+  pluginId: string;
+  namespace: string;
+  keyStartInclusive: string;
+  keyEndExclusive: string;
+  limit: number;
+  order?: "asc" | "desc";
+  env?: NodeJS.ProcessEnv;
+}): PluginStateEntry<unknown>[] {
+  if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key-range limit must be a positive safe integer.",
+    });
+  }
+  if (params.keyStartInclusive >= params.keyEndExclusive) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key range must have an increasing exclusive upper bound.",
+    });
+  }
+  try {
+    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
+    return selectPluginStateEntriesInKeyRange(db, {
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      keyStartInclusive: params.keyStartInclusive,
+      keyEndExclusive: params.keyEndExclusive,
+      limit: params.limit,
+      order: params.order ?? "asc",
+      now: Date.now(),
+    }).map((row) => rowToEntry(row, "entries"));
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "entries",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to list plugin state entries by key range.",
+    );
+  }
+}
+
 export function pluginStateClear(params: {
   pluginId: string;
   namespace: string;
@@ -912,9 +984,9 @@ function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
   maxPluginStateEntriesPerPluginForTests = value;
 }
 
-export function countPluginStateLiveEntries(pluginId: string): number {
+export function countPluginStateLiveEntries(pluginId: string, env?: NodeJS.ProcessEnv): number {
   try {
-    const { db } = openPluginStateDatabase("entries");
+    const { db } = openPluginStateDatabase("entries", envOptions(env));
     return countLivePluginStateEntries(db, { pluginId, now: Date.now() });
   } catch (error) {
     throw wrapPluginStateError(
@@ -924,6 +996,16 @@ export function countPluginStateLiveEntries(pluginId: string): number {
       "Failed to count plugin state entries.",
     );
   }
+}
+
+export function getPluginStateCapacity(
+  pluginId: string,
+  env?: NodeJS.ProcessEnv,
+): { liveEntries: number; maxEntries: number } {
+  return {
+    liveEntries: countPluginStateLiveEntries(pluginId, env),
+    maxEntries: resolveMaxPluginStateEntriesPerPlugin(),
+  };
 }
 
 function seedPluginStateDatabaseEntriesForTests(

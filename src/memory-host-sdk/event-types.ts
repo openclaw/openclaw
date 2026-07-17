@@ -1,7 +1,12 @@
 import type { MemoryDreamingPhaseName } from "./dreaming.js";
 
+type MemoryHostEventStorageMetadata = {
+  /** True when diagnostic detail was bounded before persistence. Aggregate counts stay exact. */
+  storageTruncated?: true;
+};
+
 /** Event emitted when a recall query records the selected memory snippets. */
-export type MemoryHostRecallRecordedEvent = {
+export type MemoryHostRecallRecordedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.recall.recorded";
   timestamp: string;
   query: string;
@@ -15,7 +20,7 @@ export type MemoryHostRecallRecordedEvent = {
 };
 
 /** Event emitted when recall hits are visible but excluded from short-term promotion. */
-export type MemoryHostRecallSkippedEvent = {
+export type MemoryHostRecallSkippedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.recall.skipped";
   timestamp: string;
   query: string;
@@ -32,7 +37,7 @@ export type MemoryHostRecallSkippedEvent = {
 };
 
 /** Event emitted when deep-dream candidates are promoted into durable memory. */
-export type MemoryHostPromotionAppliedEvent = {
+export type MemoryHostPromotionAppliedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.promotion.applied";
   timestamp: string;
   memoryPath: string;
@@ -51,7 +56,7 @@ export type MemoryHostPromotionAppliedEvent = {
 export type MemoryDreamOutcome = "completed" | "failed";
 
 /** Event emitted after a dreaming phase writes inline memory and/or reports. */
-export type MemoryHostDreamCompletedEvent = {
+export type MemoryHostDreamCompletedEvent = MemoryHostEventStorageMetadata & {
   type: "memory.dream.completed";
   timestamp: string;
   phase: MemoryDreamingPhaseName;

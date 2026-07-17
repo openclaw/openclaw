@@ -85,7 +85,6 @@ type LegacyMemoryHostEvent = Record<string, unknown> & {
 
 type StoredMemoryHostEvent = {
   kind: "event";
-  workspaceKey: string;
   event: LegacyMemoryHostEvent;
   recordedAt: number;
   sequence: number;
@@ -93,6 +92,7 @@ type StoredMemoryHostEvent = {
 
 const MEMORY_HOST_EVENTS_NAMESPACE = "memory-host.events";
 const MAX_MEMORY_HOST_EVENTS = 50_000;
+const MAX_LEGACY_MEMORY_HOST_EVENT_VALUE_BYTES = 65_536;
 const LEGACY_MEMORY_HOST_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 
 function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
@@ -1262,7 +1262,6 @@ async function migrateLegacyMemoryHostEventSource(params: {
     });
     return;
   }
-  const workspaceKey = normalizeMemoryHostWorkspaceKey(params.source.workspaceDir);
   const prefix = memoryHostWorkspacePrefix(params.source.workspaceDir);
   const records: Array<{ key: string; value: StoredMemoryHostEvent }> = [];
   for (const [index, line] of raw.split(/\r?\n/u).entries()) {
@@ -1287,18 +1286,28 @@ async function migrateLegacyMemoryHostEventSource(params: {
     }
     const parsedTimestamp = Date.parse(event.timestamp);
     const recordedAt = Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now();
+    const sequence = LEGACY_MEMORY_HOST_SEQUENCE_BASE + index + 1;
     const digest = crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
+    const value: StoredMemoryHostEvent = {
+      kind: "event",
+      event,
+      recordedAt,
+      // Legacy keys sort before SQLite-native keys. Negative order also keeps
+      // old events before runtime events when readers inspect the stored value.
+      sequence,
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_LEGACY_MEMORY_HOST_EVENT_VALUE_BYTES
+    ) {
+      params.warnings.push(
+        `Skipped oversized Memory Core host event at ${params.source.filePath}:${index + 1}`,
+      );
+      continue;
+    }
     records.push({
-      key: `${prefix}:legacy:${(index + 1).toString().padStart(16, "0")}:${digest}`,
-      value: {
-        kind: "event",
-        workspaceKey,
-        event,
-        recordedAt,
-        // Legacy file lines predate any SQLite-native events, including events
-        // written before delayed doctor repair. Negative order never overlaps runtime cursors.
-        sequence: LEGACY_MEMORY_HOST_SEQUENCE_BASE + index + 1,
-      },
+      // Runtime event keys use the adjacent `1:` range in event-store.ts.
+      key: `${prefix}:event:0:${(index + 1).toString().padStart(16, "0")}:${digest}`,
+      value,
     });
   }
   if (params.warnings.length > warningStart) {
@@ -1314,6 +1323,20 @@ async function migrateLegacyMemoryHostEventSource(params: {
   if (missing.length > MAX_MEMORY_HOST_EVENTS - existingKeys.size) {
     params.warnings.push(
       `Skipped Memory Core host event migration because SQLite has room for ${MAX_MEMORY_HOST_EVENTS - existingKeys.size} of ${missing.length} missing rows; left legacy source in place`,
+    );
+    return;
+  }
+  const capacity = params.context.getPluginStateCapacity?.();
+  if (!capacity) {
+    params.warnings.push(
+      "Skipped Memory Core host event migration because plugin-wide SQLite capacity is unavailable; left legacy source in place",
+    );
+    return;
+  }
+  const pluginRemainingCapacity = Math.max(0, capacity.maxEntries - capacity.liveEntries);
+  if (missing.length > pluginRemainingCapacity) {
+    params.warnings.push(
+      `Skipped Memory Core host event migration because SQLite plugin state has room for ${pluginRemainingCapacity} of ${missing.length} missing rows; left legacy source in place`,
     );
     return;
   }

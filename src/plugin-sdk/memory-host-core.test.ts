@@ -99,15 +99,20 @@ describe("memory-host-core helpers", () => {
         results: [],
       });
 
-      await expect(
-        listMemoryHostPublicArtifacts({
-          cfg: {
-            agents: {
-              list: [{ id: "main", default: true, workspace: workspaceDir }],
-            },
+      const artifacts = await listMemoryHostPublicArtifacts({
+        cfg: {
+          agents: {
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
-        }),
-      ).resolves.toEqual([
+        },
+      });
+      const eventExportPath = path.join(
+        workspaceDir,
+        "memory",
+        "events",
+        "memory-host-events.jsonl",
+      );
+      expect(artifacts).toEqual([
         {
           kind: "memory-root",
           workspaceDir,
@@ -135,29 +140,21 @@ describe("memory-host-core helpers", () => {
         {
           kind: "event-log",
           workspaceDir,
-          relativePath: "memory/events/memory-host-events.json",
-          absolutePath: expect.stringMatching(
-            /^sqlite:plugin_state_entries\/memory-core\/memory-host\.events\/[a-f0-9]{24}$/u,
-          ),
+          relativePath: "memory/events/memory-host-events.jsonl",
+          absolutePath: eventExportPath,
           agentIds: ["main"],
           contentType: "json",
-          content: JSON.stringify(
-            [
-              {
-                type: "memory.recall.recorded",
-                timestamp: "2026-05-18T12:00:00.000Z",
-                query: "bridge",
-                resultCount: 0,
-                results: [],
-              },
-            ],
-            null,
-            2,
-          ),
-          updatedAtMs: eventStoredAt,
-          sizeBytes: expect.any(Number),
         },
       ]);
+      await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe(
+        `${JSON.stringify({
+          type: "memory.recall.recorded",
+          timestamp: "2026-05-18T12:00:00.000Z",
+          query: "bridge",
+          resultCount: 0,
+          results: [],
+        })}\n`,
+      );
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }

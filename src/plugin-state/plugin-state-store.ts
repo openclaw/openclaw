@@ -44,9 +44,11 @@ export type {
 export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
+  getPluginStateCapacity,
   isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   resolveMaxPluginStateEntriesPerPlugin,
+  pluginStateEntriesInKeyRange,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 

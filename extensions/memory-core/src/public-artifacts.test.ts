@@ -59,7 +59,9 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
+    const artifacts = await listMemoryCorePublicArtifacts({ cfg });
+    const eventExportPath = path.join(workspaceDir, "memory", "events", "memory-host-events.jsonl");
+    expect(artifacts).toEqual([
       {
         kind: "memory-root",
         workspaceDir,
@@ -87,29 +89,21 @@ describe("listMemoryCorePublicArtifacts", () => {
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/events/memory-host-events.json",
-        absolutePath: expect.stringMatching(
-          /^sqlite:plugin_state_entries\/memory-core\/memory-host\.events\/[a-f0-9]{24}$/u,
-        ),
+        relativePath: "memory/events/memory-host-events.jsonl",
+        absolutePath: eventExportPath,
         agentIds: ["main"],
         contentType: "json",
-        content: JSON.stringify(
-          [
-            {
-              type: "memory.recall.recorded",
-              timestamp: "2026-04-06T12:00:00.000Z",
-              query: "alpha",
-              resultCount: 0,
-              results: [],
-            },
-          ],
-          null,
-          2,
-        ),
-        updatedAtMs: eventStoredAt,
-        sizeBytes: expect.any(Number),
       },
     ]);
+    await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe(
+      `${JSON.stringify({
+        type: "memory.recall.recorded",
+        timestamp: "2026-04-06T12:00:00.000Z",
+        query: "alpha",
+        resultCount: 0,
+        results: [],
+      })}\n`,
+    );
   });
 
   it("ignores lowercase memory root when only the legacy filename exists", async () => {

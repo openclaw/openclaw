@@ -33,9 +33,6 @@ type BridgeArtifact = {
   workspaceDir: string;
   relativePath: string;
   absolutePath: string;
-  content?: string;
-  updatedAtMs?: number;
-  sizeBytes?: number;
 };
 
 export type BridgeMemoryWikiResult = {
@@ -116,11 +113,8 @@ async function collectBridgeArtifacts(
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
-    const syncKey =
-      artifact.content === undefined
-        ? await resolveArtifactKey(artifact.absolutePath)
-        : artifact.absolutePath;
-    if (artifact.content === undefined && isPathInsideOrEqual(vaultRootKey, syncKey)) {
+    const syncKey = await resolveArtifactKey(artifact.absolutePath);
+    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
       continue;
     }
     collected.push({
@@ -129,9 +123,6 @@ async function collectBridgeArtifacts(
       workspaceDir: artifact.workspaceDir,
       relativePath: artifact.relativePath,
       absolutePath: artifact.absolutePath,
-      content: artifact.content,
-      updatedAtMs: artifact.updatedAtMs,
-      sizeBytes: artifact.sizeBytes,
     });
   }
   const deduped = new Map<string, BridgeArtifact>();
@@ -209,10 +200,6 @@ async function writeBridgeSourcePage(params: {
         workspaceDir: params.artifact.workspaceDir,
         relativePath: params.artifact.relativePath,
         agentIds: params.agentIds,
-        contentHash:
-          params.artifact.content === undefined
-            ? undefined
-            : createHash("sha1").update(params.artifact.content).digest("hex"),
       }),
     )
     .digest("hex");
@@ -226,7 +213,6 @@ async function writeBridgeSourcePage(params: {
     pagePath,
     group: "bridge",
     state: params.state,
-    sourceContent: params.artifact.content,
     buildRendered: (raw, updatedAt) => {
       const contentLanguage =
         params.artifact.artifactType === "memory-events" ? "json" : "markdown";
@@ -317,13 +303,7 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
-    const stats =
-      artifact.content === undefined
-        ? await fs.stat(artifact.absolutePath)
-        : {
-            mtimeMs: artifact.updatedAtMs ?? Date.now(),
-            size: artifact.sizeBytes ?? Buffer.byteLength(artifact.content),
-          };
+    const stats = await fs.stat(artifact.absolutePath);
     activeKeys.add(artifact.syncKey);
     results.push(
       await writeBridgeSourcePage({

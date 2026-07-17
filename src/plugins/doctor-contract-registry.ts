@@ -59,6 +59,8 @@ export type PluginDoctorStateMigrationDetection = {
 
 export type PluginDoctorStateMigrationContext = {
   openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
 };
 
 export type PluginDoctorStateMigration = {

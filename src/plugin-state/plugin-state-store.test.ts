@@ -15,6 +15,7 @@ import {
   createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  pluginStateEntriesInKeyRange,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
@@ -100,6 +101,29 @@ describe("plugin state keyed store", () => {
       expect(store.entries()).toMatchObject([{ key: "interaction:1", value: { count: 1 } }]);
       expect(store.consume("interaction:1")).toEqual({ count: 1 });
       expect(store.lookup("interaction:1")).toBeUndefined();
+    });
+  });
+
+  it("reads a bounded sortable key range without scanning sibling keys", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateSyncKeyedStore<{ count: number }>("memory-core", {
+        namespace: "events",
+        maxEntries: 10,
+      });
+      store.register("workspace:event:0001", { count: 1 });
+      store.register("workspace:event:0002", { count: 2 });
+      store.register("workspace:other:0003", { count: 3 });
+
+      expect(
+        pluginStateEntriesInKeyRange({
+          pluginId: "memory-core",
+          namespace: "events",
+          keyStartInclusive: "workspace:event:",
+          keyEndExclusive: "workspace:event;",
+          limit: 1,
+          order: "desc",
+        }),
+      ).toMatchObject([{ key: "workspace:event:0002", value: { count: 2 } }]);
     });
   });
 

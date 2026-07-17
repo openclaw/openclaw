@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createPluginStateKeyedStoreForTests,
+  getPluginStateCapacityForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
@@ -33,6 +34,9 @@ import {
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
+    getPluginStateCapacity() {
+      return getPluginStateCapacityForTests("memory-core", env);
+    },
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       return createPluginStateKeyedStoreForTests<T>("memory-core", {
         ...options,
@@ -536,6 +540,35 @@ describe("memory-core doctor dreaming migration", () => {
       lastSequence: 1,
     });
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("leaves legacy host events in place when plugin-wide SQLite capacity is exhausted", async () => {
+    const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+    await fs.writeFile(
+      eventPath,
+      `${JSON.stringify({
+        type: "memory.recall.recorded",
+        timestamp: "2026-07-01T00:00:00.000Z",
+        query: "sqlite capacity",
+        resultCount: 0,
+        results: [],
+      })}\n`,
+      "utf8",
+    );
+    const params = migrationParams();
+    params.context = {
+      ...params.context,
+      getPluginStateCapacity: () => ({ liveEntries: 50_000, maxEntries: 50_000 }),
+    };
+
+    const result = await hostEventsMigration().migrateLegacyState(params);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining("SQLite plugin state has room for 0 of 1 missing rows"),
+    ]);
+    await expect(fs.access(eventPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${eventPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("retires an empty legacy memory host event source without claiming an import", async () => {

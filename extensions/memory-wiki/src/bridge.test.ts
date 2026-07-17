@@ -432,33 +432,31 @@ describe("syncMemoryWikiBridgeSources", () => {
       },
     });
 
-    const eventContent = JSON.stringify([
-      {
-        type: "memory.recall.recorded",
-        timestamp: "2026-04-05T12:00:00.000Z",
-        query: "bridge events",
-        resultCount: 1,
-        results: [
-          {
-            path: "memory/2026-04-05.md",
-            startLine: 1,
-            endLine: 2,
-            score: 0.8,
-          },
-        ],
-      },
-    ]);
+    const eventContent = `${JSON.stringify({
+      type: "memory.recall.recorded",
+      timestamp: "2026-04-05T12:00:00.000Z",
+      query: "bridge events",
+      resultCount: 1,
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.8,
+        },
+      ],
+    })}\n`;
+    const eventPath = path.join(workspaceDir, "memory", "events", "memory-host-events.jsonl");
+    await fs.mkdir(path.dirname(eventPath), { recursive: true });
+    await fs.writeFile(eventPath, eventContent, "utf8");
     registerBridgeArtifacts([
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/events/memory-host-events.json",
-        absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events/test",
+        relativePath: "memory/events/memory-host-events.jsonl",
+        absolutePath: eventPath,
         agentIds: ["main"],
         contentType: "json",
-        content: eventContent,
-        updatedAtMs: Date.parse("2026-04-05T12:00:00.000Z"),
-        sizeBytes: Buffer.byteLength(eventContent),
       },
     ]);
 

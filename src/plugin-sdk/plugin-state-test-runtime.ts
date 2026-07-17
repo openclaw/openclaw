@@ -4,6 +4,7 @@
 export {
   createPluginStateKeyedStore as createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStore as createPluginStateSyncKeyedStoreForTests,
+  getPluginStateCapacity as getPluginStateCapacityForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 export {

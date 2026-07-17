@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createPluginStateKeyedStore,
+  getPluginStateCapacity as resolvePluginStateCapacity,
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import {
@@ -248,6 +249,9 @@ function createPluginDoctorStateMigrationContext(
   env: NodeJS.ProcessEnv,
 ): PluginDoctorStateMigrationContext {
   return {
+    getPluginStateCapacity() {
+      return resolvePluginStateCapacity(pluginId, env);
+    },
     openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
       return createPluginStateKeyedStore<T>(pluginId, {
         ...options,
