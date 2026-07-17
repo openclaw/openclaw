@@ -24,7 +24,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
-import { describe, it, vi } from "vitest";
+import { describe, it } from "vitest";
 import type { OpenClawConfig, ReplyPayload } from "../runtime-api.js";
 import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";

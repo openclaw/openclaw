@@ -694,6 +694,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       typingCallbacks?.onCleanup?.();
     },
   };
+  const handleDeliveryError = async (error: unknown, info: { kind: string }) => {
+    streamingCloseErroredForReply = true;
+    streamingClosedForReply = false;
+    params.runtime.error?.(
+      `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
+    );
+    await queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError: unknown) => {
+      params.runtime.error?.(
+        `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
+      );
+    });
+  };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload: ReplyPayload, info) => {
       if (info?.kind === "final") {
@@ -890,18 +902,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       }
     },
-    onError: async (error, info) => {
-      streamingCloseErroredForReply = true;
-      streamingClosedForReply = false;
-      params.runtime.error?.(
-        `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
-      );
-      await queueIdleSideEffects({ markClosedForReply: false }).catch((cleanupError) => {
-        params.runtime.error?.(
-          `feishu[${account.accountId}] reply error cleanup failed: ${String(cleanupError)}`,
-        );
-      });
-    },
+    // The shipped SDK declaration stays void; core still awaits the runtime promise.
+    onError: handleDeliveryError as NonNullable<
+      ChannelInboundTurnPlan["delivery"]["onError"]
+    >,
   };
 
   return {

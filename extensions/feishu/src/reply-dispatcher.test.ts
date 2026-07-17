@@ -2004,7 +2004,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       ),
     ).rejects.toThrow("media failed");
     await Promise.all([
-      options.onError?.(new Error("media failed"), { kind: "final" }),
+      Promise.resolve(options.onError?.(new Error("media failed"), { kind: "final" })),
       options.onIdle?.(),
     ]);
     await options.deliver({ text: "Second answer" }, { kind: "final" });
@@ -2046,7 +2046,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         { kind: "final" },
       ),
     ).rejects.toThrow("media failed");
-    await options.onError?.(new Error("media failed"), { kind: "final" });
+    await Promise.resolve(options.onError?.(new Error("media failed"), { kind: "final" }));
     await options.deliver({ text: "Recovered answer" }, { kind: "final" });
     await options.onIdle?.();
 

@@ -170,7 +170,9 @@ describe("handleQaInbound", () => {
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-    await assembled.delivery.onError?.(new Error("model failed"), { kind: "final" });
+    await Promise.resolve(
+      assembled.delivery.onError?.(new Error("model failed"), { kind: "final" }),
+    );
 
     await vi.waitFor(() => {
       expect(deleteQaBusMessage).toHaveBeenCalledWith(
@@ -191,7 +193,9 @@ describe("handleQaInbound", () => {
     await expect(
       assembled.replyOptions?.onPartialReply?.({ text: "broken preview" }),
     ).rejects.toThrow("edit failed");
-    await assembled.delivery.onError?.(new Error("dispatch failed"), { kind: "final" });
+    await Promise.resolve(
+      assembled.delivery.onError?.(new Error("dispatch failed"), { kind: "final" }),
+    );
 
     await vi.waitFor(() => {
       expect(deleteQaBusMessage).toHaveBeenCalledWith(
@@ -216,14 +220,17 @@ describe("handleQaInbound", () => {
 
       const assembled = firstRunAssembledParams(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-      await assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
-        kind: "final",
-      });
+      await Promise.resolve(
+        assembled.delivery.onError?.(
+          new Error(`dispatch\r\nforged${paragraphSeparator}next`),
+          { kind: "final" },
+        ),
+      );
 
       await vi.waitFor(() => {
         expect(warn).toHaveBeenCalledTimes(2);
       });
-      await assembled.delivery.onError?.(undefined, { kind: "final" });
+      await Promise.resolve(assembled.delivery.onError?.(undefined, { kind: "final" }));
       await vi.waitFor(() => {
         expect(warn).toHaveBeenCalledTimes(3);
       });
