@@ -44,6 +44,7 @@ export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
   hasSyntheticLocalProviderAuthConfig,
+  providerHasPluginSyntheticAuthHook,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {
