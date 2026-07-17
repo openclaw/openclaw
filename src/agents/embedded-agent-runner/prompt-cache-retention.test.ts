@@ -74,13 +74,15 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
-  it("passes explicit cacheRetention through for LiteLLM-proxied Claude models (issue #37966)", () => {
+  it("passes explicit cacheRetention through for LiteLLM models with Anthropic cache capability (issue #37966)", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "short" },
         "litellm",
         "openai-completions",
         "claude-sonnet-4-6",
+        undefined,
+        "anthropic",
       ),
     ).toBe("short");
     expect(
@@ -89,6 +91,8 @@ describe("prompt cache retention", () => {
         "litellm",
         "openai-completions",
         "anthropic/claude-opus-4-6",
+        undefined,
+        "anthropic",
       ),
     ).toBe("long");
     expect(
@@ -97,11 +101,13 @@ describe("prompt cache retention", () => {
         "litellm",
         "openai-completions",
         "litellm/claude-haiku-4-6",
+        undefined,
+        "anthropic",
       ),
     ).toBe("none");
   });
 
-  it("keeps LiteLLM cacheRetention disabled without explicit Claude model evidence", () => {
+  it("keeps LiteLLM cacheRetention disabled without explicit cache capability", () => {
     expect(
       resolveCacheRetention({ cacheRetention: "long" }, "litellm", "openai-completions", "gpt-5.5"),
     ).toBeUndefined();

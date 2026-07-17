@@ -176,6 +176,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.provider,
     attempt.model.api,
     attempt.modelId,
+    attempt.model.compat?.supportsPromptCacheKey,
+    attempt.model.compat?.cacheControlFormat,
   );
   const agentTransportOverride = resolveAgentTransportOverride({
     settingsManager: input.settingsManager,

@@ -975,7 +975,7 @@ describe("OpenAI-compatible completions params", () => {
     expect(JSON.stringify(carrierMsg)).not.toContain("cache_control");
   });
 
-  it("applies Anthropic cache control for explicit LiteLLM Claude cacheRetention", async () => {
+  it("applies Anthropic cache control for explicitly capable LiteLLM cacheRetention", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
@@ -983,6 +983,7 @@ describe("OpenAI-compatible completions params", () => {
         id: "claude-sonnet-4-6",
         provider: "litellm",
         baseUrl: "https://litellm.example.com/v1",
+        compat: { cacheControlFormat: "anthropic" },
       },
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
@@ -1018,7 +1019,7 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
-  it("adds long-retention ttl for explicit LiteLLM Claude cacheRetention", async () => {
+  it("adds long-retention ttl for explicitly capable LiteLLM cacheRetention", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
@@ -1026,6 +1027,7 @@ describe("OpenAI-compatible completions params", () => {
         id: "anthropic/claude-opus-4-6",
         provider: "litellm",
         baseUrl: "https://litellm.example.com/v1",
+        compat: { cacheControlFormat: "anthropic" },
       },
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
@@ -1061,7 +1063,7 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
-  it("does not inject LiteLLM Claude cache control without explicit cacheRetention", async () => {
+  it("does not inject explicitly capable LiteLLM cache control without cacheRetention", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
@@ -1069,6 +1071,7 @@ describe("OpenAI-compatible completions params", () => {
         id: "claude-sonnet-4-6",
         provider: "litellm",
         baseUrl: "https://litellm.example.com/v1",
+        compat: { cacheControlFormat: "anthropic" },
       },
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
@@ -1093,12 +1096,12 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
-  it("does not inject Anthropic cache control for non-Claude LiteLLM models", async () => {
+  it("does not infer Anthropic cache control from a LiteLLM model name", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
-        id: "gpt-5.5",
+        id: "claude-sonnet-4-6",
         provider: "litellm",
         baseUrl: "https://litellm.example.com/v1",
       },

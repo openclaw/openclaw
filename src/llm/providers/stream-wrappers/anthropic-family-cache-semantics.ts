@@ -46,11 +46,6 @@ function isAnthropicBedrockModel(modelId: string): boolean {
   return false;
 }
 
-function isLiteLLMAnthropicModel(modelId: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return normalized.startsWith("anthropic/") || normalized.includes("claude");
-}
-
 export function isAnthropicFamilyCacheTtlEligible(params: {
   provider: string;
   modelApi?: string;
@@ -94,14 +89,6 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     ) {
       return "anthropic-bedrock";
     }
-  }
-  if (
-    normalizedProvider === "litellm" &&
-    params.hasExplicitCacheConfig &&
-    typeof params.modelId === "string" &&
-    isLiteLLMAnthropicModel(params.modelId)
-  ) {
-    return "custom-anthropic-api";
   }
   if (
     normalizedProvider !== "amazon-bedrock" &&
