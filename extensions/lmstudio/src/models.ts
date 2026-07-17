@@ -184,17 +184,17 @@ export function resolveLmstudioReasoningCompat(
 }
 
 /**
- * Maps LM Studio `trained_for_tool_use` into catalog `compat.supportsTools`.
- * Boolean true/false are authoritative. Omitted metadata stays unset so core
- * keeps the permissive default (`supportsTools !== false`); otherwise models
- * that report false still advertise tools.
+ * Maps LM Studio native tool training into catalog `compat.supportsTools`.
+ * Only `trained_for_tool_use: true` becomes an explicit opt-in. False and
+ * omitted stay unset so core keeps the permissive default
+ * (`supportsTools !== false`): LM Studio still offers default tool-use mode
+ * for untrained models, and OpenClaw must not disable tools on that signal.
  */
 function resolveLmstudioToolsCompat(
   entry: Pick<LmstudioModelWire, "capabilities">,
 ): Pick<NonNullable<ModelDefinitionConfig["compat"]>, "supportsTools"> | undefined {
-  const trained = entry.capabilities?.trained_for_tool_use;
-  if (trained === true || trained === false) {
-    return { supportsTools: trained };
+  if (entry.capabilities?.trained_for_tool_use === true) {
+    return { supportsTools: true };
   }
   return undefined;
 }

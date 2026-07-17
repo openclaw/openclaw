@@ -228,7 +228,7 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("maps trained_for_tool_use into explicit catalog supportsTools", () => {
+  it("maps trained_for_tool_use true into supportsTools without disabling false", () => {
     expect(
       mapLmstudioWireEntry({
         type: "llm",
@@ -237,13 +237,15 @@ describe("lmstudio-models", () => {
       })?.compat,
     ).toEqual({ supportsTools: true });
 
+    // LM Studio still provides default tool-use mode when untrained; leave
+    // compat unset so OpenClaw keeps tools enabled (supportsTools !== false).
     expect(
       mapLmstudioWireEntry({
         type: "llm",
         key: "tools-untrained",
         capabilities: { trained_for_tool_use: false },
       })?.compat,
-    ).toEqual({ supportsTools: false });
+    ).toBeUndefined();
 
     expect(
       mapLmstudioWireEntry({
