@@ -43,7 +43,7 @@ const SETUP_WELCOME_QUESTION: SystemAgentChatQuestion = {
   isOther: true,
 };
 
-export type OnboardingWelcome = {
+type OnboardingWelcome = {
   text: string;
   question: SystemAgentChatQuestion;
 };
