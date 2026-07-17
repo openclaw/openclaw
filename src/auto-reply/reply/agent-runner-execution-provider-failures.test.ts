@@ -519,6 +519,7 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       payload: { text: SILENT_REPLY_TOKEN },
     });
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("cancels the overload notice immediately when a slow retrying turn is aborted", async () => {

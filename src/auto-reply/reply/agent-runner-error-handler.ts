@@ -144,6 +144,17 @@ export async function handleAgentExecutionError(params: {
     }
     return undefined;
   };
+  const waitForRetryBackoff = async (delayMs: number, abortSignal?: AbortSignal) => {
+    try {
+      await sleepWithAbort(delayMs, abortSignal);
+    } catch (error) {
+      const abortAction = resolveReplyOperationAbortAction(error);
+      if (!abortAction) {
+        throw error;
+      }
+      return abortAction;
+    }
+  };
   if (err instanceof LiveSessionModelSwitchError) {
     if (params.liveModelSwitchRetries <= MAX_LIVE_SWITCH_RETRIES) {
       params.state.pendingLifecycleTerminal = undefined;
@@ -380,14 +391,9 @@ export async function handleAgentExecutionError(params: {
       `Overloaded provider before reply (${sanitizeForLog(message)}). ` +
         `Retrying ${retryCount}/${MAX_OVERLOAD_RETRIES} in ${retryDelayMs}ms.`,
     );
-    try {
-      await sleepWithAbort(retryDelayMs, retryAbortSignal);
-    } catch (sleepError) {
-      const abortAction = resolveReplyOperationAbortAction(sleepError);
-      if (abortAction) {
-        return abortAction;
-      }
-      throw sleepError;
+    const abortAction = await waitForRetryBackoff(retryDelayMs, retryAbortSignal);
+    if (abortAction) {
+      return abortAction;
     }
     params.state.pendingLifecycleTerminal = undefined;
     turn.replyOperation?.recordActivity();
@@ -408,14 +414,9 @@ export async function handleAgentExecutionError(params: {
       `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
     );
     const retryAbortSignal = turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal;
-    try {
-      await sleepWithAbort(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
-    } catch (sleepError) {
-      const abortAction = resolveReplyOperationAbortAction(sleepError);
-      if (abortAction) {
-        return abortAction;
-      }
-      throw sleepError;
+    const abortAction = await waitForRetryBackoff(TRANSIENT_HTTP_RETRY_DELAY_MS, retryAbortSignal);
+    if (abortAction) {
+      return abortAction;
     }
     return { kind: "retry" };
   }
