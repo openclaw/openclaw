@@ -28,7 +28,7 @@ const CARD_ACTION_COMPLETED_MAX_ENTRIES = 10_000;
 const CARD_ACTION_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const CARD_ACTION_FAILED_MAX_ENTRIES = 1_000;
 
-export type MSTeamsCardActionIngressPayload = {
+type MSTeamsCardActionIngressPayload = {
   version: typeof CARD_ACTION_INGRESS_VERSION;
   receivedAt: number;
   activity: MSTeamsActivity;
@@ -41,10 +41,10 @@ type MSTeamsCardActionTurnAdoptionLifecycle = ReturnType<
 class MSTeamsCardActionIngressPermanentError extends Error {}
 
 function cloneActivity(activity: MSTeamsActivity): MSTeamsActivity {
-  return JSON.parse(JSON.stringify(activity)) as MSTeamsActivity;
+  return structuredClone(activity);
 }
 
-export function resolveMSTeamsCardActionEventId(activity: MSTeamsActivity): string {
+function resolveMSTeamsCardActionEventId(activity: MSTeamsActivity): string {
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
   const stableIdentity = activity.id?.trim()
     ? [conversationId, activity.id.trim()]

@@ -842,37 +842,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     releaseDrain?.();
     await drainWork;
 
-    abort.abort();
-    await task;
-  });
-
-  it("does not persist unauthorized non-poll card actions", async () => {
-    const abort = new AbortController();
+    cardActionIngress.enqueue.mockClear();
     isCardActionInvokeAuthorized.mockResolvedValueOnce(false);
-    const task = monitorMSTeamsProvider({
-      cfg: createConfig(0),
-      runtime: createRuntime(),
-      abortSignal: abort.signal,
-      conversationStore: createStores().conversationStore,
-      pollStore: createStores().pollStore,
-    });
-
-    await waitForMSTeamsTestState(() => {
-      expect(registerMSTeamsHandlers).toHaveBeenCalled();
-    });
-    const sdkResultPromise = loadMSTeamsSdkWithAuth.mock.results[0]?.value;
-    if (!sdkResultPromise) {
-      throw new Error("expected loadMSTeamsSdkWithAuth result");
-    }
-    const app = (await sdkResultPromise).app;
-    const cardActionHandler = app.on.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "card.action",
-    )?.[1];
-    if (typeof cardActionHandler !== "function") {
-      throw new Error("expected card.action handler");
-    }
-
-    const response = await cardActionHandler({
+    const deniedResponse = await cardActionHandler({
       activity: {
         type: "invoke",
         name: "adaptiveCard/action",
@@ -880,8 +852,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
-
-    expect(response).toMatchObject({ statusCode: 200, value: "Not authorized." });
+    expect(deniedResponse).toMatchObject({ statusCode: 200, value: "Not authorized." });
     expect(cardActionIngress.enqueue).not.toHaveBeenCalled();
 
     abort.abort();
@@ -1178,3 +1149,4 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

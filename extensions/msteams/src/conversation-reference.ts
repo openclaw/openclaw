@@ -10,7 +10,9 @@ export function buildStoredConversationReference(params: {
   teamId?: string;
   /** Thread root message ID for channel thread messages. */
   threadId?: string;
-}): StoredConversationReference {
+}): StoredConversationReference & {
+  conversation: { id: string; conversationType?: string; tenantId?: string };
+} {
   const { activity, conversationId, conversationType, teamId, threadId } = params;
   const from = activity.from;
   const conversation = activity.conversation;
