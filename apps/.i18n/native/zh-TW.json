@@ -22894,11 +22894,6 @@
       "translated": "附件 %@ 調整大小後仍超過 5 MB 限制"
     },
     {
-      "id": "native.apple.82c2287cd78da56f",
-      "source": "\\(baseName).jpg",
-      "translated": "\\(baseName).jpg"
-    },
-    {
       "id": "native.apple.61b7d1ecf7fdae3e",
       "source": "\\(invocation) ",
       "translated": "\\(invocation) "

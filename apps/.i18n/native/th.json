@@ -22894,11 +22894,6 @@
       "translated": "ไฟล์แนบ %@ มีขนาดเกินขีดจำกัด 5 MB หลังจากปรับขนาด"
     },
     {
-      "id": "native.apple.82c2287cd78da56f",
-      "source": "\\(baseName).jpg",
-      "translated": "\\(baseName).jpg"
-    },
-    {
       "id": "native.apple.61b7d1ecf7fdae3e",
       "source": "\\(invocation) ",
       "translated": "\\(invocation) "

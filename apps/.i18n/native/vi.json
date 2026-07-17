@@ -22894,11 +22894,6 @@
       "translated": "Tệp đính kèm %@ vượt quá giới hạn 5 MB sau khi thay đổi kích thước"
     },
     {
-      "id": "native.apple.82c2287cd78da56f",
-      "source": "\\(baseName).jpg",
-      "translated": "\\(baseName).jpg"
-    },
-    {
       "id": "native.apple.61b7d1ecf7fdae3e",
       "source": "\\(invocation) ",
       "translated": "\\(invocation) "
