@@ -193,6 +193,8 @@ describe("main session recovery state", () => {
     const entry = interruptedEntry({
       pendingFinalDelivery: true,
       pendingFinalDeliveryText: " captured reply ",
+      restartRecoveryDeliveryRunId: "recovery-1",
+      restartRecoveryDeliverySourceRunId: "source-1",
       mainRestartRecovery: recoveryState({
         revision: 2,
         chargedAttempts: 1,
@@ -248,6 +250,8 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery?.chargedAttempts).toBe(1);
     expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
     expect(entry.abortedLastRun).toBe(true);
+    expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entry.restartRecoveryDeliverySourceRunId).toBe("source-1");
   });
 
   it("rejects a reservation created by an older lifecycle generation", () => {

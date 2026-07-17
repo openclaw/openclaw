@@ -377,6 +377,11 @@ export function transitionMainSessionRecovery(
       entry.startedAt = undefined;
       entry.endedAt = undefined;
       entry.runtimeMs = undefined;
+      if (entry.restartRecoveryDeliveryRunId === command.runId) {
+        // Gateway accepted this RPC id before setup failed. Rotate it on retry
+        // or the dedupe cache replays that terminal pre-dispatch failure.
+        entry.restartRecoveryDeliveryRunId = undefined;
+      }
       entry.updatedAt = command.now;
       return { kind: "applied" };
     }
