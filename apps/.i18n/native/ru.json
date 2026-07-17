@@ -19839,9 +19839,19 @@
       "translated": "На этом Gateway не найден пригодный доступ к ИИ"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "Ничего страшного — можно подключиться с помощью ключа API или токена. Также можно войти в Claude Code или Codex либо запустить Ollama или LM Studio с подходящей моделью, а затем нажать «Проверить снова»."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "Подключите ниже провайдера с помощью API-ключа или токена, затем повторите проверку."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "Установите один из этих инструментов, затем повторите проверку. Также можно подключить провайдера ниже."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "Рекомендуемые установки"
     },
     {
       "id": "native.apple.e2749739df556643",

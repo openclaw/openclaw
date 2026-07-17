@@ -418,26 +418,12 @@ describe("plugin management service", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.providerAuthChoices.mockReturnValue([{ choiceId: "provider", icon: providerIcon }]);
     mocks.recommendedInstalls.mockReturnValue([{ id: "tool", icon: recommendedIcon }]);
-    expect(resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl: providerIcon })).toBe(
-      providerIcon,
-    );
-    expect(
-      resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl: recommendedIcon }),
-    ).toBe(recommendedIcon);
-    expect(
-      resolveManagedSetupCatalogIconUrl({
-        config: {},
-        env: {},
-        iconUrl: "https://untrusted.example/icon.png",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveManagedSetupCatalogIconUrl({
-        config: {},
-        env: {},
-        iconUrl: "http://127.0.0.1/private.png",
-      }),
-    ).toBeUndefined();
+    const resolve = (iconUrl: string) =>
+      resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
+    expect(resolve(providerIcon)).toBe(providerIcon);
+    expect(resolve(recommendedIcon)).toBe(recommendedIcon);
+    expect(resolve("https://untrusted.example/icon.png")).toBeUndefined();
+    expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();
     expect(mocks.providerAuthChoices).toHaveBeenCalledWith({
       config: {},
       env: {},

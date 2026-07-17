@@ -19839,9 +19839,19 @@
       "translated": "在此 Gateway 上找不到可用的 AI 存取方式"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "沒關係——你可以使用 API 金鑰或權杖連線。你也可以登入 Claude Code 或 Codex，或啟動 Ollama 或 LM Studio 並載入合適的模型，然後按一下「再次檢查」。"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "使用 API 金鑰或權杖連接下方的供應商，然後再次檢查。"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "安裝其中一項工具，然後再次檢查。您也可以連接下方的供應商。"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "建議安裝項目"
     },
     {
       "id": "native.apple.e2749739df556643",

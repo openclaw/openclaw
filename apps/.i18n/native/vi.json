@@ -19839,9 +19839,19 @@
       "translated": "Không tìm thấy quyền truy cập AI khả dụng trên Gateway này"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "Không sao — bạn có thể kết nối bằng khóa API hoặc mã thông báo. Bạn cũng có thể đăng nhập vào Claude Code hoặc Codex, hoặc khởi động Ollama hay LM Studio với một mô hình phù hợp, rồi nhấn “Kiểm tra lại”."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "Kết nối với một nhà cung cấp bên dưới bằng khóa API hoặc token, sau đó kiểm tra lại."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "Cài đặt một trong các công cụ này, sau đó kiểm tra lại. Bạn cũng có thể kết nối với một nhà cung cấp bên dưới."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "Các bản cài đặt được đề xuất"
     },
     {
       "id": "native.apple.e2749739df556643",

@@ -19839,9 +19839,19 @@
       "translated": "هیچ دسترسی قابل‌استفاده‌ای به هوش مصنوعی در این Gateway پیدا نشد"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "اشکالی ندارد — می‌توانید با یک کلید API یا توکن متصل شوید. همچنین می‌توانید وارد Claude Code یا Codex شوید، یا Ollama یا LM Studio را با یک مدل مناسب اجرا کنید و سپس «بررسی دوباره» را بزنید."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "یکی از ارائه‌دهندگان زیر را با یک کلید API یا توکن متصل کنید، سپس دوباره بررسی کنید."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "یکی از این ابزارها را نصب کنید، سپس دوباره بررسی کنید. همچنین می‌توانید یکی از ارائه‌دهندگان زیر را متصل کنید."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "نصب‌های پیشنهادی"
     },
     {
       "id": "native.apple.e2749739df556643",

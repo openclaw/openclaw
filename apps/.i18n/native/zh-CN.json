@@ -19839,9 +19839,19 @@
       "translated": "此网关上未找到可用的 AI 访问方式"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "没关系——你可以使用 API 密钥或令牌连接。你也可以登录 Claude Code 或 Codex，或者启动 Ollama 或 LM Studio 并加载合适的模型，然后点击“再次检查”。"
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "使用 API 密钥或令牌连接下方的提供商，然后再次检查。"
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "安装以下任一工具，然后再次检查。你也可以连接下方的提供商。"
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "推荐安装"
     },
     {
       "id": "native.apple.e2749739df556643",

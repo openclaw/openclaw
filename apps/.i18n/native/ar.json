@@ -19839,9 +19839,19 @@
       "translated": "لم يُعثر على وصول صالح للاستخدام إلى الذكاء الاصطناعي على Gateway هذا"
     },
     {
-      "id": "native.apple.06b98c6084617183",
-      "source": "That’s fine — you can connect one with an API key or token. You can also sign in to Claude Code or Codex, or start Ollama or LM Studio with a suitable model, then hit “Check again”.",
-      "translated": "لا بأس — يمكنك الاتصال باستخدام مفتاح API أو رمز مميز. ويمكنك أيضًا تسجيل الدخول إلى Claude Code أو Codex، أو تشغيل Ollama أو LM Studio مع نموذج مناسب، ثم الضغط على «التحقق مجددًا»."
+      "id": "native.apple.1833f355381b12f3",
+      "source": "Connect a provider below with an API key or token, then check again.",
+      "translated": "اربط أحد المزوّدين أدناه باستخدام مفتاح API أو رمز مميّز، ثم تحقّق مرة أخرى."
+    },
+    {
+      "id": "native.apple.7345ff41fe96eaed",
+      "source": "Install one of these tools, then check again. You can also connect a provider below.",
+      "translated": "ثبّت إحدى هذه الأدوات، ثم تحقّق مرة أخرى. يمكنك أيضًا ربط أحد المزوّدين أدناه."
+    },
+    {
+      "id": "native.apple.14b8c3e061779615",
+      "source": "Recommended installs",
+      "translated": "عمليات التثبيت الموصى بها"
     },
     {
       "id": "native.apple.e2749739df556643",
