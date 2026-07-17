@@ -267,17 +267,19 @@ runs:
       if: inputs.sticky-disk == 'true'
       shell: bash
       env:
-        # Evaluated before this step's bind mount populates node_modules, so
-        # the '**/package.json' glob only sees checkout manifests. Recomputing
-        # this hash any later would sweep snapshot-internal package.json files
-        # into the fingerprint and permanently miss the warm path.
-        DEPS_INPUT_FINGERPRINT: frozen-${{ inputs.frozen-lockfile }}-${{ hashFiles('**/package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.pnpmfile.cjs', 'pnpmfile.cjs', '.github/actions/setup-node-env/sticky-importers.sh', 'scripts/postinstall-bundled-plugins.mjs', 'scripts/preinstall-package-manager-warning.mjs', 'scripts/prepare-git-hooks.mjs') }}
+        FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
       run: |
         set -euo pipefail
         sticky_root=/var/tmp/openclaw-node-deps
         sticky_modules="$sticky_root/node_modules"
         sticky_store="$sticky_root/store"
         workspace_modules="$GITHUB_WORKSPACE/node_modules"
+
+        # Compute before mounting node_modules. The helper hashes tracked
+        # manifests canonically. The audited direct root hooks retain only pnpm
+        # install lifecycle scripts; hook drift falls back to hashing all scripts.
+        deps_input_fingerprint="$(node "$GITHUB_ACTION_PATH/dependency-fingerprint.mjs" \
+          --workspace "$GITHUB_WORKSPACE" --frozen-lockfile "$FROZEN_LOCKFILE")"
 
         mkdir -p "$sticky_modules" "$sticky_store" "$workspace_modules"
         sudo mount --bind "$sticky_modules" "$workspace_modules"
@@ -287,7 +289,7 @@ runs:
           exit 1
         fi
         findmnt --target "$workspace_modules"
-        deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${DEPS_INPUT_FINGERPRINT:?}"
+        deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${deps_input_fingerprint:?}"
         # zizmor: ignore[github-env] static trusted path defined in this composite action.
         echo "PNPM_CONFIG_STORE_DIR=$sticky_store" >> "$GITHUB_ENV"
         echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$deps_fingerprint" >> "$GITHUB_ENV"
@@ -394,6 +396,16 @@ runs:
         append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
         append_pnpm_option_arg PNPM_CONFIG_STORE_DIR store-dir
         append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
+        run_pnpm_install() {
+          if [ "$STICKY_DISK" = "true" ]; then
+            # pnpm can occasionally retain a child after printing Done on a
+            # sticky COW mount. Bound that attempt, then let the existing retry
+            # finish from the now-populated store and module tree.
+            timeout --signal=TERM --kill-after=15s 4m pnpm "${install_args[@]}"
+          else
+            pnpm "${install_args[@]}"
+          fi
+        }
         if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
           mkdir -p "$PNPM_CONFIG_MODULES_DIR"
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
@@ -412,7 +424,10 @@ runs:
           if [ "$STICKY_DISK" = "true" ] && [ "$STICKY_WRITER" = "true" ]; then
             rm -f "$sticky_marker"
           fi
-          pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+          if ! run_pnpm_install; then
+            echo "::warning::pnpm install failed or timed out; retrying once"
+            run_pnpm_install
+          fi
           if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
             rm -rf node_modules
             ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
