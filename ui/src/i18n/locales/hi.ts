@@ -1764,6 +1764,10 @@ export const hi: TranslationMap = {
       testingButton: "परीक्षण हो रहा है…",
       testing: "परीक्षण हो रहा है — त्वरित उत्तर के लिए {modelRef} से पूछा जा रहा है…",
     },
+    empty: {
+      title: "अनुशंसित इंस्टॉल",
+      intro: "कोई मौजूदा AI एक्सेस नहीं मिला। इनमें से कोई एक टूल इंस्टॉल करें, फिर दोबारा जाँचें।",
+    },
     unavailable: {
       title: "पता लगाया गया, लेकिन स्वचालित रूप से परीक्षण नहीं किया गया",
     },
@@ -2302,6 +2306,13 @@ export const hi: TranslationMap = {
     session: "सत्र",
     outputTruncated: "पूर्वावलोकन संपादित और छोटा किया गया।",
     noOutputPreview: "कोई आउटपुट पूर्वावलोकन नहीं।",
+    answerCandidate: {
+      title: "उत्तर उम्मीदवार",
+      itemId: "आइटम",
+      candidate: "उम्मीदवार उत्तर",
+      superseded: "प्रतिस्थापित उत्तर",
+      selected: "चयनित उत्तर",
+    },
     status: {
       running: "चल रहा है",
       done: "पूर्ण",
@@ -3695,6 +3706,11 @@ export const hi: TranslationMap = {
       pause: "लक्ष्य रोकें",
       resume: "लक्ष्य फिर से शुरू करें",
       clear: "लक्ष्य साफ़ करें",
+    },
+    questions: {
+      title: "Codex को इनपुट चाहिए",
+      other: "कोई अन्य उत्तर टाइप करें",
+      submit: "उत्तर सबमिट करें",
     },
     messages: {
       activity: "गतिविधि",
