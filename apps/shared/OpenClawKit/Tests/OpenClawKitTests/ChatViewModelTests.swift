@@ -1306,70 +1306,70 @@ struct ChatViewModelTests {
             expectedRunId: String?,
             expectedSteps: [OpenClawChatPlanStep],
             staleAfterLivePlan: Bool)] = [
-                (
-                    "replace",
-                    historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(
-                            runId: "run-retained",
-                            text: "working",
-                            plan: OpenClawChatPlanSnapshot(
-                                steps: [OpenClawChatPlanStep(step: "Replacement", status: .completed)]))),
-                    "run-retained",
-                    [OpenClawChatPlanStep(step: "Replacement", status: .completed)],
-                    false),
-                (
-                    "legacy-preserve",
-                    historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(runId: "run-retained", text: "working")),
-                    "run-retained",
-                    retainedSteps,
-                    false),
-                (
-                    "superseded",
-                    historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(
-                            runId: "run-next",
-                            text: "next",
-                            plan: OpenClawChatPlanSnapshot(
-                                steps: [OpenClawChatPlanStep(step: "Next run", status: .inProgress)]))),
-                    "run-next",
-                    [OpenClawChatPlanStep(step: "Next run", status: .inProgress)],
-                    false),
-                (
-                    "active-preserve",
-                    historyPayload(hasActiveRun: true, activeRunIds: ["run-retained"]),
-                    "run-retained",
-                    retainedSteps,
-                    false),
-                (
-                    "terminal-clear",
-                    historyPayload(hasActiveRun: false, activeRunIds: []),
-                    nil,
-                    [],
-                    false),
-                (
-                    "no-evidence-preserve",
-                    historyPayload(supportsActiveRunState: false),
-                    "run-retained",
-                    retainedSteps,
-                    false),
-                (
-                    "stale-response-does-not-clobber-newer-live-plan",
-                    historyPayload(hasActiveRun: false, activeRunIds: []),
-                    "run-live",
-                    liveSteps,
-                    true),
-                (
-                    "explicit-empty-clears",
-                    historyPayload(
-                        inFlightRun: OpenClawChatInFlightRun(
-                            runId: "run-retained",
-                            text: "working",
-                            plan: OpenClawChatPlanSnapshot(steps: []))),
-                    nil,
-                    [],
-                    false),
-            ]
+            (
+                "replace",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-retained",
+                        text: "working",
+                        plan: OpenClawChatPlanSnapshot(
+                            steps: [OpenClawChatPlanStep(step: "Replacement", status: .completed)]))),
+                "run-retained",
+                [OpenClawChatPlanStep(step: "Replacement", status: .completed)],
+                false),
+            (
+                "legacy-preserve",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(runId: "run-retained", text: "working")),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "superseded",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-next",
+                        text: "next",
+                        plan: OpenClawChatPlanSnapshot(
+                            steps: [OpenClawChatPlanStep(step: "Next run", status: .inProgress)]))),
+                "run-next",
+                [OpenClawChatPlanStep(step: "Next run", status: .inProgress)],
+                false),
+            (
+                "active-preserve",
+                historyPayload(hasActiveRun: true, activeRunIds: ["run-retained"]),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "terminal-clear",
+                historyPayload(hasActiveRun: false, activeRunIds: []),
+                nil,
+                [],
+                false),
+            (
+                "no-evidence-preserve",
+                historyPayload(supportsActiveRunState: false),
+                "run-retained",
+                retainedSteps,
+                false),
+            (
+                "stale-response-does-not-clobber-newer-live-plan",
+                historyPayload(hasActiveRun: false, activeRunIds: []),
+                "run-live",
+                liveSteps,
+                true),
+            (
+                "explicit-empty-clears",
+                historyPayload(
+                    inFlightRun: OpenClawChatInFlightRun(
+                        runId: "run-retained",
+                        text: "working",
+                        plan: OpenClawChatPlanSnapshot(steps: []))),
+                nil,
+                [],
+                false),
+        ]
 
         for testCase in cases {
             let (_, vm) = await makeViewModel(historyResponses: [])
