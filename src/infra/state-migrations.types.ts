@@ -19,6 +19,7 @@ export type SessionStoreAliasPlan = {
 };
 
 export type LegacyStateDetection = {
+  doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;
   targetScope?: SessionScope;

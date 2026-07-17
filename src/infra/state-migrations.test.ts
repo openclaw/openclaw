@@ -49,6 +49,7 @@ const pluginDoctorStateMigrationEntries = vi.hoisted(
         migration: {
           id: string;
           label: string;
+          doctorOnly?: boolean;
           detectLegacyState: (params: {
             config: OpenClawConfig;
             env: NodeJS.ProcessEnv;
@@ -545,6 +546,54 @@ describe("state migrations", () => {
       `migrate:${customHome}`,
     ]);
     expect(result.changes).toContain("Migrated fixture environment");
+  });
+
+  it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const detectLegacyState = vi.fn(() => ({ preview: ["doctor-only plugin state"] }));
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["doctor-only plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-doctor-only-test",
+          label: "Memory Core doctor-only test migration",
+          doctorOnly: true,
+          detectLegacyState,
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    const automatic = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(automatic.changes).not.toContain("doctor-only plugin state migrated");
+    expect(detectLegacyState).not.toHaveBeenCalled();
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.pluginPlans).toMatchObject({ hasLegacy: true });
+    expect(detected.preview).toContain("doctor-only plugin state");
+
+    const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(repaired.warnings).toStrictEqual([]);
+    expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(detectLegacyState).toHaveBeenCalledTimes(2);
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
   it("detects legacy sessions, agent files, channel auth, and pairing state", () => {
