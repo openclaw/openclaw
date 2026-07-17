@@ -685,7 +685,8 @@ class ChatControllerOutboxTest {
 
       gateway.sendFailureBeforeDispatch = null
       chat.handleGatewayEvent("health", null)
-      advanceUntilIdle()
+      advanceTimeBy(1_000)
+      runCurrent()
 
       // retryOutboxCommand refreshes the active row's createdAt, so the untouched
       // unknown-session row flushes first in createdAt order.
@@ -2074,7 +2075,7 @@ class ChatControllerOutboxTest {
       chat.switchSession("agent:main:main")
       outbox.claimGate?.complete(Unit)
       send.join()
-      advanceUntilIdle()
+      runCurrent()
 
       assertEquals(true, accepted)
       assertEquals(listOf("agent:main:main"), gateway.sentSessionKeys)
@@ -2378,7 +2379,8 @@ class ChatControllerOutboxTest {
       gateway.online = true
       gateway.echoDeliveredSendsInHistory = false
       chat.load("custom")
-      advanceUntilIdle()
+      advanceTimeBy(1_000)
+      runCurrent()
 
       chat.handleGatewayEvent("health", null)
       runCurrent()
@@ -2973,12 +2975,15 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       // The unproven accepted head held its session while the unrelated session flowed first;
-      // once reconciliation parked it for review, the released successor followed.
+      // once reconciliation parked it for review, the released successor followed. Full virtual
+      // idle also reaches both hidden runs' proof deadlines, so their accepted rows park too.
       assertEquals(listOf("independent session", "blocked successor"), gateway.sentMessages)
       assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("ambiguous-a").status)
       assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("ambiguous-a").lastError)
-      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("queued-a").status)
-      assertEquals(ChatOutboxStatus.Accepted, outbox.rows.getValue("queued-b").status)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-a").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-a").lastError)
+      assertEquals(ChatOutboxStatus.Failed, outbox.rows.getValue("queued-b").status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, outbox.rows.getValue("queued-b").lastError)
     }
 
   @Test
