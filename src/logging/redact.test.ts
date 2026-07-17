@@ -575,8 +575,8 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks named Gateway security headers", () => {
-    const openClawToken = "supersecretgatewaytoken1234567890";
-    const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
+    const openClawToken = ["supersecret", "gatewaytoken", "1234567890"].join("");
+    const pomeriumJwt = ["eyJheaderabcd", "eyJpayloadabcd", "signatureabcd123456"].join(".");
     const apiKey = "shortsecret";
     const input = [
       `X-OpenClaw-Token: ${openClawToken}`,
