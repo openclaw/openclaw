@@ -161,7 +161,7 @@ describe("shared question card", () => {
       input.dispatchEvent(new InputEvent("input", { bubbles: true }));
       await card.updateComplete;
 
-      draw({ ...status, actionToken: "second-token" }, vi.fn());
+      draw({ ...status, actionToken: "test-second-token" }, vi.fn());
       await card.updateComplete;
       expect(container.querySelector<HTMLInputElement>(".chat-question__other")?.value).toBe("");
     });

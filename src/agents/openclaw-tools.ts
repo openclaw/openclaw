@@ -455,13 +455,13 @@ export function createOpenClawTools(
     pluginToolAllowlist: options?.pluginToolAllowlist,
     pluginToolDenylist: options?.pluginToolDenylist,
   });
-  const includeAskUserTool =
-    embedded &&
-    shouldIncludeAskUserToolForOpenClawTools({
-      config: resolvedConfig,
-      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      pluginToolDenylist: options?.pluginToolDenylist,
-    });
+  // isEmbeddedMode() marks the TUI-embedded host, not the embedded agent runner;
+  // gating on it would hide ask_user from every normal gateway run.
+  const includeAskUserTool = shouldIncludeAskUserToolForOpenClawTools({
+    config: resolvedConfig,
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    pluginToolDenylist: options?.pluginToolDenylist,
+  });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
     ...(embedded

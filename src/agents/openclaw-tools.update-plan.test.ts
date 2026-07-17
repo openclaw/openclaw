@@ -102,12 +102,14 @@ describe("openclaw-tools update_plan gating", () => {
     expect(
       shouldIncludeAskUserToolForOpenClawTools({ agentSessionKey: "agent:main:acp:worker" }),
     ).toBe(false);
+    // ask_user must not depend on the TUI embedded-host flag; normal gateway
+    // runs are the primary consumer.
     expect(
       createFastToolNames({
         config: {} as OpenClawConfig,
         runSessionKey: "agent:main:non-embedded",
       }),
-    ).not.toContain("ask_user");
+    ).toContain("ask_user");
     setEmbeddedMode(true);
 
     expect(
