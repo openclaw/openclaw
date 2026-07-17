@@ -868,13 +868,11 @@ describe("Claude session catalog", () => {
       listLocalClaudeSessionPage({ limit: 1, cursor: ` ${first.nextCursor} ` }, home),
     ).rejects.toThrow("catalog cursor is invalid");
     const runtime = { nodes: { list: vi.fn() } } as unknown as PluginRuntime;
+    const provider = captureCatalogProvider(runtime);
     await expect(
-      listClaudeSessionCatalog({
-        runtime,
-        query: {
-          hostIds: ["gateway:local"],
-          cursors: { "gateway:local": ` ${first.nextCursor} ` },
-        },
+      provider.list({
+        hostIds: ["gateway:local"],
+        cursors: { "gateway:local": ` ${first.nextCursor} ` },
       }),
     ).rejects.toThrow("cursor for gateway:local is invalid");
 
