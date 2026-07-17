@@ -87,6 +87,7 @@ internal fun OpenClawWearApp(
     )
   }
   var expectedAssistantKey by remember { mutableStateOf<String?>(null) }
+  var awaitingReplySessionId by remember { mutableStateOf<String?>(null) }
   var awaitingReply by remember { mutableStateOf(false) }
   var previousRealtimeSnapshot by remember { mutableStateOf(snapshot) }
   var realtimeThinkingTurnId by remember { mutableStateOf<String?>(null) }
@@ -97,8 +98,23 @@ internal fun OpenClawWearApp(
 
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
-    if (message.isEmpty() || state.sending) return
+    val sessionId = snapshot?.activeSessionId
+    if (message.isEmpty()) {
+      interaction = WearInteractionState.READY
+      return
+    }
+    if (state.sending || !state.streamText.isNullOrBlank()) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
+    if (!state.connected || sessionId == null) {
+      interaction = WearInteractionState.READY
+      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+      return
+    }
     expectedAssistantKey = snapshot.latestAssistantMessage()?.stableKey()
+    awaitingReplySessionId = sessionId
     awaitingReply = true
     interaction = WearInteractionState.SENDING
     speaker.stop()
@@ -171,6 +187,7 @@ internal fun OpenClawWearApp(
       viewModel.stopRealtimeTalk()
       return
     }
+    if (!state.connected || state.selectedSession == null) return
     if (
       ContextCompat.checkSelfPermission(view.context, Manifest.permission.RECORD_AUDIO) ==
       PackageManager.PERMISSION_GRANTED
@@ -181,11 +198,39 @@ internal fun OpenClawWearApp(
     }
   }
 
-  LaunchedEffect(state.messages, state.activeRunId, state.sending, awaitingReply) {
-    if (!awaitingReply || state.sending || state.activeRunId != null) return@LaunchedEffect
-    val reply = snapshot.latestAssistantMessage()
-    if (reply != null && reply.stableKey() != expectedAssistantKey) {
+  LaunchedEffect(
+    snapshot?.activeSessionId,
+    state.messages,
+    state.activeRunId,
+    state.sending,
+    state.error,
+    awaitingReply,
+  ) {
+    if (!awaitingReply) return@LaunchedEffect
+    val activeSnapshot = snapshot
+    if (
+      state.error != null ||
+      activeSnapshot == null ||
+      activeSnapshot.activeSessionId != awaitingReplySessionId
+    ) {
       awaitingReply = false
+      awaitingReplySessionId = null
+      expectedAssistantKey = null
+      interaction = WearInteractionState.READY
+      return@LaunchedEffect
+    }
+    if (state.sending || state.activeRunId != null) return@LaunchedEffect
+    val reply =
+      newAssistantReplyForSession(
+        awaitingSessionId = awaitingReplySessionId,
+        activeSessionId = activeSnapshot.activeSessionId,
+        expectedAssistantKey = expectedAssistantKey,
+        latestAssistantMessage = activeSnapshot.latestAssistantMessage(),
+      )
+    if (reply != null) {
+      awaitingReply = false
+      awaitingReplySessionId = null
+      expectedAssistantKey = null
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
       if (autoSpeak) speaker.speak(reply.text)
@@ -194,21 +239,19 @@ internal fun OpenClawWearApp(
 
   LaunchedEffect(snapshot?.realtimeTalk) {
     val next = snapshot
-    val completedTurn =
+    realtimeThinkingTurnId =
       if (next == null) {
         null
       } else {
-        newlyCompletedRealtimeUserTurnId(previousRealtimeSnapshot, next)
+        nextRealtimeThinkingTurnId(previousRealtimeSnapshot, next, realtimeThinkingTurnId)
       }
     previousRealtimeSnapshot = next
-    if (next?.realtimeTalk?.active != true) {
+  }
+  LaunchedEffect(realtimeThinkingTurnId) {
+    val turnId = realtimeThinkingTurnId ?: return@LaunchedEffect
+    delay(MINIMUM_REALTIME_THINKING_VISIBLE_MILLIS)
+    if (realtimeThinkingTurnId == turnId) {
       realtimeThinkingTurnId = null
-    } else if (completedTurn != null) {
-      realtimeThinkingTurnId = completedTurn
-      delay(MINIMUM_REALTIME_THINKING_VISIBLE_MILLIS)
-      if (realtimeThinkingTurnId == completedTurn) {
-        realtimeThinkingTurnId = null
-      }
     }
   }
 
@@ -243,11 +286,19 @@ internal fun OpenClawWearApp(
         realtimePlaying = state.realtimePlaying,
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
-        actionBusy = state.sending || state.talkBusy || state.controlBusy,
+        actionBusy =
+          state.sending ||
+            state.talkBusy ||
+            state.controlBusy ||
+            state.activeRunId != null ||
+            !state.streamText.isNullOrBlank(),
+        inputEnabled = state.connected && snapshot?.activeSessionId != null,
+        canAbort = state.activeRunId != null || !state.streamText.isNullOrBlank(),
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
         onTalk = {
+          if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.LISTENING
           val intent =
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
@@ -262,6 +313,7 @@ internal fun OpenClawWearApp(
           }
         },
         onType = {
+          if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.TYPING
           val remoteInput =
             RemoteInput
@@ -279,6 +331,14 @@ internal fun OpenClawWearApp(
           textLauncher.launch(intent)
         },
         onRealtimeTalk = ::toggleRealtimeTalk,
+        onAbort = {
+          awaitingReply = false
+          awaitingReplySessionId = null
+          expectedAssistantKey = null
+          interaction = WearInteractionState.READY
+          speaker.stop()
+          viewModel.abort()
+        },
         onSelectAgent = viewModel::selectAgent,
         onSelectSession = { sessionKey ->
           state.sessions.firstOrNull { it.key == sessionKey }?.let(viewModel::openSession)
@@ -336,6 +396,27 @@ private fun WearConversationSnapshot?.latestAssistantMessage(): WearChatMessage?
     }
 
 private fun WearChatMessage.stableKey(): String = id ?: role + ":" + timestamp + ":" + text.hashCode()
+
+internal fun newAssistantReplyForSession(
+  awaitingSessionId: String?,
+  activeSessionId: String?,
+  expectedAssistantKey: String?,
+  latestAssistantMessage: WearChatMessage?,
+): WearChatMessage? =
+  latestAssistantMessage?.takeIf { message ->
+    awaitingSessionId != null &&
+      awaitingSessionId == activeSessionId &&
+      message.stableKey() != expectedAssistantKey
+  }
+
+internal fun nextRealtimeThinkingTurnId(
+  previous: WearConversationSnapshot?,
+  next: WearConversationSnapshot,
+  currentTurnId: String?,
+): String? {
+  if (!next.realtimeTalk.active) return null
+  return newlyCompletedRealtimeUserTurnId(previous, next) ?: currentTurnId
+}
 
 internal fun newlyCompletedRealtimeUserTurnId(
   previous: WearConversationSnapshot?,

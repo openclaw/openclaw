@@ -49,7 +49,8 @@
     <string name="theme_light">Light</string>
     <string name="auto_speak">Speak replies automatically</string>
     <string name="reply_alerts">Reply alerts</string>
-    <string name="enable_alerts">Enable alerts</string>
+  <string name="enable_alerts">Enable alerts</string>
+  <string name="abort_run">Abort run</string>
     <string name="open_notification_settings">Open notification settings</string>
     <string name="on">On</string>
     <string name="off">Off</string>

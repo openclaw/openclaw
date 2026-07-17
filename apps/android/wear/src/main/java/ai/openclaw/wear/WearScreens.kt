@@ -99,12 +99,15 @@ internal fun OpenClawWearScreens(
   realtimePlaybackFailed: Boolean,
   realtimeThinkingOverride: Boolean,
   actionBusy: Boolean,
+  inputEnabled: Boolean,
+  canAbort: Boolean,
   themeMode: WearThemeMode,
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
+  onAbort: () -> Unit,
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onRefresh: () -> Unit,
@@ -183,8 +186,11 @@ internal fun OpenClawWearScreens(
             interaction = interaction,
             speaking = speaking,
             actionBusy = actionBusy,
+            inputEnabled = inputEnabled,
+            canAbort = canAbort,
             onTalk = onTalk,
             onType = onType,
+            onAbort = onAbort,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
@@ -228,6 +234,7 @@ internal fun OpenClawWearScreens(
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
             actionBusy = actionBusy,
+            inputEnabled = inputEnabled,
             onTalk = onTalk,
             onType = onType,
             onRealtimeTalk = onRealtimeTalk,
@@ -244,8 +251,11 @@ private fun ChatPage(
   interaction: WearInteractionState,
   speaking: Boolean,
   actionBusy: Boolean,
+  inputEnabled: Boolean,
+  canAbort: Boolean,
   onTalk: () -> Unit,
   onType: () -> Unit,
+  onAbort: () -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
@@ -271,15 +281,24 @@ private fun ChatPage(
       ) {
         ActionButton(
           label = stringResource(R.string.talk),
-          enabled = !actionBusy && !speaking,
+          enabled = inputEnabled && !actionBusy && !speaking,
           onClick = onTalk,
           modifier = Modifier.weight(1f),
         )
         ActionButton(
           label = stringResource(R.string.type),
-          enabled = !actionBusy && !speaking,
+          enabled = inputEnabled && !actionBusy && !speaking,
           onClick = onType,
           modifier = Modifier.weight(1f),
+        )
+      }
+    }
+    if (canAbort) {
+      item {
+        SecondaryButton(
+          label = stringResource(R.string.abort_run),
+          enabled = true,
+          onClick = onAbort,
         )
       }
     }
@@ -339,6 +358,7 @@ private fun VoicePage(
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
   actionBusy: Boolean,
+  inputEnabled: Boolean,
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -404,6 +424,7 @@ private fun VoicePage(
             realtimeThinkingOverride = realtimeThinkingOverride,
             realtimeElapsedSeconds = realtimeElapsedSeconds,
             actionBusy = actionBusy,
+            inputEnabled = inputEnabled,
             onTalk = onTalk,
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
@@ -414,6 +435,7 @@ private fun VoicePage(
             conversation = realtimeTalk.conversation,
             realtimeActive = realtimeTalk.active || realtimeCapturing,
             actionBusy = actionBusy,
+            inputEnabled = inputEnabled,
             onType = onType,
             onRealtimeTalk = onRealtimeTalk,
           )
@@ -446,6 +468,7 @@ private fun VoiceHomeMode(
   realtimeThinkingOverride: Boolean,
   realtimeElapsedSeconds: Long,
   actionBusy: Boolean,
+  inputEnabled: Boolean,
   onTalk: () -> Unit,
   onRealtimeTalk: () -> Unit,
   onStopSpeaking: () -> Unit,
@@ -465,8 +488,9 @@ private fun VoiceHomeMode(
     )
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
-  val dictateEnabled = !actionBusy && !speaking && !realtimeActive && !dictatePreview
-  val liveEnabled = (!actionBusy || ttsOnly) && !dictatePreview
+  val dictateEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
+  val liveEnabled =
+    (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
   val startDictate: () -> Unit = {
     if (dictateEnabled) {
       coroutineScope.launch {
@@ -676,6 +700,7 @@ private fun ThreadVoiceMode(
   conversation: List<WearRealtimeTalkEntry>,
   realtimeActive: Boolean,
   actionBusy: Boolean,
+  inputEnabled: Boolean,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
 ) {
@@ -729,7 +754,7 @@ private fun ThreadVoiceMode(
             .background(colors.surfaceRaised, RoundedCornerShape(17.dp))
             .border(1.dp, colors.borderStrong, RoundedCornerShape(17.dp))
             .clickable(
-              enabled = !actionBusy && !realtimeActive,
+              enabled = inputEnabled && !actionBusy && !realtimeActive,
               role = Role.Button,
               onClick = onType,
             ),
@@ -738,7 +763,7 @@ private fun ThreadVoiceMode(
         Text(
           text = stringResource(R.string.type),
           color =
-            if (!actionBusy && !realtimeActive) {
+            if (inputEnabled && !actionBusy && !realtimeActive) {
               colors.text
             } else {
               colors.textMuted
@@ -759,7 +784,7 @@ private fun ThreadVoiceMode(
               color = if (realtimeActive) LiveCyan else DictateBlue,
               shape = CircleShape,
             ).clickable(
-              enabled = !actionBusy || realtimeActive,
+              enabled = realtimeActive || (inputEnabled && !actionBusy),
               role = Role.Button,
               onClick = onRealtimeTalk,
             ),
