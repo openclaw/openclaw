@@ -289,12 +289,12 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       value: options.remote?.apiKey,
       path: "agents.*.memorySearch.remote.apiKey",
     });
-    const { githubToken: profileValue } = await resolveFirstGithubToken({
+    const profile = await resolveFirstGithubToken({
       agentDir: options.agentDir,
       config: options.config,
       env: process.env,
     });
-    const value = explicitValue.value || profileValue;
+    const value = explicitValue.value || profile.githubToken;
     if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
