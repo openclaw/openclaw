@@ -164,6 +164,9 @@ async function startNgrokTunnel(config: {
                   res();
                 };
                 proc.once("close", finish);
+                // Give ngrok a graceful window before forcing termination. The final bounded
+                // close wait avoids returning before SIGKILL normally reaps the child without
+                // letting an unobservable close event hang runtime cleanup forever.
                 const forceKillTimer = setTimeout(() => {
                   if (!closed) {
                     proc.kill("SIGKILL");
