@@ -12,9 +12,13 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);
 const ANSI_SGR_REGEX = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, "g");
+// Selector overlays can remain open across many query edits, so keep abandoned query
+// patterns from accumulating for the lifetime of the component.
+const MAX_REGEX_CACHE_ENTRIES = 256;
 
 export interface SearchableSelectListTheme extends SelectListTheme {
   searchPrompt: (text: string) => string;
@@ -61,6 +65,7 @@ export class SearchableSelectList implements Component {
     if (!regex) {
       regex = new RegExp(this.escapeRegex(pattern), "gi");
       this.regexCache.set(pattern, regex);
+      pruneMapToMaxSize(this.regexCache, MAX_REGEX_CACHE_ENTRIES);
     }
     return regex;
   }
