@@ -2,6 +2,7 @@ import type {
   CloseSessionRequest,
   InitializeRequest,
   ListSessionsRequest,
+  NewSessionRequest,
   PromptRequest,
   PromptResponse,
   ResumeSessionRequest,
@@ -519,6 +520,79 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(agent.closeSession(createCloseSessionRequest("missing-session"))).rejects.toThrow(
       /Session missing-session not found/i,
     );
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("newSession emits result before session_info_update notification", async () => {
+    const connection = createAcpConnection();
+    const sessionUpdate = connection["__sessionUpdateMock"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    let sessionUpdateCalled = false;
+    sessionUpdate.mockImplementation(() => {
+      sessionUpdateCalled = true;
+    });
+
+    const result = await agent.newSession({
+      cwd: "/tmp",
+      mcpServers: [],
+      _meta: {},
+    } as NewSessionRequest);
+    // Verify the result arrived before any notification
+    expect(sessionUpdateCalled).toBe(false);
+    expect(result.sessionId).toBeTruthy();
+
+    // Flush deferred setTimeout notifications
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sessionUpdateCalled).toBe(true);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("resumeSession emits result before session_info_update notification", async () => {
+    const connection = createAcpConnection();
+    const sessionUpdate = connection["__sessionUpdateMock"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({ key: "agent:main:order-proof", cwd: "/tmp" }),
+        ]);
+      }
+      if (method === "sessions.get") {
+        return { ok: true };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    let sessionUpdateCalled = false;
+    sessionUpdate.mockImplementation(() => {
+      sessionUpdateCalled = true;
+    });
+
+    const result = await agent.resumeSession(
+      createResumeSessionRequest("agent:main:order-proof", "/tmp"),
+    );
+    // Verify the result arrived before any notification
+    expect(sessionUpdateCalled).toBe(false);
+    expect(result.configOptions).toBeTruthy();
+
+    // Flush deferred setTimeout notifications
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sessionUpdateCalled).toBe(true);
 
     sessionStore.clearAllSessionsForTest();
   });
