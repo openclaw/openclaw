@@ -469,6 +469,38 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("normalizes bare numeric message.action send targets as Discord channels", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "123",
+        message: "hello",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("notifies inbound event delivery after message sends", async () => {
     const markDelivered = vi.fn();
     const end = beginDiscordInboundEventDeliveryCorrelation(
