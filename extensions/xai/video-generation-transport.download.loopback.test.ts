@@ -19,6 +19,7 @@ describe("downloadXaiVideo", () => {
   const dripTimers = new Set<ReturnType<typeof setTimeout>>();
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     fetchWithTimeoutGuardedMock.mockReset();
     for (const timer of dripTimers) {
       clearTimeout(timer);
@@ -134,6 +135,7 @@ describe("downloadXaiVideo", () => {
       };
       drip();
     });
+    server.on("clientError", (_err, socket) => socket.destroy());
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
 
