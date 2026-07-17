@@ -21,6 +21,7 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -258,6 +259,8 @@ type PluginManifestSecretInputPath = {
   path: string;
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
+  /** Runtime owner kind used to isolate this surface when resolution fails. */
+  ownerKind?: "route";
 };
 
 type PluginManifestSecretInputContracts = {
@@ -537,6 +540,8 @@ type PluginManifestProviderAuthChoice = {
    * Defaults to `["text-inference"]` when omitted.
    */
   onboardingScopes?: PluginManifestOnboardingScope[];
+  /** Provider runtime can discover and prepare an already-installed local model. */
+  appGuidedDiscovery?: boolean;
 };
 
 type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
@@ -969,9 +974,11 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
+    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),
+      ...(ownerKind ? { ownerKind } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;
@@ -1567,6 +1574,7 @@ function normalizeProviderAuthChoices(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
+    const appGuidedDiscovery = entry.appGuidedDiscovery === true;
     normalized.push({
       provider,
       method,
@@ -1580,6 +1588,7 @@ function normalizeProviderAuthChoices(
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
       ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
+      ...(appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
@@ -1784,7 +1793,7 @@ export function loadPluginManifest(
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
-  if (CORE_RESERVED_PLUGIN_IDS.has(id)) {
+  if (CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id))) {
     return cacheResult({
       ok: false,
       error: `plugin manifest id "${id}" is reserved by OpenClaw core`,

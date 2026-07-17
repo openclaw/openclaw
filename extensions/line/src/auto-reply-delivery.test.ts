@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { buildLineMediaMessage } from "./outbound-media.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
@@ -91,7 +92,6 @@ describe("deliverLineAutoReply", () => {
       createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
       pushMessagesLine,
       createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
-      createImageMessage,
       buildMediaMessage,
       createLocationMessage,
       ...overrides,
@@ -561,10 +561,9 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("keeps the image route for generic media without LINE-specific options", async () => {
-    // Parity with the push path (docs/channels/line.md): a bare media URL with no
-    // LINE media options stays on the image route and does not attempt resolution.
-    // A .mp4 proves it: if the generic path wrongly resolved by kind it would infer
-    // "video" (missing preview → build failure), so an image bubble means image route.
+    // A bare media URL stays on the image route, but shares validation with
+    // LINE-specific media. A .mp4 proves the explicit image fallback prevents
+    // extension-based video inference.
     const { deps, replyMessageLine, buildMediaMessage } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
@@ -581,7 +580,16 @@ describe("deliverLineAutoReply", () => {
     });
 
     expect(result.status).toBe("delivered");
-    expect(buildMediaMessage).not.toHaveBeenCalled();
+    expect(buildMediaMessage).toHaveBeenCalledWith(
+      "https://example.com/clip.mp4",
+      {
+        mediaKind: "image",
+        previewImageUrl: undefined,
+        durationMs: undefined,
+        trackingId: undefined,
+      },
+      "line:user:1",
+    );
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
       [createImageMessage("https://example.com/clip.mp4")],
@@ -636,6 +644,34 @@ describe("deliverLineAutoReply", () => {
         deps,
       }),
     ).rejects.toThrow(/require previewImageUrl/i);
+
+    expect(replyMessageLine).not.toHaveBeenCalled();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("does not expose credentials from media-only validation failures", async () => {
+    const lineData = {};
+    const mediaUrl = new URL("http://example.com/image.jpg");
+    mediaUrl.username = ["line", "user"].join("-");
+    mediaUrl.password = ["line", "fixture"].join("-");
+    mediaUrl.searchParams.set("auth", ["line", "query"].join("-"));
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+      buildMediaMessage: buildLineMediaMessage,
+    });
+
+    await expect(
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: {
+          mediaUrls: [mediaUrl.href],
+          channelData: { line: lineData },
+        },
+        lineData,
+        deps,
+      }),
+    ).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
 
     expect(replyMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();

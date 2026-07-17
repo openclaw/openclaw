@@ -16,6 +16,8 @@ extension OnboardingView {
             self.cliPage()
         case 3:
             self.aiSetupPage(contentHeight: contentHeight)
+        case 4:
+            self.memoryImportPage(contentHeight: contentHeight)
         case 5:
             self.permissionsPage(contentHeight: contentHeight)
         case 9:

@@ -6,6 +6,9 @@ import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.notifyNativeLocaleChanged
+import ai.openclaw.app.wear.GoogleWearMessageSender
+import ai.openclaw.app.wear.GoogleWearPeerResolver
+import ai.openclaw.app.wear.WearProxyBridge
 import android.app.Application
 import android.content.res.Configuration
 import android.os.StrictMode
@@ -30,6 +33,15 @@ class NodeApp : Application() {
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
   private var runtimeInstance: NodeRuntime? = null
+
+  internal val wearProxyBridge: WearProxyBridge by lazy {
+    WearProxyBridge(
+      scope = runtimeScope,
+      sender = GoogleWearMessageSender(this),
+      peerResolver = GoogleWearPeerResolver(this),
+      handleRequest = { request -> ensureBackgroundRuntime().handleWearProxyRequest(request) },
+    )
+  }
 
   /**
    * Returns the single NodeRuntime for this process, creating it on first use.

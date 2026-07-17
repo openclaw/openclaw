@@ -28,94 +28,144 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-const COMPACT_NODE_TEST_JOB_SECONDS = 260;
+// Fleet-loaded runners inflate measured hints by ~20-25%; a 220s packing cap
+// keeps the slowest bin near the 5-minute PR wall-clock budget under load.
+const COMPACT_NODE_TEST_JOB_SECONDS = 220;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 4;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 const AUTO_REPLY_COMMANDS_STRIPES = 3;
-// Advisory runtime estimates (seconds) per split shard, measured from a
-// Blacksmith compact PR run under two-plans-per-job concurrency (run
-// 29395969440). Packing only: a stale entry skews job balance but never
-// correctness. Unknown shards fall back to a per-file estimate.
+const AGENTS_CORE_RUNNER_CLI_STRIPES = 3;
+// Advisory runtime estimates (seconds) per split shard: mean [shard:*]
+// begin->end wall clock across five green Blacksmith compact PR runs
+// (29557851276, 29558164241, 29558528472, 29558634980, 29558677406).
+// Packing only: a stale entry skews job balance but never correctness.
+// Unknown shards fall back to a per-file estimate.
 const COMPACT_GROUP_SECONDS_HINTS = new Map([
-  ["agentic-agents-core-auth", 28],
-  ["agentic-agents-core-isolated", 12],
-  ["agentic-agents-core-models", 48],
-  ["agentic-agents-core-runner-cli", 120],
-  ["agentic-agents-core-runner-commands", 38],
-  ["agentic-agents-core-runner-embedded", 27],
-  ["agentic-agents-core-runner-sessions", 120],
-  ["agentic-agents-core-runtime", 81],
-  ["agentic-agents-core-subagents", 30],
-  ["agentic-agents-core-tools", 41],
-  ["agentic-agents-embedded", 69],
-  ["agentic-agents-support", 104],
-  ["agentic-agents-tools", 43],
-  ["agentic-cli", 70],
-  ["agentic-command-support", 30],
-  ["agentic-commands-agent-channel", 43],
-  ["agentic-commands-doctor", 26],
-  ["agentic-commands-doctor-auth", 8],
-  ["agentic-commands-doctor-config-state", 58],
+  ["agentic-agents-core-auth", 23],
+  ["agentic-agents-core-isolated", 8],
+  ["agentic-agents-core-models", 60],
+  // cli-runner.reliability.test.ts imports a ~245s module graph on its own
+  // (79 tests in <2s, import dominates); one file cannot be split further, so
+  // its stripe is a near-solo bin and the sibling stripes stay tiny.
+  ["agentic-agents-core-runner-cli-1", 245],
+  ["agentic-agents-core-runner-cli-2", 18],
+  ["agentic-agents-core-runner-cli-3", 8],
+  ["agentic-agents-core-runner-commands", 25],
+  ["agentic-agents-core-runner-embedded", 9],
+  ["agentic-agents-core-runner-sessions", 10],
+  ["agentic-agents-core-runtime", 67],
+  ["agentic-agents-core-subagents", 25],
+  ["agentic-agents-core-tools", 50],
+  ["agentic-agents-embedded", 54],
+  ["agentic-agents-support", 108],
+  ["agentic-agents-tools", 41],
+  ["agentic-cli", 68],
+  ["agentic-command-support", 39],
+  ["agentic-commands-agent-channel", 56],
+  ["agentic-commands-doctor", 10],
+  ["agentic-commands-doctor-auth", 5],
+  ["agentic-commands-doctor-config-state", 37],
   ["agentic-commands-doctor-gateway", 6],
-  ["agentic-commands-doctor-plugins-tools", 14],
-  ["agentic-commands-doctor-sessions-cron", 22],
-  ["agentic-commands-models", 17],
-  ["agentic-commands-onboard-config", 25],
-  ["agentic-commands-status-tools", 19],
-  ["agentic-control-plane-agent-chat", 74],
-  ["agentic-control-plane-auth-node", 105],
-  ["agentic-control-plane-http-models", 34],
-  ["agentic-control-plane-http-plugin-ws", 28],
-  ["agentic-control-plane-runtime-config", 32],
-  ["agentic-control-plane-runtime-cron", 22],
-  ["agentic-control-plane-runtime-server", 40],
-  ["agentic-control-plane-runtime-state", 29],
-  ["agentic-control-plane-runtime-ui-tools", 23],
-  ["agentic-control-plane-startup-core", 85],
-  ["agentic-control-plane-startup-health-runtime", 20],
-  ["agentic-control-plane-startup-restart-close", 19],
-  ["agentic-gateway-core", 112],
-  ["agentic-gateway-methods", 90],
-  ["agentic-plugin-sdk", 52],
-  ["auto-reply-core-top-level", 26],
-  ["auto-reply-reply-agent-runner", 33],
-  ["auto-reply-reply-commands-1", 179],
-  ["auto-reply-reply-commands-2", 39],
-  ["auto-reply-reply-commands-3", 28],
-  ["auto-reply-reply-dispatch", 41],
-  ["auto-reply-reply-session", 38],
-  ["auto-reply-reply-state-routing", 22],
-  ["core-runtime-cron-core", 29],
-  ["core-runtime-cron-isolated-agent", 55],
-  ["core-runtime-cron-service", 13],
-  ["core-runtime-hooks", 11],
-  ["core-runtime-infra-approval-exec", 35],
-  ["core-runtime-infra-channel-plugin", 20],
-  ["core-runtime-infra-heartbeat-runner", 44],
-  ["core-runtime-infra-net-install", 15],
-  ["core-runtime-infra-outbound-actions", 15],
-  ["core-runtime-infra-outbound-core", 37],
-  ["core-runtime-infra-process", 75],
-  ["core-runtime-infra-provider-push", 21],
-  ["core-runtime-infra-storage-state", 41],
-  ["core-runtime-infra-system-runtime", 29],
-  ["core-runtime-media-ui", 123],
-  ["core-runtime-secrets", 30],
-  ["core-runtime-shared", 49],
-  // PTY timing tests inflate badly next to co-runners; keep this group in a
-  // lightly packed bin so its lane stays close to solo runtime.
-  ["core-runtime-tui-pty", 200],
-  ["core-tooling-1", 88],
-  ["core-tooling-2", 84],
-  ["core-tooling-3", 100],
-  ["core-tooling-4", 79],
+  ["agentic-commands-doctor-plugins-tools", 9],
+  ["agentic-commands-doctor-sessions-cron", 24],
+  ["agentic-commands-doctor-shared", 13],
+  ["agentic-commands-models", 14],
+  ["agentic-commands-onboard-config", 10],
+  ["agentic-commands-status-tools", 25],
+  ["agentic-control-plane-agent-chat", 71],
+  ["agentic-control-plane-auth-node", 86],
+  ["agentic-control-plane-http-models", 20],
+  ["agentic-control-plane-http-plugin-ws", 36],
+  ["agentic-control-plane-runtime-config", 12],
+  ["agentic-control-plane-runtime-cron", 25],
+  ["agentic-control-plane-runtime-server", 14],
+  ["agentic-control-plane-runtime-shared-token", 17],
+  ["agentic-control-plane-runtime-state", 25],
+  ["agentic-control-plane-runtime-ui-tools", 10],
+  ["agentic-control-plane-startup-core", 98],
+  ["agentic-control-plane-startup-health-runtime", 9],
+  ["agentic-control-plane-startup-restart-close", 16],
+  ["agentic-gateway-core", 127],
+  ["agentic-gateway-methods", 68],
+  ["agentic-plugin-sdk", 46],
+  ["auto-reply-core-top-level", 29],
+  ["auto-reply-reply-agent-runner", 35],
+  ["auto-reply-reply-commands-1", 26],
+  ["auto-reply-reply-commands-2", 9],
+  ["auto-reply-reply-commands-3", 12],
+  ["auto-reply-reply-dispatch", 40],
+  ["auto-reply-reply-session", 19],
+  ["auto-reply-reply-state-routing", 18],
+  ["core-runtime-cron-core", 19],
+  ["core-runtime-cron-isolated-agent", 51],
+  ["core-runtime-cron-service", 20],
+  ["core-runtime-hooks", 8],
+  ["core-runtime-infra-approval-exec", 27],
+  ["core-runtime-infra-channel-plugin", 16],
+  ["core-runtime-infra-diagnostics-state", 14],
+  ["core-runtime-infra-heartbeat-runner", 51],
+  ["core-runtime-infra-misc", 11],
+  ["core-runtime-infra-net-install", 10],
+  ["core-runtime-infra-outbound-actions", 17],
+  ["core-runtime-infra-outbound-core", 39],
+  ["core-runtime-infra-process", 89],
+  ["core-runtime-infra-provider-push", 14],
+  ["core-runtime-infra-storage-state", 55],
+  ["core-runtime-infra-system-runtime", 35],
+  ["core-runtime-media-ui", 113],
+  ["core-runtime-secrets", 45],
+  ["core-runtime-shared", 46],
+  // PTY timing suites still need a lightly packed lane; the exclusive-bin cap
+  // leaves only trivial co-groups next to this measured runtime.
+  ["core-runtime-tui-pty", 103],
+  ["core-tooling-1", 85],
+  ["core-tooling-2", 112],
+  ["core-tooling-3", 106],
+  ["core-tooling-4", 105],
   ["core-tooling-docker", 6],
-  ["core-tooling-isolated", 50],
-  ["core-unit-fast", 157],
-  ["core-unit-src-security", 149],
-  ["core-unit-support", 28],
+  ["core-tooling-isolated", 52],
+  ["core-unit-fast", 142],
+  ["core-unit-src-security", 108],
+  ["core-unit-support", 15],
 ]);
+// Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
+// from single-file local runs (M4 Max) and static import-graph size. Packing
+// only: a stale entry skews stripe balance but never correctness. Unlisted
+// files use the default, which mostly reflects the per-file module-graph
+// re-evaluation cost that dominates these serial suites.
+const STRIPE_FILE_SECONDS_HINTS = new Map([
+  // cli-runner entries are CI wall clock (begin->checkmark deltas from the
+  // compact runs above); reliability's import graph alone runs ~245s, so LPT
+  // must isolate it or its stripe owns the PR tail.
+  ["src/agents/cli-runner.context-engine.test.ts", 6],
+  ["src/agents/cli-runner.reliability.test.ts", 245],
+  ["src/agents/cli-runner.spawn.test.ts", 18],
+  ["src/auto-reply/reply/commands-export-session.test.ts", 8],
+  ["src/auto-reply/reply/commands-gating.test.ts", 6],
+  ["src/auto-reply/reply/commands-learn.test.ts", 8],
+  ["src/auto-reply/reply/commands-plugins.install.test.ts", 6],
+  ["src/auto-reply/reply/commands-status.test.ts", 12],
+  ["src/auto-reply/reply/commands-system-prompt.test.ts", 8],
+  ["src/scripts/test-projects.test.ts", 21],
+  ["test/scripts/bench-sqlite-reliability.test.ts", 9],
+  ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
+  ["test/scripts/changed-lanes.test.ts", 5],
+  ["test/scripts/ci-workflow-guards.test.ts", 12],
+  ["test/scripts/crabbox-wrapper.test.ts", 19],
+  ["test/scripts/find-reusable-release-validation.test.ts", 8],
+  ["test/scripts/install-sh.test.ts", 6],
+  ["test/scripts/kitchen-sink-rpc-walk.test.ts", 5],
+  ["test/scripts/openclaw-live-updater.test.ts", 18],
+  ["test/scripts/parallels-smoke-model.test.ts", 8],
+  ["test/scripts/plugin-clawhub-release.test.ts", 5],
+  ["test/scripts/plugin-gateway-gauntlet.test.ts", 5],
+  ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
+  ["test/scripts/pr-operation-lock.test.ts", 27],
+  ["test/scripts/test-projects.test.ts", 8],
+]);
+const DEFAULT_STRIPE_FILE_SECONDS = 3;
+
 const DEFAULT_WHOLE_GROUP_SECONDS = 25;
 const DEFAULT_SECONDS_PER_TEST_FILE = 0.5;
 // Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
@@ -128,6 +178,21 @@ const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 
 function isExclusiveCompactGroup(group) {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(group.shard_name);
+}
+
+// Spawn/signal/PTY-timing suites also flake under high in-process worker
+// counts; pin them to the proven 2-worker budget while the job-level default
+// scales with the runner class. infra-process spawns child processes per test
+// and hit worker-startup timeouts under contention before serialization.
+const PINNED_WORKER_COMPACT_GROUP_RE =
+  /^core-tooling(?:-\d+|-isolated|-docker)?$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-media-ui$|^agentic-gateway-(?:core|methods)$/u;
+const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+
+function applyCompactGroupWorkerPins(group) {
+  if (!PINNED_WORKER_COMPACT_GROUP_RE.test(group.shard_name)) {
+    return group;
+  }
+  return { ...group, env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV } };
 }
 
 function estimateCompactGroupSeconds(group) {
@@ -150,6 +215,9 @@ const FULL_NODE_TEST_ADMISSION_PRIORITY = new Map([
   ["auto-reply-reply-commands-1", 1],
   ["auto-reply-reply-commands-2", 1],
   ["auto-reply-reply-commands-3", 1],
+  // Start the broad cache writer in the first admission wave so later jobs
+  // can reuse its protected transform snapshot on the next run.
+  ["core-unit-fast", 1],
 ]);
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
@@ -161,7 +229,9 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-subagents",
   "agentic-agents-embedded",
   "agentic-agents-support",
-  "agentic-agents-core-runner-cli",
+  "agentic-agents-core-runner-cli-1",
+  "agentic-agents-core-runner-cli-2",
+  "agentic-agents-core-runner-cli-3",
   "agentic-agents-core-runner-commands",
   "agentic-agents-core-runner-embedded",
   "agentic-agents-core-runner-sessions",
@@ -170,8 +240,15 @@ const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-gateway-core",
   "agentic-gateway-methods",
   "auto-reply-reply-dispatch",
+  // The commands stripes and security suite are import-bound (30-45s of
+  // module-graph import per file); the 8 vCPU class with a higher Vitest
+  // worker budget cuts their wall clock roughly linearly.
+  "auto-reply-reply-commands-1",
+  "auto-reply-reply-commands-2",
+  "auto-reply-reply-commands-3",
   "core-runtime-media-ui",
   "core-unit-fast",
+  "core-unit-src-security",
 ]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
@@ -439,12 +516,30 @@ function createAgentCoreSplitShards() {
     "agentic-agents-core-runner-sessions",
     "agentic-agents-core-runtime",
   ]
-    .map((shardName) => ({
-      configs: ["test/vitest/vitest.agents-core.config.ts"],
-      includePatterns: groups.get(shardName) ?? [],
-      requiresDist: false,
-      shardName,
-    }))
+    .flatMap((shardName) => {
+      const includePatterns = groups.get(shardName) ?? [];
+      // agents-core runs files serially (fileParallelism false guards shared
+      // module state), so the import-heavy cli-runner suite (~35s of module
+      // import per file) stripes across bins to parallelize at the job level.
+      if (shardName === "agentic-agents-core-runner-cli") {
+        return createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES).map(
+          (batch, index) => ({
+            configs: ["test/vitest/vitest.agents-core.config.ts"],
+            includePatterns: batch,
+            requiresDist: false,
+            shardName: `${shardName}-${index + 1}`,
+          }),
+        );
+      }
+      return [
+        {
+          configs: ["test/vitest/vitest.agents-core.config.ts"],
+          includePatterns,
+          requiresDist: false,
+          shardName,
+        },
+      ];
+    })
     .filter((shard) => shard.includePatterns.length > 0);
 
   return [
@@ -1180,12 +1275,35 @@ function compareFullNodeTestAdmissionOrder(a, b) {
   );
 }
 
+function stripeFileWeight(file) {
+  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_STRIPE_FILE_SECONDS;
+}
+
+// Deterministic cost-aware striping (greedy LPT): heaviest files first, each
+// into the currently lightest batch. Round-robin by discovery order packed one
+// whale next to another and left sibling stripes ~10x lighter.
 function createStripedBatches(values, batchCount) {
-  const batches = Array.from({ length: batchCount }, () => []);
-  for (const [index, value] of values.entries()) {
-    batches[index % batchCount].push(value);
+  const entries = values.map((value, index) => ({
+    index,
+    value,
+    weight: stripeFileWeight(value),
+  }));
+  entries.sort((a, b) => b.weight - a.weight || a.index - b.index);
+  const batches = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
+  for (const entry of entries) {
+    let target = batches[0];
+    for (const batch of batches) {
+      if (batch.totalWeight < target.totalWeight) {
+        target = batch;
+      }
+    }
+    target.totalWeight += entry.weight;
+    target.entries.push(entry);
   }
-  return batches;
+  // Keep discovery order inside each stripe so include lists stay stable.
+  return batches.map((batch) =>
+    batch.entries.toSorted((a, b) => a.index - b.index).map((entry) => entry.value),
+  );
 }
 
 function listCompactToolingTestFiles() {
@@ -1314,6 +1432,24 @@ export function createNodeTestShardBundles(options = {}) {
   return [...unbundled, ...bundled].toSorted(compareFullNodeTestAdmissionOrder);
 }
 
+/**
+ * Mark one semantic cache producer without coupling persistence to matrix order.
+ * The broad core unit graph is shared by most shards; precise changed plans
+ * fall back to their first (normally only) job.
+ */
+export function assignVitestFsCacheWriter(shards) {
+  const preferredIndex = shards.findIndex(
+    (shard) =>
+      shard.shardName === "core-unit-fast" ||
+      shard.groups?.some((group) => group.shard_name === "core-unit-fast"),
+  );
+  const writerIndex = preferredIndex >= 0 ? preferredIndex : shards.length > 0 ? 0 : -1;
+  return shards.map((shard, index) => ({
+    ...shard,
+    saveVitestFsCache: index === writerIndex,
+  }));
+}
+
 function createCompactNodeTestShardBundles(options = {}) {
   const shards = createNodeTestShards(options);
   const groupsByRunner = new Map();
@@ -1330,7 +1466,7 @@ function createCompactNodeTestShardBundles(options = {}) {
       runner,
       shard_name: shard.shardName,
     };
-    groups.push(...expandCompactNodeTestGroup(group));
+    groups.push(...expandCompactNodeTestGroup(group).map(applyCompactGroupWorkerPins));
     groupsByRunner.set(key, groups);
   }
 

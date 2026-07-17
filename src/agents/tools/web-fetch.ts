@@ -15,6 +15,8 @@ import { resolveWebProviderConfig } from "../../../packages/web-content-core/src
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
+import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -799,16 +801,21 @@ export function createWebFetchTool(options?: {
     description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
-        {
+      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
+        resolveWebFetchToolRuntimeContext({
           config: options?.config,
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebFetch: options?.runtimeWebFetch,
-        },
-      );
+        });
       const executionFetch = resolveFetchConfig(config);
       if (!resolveFetchEnabled({ fetch: executionFetch, sandboxed: options?.sandboxed })) {
         throw new Error("web_fetch is disabled.");
+      }
+      if (providerSelectionId) {
+        assertSecretOwnerAvailable(
+          "capability",
+          runtimeWebSecretOwnerId("fetch", providerSelectionId),
+        );
       }
       const providerCacheKey =
         normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??

@@ -21,6 +21,14 @@ function hasWidget(tools: readonly { name: string }[]): boolean {
   return tools.some((tool) => tool.name === "show_widget");
 }
 
+function hasScreen(tools: readonly { name: string }[]): boolean {
+  return tools.some((tool) => tool.name === "screen");
+}
+
+function hasTerminal(tools: readonly { name: string }[]): boolean {
+  return tools.some((tool) => tool.name === "terminal");
+}
+
 describe("gateway client capability tool filtering", () => {
   it("excludes capability-gated tools when no gateway client caps exist", () => {
     expect(hasWidget(createOpenClawTools())).toBe(false);
@@ -34,6 +42,18 @@ describe("gateway client capability tool filtering", () => {
     expect(hasWidget(createOpenClawTools({ clientCaps: ["tool-events", "inline-widgets"] }))).toBe(
       true,
     );
+  });
+
+  it("only exposes screen to UI-command clients", () => {
+    expect(hasScreen(createOpenClawTools())).toBe(false);
+    expect(hasScreen(createOpenClawTools({ clientCaps: ["ui-commands"] }))).toBe(true);
+  });
+
+  it("omits terminal for sandboxed agents", () => {
+    expect(hasTerminal(createOpenClawTools({ agentSessionKey: "agent:main:main" }))).toBe(true);
+    expect(
+      hasTerminal(createOpenClawTools({ agentSessionKey: "agent:main:main", sandboxed: true })),
+    ).toBe(false);
   });
 
   it("does not let tools.allow resurrect a gated tool for a channel run", () => {

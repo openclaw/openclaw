@@ -15,9 +15,14 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  groupCatalogSessionsByProject,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { sidebarSessionMetaId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -92,9 +97,11 @@ type SessionCatalogGroupsParams = {
   newSessionAgentId: string;
   collapsedSections: ReadonlySet<string>;
   loadingMoreCatalogIds: ReadonlySet<string>;
+  projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
+  onToggleProjectGrouping: () => void;
   onLoadMore: (catalogId: string) => void;
   onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -207,6 +214,17 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               >${hasError ? icons.alertTriangle : rows.length}</span
             >
           </button>
+          <button
+            type="button"
+            class="sidebar-session-sort sidebar-session-catalog-grouping"
+            aria-pressed=${String(params.projectGrouping === "project")}
+            data-session-catalog-grouping-toggle=${catalog.id}
+            title=${t("chat.sidebar.groupCatalogSessionsByProject")}
+            aria-label=${t("chat.sidebar.groupCatalogSessionsByProject")}
+            @click=${() => params.onToggleProjectGrouping()}
+          >
+            ${icons.folder}
+          </button>
           ${canCreateSession
             ? html`<button
                 type="button"
@@ -254,6 +272,8 @@ function renderCatalogHostGroup(
   params: SessionCatalogGroupsParams,
 ) {
   const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
+  const projectGroups =
+    params.projectGrouping === "project" ? groupCatalogSessionsByProject(host.sessions) : null;
   return html`
     <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>
       <div
@@ -270,10 +290,41 @@ function renderCatalogHostGroup(
           >${host.error ? icons.alertTriangle : host.sessions.length}</span
         >
       </div>
-      <div class="sidebar-session-catalog-host__sessions">
-        ${host.sessions.map((session) =>
-          renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-        )}
+      <div class="sidebar-session-catalog-host__sessions" role="list" aria-label=${host.label}>
+        ${projectGroups
+          ? html`${projectGroups.groups.map((group) => {
+              const sectionId = `catalog-project:${catalog.id}:${host.hostId}:${group.key}`;
+              const collapsed = params.collapsedSections.has(sectionId);
+              return html`
+                <button
+                  type="button"
+                  class="sidebar-session-catalog-project__head"
+                  data-session-catalog-project=${group.key}
+                  aria-expanded=${String(!collapsed)}
+                  title=${group.title}
+                  @click=${() => params.onToggleSection(sectionId)}
+                >
+                  <span class="sidebar-session-catalog-project__icon" aria-hidden="true"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
+                  <span class="sidebar-session-catalog-project__label">${group.label}</span>
+                  <span class="sidebar-session-catalog-project__count" aria-hidden="true"
+                    >${group.sessions.length}</span
+                  >
+                </button>
+                ${collapsed
+                  ? nothing
+                  : group.sessions.map((session) =>
+                      renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+                    )}
+              `;
+            })}
+            ${projectGroups.ungrouped.map((session) =>
+              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+            )}`
+          : host.sessions.map((session) =>
+              renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
+            )}
       </div>
     </section>
   `;
@@ -308,6 +359,9 @@ function renderCatalogSessionRow(
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
   const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
+  const label = session.name || session.threadId;
+  const meta = formatSidebarTimestamp(timestamp);
+  const metaId = meta ? sidebarSessionMetaId(key) : undefined;
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
@@ -326,6 +380,7 @@ function renderCatalogSessionRow(
         ? "sidebar-recent-session--active"
         : ""}"
       data-session-key=${key}
+      role="listitem"
       @contextmenu=${(event: MouseEvent) => {
         event.preventDefault();
         openMenu(event.clientX, event.clientY);
@@ -334,7 +389,9 @@ function renderCatalogSessionRow(
       <a
         href=${href}
         class="sidebar-recent-session__link"
-        title=${`${session.name || session.threadId} · ${host.label}`}
+        title=${`${label} · ${host.label}`}
+        aria-current=${active ? "page" : nothing}
+        aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -348,13 +405,11 @@ function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.name || session.threadId}</span
-          >
+          <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
+        <span class="session-row-trail" id=${metaId ?? nothing}>${meta}</span>
         <span class="session-row-actions">
           <button
             class="session-action"
