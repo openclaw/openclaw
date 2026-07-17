@@ -61,6 +61,39 @@ class ChatImageCodecTest {
   }
 
   @Test
+  fun highEntropyPngIsScaledUntilItFitsTheGatewayBudget() {
+    val width = 800
+    val height = 800
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val pixels = IntArray(width * height)
+    var state = 0x12345678
+    for (index in pixels.indices) {
+      state = state * 1_664_525 + 1_013_904_223
+      pixels[index] = 0x80000000.toInt() or (state and 0x00ffffff)
+    }
+    bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+    val source = ByteArrayOutputStream()
+    assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, source))
+    bitmap.recycle()
+    assertTrue(source.size() > (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3)
+
+    val file = File.createTempFile("high-entropy-", ".png")
+    try {
+      file.writeBytes(source.toByteArray())
+      val resolver = RuntimeEnvironment.getApplication().contentResolver
+      val attachment = loadSizedImageAttachment(resolver, Uri.fromFile(file))
+      val encoded = Base64.decode(attachment.base64, Base64.DEFAULT)
+
+      assertEquals("image/png", attachment.mimeType)
+      assertTrue(attachment.fileName.endsWith(".png"))
+      assertTrue(attachment.base64.length <= CHAT_IMAGE_MAX_BASE64_CHARS)
+      assertEquals(listOf(0x89, 0x50, 0x4e, 0x47), encoded.take(4).map { it.toInt() and 0xff })
+    } finally {
+      file.delete()
+    }
+  }
+
+  @Test
   fun decodeBase64BitmapRejectsOversizedInputBeforeDecode() {
     assertNull(decodeBase64Bitmap("A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)))
   }

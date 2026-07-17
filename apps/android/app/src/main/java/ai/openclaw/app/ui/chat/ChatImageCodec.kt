@@ -17,6 +17,8 @@ private const val CHAT_ATTACHMENT_MAX_WIDTH = 1600
 private const val CHAT_ATTACHMENT_START_QUALITY = 85
 private const val CHAT_DECODE_MAX_DIMENSION = 1600
 private const val CHAT_IMAGE_CACHE_BYTES = 16 * 1024 * 1024
+private const val CHAT_PNG_SCALE_STEP = 0.7
+private const val CHAT_PNG_MAX_SCALE_ATTEMPTS = 24
 
 private val decodedBitmapCache =
   object : LruCache<String, Bitmap>(CHAT_IMAGE_CACHE_BYTES) {
@@ -42,7 +44,9 @@ internal fun loadSizedImageAttachment(
   val compressionFormat = if (preservePng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
   // Reuse the node limiter so chat attachments and node photo payloads stay
   // within the same gateway frame budget. PNG has no lossy quality ladder,
-  // so its search only reduces dimensions when needed.
+  // so allow its dimension-only search to continue down to a guaranteed-small
+  // image rather than dropping high-entropy attachments after the JPEG-tuned
+  // number of attempts.
   val encodedBytes =
     JpegSizeLimiter
       .compressToLimit(
@@ -52,7 +56,9 @@ internal fun loadSizedImageAttachment(
         minQuality = if (preservePng) 100 else 20,
         maxQualityAttempts = if (preservePng) 1 else 6,
         maxBytes = maxBytes,
-        minSize = 240,
+        minSize = if (preservePng) 1 else 240,
+        scaleStep = if (preservePng) CHAT_PNG_SCALE_STEP else 0.85,
+        maxScaleAttempts = if (preservePng) CHAT_PNG_MAX_SCALE_ATTEMPTS else 6,
         encode = { width, height, quality ->
           val working =
             if (width == bitmap.width && height == bitmap.height) {
