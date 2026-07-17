@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 
 const mocks = vi.hoisted(() => ({
   buildSessionEntry: vi.fn(),
@@ -28,20 +28,18 @@ const createLease = () => ({
   signal: new AbortController().signal,
 });
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("QmdSessionExporter", () => {
   let tempDir: string;
   let exportDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "qmd-session-exporter-"));
+  beforeEach(() => {
+    tempDir = tempDirs.make("qmd-session-exporter-");
     exportDir = path.join(tempDir, "exports");
     mocks.buildSessionEntry.mockReset();
     mocks.corpusEntries.mockReset();
     mocks.replaceArtifactMappings.mockReset();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("skips unchanged transcript parsing by canonical corpus revision", async () => {
