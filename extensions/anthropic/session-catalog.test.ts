@@ -1407,6 +1407,43 @@ describe("Claude session catalog", () => {
     ]);
   });
 
+  it("starts paired-node discovery while the local catalog is still reading", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "concurrent-local-session";
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Local")] },
+    });
+    let releaseOpen = () => {};
+    const openGate = new Promise<void>((resolve) => {
+      releaseOpen = resolve;
+    });
+    let reportOpen = () => {};
+    const opened = new Promise<void>((resolve) => {
+      reportOpen = resolve;
+    });
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      reportOpen();
+      await openGate;
+      return await originalOpen(...args);
+    });
+    const listNodes = vi.fn(async () => ({ nodes: [] }));
+    const provider = captureCatalogProvider({
+      nodes: { list: listNodes },
+    } as unknown as PluginRuntime);
+
+    const listing = provider.list({});
+    await opened;
+    expect(listNodes).toHaveBeenCalledOnce();
+    releaseOpen();
+    await expect(listing).resolves.toMatchObject([
+      { hostId: "gateway:local", sessions: [expect.objectContaining({ threadId: sessionId })] },
+    ]);
+  });
+
   it("keeps the underlying paired-node list failure", async () => {
     const runtime = {
       nodes: {

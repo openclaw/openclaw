@@ -82,6 +82,69 @@ enum MacNodeClaudeSessionCatalog {
         }
     }
 
+    private struct CatalogFileIdentity: Equatable {
+        var modificationDate: Date
+        var size: UInt64
+        var inode: UInt64
+    }
+
+    private struct CatalogDiscoveryCacheEntry {
+        var rootPath: String
+        var identity: CatalogFileIdentity
+        var sessionId: String
+        var scannedBytes: Int
+        var record: SessionRecord?
+        var sidechain: Bool
+        var generation: UInt64 = 0
+    }
+
+    private final class CatalogDiscoveryCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: CatalogDiscoveryCacheEntry] = [:]
+        private var generation: UInt64 = 0
+
+        func lookup(
+            path: String,
+            rootPath: String,
+            identity: CatalogFileIdentity,
+            sessionId: String) -> CatalogDiscoveryCacheEntry?
+        {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard var entry = self.entries[path],
+                  entry.rootPath == rootPath,
+                  entry.identity == identity,
+                  entry.sessionId == sessionId
+            else { return nil }
+            self.generation &+= 1
+            entry.generation = self.generation
+            self.entries[path] = entry
+            return entry
+        }
+
+        func store(_ entry: CatalogDiscoveryCacheEntry, path: String) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.generation &+= 1
+            var entry = entry
+            entry.generation = self.generation
+            self.entries[path] = entry
+            if self.entries.count > MacNodeClaudeSessionCatalog.maxCatalogDiscoveryCacheEntries,
+               let oldest = self.entries.min(by: { $0.value.generation < $1.value.generation })
+            {
+                self.entries.removeValue(forKey: oldest.key)
+            }
+        }
+
+        func removeUnseen(rootPath: String, seenPaths: Set<String>) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries = self.entries.filter { path, entry in
+                entry.rootPath != rootPath || seenPaths.contains(path)
+            }
+        }
+    }
+
     private static let defaultPageLimit = 50
     private static let maxPageLimit = 100
     private static let defaultReadLimit = 20
@@ -90,6 +153,7 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxSessionIdLength = 256
     private static let maxSearchLength = 500
     private static let maxCatalogDiscoveryFiles = 10000
+    fileprivate static let maxCatalogDiscoveryCacheEntries = 20000
     private static let metadataPrefixBytes = 1024 * 1024
     private static let metadataReadChunkBytes = 16 * 1024
     private static let maxCatalogMetadataScanBytes = 64 * 1024 * 1024
@@ -100,6 +164,7 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxTruncatedTranscriptTextBytes = 512 * 1024
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
+    private static let catalogDiscoveryCache = CatalogDiscoveryCache()
 
     static func shouldAdvertise(
         root: [String: Any]? = nil,
@@ -275,6 +340,15 @@ extension MacNodeClaudeSessionCatalog {
         return try? JSONSerialization.jsonObject(with: data)
     }
 
+    private static func catalogFileIdentity(_ url: URL) -> CatalogFileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+        else { return nil }
+        return CatalogFileIdentity(modificationDate: modificationDate, size: size, inode: inode)
+    }
+
     private static func string(_ value: Any?, maxLength: Int = 4096) -> String? {
         guard let raw = value as? String else { return nil }
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -356,13 +430,19 @@ extension MacNodeClaudeSessionCatalog {
     {
         var discoveredFiles = 0
         var scannedBytes = 0
-        for projectURL in self.childDirectories(projectsURL) {
+        var truncated = false
+        var seenPaths = Set<String>()
+        let rootPath = projectsURL.path
+        scan: for projectURL in self.childDirectories(projectsURL) {
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: projectURL,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: [.skipsHiddenFiles])) ?? []
             for candidate in files where candidate.pathExtension == "jsonl" {
-                guard discoveredFiles < self.maxCatalogDiscoveryFiles else { return }
+                guard discoveredFiles < self.maxCatalogDiscoveryFiles else {
+                    truncated = true
+                    break scan
+                }
                 discoveredFiles += 1
                 let sessionId = candidate.deletingPathExtension().lastPathComponent
                 guard !sessionId.isEmpty,
@@ -372,14 +452,46 @@ extension MacNodeClaudeSessionCatalog {
                           root: projectsURL,
                           resolvedRoot: resolvedProjectsURL,
                           candidate: candidate,
-                          sessionId: sessionId),
-                      let handle = try? FileHandle(forReadingFrom: fileURL)
+                          sessionId: sessionId)
                 else { continue }
+                let identity = self.catalogFileIdentity(fileURL)
+                let cachePath = fileURL.path
+                seenPaths.insert(cachePath)
+                // Cache identity does not encode ACLs. Preserve the old open-on-every-list
+                // authorization behavior before returning cached prompt metadata.
+                guard FileManager.default.isReadableFile(atPath: cachePath) else { continue }
+                if let identity,
+                   let cached = self.catalogDiscoveryCache.lookup(
+                       path: cachePath,
+                       rootPath: rootPath,
+                       identity: identity,
+                       sessionId: sessionId),
+                   scannedBytes + cached.scannedBytes <= self.maxCatalogMetadataScanBytes
+                {
+                    if cached.sidechain {
+                        sidechainIds.insert(sessionId)
+                    }
+                    if let record = cached.record {
+                        records[sessionId] = record
+                    }
+                    // Preserve the cold-scan byte frontier so repeated pagination stays stable.
+                    scannedBytes += cached.scannedBytes
+                    if scannedBytes >= self.maxCatalogMetadataScanBytes {
+                        truncated = true
+                        break scan
+                    }
+                    continue
+                }
+                guard let handle = try? FileHandle(forReadingFrom: fileURL) else { continue }
                 var aiTitle: String?
-                let updatedAt = (try? fileURL.resourceValues(
+                let updatedAt = identity.map {
+                    Int64($0.modificationDate.timeIntervalSince1970 * 1000)
+                } ?? (try? fileURL.resourceValues(
                     forKeys: [.contentModificationDateKey]).contentModificationDate)
                     .map { Int64($0.timeIntervalSince1970 * 1000) }
                 var stopFile = false
+                var discoveredRecord: SessionRecord?
+                var discoveredSidechain = false
                 func inspectLine(_ line: Data) {
                     guard let row = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                           self.string(row["sessionId"], maxLength: self.maxSessionIdLength) == sessionId
@@ -395,7 +507,7 @@ extension MacNodeClaudeSessionCatalog {
                     if row["entrypoint"] as? String == "sdk-cli",
                        (row["isSidechain"] as? Bool) == true
                     {
-                        sidechainIds.insert(sessionId)
+                        discoveredSidechain = true
                         stopFile = true
                         return
                     }
@@ -407,7 +519,7 @@ extension MacNodeClaudeSessionCatalog {
                     else { return }
                     var fragments: [String] = []
                     self.collectText(content, into: &fragments)
-                    records[sessionId] = SessionRecord(
+                    discoveredRecord = SessionRecord(
                         threadId: sessionId,
                         name: aiTitle ?? fragments.first.flatMap { self.string($0, maxLength: 500) },
                         cwd: self.string(row["cwd"]),
@@ -450,10 +562,35 @@ extension MacNodeClaudeSessionCatalog {
                     inspectLine(pending)
                 }
                 try? handle.close()
+                if discoveredSidechain {
+                    sidechainIds.insert(sessionId)
+                }
+                if let discoveredRecord {
+                    records[sessionId] = discoveredRecord
+                }
+                let budgetConstrained = scannedBytes >= self.maxCatalogMetadataScanBytes
+                if let identity,
+                   !budgetConstrained,
+                   stopFile || reachedEnd || fileBytes >= self.metadataPrefixBytes
+                {
+                    self.catalogDiscoveryCache.store(
+                        CatalogDiscoveryCacheEntry(
+                            rootPath: rootPath,
+                            identity: identity,
+                            sessionId: sessionId,
+                            scannedBytes: fileBytes,
+                            record: discoveredRecord,
+                            sidechain: discoveredSidechain),
+                        path: cachePath)
+                }
                 if scannedBytes >= self.maxCatalogMetadataScanBytes {
-                    return
+                    truncated = true
+                    break scan
                 }
             }
+        }
+        if !truncated {
+            self.catalogDiscoveryCache.removeUnseen(rootPath: rootPath, seenPaths: seenPaths)
         }
     }
 

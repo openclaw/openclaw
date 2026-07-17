@@ -60,7 +60,7 @@ enum MacNodeCodexThreadCatalog {
         }
     }
 
-    private struct ListParams {
+    private struct ListParams: Equatable {
         var cursor: String?
         var limit = 50
         var searchTerm: String?
@@ -335,13 +335,16 @@ enum MacNodeCodexThreadCatalog {
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
         guard params.searchTerm != nil else {
-            let session = try CodexAppServerThreadRequestSession(
+            // App Server startup waits for rollout backfill to complete before exposing SQLite.
+            // Use that indexed path only for the UI's initial page; actions and pagination keep
+            // Codex's canonical scan-and-repair behavior.
+            let useStateDbOnly = self.isDefaultCatalogPage(params)
+            let output = try await self.requestInteractiveListPage(
+                params: params,
                 invocation: invocation,
-                method: "thread/list",
-                requestParams: self.appServerParams(params),
                 timeoutSeconds: timeoutSeconds,
-                maxLineBytes: maxLineBytes)
-            let output = try await session.run()
+                maxLineBytes: maxLineBytes,
+                useStateDbOnly: useStateDbOnly)
             return try self.normalize(listResultData: output.resultData)
         }
 
@@ -363,13 +366,12 @@ enum MacNodeCodexThreadCatalog {
             var pageParams = params
             pageParams.cursor = cursor
             pageParams.limit = remainingLimit
-            let session = try CodexAppServerThreadRequestSession(
+            let output = try await self.requestInteractiveListPage(
+                params: pageParams,
                 invocation: invocation,
-                method: "thread/list",
-                requestParams: self.appServerParams(pageParams),
                 timeoutSeconds: remainingTimeout,
-                maxLineBytes: maxLineBytes)
-            let output = try await session.run()
+                maxLineBytes: maxLineBytes,
+                useStateDbOnly: false)
             let page = try self.normalizedResponse(
                 listResultData: output.resultData,
                 searchTerm: params.searchTerm)
@@ -400,6 +402,57 @@ enum MacNodeCodexThreadCatalog {
             sessions: sessions,
             nextCursor: nextCursor,
             backwardsCursor: backwardsCursor))
+    }
+
+    private static func isDefaultCatalogPage(_ params: ListParams) -> Bool {
+        params == ListParams()
+    }
+
+    private static func requestListPage(
+        params: ListParams,
+        invocation: ResolvedInvocation,
+        timeoutSeconds: Double,
+        maxLineBytes: Int,
+        useStateDbOnly: Bool) async throws -> CodexAppServerThreadRequestSession.Output
+    {
+        let session = try CodexAppServerThreadRequestSession(
+            invocation: invocation,
+            method: "thread/list",
+            requestParams: self.appServerParams(params, useStateDbOnly: useStateDbOnly),
+            timeoutSeconds: timeoutSeconds,
+            maxLineBytes: maxLineBytes)
+        return try await session.run()
+    }
+
+    private static func requestInteractiveListPage(
+        params: ListParams,
+        invocation: ResolvedInvocation,
+        timeoutSeconds: Double,
+        maxLineBytes: Int,
+        useStateDbOnly: Bool) async throws -> CodexAppServerThreadRequestSession.Output
+    {
+        let output = try await self.requestListPage(
+            params: params,
+            invocation: invocation,
+            timeoutSeconds: timeoutSeconds,
+            maxLineBytes: maxLineBytes,
+            useStateDbOnly: useStateDbOnly)
+        guard useStateDbOnly, self.listResultIsEmpty(output.resultData) else { return output }
+        // Codex intentionally projects an unavailable SQLite store as an empty state-only page.
+        // Keep its filesystem fallback for that failure state and for stale empty pages.
+        return try await self.requestListPage(
+            params: params,
+            invocation: invocation,
+            timeoutSeconds: timeoutSeconds,
+            maxLineBytes: maxLineBytes,
+            useStateDbOnly: false)
+    }
+
+    private static func listResultIsEmpty(_ data: Data) -> Bool {
+        guard let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let threads = result["data"] as? [Any]
+        else { return false }
+        return threads.isEmpty
     }
 }
 
@@ -1034,7 +1087,10 @@ extension MacNodeCodexThreadCatalog {
         return trimmed
     }
 
-    private static func appServerParams(_ params: ListParams) -> [String: Any] {
+    private static func appServerParams(
+        _ params: ListParams,
+        useStateDbOnly: Bool) -> [String: Any]
+    {
         var result: [String: Any] = [
             "limit": params.limit,
             "sortKey": "recency_at",
@@ -1043,7 +1099,7 @@ extension MacNodeCodexThreadCatalog {
             // Codex's stable interactive-session default.
             "modelProviders": [String](),
             "archived": false,
-            "useStateDbOnly": false,
+            "useStateDbOnly": useStateDbOnly,
         ]
         if let cursor = params.cursor {
             result["cursor"] = cursor

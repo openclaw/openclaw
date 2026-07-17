@@ -764,6 +764,46 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(listParams["useStateDbOnly"] as? Bool == false)
     }
 
+    @Test func `falls back to rollout scan when the state database page is empty`() async throws {
+        let page = try listResponseJSON(names: ["Filesystem thread"], nextCursor: nil)
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        capture="${0}.requests"
+        counter="${0}.counter"
+        count=0
+        [ ! -f "$counter" ] || count=$(cat "$counter")
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$counter"
+        IFS= read -r initialize || exit 2
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        IFS= read -r list || exit 4
+        printf '%s\n' "$list" >> "$capture"
+        case "$count" in
+          1) printf '%s\n' '{"id":2,"result":{"data":[]}}' ;;
+          2) printf '%s\n' '\#(page)' ;;
+          *) exit 9 ;;
+        esac
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+
+        let payload = try await MacNodeCodexThreadCatalog.list(
+            paramsJSON: nil,
+            executable: fake.executable.path)
+        let response = try #require(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+        #expect((response["sessions"] as? [Any])?.count == 1)
+
+        let requests = try String(contentsOf: fake.capture, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map { try #require(
+                JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        let params = try requests.map { try #require($0["params"] as? [String: Any]) }
+        #expect(params.count == 2)
+        #expect(params[0]["useStateDbOnly"] as? Bool == true)
+        #expect(params[1]["useStateDbOnly"] as? Bool == false)
+    }
+
     @Test func `reads one paginated transcript turn page from App Server`() async throws {
         let fake = try makeFakeCodex(#"""
         #!/bin/sh

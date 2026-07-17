@@ -52,10 +52,14 @@ actor MacNodeRuntime {
             MacNodeClaudeSessionCatalog.shouldAdvertise()
         },
         claudeSessionListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON)
+            try await Task.detached(priority: .utility) {
+                try MacNodeClaudeSessionCatalog.list(paramsJSON: paramsJSON)
+            }.value
         },
         claudeSessionReadRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
-            try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON)
+            try await Task.detached(priority: .utility) {
+                try MacNodeClaudeSessionCatalog.read(paramsJSON: paramsJSON)
+            }.value
         })
     {
         self.nodeHostWorker = nodeHostWorker
