@@ -9,6 +9,7 @@ import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guar
 import {
   readTwilioWebhookForm,
   respondTwiml,
+  resolveTwilioMessageSid,
   resolveTwilioWebhookSignatureUrl,
   verifyTwilioSignature,
 } from "./twilio.js";
@@ -131,7 +132,8 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
       respondTwiml(res, 429, "Rate limit exceeded");
       return true;
     }
-    if (!form.MessageSid?.trim()) {
+    const messageSid = resolveTwilioMessageSid(form);
+    if (!messageSid) {
       respondTwiml(res, 400, "Missing MessageSid");
       return true;
     }
@@ -139,7 +141,7 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     // A 200 is impossible until SQLite commits this exact transport envelope.
     const verdict = await params.ingress.enqueue(form);
     if (verdict.duplicate) {
-      params.log?.warn?.(`SMS webhook ignored replayed message ${form.MessageSid}`);
+      params.log?.warn?.(`SMS webhook ignored replayed message ${messageSid}`);
     }
     // Reserve detached work under HTTP admission; it only pumps the durable drain.
     void runDetachedWebhookWork(() => params.ingress.drainOnce()).catch((err: unknown) => {

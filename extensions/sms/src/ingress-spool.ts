@@ -7,7 +7,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import { getSmsRuntime } from "./runtime.js";
-import { buildTwilioInboundMessage } from "./twilio.js";
+import { buildTwilioInboundMessage, resolveTwilioMessageSid } from "./twilio.js";
 import type { ResolvedSmsAccount, SmsInboundMessage } from "./types.js";
 
 const SMS_INGRESS_PAYLOAD_VERSION = 1;
@@ -88,7 +88,7 @@ export function createSmsIngressSpool(params: {
   });
   return {
     enqueue: async (form: Record<string, string>) => {
-      const eventId = form.MessageSid?.trim();
+      const eventId = resolveTwilioMessageSid(form);
       if (!eventId) {
         throw new Error("SMS webhook is missing MessageSid.");
       }

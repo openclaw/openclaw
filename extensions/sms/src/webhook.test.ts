@@ -210,6 +210,29 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
 
+  it("accepts the legacy SmsMessageSid event id alias", async () => {
+    const body =
+      "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&SmsMessageSid=SM-alias";
+    const signature = computeTestTwilioSignature({
+      url: "https://gateway.example.com/webhooks/sms",
+      authToken: "secret",
+      form: parseTestTwilioForm(body),
+    });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(enqueueSmsIngress).toHaveBeenCalledWith(
+      expect.objectContaining({ SmsMessageSid: "SM-alias" }),
+    );
+  });
+
   it("validates the raw RCS form before canonicalizing its sender", async () => {
     const messageSid = createMessageSid(9);
     const { body, signature } = createSignedSmsPayload(messageSid, {

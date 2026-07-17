@@ -241,14 +241,19 @@ export function buildTwilioInboundMessage(form: Record<string, string>): SmsInbo
   const to = firstTrimmedString(form.To);
   const body = firstString(form.Body);
   const accountSid = firstTrimmedString(form.AccountSid);
-  const messageSid =
-    firstTrimmedString(form.MessageSid) ||
-    firstTrimmedString(form.SmsSid) ||
-    firstTrimmedString(form.SmsMessageSid);
+  const messageSid = resolveTwilioMessageSid(form);
   if (!from || !to || !body || !messageSid) {
     return null;
   }
   return { accountSid, from, to, body, messageSid };
+}
+
+export function resolveTwilioMessageSid(form: Record<string, string>): string {
+  return (
+    firstTrimmedString(form.MessageSid) ||
+    firstTrimmedString(form.SmsSid) ||
+    firstTrimmedString(form.SmsMessageSid)
+  );
 }
 
 export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Record<string, string>> {

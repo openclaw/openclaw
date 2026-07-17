@@ -131,6 +131,32 @@ describe("createSmsIngressSpool", () => {
     expect(deliver).toHaveBeenCalledOnce();
   });
 
+  it.each(["SmsSid", "SmsMessageSid"])("accepts the legacy %s event id alias", async (key) => {
+    const stateDir = await createStateDir();
+    const deliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
+      await lifecycle.onAdopted();
+    });
+    const spool = createSmsIngressSpool({
+      cfg: {},
+      account,
+      channelRuntime: {} as SmsChannelRuntime,
+      queue: createQueue(stateDir),
+      deliver,
+    });
+    disposers.push(spool.dispose);
+    const rawForm = form("SM-alias");
+    delete rawForm.MessageSid;
+    rawForm[key] = "SM-alias";
+
+    expect(await spool.enqueue(rawForm)).toMatchObject({ kind: "accepted", duplicate: false });
+    await drainSpool(spool);
+
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({ messageSid: "SM-alias" }),
+      expect.any(Object),
+    );
+  });
+
   it("preserves the old handler-reload replay guard scenario with a tombstone", async () => {
     const stateDir = await createStateDir();
     const firstDeliver = vi.fn<SmsIngressDeliver>(async (_message, lifecycle) => {
