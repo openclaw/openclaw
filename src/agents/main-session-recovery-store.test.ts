@@ -571,6 +571,11 @@ describe("main session recovery store", () => {
       sessionKey,
       storePath,
     });
+    await expect(releaseMainSessionRecoveryOwner(second.lease)).resolves.toEqual({
+      sessionId: "session-1",
+      sessionKey,
+      storePath,
+    });
   });
 
   it("does not let an old lease release a same-token claim from a new cycle", async () => {

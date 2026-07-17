@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { AgentCommandOpts } from "./command/types.js";
@@ -11,8 +12,8 @@ import {
   bindMainSessionRecoveryOwnerRun,
   claimMainSessionRecoveryOwner,
   inspectMainSessionRecoveryRequired,
+  readMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
-  validateMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
   type MainSessionRecoveryPendingTarget,
 } from "./main-session-recovery-store.js";
@@ -24,16 +25,68 @@ type PreparedRecoveryOwnerTarget = object & {
   previousSessionId?: string;
   sessionId: string;
   sessionKey?: string;
+  sessionEntry?: InternalSessionEntry;
+  sessionStore?: Record<string, InternalSessionEntry>;
   storePath: string;
   runLease?: { release: () => Promise<void> };
 };
+
+type AcquiredRecoveryOwner = {
+  lease: MainSessionRecoveryOwnerLease;
+  entry: InternalSessionEntry;
+  sessionKey: string;
+};
+
+function cloneRecoveryOwnerEntry(entry: InternalSessionEntry): InternalSessionEntry {
+  const state = entry.mainRestartRecovery;
+  return {
+    ...entry,
+    ...(entry.restartRecoveryRuns
+      ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
+      : {}),
+    ...(state
+      ? {
+          mainRestartRecovery: {
+            ...state,
+            ...(state.reservation ? { reservation: { ...state.reservation } } : {}),
+            ...(state.foregroundClaims
+              ? {
+                  foregroundClaims: {
+                    ...state.foregroundClaims,
+                    tokens: [...state.foregroundClaims.tokens],
+                    ...(state.foregroundClaims.runIdsByClaimId
+                      ? { runIdsByClaimId: { ...state.foregroundClaims.runIdsByClaimId } }
+                      : {}),
+                  },
+                }
+              : {}),
+            ...(state.tombstone ? { tombstone: { ...state.tombstone } } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function refreshPreparedRecoveryOwnerTarget(
+  prepared: PreparedRecoveryOwnerTarget,
+  acquired: AcquiredRecoveryOwner | undefined,
+): void {
+  if (!acquired || acquired.entry.sessionId !== prepared.sessionId) {
+    return;
+  }
+  const entry = cloneRecoveryOwnerEntry(acquired.entry);
+  prepared.sessionEntry = entry;
+  if (prepared.sessionStore && prepared.sessionKey) {
+    prepared.sessionStore[prepared.sessionKey] = entry;
+  }
+}
 
 async function claimAgentCommandRecoveryOwner(params: {
   lifecycleGeneration: string;
   mode: "claim" | "reject_uncoordinated";
   opts: AgentCommandOpts;
   prepared: PreparedRecoveryOwnerTarget;
-}): Promise<MainSessionRecoveryOwnerLease | undefined> {
+}): Promise<AcquiredRecoveryOwner | undefined> {
   const transferredLease = params.opts.mainRestartRecoveryOwnerLease;
   if (transferredLease) {
     const expectedLeaseSessionId = params.prepared.isNewSession
@@ -45,14 +98,19 @@ async function claimAgentCommandRecoveryOwner(params: {
       transferredLease.sessionId === expectedLeaseSessionId &&
       transferredLease.sessionKey === params.prepared.sessionKey &&
       path.resolve(transferredLease.storePath) === path.resolve(params.prepared.storePath);
-    if (!matchesPreparedTarget || !(await validateMainSessionRecoveryOwner(transferredLease))) {
+    if (!matchesPreparedTarget) {
       // Gateway transfers a persisted fence before preparation; bind it again after
       // session resolution so rollover or rerouting cannot execute under another row's lease.
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }
-    return params.opts.runId
-      ? await bindMainSessionRecoveryOwnerRun(transferredLease, params.opts.runId)
-      : transferredLease;
+    if (params.opts.runId) {
+      return await bindMainSessionRecoveryOwnerRun(transferredLease, params.opts.runId);
+    }
+    const snapshot = await readMainSessionRecoveryOwner(transferredLease);
+    if (!snapshot) {
+      throw new Error("main-session recovery owner changed during ingress preparation; retry");
+    }
+    return { ...snapshot, lease: transferredLease };
   }
   if (params.opts.sessionEffects === "internal") {
     return undefined;
@@ -103,7 +161,7 @@ async function claimAgentCommandRecoveryOwner(params: {
   }
   // Explicit replacements keep this token through successor persistence so
   // recovery cannot race the replacement; Gateway claims follow the same lease path.
-  return claim.lease;
+  return { lease: claim.lease, entry: claim.entry, sessionKey: claim.sessionKey };
 }
 
 export async function runWithAgentCommandRecoveryOwner<
@@ -141,7 +199,11 @@ export async function runWithAgentCommandRecoveryOwner<
       }
       throw error;
     }
-    lease = await claimAgentCommandRecoveryOwner({ ...params, prepared });
+    const acquired = await claimAgentCommandRecoveryOwner({ ...params, prepared });
+    lease = acquired?.lease;
+    // Preparation uses a detached working copy. Carry the owner transaction's
+    // exact row forward so successful settlement can consume the same recovery cycle.
+    refreshPreparedRecoveryOwnerTarget(prepared, acquired);
     return await params.run(prepared);
   } finally {
     try {

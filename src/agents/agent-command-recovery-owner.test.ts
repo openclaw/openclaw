@@ -72,6 +72,44 @@ describe("agent command restart recovery ownership", () => {
     ).toBeUndefined();
   });
 
+  it("refreshes the prepared working copy after claiming a recovery owner", async () => {
+    const base = createTarget();
+    const staleEntry: SessionEntry = {
+      sessionId: base.sessionId,
+      updatedAt: 100,
+      status: "running",
+      abortedLastRun: true,
+    };
+    const target = {
+      ...base,
+      sessionEntry: { ...staleEntry },
+      sessionStore: { [sessionKey]: { ...staleEntry } },
+    };
+    await write(target, staleEntry);
+
+    await runWithAgentCommandRecoveryOwner({
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      mode: "claim",
+      opts: { runId: "foreground-run" } as AgentCommandOpts,
+      prepare: async () => target,
+      run: async (prepared) => {
+        const claims = prepared.sessionEntry.mainRestartRecovery?.foregroundClaims;
+        expect(claims?.tokens).toEqual([expect.any(String)]);
+        expect(Object.values(claims?.runIdsByClaimId ?? {})).toContain("foreground-run");
+        expect(prepared.sessionStore[sessionKey]).toEqual(prepared.sessionEntry);
+        const completed = { ...prepared.sessionEntry, abortedLastRun: false };
+        await write(target, completed);
+      },
+    });
+
+    const completed = loadSessionEntry({ sessionKey, storePath: target.storePath });
+    expect(completed?.abortedLastRun).toBe(false);
+    expect(completed?.mainRestartRecovery).toBeUndefined();
+    expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenLastCalledWith(
+      undefined,
+    );
+  });
+
   it("rejects standalone work owned by a legacy session-key alias", async () => {
     const target = createTarget();
     await applySessionEntryLifecycleMutation({

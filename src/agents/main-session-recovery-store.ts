@@ -34,7 +34,12 @@ export type MainSessionRecoveryPendingTarget = MainSessionRecoveryStoreTarget & 
 };
 
 type MainSessionRecoveryOwnerClaimResult =
-  | { kind: "claimed"; lease: MainSessionRecoveryOwnerLease }
+  | {
+      kind: "claimed";
+      lease: MainSessionRecoveryOwnerLease;
+      entry: SessionEntry;
+      sessionKey: string;
+    }
   | { kind: "invalidated"; reason: string }
   | { kind: "not_required" };
 
@@ -206,12 +211,20 @@ export async function commitMainSessionRecovery(params: {
 export async function validateMainSessionRecoveryOwner(
   lease: MainSessionRecoveryOwnerLease,
 ): Promise<boolean> {
+  return (await readMainSessionRecoveryOwner(lease)) !== undefined;
+}
+
+export async function readMainSessionRecoveryOwner(
+  lease: MainSessionRecoveryOwnerLease,
+): Promise<{ entry: SessionEntry; sessionKey: string } | undefined> {
   const result = await commitMainSessionRecovery({
     command: { kind: "validate_foreground", claim: lease },
     requireWriteSuccess: true,
     target: lease,
   });
-  return result.transition.kind === "foreground_validated";
+  return result.transition.kind === "foreground_validated" && result.entry && result.sessionKey
+    ? { entry: result.entry, sessionKey: result.sessionKey }
+    : undefined;
 }
 
 export async function claimMainSessionRecoveryOwner(params: {
@@ -245,9 +258,14 @@ export async function claimMainSessionRecoveryOwner(params: {
     });
   }
   if (claim.transition.kind === "foreground_claimed") {
+    if (!claim.entry || !claim.sessionKey) {
+      return { kind: "invalidated", reason: "state_changed" };
+    }
     return {
       kind: "claimed",
       lease: { ...claim.transition.claim, storePath: params.target.storePath },
+      entry: claim.entry,
+      sessionKey: claim.sessionKey,
     };
   }
   if (claim.transition.kind === "rejected" && claim.transition.reason === "stale_generation") {
@@ -291,16 +309,20 @@ export async function claimMainSessionRecoveryOwner(params: {
 export async function bindMainSessionRecoveryOwnerRun(
   lease: MainSessionRecoveryOwnerLease,
   runId: string,
-): Promise<MainSessionRecoveryOwnerLease> {
+): Promise<{
+  lease: MainSessionRecoveryOwnerLease;
+  entry: SessionEntry;
+  sessionKey: string;
+}> {
   const result = await commitMainSessionRecovery({
     command: { kind: "bind_foreground_run", claim: lease, runId },
     requireWriteSuccess: true,
     target: lease,
   });
-  if (result.transition.kind !== "applied") {
+  if (result.transition.kind !== "applied" || !result.entry || !result.sessionKey) {
     throw new Error("main-session recovery owner changed before run binding");
   }
-  return { ...lease, runId };
+  return { lease: { ...lease, runId }, entry: result.entry, sessionKey: result.sessionKey };
 }
 
 export async function inspectMainSessionRecoveryRequired(params: {
@@ -363,7 +385,7 @@ async function releaseMainSessionRecoveryOwnerWithRetries(
   const { entry, sessionKey } = released;
   const state = entry?.mainRestartRecovery;
   if (
-    released.transition.kind !== "applied" ||
+    (released.transition.kind !== "applied" && released.transition.kind !== "no_change") ||
     !entry ||
     !sessionKey ||
     entry.sessionId !== lease.sessionId ||
