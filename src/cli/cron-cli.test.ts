@@ -36,6 +36,10 @@ const defaultGatewayMock = async (
   if (method === "cron.status") {
     return { enabled: true };
   }
+  if (method === "cron.get") {
+    const { id } = (params ?? {}) as { id?: string };
+    return createCronJob(id ?? "job-1", "Test Job");
+  }
   return { ok: true, params };
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
