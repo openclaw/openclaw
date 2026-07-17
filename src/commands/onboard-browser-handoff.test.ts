@@ -1,6 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { detectGraphicalSession, runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
+import {
+  detectGraphicalSession,
+  probeBrowserHatchGateway,
+  runBrowserHatchHandoff,
+} from "./onboard-browser-handoff.js";
+
+describe("probeBrowserHatchGateway", () => {
+  it("skips a disabled Control UI without touching the network", async () => {
+    const result = await probeBrowserHatchGateway({
+      config: { gateway: { controlUi: { enabled: false } } },
+    });
+    expect(result).toEqual({ ok: false, detail: "control ui disabled" });
+  });
+});
 
 const target = {
   config: {},

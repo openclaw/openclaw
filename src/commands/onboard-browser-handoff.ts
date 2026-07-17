@@ -3,6 +3,7 @@
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,7 +18,6 @@ import {
   buildOnboardingControlUiUrl,
   formatControlUiSshHint,
   openUrl,
-  probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "./onboard-helpers.js";
@@ -182,20 +182,25 @@ async function probeDashboardPresence(
   target: BrowserHatchTarget,
   timeoutMs: number,
 ): Promise<DashboardPresenceProbeResult> {
-  const { token, password } = target;
   try {
+    // Read presence over the same trusted local CLI path every `openclaw`
+    // command uses. A raw shared-auth call with a (possibly SecretRef-managed)
+    // token is rejected as an unpaired Control UI client with "device identity
+    // required"; the CLI-mode loopback client is granted operator.read instead.
     const presence = await callGateway<SystemPresence[]>({
       config: target.config,
       method: "system-presence",
       timeoutMs,
-      ...(token ? { token } : {}),
-      ...(password ? { password } : {}),
-      requireLocalBackendSharedAuth: true,
+      // Connect as a CLI-mode loopback client (what every `openclaw` command
+      // does) so the gateway grants operator.read via trusted local auth.
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      expectFinal: false,
       ignoreEnvUrlOverride: true,
     });
     return {
       reachable: true,
-      clientKeys: presence.filter(isConnectedControlUi).map(dashboardPresenceKey),
+      clientKeys: (presence ?? []).filter(isConnectedControlUi).map(dashboardPresenceKey),
     };
   } catch (error) {
     return {
@@ -244,15 +249,23 @@ export async function probeBrowserHatchGateway(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ ok: boolean; detail?: string }> {
-  const env = params.env ?? process.env;
+  // A disabled Control UI still answers the WS/presence RPC, so without this
+  // guard the handoff would open a dead dashboard URL and block for the full
+  // timeout before falling back. Skip straight to the terminal hatch instead.
+  if (params.config.gateway?.controlUi?.enabled === false) {
+    return { ok: false, detail: "control ui disabled" };
+  }
+  // Reachability is proven by the same presence read the handoff waits on, so
+  // the gate and the wait share one auth path (avoids a probe that passes but a
+  // later presence read that fails, or vice versa).
   try {
-    const target = await resolveBrowserHatchTarget(params.config, env, false);
-    const { token, password } = target;
-    return await probeGatewayReachable({
-      url: target.wsUrl,
-      token,
-      password,
-    });
+    const presence = await probeDashboardPresence(
+      { config: params.config, dashboardUrl: "", wsUrl: "" },
+      HANDOFF_PROBE_TIMEOUT_MS,
+    );
+    return presence.reachable
+      ? { ok: true }
+      : { ok: false, ...(presence.reason ? { detail: presence.reason } : {}) };
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : String(error) };
   }
