@@ -2635,7 +2635,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
-        const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
+        const displayIssues = attachConfigIssueDiagnostics(issues, {
           raw: snapshot.raw,
           parsed: snapshot.parsed,
           effective: snapshot.sourceConfig,

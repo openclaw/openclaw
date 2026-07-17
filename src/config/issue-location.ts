@@ -222,26 +222,6 @@ export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[
   );
 }
 
-export function parseConfigIssuePath(pathValue: string): ConfigIssuePathSegment[] {
-  const trimmed = pathValue.trim();
-  if (!trimmed || trimmed === "<root>") {
-    return [];
-  }
-  const segments: ConfigIssuePathSegment[] = [];
-  for (const match of trimmed.matchAll(/(?:^|\.)([^.\[]+)|\[(\d+)\]/g)) {
-    const dotSegment = match[1];
-    if (dotSegment !== undefined) {
-      segments.push(dotSegment);
-      continue;
-    }
-    const index = Number(match[2]);
-    if (Number.isInteger(index) && index >= 0) {
-      segments.push(index);
-    }
-  }
-  return segments;
-}
-
 export function resolveConfigValueAtPath(
   root: unknown,
   segments: readonly ConfigIssuePathSegment[],
@@ -261,36 +241,6 @@ export function resolveConfigValueAtPath(
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
-}
-
-function resolveSegmentsAgainstParsed(
-  root: unknown,
-  rawSegments: readonly ConfigIssuePathSegment[],
-): ConfigIssuePathSegment[] {
-  const resolved: ConfigIssuePathSegment[] = [];
-  let current = root;
-  for (const segment of rawSegments) {
-    if (typeof segment === "string" && Array.isArray(current)) {
-      const index = Number(segment);
-      if (Number.isSafeInteger(index) && index >= 0 && String(index) === segment) {
-        resolved.push(index);
-        current = current[index];
-        continue;
-      }
-    }
-    if (typeof segment === "number" && !Array.isArray(current)) {
-      const key = String(segment);
-      resolved.push(key);
-      current =
-        current && typeof current === "object"
-          ? (current as Record<string, unknown>)[key]
-          : undefined;
-      continue;
-    }
-    resolved.push(segment);
-    current = resolveConfigValueAtPath(current, [segment]);
-  }
-  return resolved;
 }
 
 function stringifyReceivedValue(value: unknown): string | null {
@@ -379,8 +329,10 @@ export function attachConfigIssueDiagnostics(
       ? path.basename(params.configPath)
       : "openclaw.json";
   return issues.map((issue) => {
-    const rawSegments = parseConfigIssuePath(issue.path);
-    const segments = resolveSegmentsAgainstParsed(params.parsed, rawSegments);
+    const segments = issue.pathSegments;
+    if (!segments || segments.length === 0) {
+      return issue;
+    }
     const literalValue = resolveConfigValueAtPath(params.parsed, segments);
     const effectiveValue = resolveConfigValueAtPath(params.effective, segments);
     const line = raw === null ? undefined : resolveConfigIssueLineInRaw(raw, segments);

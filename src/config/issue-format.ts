@@ -30,7 +30,7 @@ function normalizeConfigIssuePath(path: string | null | undefined): string {
 /** Return the public config issue shape with a normalized path and non-empty allowed values. */
 function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIssue {
   const hasAllowedValues = Array.isArray(issue.allowedValues) && issue.allowedValues.length > 0;
-  return {
+  const normalized: ConfigValidationIssue = {
     path: normalizeConfigIssuePath(issue.path),
     message: issue.message,
     ...(hasAllowedValues ? { allowedValues: issue.allowedValues } : {}),
@@ -40,6 +40,13 @@ function normalizeConfigIssue(issue: ConfigValidationIssue): ConfigValidationIss
       ? { allowedValuesHiddenCount: issue.allowedValuesHiddenCount }
       : {}),
   };
+  if (issue.pathSegments) {
+    Object.defineProperty(normalized, "pathSegments", {
+      value: issue.pathSegments,
+      enumerable: false,
+    });
+  }
+  return normalized;
 }
 
 /** Normalize a batch of config validation issues for display or JSON output. */

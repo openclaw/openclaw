@@ -70,15 +70,18 @@ describe("config issue format", () => {
   });
 
   it("normalizes issue collections for machine output", () => {
-    expect(
-      normalizeConfigIssues([
-        {
-          path: "update.channel",
-          message: "invalid",
-          allowedValues: [],
-          allowedValuesHiddenCount: 2,
-        },
-      ]),
-    ).toEqual([{ path: "update.channel", message: "invalid" }]);
+    const issues = normalizeConfigIssues([
+      {
+        path: "update.channel",
+        pathSegments: ["update", "channel"],
+        message: "invalid",
+        allowedValues: [],
+        allowedValuesHiddenCount: 2,
+      },
+    ]);
+
+    expect(issues).toEqual([{ path: "update.channel", message: "invalid" }]);
+    expect(issues[0]?.pathSegments).toEqual(["update", "channel"]);
+    expect(JSON.stringify(issues)).not.toContain("pathSegments");
   });
 });

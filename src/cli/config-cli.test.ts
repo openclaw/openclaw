@@ -1195,6 +1195,7 @@ describe("config cli", () => {
           issues: [
             {
               path: "agents.list.3.tools.profile",
+              pathSegments: ["agents", "list", 3, "tools", "profile"],
               message: 'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
               allowedValues: ["minimal", "coding", "messaging", "full"],
             },
