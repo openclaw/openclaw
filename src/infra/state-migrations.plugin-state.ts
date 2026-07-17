@@ -146,7 +146,7 @@ export async function migrateLegacyPluginStateSidecar(params: {
       return {
         changes,
         warnings: [
-          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row" : "rows"} have different values in the sidecar and shared state; sidecar data is newer. First key: ${conflictedKeys[0]}`,
+          `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
         ],
       };
     }
