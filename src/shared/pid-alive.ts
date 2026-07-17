@@ -32,8 +32,10 @@ export function isPidAlive(pid: number): boolean {
   }
   try {
     process.kill(pid, 0);
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM means the PID refers to a live process we cannot signal.
+    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
   if (isZombieProcess(pid)) {
     return false;
