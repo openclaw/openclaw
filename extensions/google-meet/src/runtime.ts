@@ -483,7 +483,7 @@ export class GoogleMeetRuntime {
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
       !isGoogleMeetTalkBackMode(session.mode) ||
-      session.transport !== "chrome" ||
+      !isBrowserTransport(session.transport) ||
       session.state !== "active" ||
       !session.chrome ||
       session.chrome.audioBridge ||
@@ -494,15 +494,31 @@ export class GoogleMeetRuntime {
       return undefined;
     }
     const config = withSessionAgentConfig(this.params.config, session.agentId);
-    const result = await launchChromeMeet({
-      runtime: this.params.runtime,
-      config: { ...config, chrome: { ...config.chrome, launch: false } },
-      fullConfig: this.params.fullConfig,
-      meetingSessionId: session.id,
-      mode: session.mode,
-      url: session.url,
-      logger: this.params.logger,
-    });
+    const result: ChromeLaunchResult =
+      session.transport === "chrome-node"
+        ? await launchChromeMeetOnNode({
+            runtime: this.params.runtime,
+            config: session.chrome.nodeId
+              ? {
+                  ...config,
+                  chromeNode: { ...config.chromeNode, node: session.chrome.nodeId },
+                }
+              : config,
+            fullConfig: this.params.fullConfig,
+            meetingSessionId: session.id,
+            mode: session.mode,
+            url: session.url,
+            logger: this.params.logger,
+          })
+        : await launchChromeMeet({
+            runtime: this.params.runtime,
+            config: { ...config, chrome: { ...config.chrome, launch: false } },
+            fullConfig: this.params.fullConfig,
+            meetingSessionId: session.id,
+            mode: session.mode,
+            url: session.url,
+            logger: this.params.logger,
+          });
     session.updatedAt = nowIso();
     return this.#attachChromeAudioBridge(session, result.audioBridge);
   }
