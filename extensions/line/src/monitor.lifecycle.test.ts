@@ -21,6 +21,7 @@ const {
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn<LineHandleWebhook>(),
+    stop: vi.fn(),
   })),
   createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
     vi.fn<LineNodeWebhookHandler>(async () => {}),
@@ -176,6 +177,7 @@ describe("monitorLineProvider lifecycle", () => {
     createLineBotMock.mockImplementation(() => ({
       account: { accountId: "default" },
       handleWebhook: vi.fn<LineHandleWebhook>(),
+      stop: vi.fn(),
     }));
     // Clear call history only; the implementation was wired to the actual
     // helper once in the module mock factory.
@@ -417,7 +419,7 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
   });
 
-  it("runs matched event processing on a detached admitted work root", async () => {
+  it("durably admits matched events before acknowledging", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
@@ -441,16 +443,13 @@ describe("monitorLineProvider lifecycle", () => {
       handleWebhook: ReturnType<typeof vi.fn>;
     };
     expect(res.statusCode).toBe(200);
-    // The request admission is released once the route handler returns, so
-    // event processing dispatched on the inherited chain would be refused as
-    // draining; the dispatch must reserve its own root.
-    expect(runDetachedWebhookWorkMock).toHaveBeenCalledTimes(1);
+    expect(runDetachedWebhookWorkMock).not.toHaveBeenCalled();
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
 
     monitor.stop();
   });
 
-  it("acknowledges shared-path POST requests before matched event processing completes", async () => {
+  it("waits for shared-path durable admission before acknowledging", async () => {
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
@@ -479,15 +478,19 @@ describe("monitorLineProvider lifecycle", () => {
     }) as unknown as IncomingMessage;
     const res = createRouteResponse();
 
-    await route.handler(req, res);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.headersSent).toBe(true);
+    const request = route.handler(req, res);
+    await vi.waitFor(() => {
+      expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    });
+    expect(res.headersSent).toBe(false);
     expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     if (!releaseWebhook) {
       throw new Error("expected pending LINE webhook handler");
     }
     releaseWebhook();
+    await request;
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
     monitor.stop();
   });
 
