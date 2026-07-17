@@ -22,7 +22,10 @@ import {
   type SqliteSchemaCompatibility,
 } from "../infra/sqlite-schema-contract.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -1696,12 +1699,17 @@ export function openOpenClawStateDatabase(
 export function runOpenClawStateWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  transactionOptions: Pick<
+    SqliteTransactionOptions,
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+  > = {},
 ): T {
   const database = openOpenClawStateDatabase(options);
   const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
-    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     databaseLabel: database.path,
-    operationLabel: "state.write",
+    ...transactionOptions,
+    operationLabel: transactionOptions.operationLabel ?? "state.write",
   });
   try {
     ensureOpenClawStatePermissions(database.path, options.env ?? process.env);

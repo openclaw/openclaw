@@ -8,6 +8,11 @@ import {
   type OpenBlobStoreOptions,
   type PluginBlobStore,
 } from "../plugin-state/plugin-blob-store.js";
+import { withPluginStateLease } from "../plugin-state/plugin-state-lease.js";
+import type {
+  PluginStateLeaseContext,
+  PluginStateLeaseOptions,
+} from "../plugin-state/plugin-state-lease.types.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -469,7 +474,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         if (prop === "state") {
           const baseState = getRuntimeProperty();
           const assertPluginStateAllowed = (
-            methodName: "openBlobStore" | "openKeyedStore" | "openChannelIngressDrain",
+            methodName:
+              | "openBlobStore"
+              | "openKeyedStore"
+              | "withLease"
+              | "openChannelIngressDrain",
           ) => {
             const record =
               pluginRuntimeRecordById.get(pluginId) ??
@@ -497,6 +506,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ): PluginStateSyncKeyedStore<T> => {
               assertPluginStateAllowed("openKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
+            },
+            withLease: <T>(
+              options: PluginStateLeaseOptions,
+              run: (lease: PluginStateLeaseContext) => Promise<T>,
+            ): Promise<T> => {
+              assertPluginStateAllowed("withLease");
+              return withPluginStateLease(pluginId, options, run);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,

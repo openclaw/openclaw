@@ -147,6 +147,23 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("flags retired QMD file-lock sidecars", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+        import path from "node:path";
+        await withFileLock(path.join(stateDir, "qmd", "embed.lock"), options, task);
+        await withFileLock(path.join(agentDir, "qmd-write.lock"), options, task);
+      `,
+      "extensions/memory-core/src/memory/qmd-locks.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+    ]);
+  });
+
   it("flags writes through local variables initialized from legacy store paths", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

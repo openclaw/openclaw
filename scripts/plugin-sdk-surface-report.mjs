@@ -257,7 +257,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +24: narrowed durable channel-ingress drain seam — factory, lifecycle binding,
       // tuning constants, and telegram-consumed claim helpers with compat mirrors,
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
-      8038,
+      // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
+      8046,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -287,7 +288,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: shared realtime voice session harness through realtime-voice.
       // +9: narrowed drain seam functions and compat mirrors after the
       // WhatsApp-split harvest (#108656).
-      4488,
+      // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
+      4489,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

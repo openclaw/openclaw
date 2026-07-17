@@ -70,14 +70,15 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v10 = materialized active transcript paths. v9 added SQLite STRICT tables.
+// v11 = agent-scoped runtime leases. v10 added materialized active transcript paths.
+// v9 added SQLite STRICT tables.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 10;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 11;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -1068,7 +1069,7 @@ export function runOpenClawAgentWriteTransaction<T>(
   options: OpenClawAgentDatabaseOptions,
   transactionOptions: Pick<
     SqliteTransactionOptions,
-    "operationLabel" | "slowTransactionHoldMs"
+    "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
   > = {},
 ): T {
   const database = openOpenClawAgentDatabase(options);
@@ -1094,7 +1095,7 @@ export function runOpenClawAgentWriteTransaction<T>(
         return operationResult;
       },
       {
-        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        busyTimeoutMs: transactionOptions.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: database.path,
         ...transactionOptions,
         operationLabel: transactionOptions.operationLabel ?? "agent.write",

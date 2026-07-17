@@ -278,7 +278,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/plugin-state-runtime` | Plugin sidecar SQLite keyed-state types plus centralized connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers for plugin-owned databases |
+    | `plugin-sdk/plugin-state-runtime` | Plugin-scoped keyed-state, BLOB, and cooperative SQLite lease contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Lease callbacks receive an abort signal and typed errors distinguish timeout, cancellation, lost ownership, invalid input, and storage failure |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -297,7 +297,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
     | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
-    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
+    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers plus Doctor-safe reclaim of definitely stale, unchanged retired lock sidecars |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |

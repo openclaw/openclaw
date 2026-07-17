@@ -491,6 +491,51 @@ describe("openclaw agent database", () => {
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
 
+  it("upgrades version 10 with agent state intact and adds lease storage", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const opened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    const databasePath = opened.path;
+    opened.db
+      .prepare(
+        "INSERT INTO auth_profile_state (state_key, state_json, updated_at) VALUES (?, ?, ?)",
+      )
+      .run("last-good", '{"profile":"primary"}', 10);
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      DROP INDEX idx_agent_state_leases_owner;
+      DROP INDEX idx_agent_state_leases_expiry;
+      DROP TABLE state_leases;
+      PRAGMA user_version = 10;
+      UPDATE schema_meta SET schema_version = 10 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
+    expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
+    expect(
+      migrated.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+    expect(
+      migrated.db
+        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key = ?")
+        .get("last-good"),
+    ).toEqual({ state_json: '{"profile":"primary"}' });
+    expect(
+      migrated.db
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'state_leases'")
+        .get(),
+    ).toEqual({ name: "state_leases" });
+  });
+
   it("migrates version 8 tables to STRICT without losing agent state", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
