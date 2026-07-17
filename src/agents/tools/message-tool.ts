@@ -244,6 +244,7 @@ function resolvePollVoteEchoRoute(params: {
 function sanitizeUserVisibleToolTextResult(
   text: string,
   bootPrompt: string | undefined,
+  options?: { strictInternalRuntimeContext?: boolean },
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
@@ -255,8 +256,12 @@ function sanitizeUserVisibleToolTextResult(
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
     ? stripInboundMetadata(strippedBoot)
     : strippedBoot;
+  const internalRuntimeContextRemoved = strippedInternal !== strippedReasoning;
   const suppressionReason =
-    strippedInternal !== strippedReasoning ||
+    (options?.strictInternalRuntimeContext === true && internalRuntimeContextRemoved) ||
+    (strippedInternal.trim().length === 0 &&
+      strippedReasoning.trim().length > 0 &&
+      internalRuntimeContextRemoved) ||
     (strippedBoot.trim().length === 0 &&
       strippedReasoning.trim().length > 0 &&
       strippedBoot !== strippedInternal)

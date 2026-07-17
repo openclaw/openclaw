@@ -36,6 +36,7 @@ export function sanitizeOpaqueChannelDataParam<TReason extends string>(
   sanitizeText: (
     value: string,
     bootPrompt: string | undefined,
+    options?: { strictInternalRuntimeContext?: boolean },
   ) => VisibleTextSuppressionResult<TReason>,
 ): TReason | undefined {
   const suppressionReason = detectOpaqueChannelDataSuppressionReason(
@@ -55,10 +56,13 @@ function detectOpaqueChannelDataSuppressionReason<TReason extends string>(
   sanitizeText: (
     value: string,
     bootPrompt: string | undefined,
+    options?: { strictInternalRuntimeContext?: boolean },
   ) => VisibleTextSuppressionResult<TReason>,
 ): TReason | undefined {
   if (typeof value === "string") {
-    return sanitizeText(value, bootPrompt).suppressionReason;
+    return sanitizeText(value, bootPrompt, {
+      strictInternalRuntimeContext: true,
+    }).suppressionReason;
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
@@ -73,7 +77,9 @@ function detectOpaqueChannelDataSuppressionReason<TReason extends string>(
     return undefined;
   }
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    const keyReason = sanitizeText(key, bootPrompt).suppressionReason;
+    const keyReason = sanitizeText(key, bootPrompt, {
+      strictInternalRuntimeContext: true,
+    }).suppressionReason;
     if (keyReason) {
       return keyReason;
     }

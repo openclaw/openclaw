@@ -3769,6 +3769,22 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
   });
 
+  it("keeps ordinary visible text around stripped internal-runtime-context before dispatch", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const internalContext =
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        message: `Please summarize:\n${internalContext}`,
+      },
+    });
+
+    expect(call?.params?.message).toBe("Please summarize:");
+    expect(JSON.stringify(call?.params)).not.toContain("BOOT.md");
+  });
+
   it("drops stringified channelData containing internal-runtime-context keys before dispatch", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
