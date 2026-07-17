@@ -1127,7 +1127,7 @@ export const OpenClawSchema = z
     talk: TalkSchema.optional(),
     gateway: z
       .strictObject({
-        port: z.number().int().positive().optional(),
+        port: z.number().int().min(1).max(65_535).optional(),
         mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
         bind: z
           .union([
