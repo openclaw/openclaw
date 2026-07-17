@@ -821,6 +821,36 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
   });
 
+  it("retains the yielded attempt assistant for paused-turn payload classification", async () => {
+    const yieldedAssistant = {
+      role: "assistant",
+      stopReason: "aborted",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", name: "sessions_yield", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: yieldedAssistant,
+        currentAttemptAssistant: undefined,
+        yieldDetected: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-yielded-assistant-classification",
+    });
+
+    expect(result.meta).toMatchObject({ livenessState: "paused", yielded: true });
+    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({ currentAssistant: null, lastAssistant: yieldedAssistant }),
+    );
+  });
+
   it("recovers a completed prompt-timeout assistant without collected assistant text", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     const finalText = "Completed answer after the timeout race.";

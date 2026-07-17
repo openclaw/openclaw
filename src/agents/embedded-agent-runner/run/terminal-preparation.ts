@@ -101,7 +101,10 @@ export function prepareEmbeddedRunTerminal(input: {
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
     toolMetas: attempt.toolMetas,
-    lastAssistant: input.currentAttemptAssistant ? attempt.lastAssistant : undefined,
+    // sessions_yield aborts before message_end, but its tool-call assistant is
+    // still required to classify the turn as a clean pause instead of an LLM error.
+    lastAssistant:
+      input.currentAttemptAssistant || attempt.yieldDetected ? attempt.lastAssistant : undefined,
     currentAssistant: input.currentAttemptAssistant ?? null,
     lastToolError: attempt.lastToolError,
     config: runParams.config,
