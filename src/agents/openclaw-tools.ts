@@ -43,7 +43,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { createComputerTool } from "./tools/computer-tool.js";
+import { createComputerTool, type ComputerToolInvocationState } from "./tools/computer-tool.js";
 import {
   createConversationsListTool,
   createConversationsSendTool,
@@ -159,6 +159,7 @@ export function createOpenClawTools(
     modelHasVision?: boolean;
     /** Mutable model-context generation used to expire screenshot coordinate frames. */
     computerContextEpoch?: { value: number };
+    computerInvocationState?: () => ComputerToolInvocationState;
     /** Active model provider for provider-specific tool gating. */
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
@@ -469,6 +470,7 @@ export function createOpenClawTools(
                   // span later assistant runs that may reuse a provider call id.
                   idempotencyScope: options?.runId,
                   contextEpoch: options?.computerContextEpoch,
+                  invocationState: options?.computerInvocationState,
                 }),
               ]),
           createCronTool({

@@ -32,7 +32,8 @@ vi.mock("./gateway.js", async (importOriginal) => {
 
 vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
 
-const { createComputerTool, invalidateComputerFrameIfMissing } = await import("./computer-tool.js");
+const { createComputerTool, createComputerToolInvocationState, invalidateComputerFrameIfMissing } =
+  await import("./computer-tool.js");
 const { DEFAULT_IMAGE_MAX_DIMENSION_PX } = await import("../image-sanitization.js");
 // With no config the reference width is capped at the default sanitization limit.
 const EFFECTIVE_REF_WIDTH = Math.min(1280, DEFAULT_IMAGE_MAX_DIMENSION_PX);
@@ -898,6 +899,33 @@ describe("createComputerTool node resolution", () => {
       ).resolves.toMatchObject({ details: { node: "mac-b" } });
     },
   );
+
+  it("enforces the held-button guard across instances sharing invocation state", async () => {
+    listNodesMock.mockResolvedValue([
+      macComputerNode({ nodeId: "mac-a" }),
+      macComputerNode({ nodeId: "mac-b", displayName: "Studio B" }),
+    ]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const invocationState = createComputerToolInvocationState();
+    const downTool = createComputerTool({
+      modelHasVision: true,
+      invocationState: () => invocationState,
+    });
+    await downTool.execute("down", { action: "left_mouse_down", node: "mac-a" });
+
+    const retargetTool = createComputerTool({
+      modelHasVision: true,
+      invocationState: () => invocationState,
+    });
+    await expect(
+      retargetTool.execute("retarget", { action: "left_mouse_down", node: "mac-b" }),
+    ).rejects.toThrow(/left button may still be held on node mac-a/);
+
+    await expect(retargetTool.execute("up", { action: "left_mouse_up" })).resolves.toBeDefined();
+    await expect(
+      retargetTool.execute("retarget-after-release", { action: "screenshot", node: "mac-b" }),
+    ).resolves.toMatchObject({ details: { node: "mac-b" } });
+  });
 
   it("does not claim button affinity when cancellation wins during target resolution", async () => {
     const controller = new AbortController();

@@ -37,6 +37,10 @@ import {
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
+  createComputerToolInvocationState,
+  type ComputerToolInvocationState,
+} from "../agents/tools/computer-tool.js";
+import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "../agents/tools/cron-tool.js";
@@ -59,6 +63,42 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js"
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
+
+const COMPUTER_INVOCATION_STATE_TTL_MS = 15 * 60 * 1000;
+const COMPUTER_INVOCATION_STATE_MAX_SESSIONS = 64;
+const computerInvocationStates = new Map<
+  string,
+  { state: ComputerToolInvocationState; expiresAt: number }
+>();
+
+export function resolveComputerInvocationState(sessionKey: string): ComputerToolInvocationState {
+  const now = Date.now();
+  for (const [key, entry] of computerInvocationStates) {
+    if (entry.expiresAt <= now) {
+      computerInvocationStates.delete(key);
+    }
+  }
+  const existing = computerInvocationStates.get(sessionKey);
+  if (existing) {
+    computerInvocationStates.delete(sessionKey);
+    existing.expiresAt = now + COMPUTER_INVOCATION_STATE_TTL_MS;
+    computerInvocationStates.set(sessionKey, existing);
+    return existing.state;
+  }
+  const created = {
+    state: createComputerToolInvocationState(),
+    expiresAt: now + COMPUTER_INVOCATION_STATE_TTL_MS,
+  };
+  computerInvocationStates.set(sessionKey, created);
+  while (computerInvocationStates.size > COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+    const oldestKey = computerInvocationStates.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    computerInvocationStates.delete(oldestKey);
+  }
+  return created.state;
+}
 
 /** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
 export function resolveGatewayScopedTools(params: {
@@ -259,6 +299,7 @@ export function resolveGatewayScopedTools(params: {
 
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
+    computerInvocationState: () => resolveComputerInvocationState(params.sessionKey),
     requesterAgentIdOverride: agentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
