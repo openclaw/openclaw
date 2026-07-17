@@ -50,9 +50,7 @@ export function parseTarget(to: string): ParsedTarget {
   if (typedTarget) {
     if (!typedTarget.id) {
       const idKind = typedTarget.type === "c2c" ? "user" : typedTarget.type;
-      throw new Error(
-        `Invalid ${typedTarget.type} target format: ${to} - missing ${idKind} ID`,
-      );
+      throw new Error(`Invalid ${typedTarget.type} target format: ${to} - missing ${idKind} ID`);
     }
     return typedTarget;
   }
