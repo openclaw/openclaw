@@ -393,11 +393,8 @@ describe("lmstudio-models", () => {
   });
 
   it("cancels the response body after a non-ok model discovery response", async () => {
-    process.env.VITEST = "false";
-    process.env.NODE_ENV = "development";
-    const response = new Response("unavailable", { status: 503 });
-    const cancel = vi.spyOn(response.body!, "cancel");
-    const fetchMock = vi.fn(async () => response);
+    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const fetchMock = vi.fn(async () => tracked.response);
 
     const result = await fetchLmstudioModels({
       baseUrl: "http://localhost:1234/v1",
@@ -409,7 +406,22 @@ describe("lmstudio-models", () => {
       status: 503,
       models: [],
     });
-    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("cancels guarded non-ok discovery bodies before releasing the dispatcher", async () => {
+    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      ssrfPolicy: {},
+    });
+
+    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("reports malformed model list JSON with an owned error", async () => {
