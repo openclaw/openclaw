@@ -3800,6 +3800,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON).toBe(
+      "${{ needs.preflight.outputs.compatibility_target == 'true' && '[\"--hookTimeout=300000\"]' || '[]' }}",
+    );
     expect(runStep.env.JOB_CONTEXT_JSON).toBe("${{ toJSON(job) }}");
     // Shard execution policy lives in the unit-tested wrapper script. Frozen
     // release targets load that wrapper from the exact trusted workflow SHA.

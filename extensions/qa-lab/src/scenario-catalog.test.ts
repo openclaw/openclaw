@@ -1,5 +1,7 @@
 // Qa Lab tests cover scenario catalog plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import {
@@ -10,6 +12,7 @@ import {
   readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 
 type CatalogScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
 type FlowCatalogScenario = CatalogScenario & {
@@ -530,27 +533,62 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
-  it("loads the opt-in update.run package self-upgrade sentinel", () => {
+  it("loads the opt-in update.run package self-upgrade script proof", () => {
     const scenario = readQaScenarioById("update-run-package-self-upgrade");
-    const config = readQaScenarioExecutionConfig(scenario.id) as
-      | {
-          requiredProviderMode?: string;
-          allowEnv?: string;
-          sourceVersion?: string;
-          targetTag?: string;
-        }
-      | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.yaml");
     expect(scenario.coverage?.primary).toContain("runtime.update-run");
     expect(scenario.coverage?.secondary).toContain("runtime.package-update");
-    expect(config?.requiredProviderMode).toBe("live-frontier");
-    expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
-    expect(config?.sourceVersion).toBe("2026.4.26");
-    expect(config?.targetTag).toBe("latest");
-    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
-      "asks the agent to self-update through update.run",
-    ]);
+    expect(scenario.execution.kind).toBe("script");
+    if (scenario.execution.kind !== "script") {
+      throw new Error(`expected script execution, got ${scenario.execution.kind}`);
+    }
+    expect(scenario.execution.path).toBe(
+      "test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts",
+    );
+    expect(scenario.execution.allowBlockedEvidence).toBe(true);
+    expect(scenario.execution.timeoutMs).toBe(3_600_000);
+    expect(scenario.execution.args).toEqual(["--artifact-base", "${outputDir}"]);
+    expect(scenario.execution.flow).toBeUndefined();
+  });
+
+  it("accepts the update.run producer's blocked evidence without destructive opt-in", async () => {
+    const outputDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-update-run-blocked-"),
+    );
+    try {
+      const result = await runQaTestFileScenarios({
+        repoRoot: process.cwd(),
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [readQaScenarioById("update-run-package-self-upgrade")],
+        env: {
+          OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF: "0",
+          OPENCLAW_QA_REF: "blocked-evidence-test",
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({
+        status: "pass",
+        producerEvidence: {
+          entries: [
+            {
+              test: { id: "update-run-package-self-upgrade" },
+              result: {
+                status: "blocked",
+                failure: {
+                  reason:
+                    "blocked destructive package self-upgrade; set OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 to run",
+                },
+              },
+            },
+          ],
+        },
+      });
+    } finally {
+      await fs.promises.rm(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("loads Codex plugin lifecycle scenarios into the standard runtime tier", () => {

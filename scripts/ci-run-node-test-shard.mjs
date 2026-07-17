@@ -17,6 +17,7 @@ const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
 const NODE_COMPILE_CACHE_PATH_ENV_KEY = "NODE_COMPILE_CACHE";
 const NODE_COMPILE_CACHE_WRITER_ENV_KEY = "OPENCLAW_NODE_COMPILE_CACHE_WRITER";
+const VITEST_EXTRA_ARGS_ENV_KEY = "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON";
 const FS_MODULE_CACHE_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const NODE_COMPILE_CACHE_MAX_BYTES = 1024 * 1024 * 1024;
 const FS_MODULE_CACHE_PRUNE_TARGET_RATIO = 0.75;
@@ -220,6 +221,7 @@ function runChild(args, childEnv, label) {
 
 export async function runShardPlans(plans, options = {}) {
   const baseEnv = options.env ?? process.env;
+  const vitestExtraArgs = parseJsonEnv(baseEnv, VITEST_EXTRA_ARGS_ENV_KEY, []);
   const concurrency = Math.max(1, options.concurrency ?? PLAN_CONCURRENCY);
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
@@ -233,12 +235,16 @@ export async function runShardPlans(plans, options = {}) {
       const index = nextIndex;
       nextIndex += 1;
       const entry = plans[index];
-      const args = entry.kind === "target" ? [entry.target] : entry.plan.configs;
-      if (!Array.isArray(args) || args.length === 0) {
+      const targetArgs = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+      if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
         console.error(`Missing node test shard configs for ${entry.name}`);
         exitCode = exitCode || 1;
         return;
       }
+      const args =
+        Array.isArray(vitestExtraArgs) && vitestExtraArgs.length > 0
+          ? [...targetArgs, "--", ...vitestExtraArgs]
+          : targetArgs;
       const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
         serial: concurrency === 1,
         cacheSlot,
