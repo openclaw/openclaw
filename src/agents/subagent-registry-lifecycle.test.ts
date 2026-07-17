@@ -20,9 +20,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import {
-  createSubagentRegistryLifecycleController,
-} from "./subagent-registry-lifecycle.js";
+import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -3946,7 +3944,7 @@ describe("run ID masking in lifecycle warnings", () => {
     const [, warningFields] = firstCall(warn);
     expect(warningFields).toMatchObject({ runId: expected });
     // No isolated surrogates are emitted anywhere.
-    const masked = String((warningFields as { runId?: unknown }).runId ?? "");
+    const masked = (warningFields as { runId?: string }).runId ?? "";
     expect(masked).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(masked).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
