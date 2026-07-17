@@ -68,49 +68,6 @@ type PerplexitySearchApiResponse = {
   }>;
 };
 
-function buildPerplexitySearchApiBody(params: {
-  query: string;
-  count: number;
-  country?: string;
-  searchDomainFilter?: string[];
-  searchRecencyFilter?: string;
-  searchLanguageFilter?: string[];
-  searchAfterDate?: string;
-  searchBeforeDate?: string;
-  maxTokens?: number;
-  maxTokensPerPage?: number;
-}): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    query: params.query,
-    max_results: params.count,
-  };
-  if (params.country) {
-    body.country = params.country;
-  }
-  if (params.searchDomainFilter?.length) {
-    body.search_domain_filter = params.searchDomainFilter;
-  }
-  if (params.searchRecencyFilter) {
-    body.search_recency_filter = params.searchRecencyFilter;
-  }
-  if (params.searchLanguageFilter?.length) {
-    body.search_language_filter = params.searchLanguageFilter;
-  }
-  if (params.searchAfterDate) {
-    body.search_after_date_filter = params.searchAfterDate;
-  }
-  if (params.searchBeforeDate) {
-    body.search_before_date_filter = params.searchBeforeDate;
-  }
-  if (params.maxTokens !== undefined) {
-    body.max_tokens = params.maxTokens;
-  }
-  if (params.maxTokensPerPage !== undefined) {
-    body.max_tokens_per_page = params.maxTokensPerPage;
-  }
-  return body;
-}
-
 function resolvePerplexityConfig(searchConfig?: SearchConfigRecord): PerplexityConfig {
   const perplexity = searchConfig?.perplexity;
   return perplexity && typeof perplexity === "object" && !Array.isArray(perplexity)
@@ -253,7 +210,34 @@ async function runPerplexitySearchApi(params: {
   maxTokens?: number;
   maxTokensPerPage?: number;
 }): Promise<Array<Record<string, unknown>>> {
-  const body = buildPerplexitySearchApiBody(params);
+  const body: Record<string, unknown> = {
+    query: params.query,
+    max_results: params.count,
+  };
+  if (params.country) {
+    body.country = params.country;
+  }
+  if (params.searchDomainFilter?.length) {
+    body.search_domain_filter = params.searchDomainFilter;
+  }
+  if (params.searchRecencyFilter) {
+    body.search_recency_filter = params.searchRecencyFilter;
+  }
+  if (params.searchLanguageFilter?.length) {
+    body.search_language_filter = params.searchLanguageFilter;
+  }
+  if (params.searchAfterDate) {
+    body.search_after_date_filter = params.searchAfterDate;
+  }
+  if (params.searchBeforeDate) {
+    body.search_before_date_filter = params.searchBeforeDate;
+  }
+  if (params.maxTokens !== undefined) {
+    body.max_tokens = params.maxTokens;
+  }
+  if (params.maxTokensPerPage !== undefined) {
+    body.max_tokens_per_page = params.maxTokensPerPage;
+  }
 
   return withTrustedWebSearchEndpoint(
     {
@@ -572,6 +556,5 @@ export const testing = {
   readPerplexityJsonResponse,
   normalizeToIsoDate,
   isoToPerplexityDate,
-  buildPerplexitySearchApiBody,
 } as const;
 export { testing as __testing };
