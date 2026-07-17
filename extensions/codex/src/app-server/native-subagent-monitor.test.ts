@@ -1805,6 +1805,37 @@ describe("CodexNativeSubagentMonitor", () => {
     client.close();
   });
 
+  it("skips task records without a runId during reconciliation", async () => {
+    const client = createClient();
+    client.setThreadRead(
+      "valid-child",
+      threadRead({
+        childThreadId: "valid-child",
+        parentThreadId: "parent-thread",
+        result: "valid result",
+      }),
+    );
+    const runtime = createRuntime();
+    const validTask = taskRecord({ childThreadId: "valid-child", status: "queued" });
+    const missingRunId = {
+      ...taskRecord({ childThreadId: "missing-runid", status: "queued" }),
+      runId: null as unknown as string,
+    };
+    runtime.listTaskRecords.mockReturnValue([validTask, missingRunId]);
+    const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+    registerParent(monitor);
+
+    await vi.waitFor(() =>
+      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1),
+    );
+    // Only the valid task should trigger completion; the null-runId record
+    // must be safely skipped without causing a runtime error.
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({ childSessionId: "valid-child", result: "valid result" }),
+    );
+    client.close();
+  });
+
   it("clears child recovery timers when the app-server client closes", async () => {
     vi.useFakeTimers();
     try {
