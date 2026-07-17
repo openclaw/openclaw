@@ -1566,24 +1566,25 @@ describe("runDoctorSessionSqlite", () => {
   it("keeps truncated GitHub issue bodies on a valid UTF-16 boundary", () => {
     const store = createLegacyStore();
     const manifestPath = path.join(store.tempDir, "failed-migration.json");
-    const writeManifest = (messages: string[]) => {
+    const writeManifest = (messages: string[], targetCount = 1) => {
       const manifest: SessionSqliteMigrationManifest = {
         failedAt: "2030-01-01T00:00:00.000Z",
         manifestVersion: 2,
         openClawVersion: "test",
         runId: "utf16-boundary",
         startedAt: "2030-01-01T00:00:00.000Z",
-        targets: [
-          {
-            agentId: "agent-with-long-name-".repeat(10),
+        targets: Array.from({ length: targetCount }, (_, index) => {
+          const targetMessages = index === targetCount - 1 ? messages : ["x".repeat(500)];
+          return {
+            agentId: `agent-${index}-${"long-name-".repeat(10)}`,
             completedMoves: [],
-            issues: messages.map((message) => ({ code: "startup_failure", message })),
+            issues: targetMessages.map((message) => ({ code: "startup_failure", message })),
             plannedMoves: [],
             sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
             storePath: store.storePath,
             validationBeforeArchive: "failed",
-          },
-        ],
+          };
+        }),
       };
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     };
@@ -1600,6 +1601,27 @@ describe("runDoctorSessionSqlite", () => {
     const urlBody = new URL(issue?.url ?? "").searchParams.get("body");
     expect(urlBody).not.toContain("�");
     expect(urlBody).toContain("truncated for URL");
+
+    let bodyTargetCount = 0;
+    let bodyMessageOffset = -1;
+    for (let count = 1; count < 50; count += 1) {
+      writeManifest(["BODY_START"], count);
+      const candidateIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+      const candidateOffset = candidateIssue?.body.indexOf("BODY_START") ?? -1;
+      if (candidateOffset < 0) {
+        break;
+      }
+      bodyTargetCount = count;
+      bodyMessageOffset = candidateOffset;
+    }
+    expect(bodyMessageOffset).toBeGreaterThanOrEqual(0);
+    expect(19_999 - bodyMessageOffset).toBeLessThan(600);
+
+    writeManifest([`${"x".repeat(19_999 - bodyMessageOffset)}🎉tail`], bodyTargetCount);
+    const bodyIssue = createSessionSqliteMigrationFailureIssue(manifestPath);
+    expect(bodyIssue?.body).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
   });
 
   it("recovers only manifests matching an explicit store selector", async () => {

@@ -460,14 +460,13 @@ export function createSessionSqliteMigrationFailureIssue(
     "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
     "",
     reportBody,
-  ]
-    .join("\n")
-    .slice(0, 20_000);
+  ].join("\n");
+  const boundedBody = truncateUtf16Safe(body, 20_000);
   return {
-    body,
+    body: boundedBody,
     ...(bodyPath ? { bodyPath } : {}),
     title,
-    url: createPrefilledGithubIssueUrl(title, body),
+    url: createPrefilledGithubIssueUrl(title, boundedBody),
   };
 }
 
