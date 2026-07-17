@@ -385,6 +385,22 @@ describe("secrets CLI", () => {
     });
   });
 
+  it("shows a user-friendly error when the secrets plan file is malformed JSON", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    await fs.writeFile(planPath, "{invalid json", "utf8");
+    try {
+      await createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" });
+    } catch {
+      // exitOverride converts exit(1) to CommanderError
+    }
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Malformed JSON in secrets plan file:"),
+    );
+  });
+
   it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult({ resolvabilityComplete: false }));
