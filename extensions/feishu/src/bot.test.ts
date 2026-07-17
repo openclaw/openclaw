@@ -2028,7 +2028,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
-  it("admits bot-authored mention events without trusting app-scoped mention ids", async () => {
+  it("verifies app-scoped bot mention ids before admitting bot-authored events", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     const baseFeishuConfig = {
       groupPolicy: "open" as const,
@@ -2064,6 +2064,50 @@ describe("handleFeishuMessage command authorization", () => {
     });
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
 
+    const getMessage = vi.fn().mockImplementation(({ path }: { path: { message_id: string } }) =>
+      Promise.resolve({
+        code: 0,
+        data: {
+          items: [
+            {
+              mentions:
+                path.message_id === "msg-bot-mentioned"
+                  ? [
+                      {
+                        key: "@_openclaw",
+                        id: "ou-openclaw",
+                        id_type: "open_id",
+                        name: "OpenClaw",
+                      },
+                    ]
+                  : [],
+            },
+          ],
+        },
+      }),
+    );
+    mockCreateFeishuClient.mockReturnValue({ im: { message: { get: getMessage } } });
+
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { ...baseFeishuConfig, allowBots: true } },
+      } as ClawdbotConfig,
+      event: createEvent("msg-bot-unmentioned"),
+      botOpenId: "ou-openclaw",
+    });
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    const unrelatedMentionEvent = createEvent("msg-bot-other-mention", "ou-other-bot");
+    unrelatedMentionEvent.message.mentions![0]!.name = "Other Bot";
+    await dispatchMessage({
+      cfg: {
+        channels: { feishu: { ...baseFeishuConfig, allowBots: true } },
+      } as ClawdbotConfig,
+      event: unrelatedMentionEvent,
+      botOpenId: "ou-openclaw",
+    });
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+
     const admittedEvent = createEvent("msg-bot-mentioned", "ou-other-app-openclaw");
     admittedEvent.message.content = JSON.stringify({ text: "@_openclaw @_alice /status" });
     admittedEvent.message.mentions?.push({
@@ -2095,6 +2139,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(inbound.CommandBody).toBe("/status");
     expect(inbound.BodyForAgent).not.toContain("ou-other-app-openclaw");
     expect(inbound.BodyForAgent).not.toContain("ou-alice");
+    expect(getMessage).toHaveBeenCalledTimes(3);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -2149,7 +2194,14 @@ describe("handleFeishuMessage command authorization", () => {
         chat_id: "oc-loop-group",
         chat_type: "group",
         message_type: "text",
-        content: JSON.stringify({ text: "ping" }),
+        content: JSON.stringify({ text: "@_openclaw ping" }),
+        mentions: [
+          {
+            key: "@_openclaw",
+            id: { open_id: "ou-loop-self" },
+            name: "OpenClaw",
+          },
+        ],
       },
     });
 

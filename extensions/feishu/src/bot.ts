@@ -207,23 +207,6 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
-function resolveDeliveredBotMentionOpenId(
-  event: FeishuMessageEvent,
-  botName?: string,
-): string | undefined {
-  const mentions = (event.message.mentions ?? []).filter(
-    (mention) => !isFeishuBroadcastMention(mention) && mention.id.open_id?.trim(),
-  );
-  const normalizedBotName = botName?.trim();
-  const namedMatch = normalizedBotName
-    ? mentions.find((mention) => mention.name.trim() === normalizedBotName)
-    : undefined;
-  if (namedMatch?.id.open_id) {
-    return namedMatch.id.open_id.trim();
-  }
-  return mentions.length === 1 ? mentions[0]?.id.open_id?.trim() : undefined;
-}
-
 async function shouldIncludeFetchedGroupContextMessage(params: {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -359,20 +342,64 @@ export async function handleFeishuMessage(params: {
       log(`feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (allowBots=false)`);
       return;
     }
-    // Feishu only delivers bot-authored group events through the include-bot mention scope;
-    // the all-group scope explicitly excludes bot messages. Event delivery is therefore the
-    // authoritative mention signal, while mention open_ids can belong to another app (#40768).
+    // Feishu also offers a broad other-bot event scope, so delivery alone does not prove this
+    // bot was addressed. Re-read mismatched mentions with this app's token because open_ids are
+    // app-scoped (#40768); names are not stable recipient identities.
     if (isGroup && !ctx.mentionedBot) {
-      const deliveredMentionOpenId = resolveDeliveredBotMentionOpenId(event, botName);
-      const deliveredCtx = deliveredMentionOpenId
-        ? parseFeishuMessageEvent(event, deliveredMentionOpenId, botName)
-        : ctx;
+      let verifiedEvent: FeishuMessageEvent | undefined;
+      try {
+        const response = (await createFeishuClient(account).im.message.get({
+          params: { user_id_type: "open_id" },
+          path: { message_id: ctx.messageId },
+        })) as {
+          code?: number;
+          data?: {
+            items?: Array<{
+              mentions?: Array<{ key?: string; id?: string; id_type?: string }>;
+            }>;
+          };
+        };
+        const verifiedMention = response.data?.items?.[0]?.mentions?.find(
+          (mention) =>
+            mention.id_type === "open_id" &&
+            mention.id === localBotOpenId &&
+            Boolean(mention.key?.trim()),
+        );
+        const verifiedKey = verifiedMention?.key?.trim();
+        if (response.code === 0 && verifiedKey) {
+          const eventMention = event.message.mentions?.find(
+            (mention) => mention.key === verifiedKey && !isFeishuBroadcastMention(mention),
+          );
+          if (eventMention) {
+            verifiedEvent = {
+              ...event,
+              message: {
+                ...event.message,
+                mentions: event.message.mentions?.map((mention) =>
+                  mention === eventMention
+                    ? { ...mention, id: { ...mention.id, open_id: localBotOpenId } }
+                    : mention,
+                ),
+              },
+            };
+          }
+        }
+      } catch (err) {
+        log(
+          `feishu[${account.accountId}]: failed to verify bot mention for ${ctx.messageId}: ${String(err)}`,
+        );
+      }
+      if (!verifiedEvent) {
+        log(
+          `feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (local mention not verifiable)`,
+        );
+        return;
+      }
+      const deliveredCtx = parseFeishuMessageEvent(verifiedEvent, localBotOpenId, botName);
       ctx = {
         ...deliveredCtx,
         mentionedBot: true,
-        content: deliveredMentionOpenId
-          ? deliveredCtx.content
-          : normalizeFeishuCommandProbeBody(deliveredCtx.content),
+        content: normalizeFeishuCommandProbeBody(deliveredCtx.content),
         // App-scoped IDs cannot safely identify additional recipients here.
         mentionTargets: undefined,
       };
