@@ -21,7 +21,7 @@ type CapturedDispatchParams = {
       payload: CapturedReplyPayload,
       info: { kind: "tool" | "block" | "final" },
     ) => Promise<unknown>;
-    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void> | void;
     onSettled?: () => unknown;
   };
   replyOptions?: {
