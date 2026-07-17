@@ -1424,7 +1424,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
-    dispatch: async (message, ingressLifecycle, receivedAt) => {
+    dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       if (!imsgEmitsBalloonMetadata && hasIMessageBalloonMetadata(message)) {
         imsgEmitsBalloonMetadata = true;
       }
@@ -1444,7 +1444,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const staleThresholdMs = isRecoveryReplay
         ? IMESSAGE_RECOVERY_MAX_AGE_MS
         : IMESSAGE_STALE_INBOUND_THRESHOLD_MS;
-      if (isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
+      // Catchup rows are operator-requested history: the catchup query's own
+      // maxAge window is their age gate. Running them through the live fence
+      // would suppress AND tombstone rows older than 15 minutes — losing
+      // messages the operator explicitly asked to replay.
+      if (!provenance?.catchup && isStaleIMessageBacklog(message, receivedAt, staleThresholdMs)) {
         staleBacklogSuppressed += 1;
         runtime.log?.(
           warn(
@@ -1694,7 +1698,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // A watch/catchup overlap is therefore rejected before either copy can
         // dispatch, replacing the retired standalone GUID guard.
         dispatchPayload: async (_message, rawEnvelope) => {
-          await ingress.receive(rawEnvelope);
+          await ingress.receive(rawEnvelope, { catchup: true });
         },
         observeSkippedFromMePayload: (message) => {
           const { bodyText } = resolveIMessageInboundBodyText(message);

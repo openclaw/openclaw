@@ -216,6 +216,34 @@ describe("iMessage durable ingress", () => {
     });
   });
 
+  it("carries catchup provenance through the journal to dispatch", async () => {
+    await withQueue(async (queue) => {
+      const provenances: Array<{ catchup?: boolean } | undefined> = [];
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch: vi.fn(async (_message, lifecycle, _receivedAt, provenance) => {
+          provenances.push(provenance);
+          await lifecycle.onAdopted();
+        }),
+        runtime: runtime(),
+      });
+      try {
+        ingress.start();
+        // Catchup rows must reach dispatch flagged: the monitor skips the live
+        // Push-flush age fence for them, or operator-requested history older
+        // than the live threshold would be suppressed AND tombstoned.
+        await ingress.receive(rawRow({ guid: "GUID-CATCHUP", id: 900 }), { catchup: true });
+        await ingress.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
+        await vi.waitFor(() => expect(provenances).toHaveLength(2));
+        expect(provenances[0]).toEqual({ catchup: true });
+        expect(provenances[1]).toEqual({});
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("dead-letters malformed persisted payloads without retry", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue(

@@ -26,6 +26,8 @@ type IMessageIngressPayload = {
   version: number;
   receivedAt: number;
   raw: unknown;
+  /** Operator-requested legacy catchup rows skip the live Push-flush age fence. */
+  catchup?: boolean;
 };
 
 export type IMessageIngressLifecycle = {
@@ -52,6 +54,7 @@ type IMessageIngressDispatch = (
   message: IMessagePayload,
   lifecycle: IMessageIngressLifecycle,
   receivedAt: number,
+  provenance?: { catchup?: boolean },
 ) => Promise<IMessageIngressDispatchResult | void> | IMessageIngressDispatchResult | void;
 
 class IMessageIngressPayloadError extends Error {
@@ -149,7 +152,7 @@ function resolveIMessageIngressNonRetryableFailure(error: unknown) {
 }
 
 type IMessageDurableIngress = {
-  receive: (raw: unknown) => Promise<void>;
+  receive: (raw: unknown, opts?: { catchup?: boolean }) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
   waitForIdle: () => Promise<void>;
@@ -256,7 +259,9 @@ export function createIMessageDurableIngress(options: {
           if (lifecycle.abortSignal.aborted) {
             throw lifecycle.abortSignal.reason;
           }
-          return await options.dispatch(message, lifecycle, record.payload.receivedAt);
+          return await options.dispatch(message, lifecycle, record.payload.receivedAt, {
+            ...(record.payload.catchup ? { catchup: true } : {}),
+          });
         }),
     });
     return drain;
@@ -313,7 +318,7 @@ export function createIMessageDurableIngress(options: {
     pumping = runPump();
   };
 
-  const receive = async (raw: unknown) => {
+  const receive = async (raw: unknown, receiveOpts?: { catchup?: boolean }) => {
     const admission = admissionTail.then(async () => {
       const rowid = rawRowid(raw);
       try {
@@ -322,7 +327,12 @@ export function createIMessageDurableIngress(options: {
         const receivedAt = now();
         await queue.enqueue(
           facts.eventId,
-          { version: IMESSAGE_INGRESS_PAYLOAD_VERSION, receivedAt, raw },
+          {
+            version: IMESSAGE_INGRESS_PAYLOAD_VERSION,
+            receivedAt,
+            raw,
+            ...(receiveOpts?.catchup ? { catchup: true } : {}),
+          },
           { receivedAt, laneKey: facts.laneKey },
         );
         await options.onDurableEnqueue?.(facts);
