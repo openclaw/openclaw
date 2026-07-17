@@ -184,6 +184,33 @@ export function resolveLmstudioReasoningCompat(
 }
 
 /**
+ * Maps LM Studio `trained_for_tool_use` into catalog `compat.supportsTools`.
+ * Boolean true/false are authoritative. Omitted metadata stays unset so core
+ * keeps the permissive default (`supportsTools !== false`); otherwise models
+ * that report false still advertise tools.
+ */
+function resolveLmstudioToolsCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
+): Pick<NonNullable<ModelDefinitionConfig["compat"]>, "supportsTools"> | undefined {
+  const trained = entry.capabilities?.trained_for_tool_use;
+  if (trained === true || trained === false) {
+    return { supportsTools: trained };
+  }
+  return undefined;
+}
+
+function resolveLmstudioModelCompat(
+  entry: Pick<LmstudioModelWire, "capabilities">,
+): ModelDefinitionConfig["compat"] | undefined {
+  const reasoningCompat = resolveLmstudioReasoningCompat(entry);
+  const toolsCompat = resolveLmstudioToolsCompat(entry);
+  if (!reasoningCompat && !toolsCompat) {
+    return undefined;
+  }
+  return { ...reasoningCompat, ...toolsCompat };
+}
+
+/**
  * Resolves LM Studio reasoning support from capabilities payloads.
  * Defaults to false when the server omits reasoning metadata.
  */
@@ -537,7 +564,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     reasoning: resolveLmstudioReasoningCapability(entry),
     input: entry.capabilities?.vision ? ["text", "image"] : ["text"],
     cost: SELF_HOSTED_DEFAULT_COST,
-    compat: resolveLmstudioReasoningCompat(entry),
+    compat: resolveLmstudioModelCompat(entry),
     contextWindow,
     contextTokens,
     maxTokens: Math.max(1, Math.min(contextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),

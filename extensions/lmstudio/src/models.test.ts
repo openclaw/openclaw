@@ -228,6 +228,32 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("maps trained_for_tool_use into explicit catalog supportsTools", () => {
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-trained",
+        capabilities: { trained_for_tool_use: true },
+      })?.compat,
+    ).toEqual({ supportsTools: true });
+
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-untrained",
+        capabilities: { trained_for_tool_use: false },
+      })?.compat,
+    ).toEqual({ supportsTools: false });
+
+    expect(
+      mapLmstudioWireEntry({
+        type: "llm",
+        key: "tools-unknown",
+        capabilities: { vision: true },
+      })?.compat,
+    ).toBeUndefined();
+  });
+
   it("resolves reasoning capability for supported and unsupported options", () => {
     expect(resolveLmstudioReasoningCapability({ capabilities: undefined })).toBe(false);
     expect(
@@ -365,6 +391,7 @@ describe("lmstudio-models", () => {
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       compat: {
+        supportsTools: true,
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
