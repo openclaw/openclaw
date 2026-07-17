@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -52,7 +52,15 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
     fsModuleLoader.load(),
     import("../secrets/plan.js"),
   ]);
-  const raw = readFileSync(pathname, "utf8");
+  let raw: string;
+  try {
+    raw = readFileSync(pathname, "utf8");
+  } catch (err) {
+    if (hasErrnoCode(err, "ENOENT")) {
+      throw new Error(`Secrets plan file not found: ${pathname}`, { cause: err });
+    }
+    throw err;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -333,9 +341,15 @@ export function registerSecretsCli(program: Command): void {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
+        // The missing-plan wrapper already carries a user-friendly message; keep its
+        // ENOENT cause out of the rendered CLI output while preserving it for diagnostics.
+        const message =
+          err instanceof Error && err.message.startsWith("Secrets plan file not found")
+            ? err.message
+            : formatErrorMessage(err);
         defaultRuntime.error(
           danger(
-            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+            `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
           ),
         );
         defaultRuntime.exit(1);

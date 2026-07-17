@@ -399,6 +399,19 @@ describe("secrets CLI", () => {
     }, "{invalid json");
   });
 
+  it("rejects --from when the plan file does not exist", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "/nonexistent/path/plan.json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    const errorOutput = runtimeErrors.join("\n");
+    expect(errorOutput).toContain("Secrets plan file not found: /nonexistent/path/plan.json");
+    expect(errorOutput).not.toContain("ENOENT");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
   it("does not print skipped-exec note when apply dry-run skippedExecRefs is zero", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult({ resolvabilityComplete: false }));
