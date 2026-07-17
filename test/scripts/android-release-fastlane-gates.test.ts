@@ -63,8 +63,12 @@ describe("Android Fastlane release upload gates", () => {
     expect(atomicUpload).toContain("client.abort_current_edit");
     expect(booleanEnv).toContain('["1", "yes", "true", "on"]');
     expect(booleanEnv).toContain('["0", "no", "false", "off"]');
-    expect(atomicUpload).toContain('fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false)');
-    expect(atomicUpload).toContain('fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)');
+    expect(atomicUpload).toContain(
+      'fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false)',
+    );
+    expect(atomicUpload).toContain(
+      'fastlane_boolean_env("SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW", default: true)',
+    );
   });
 
   it("generates fresh screenshots before building and uploading a release", () => {
