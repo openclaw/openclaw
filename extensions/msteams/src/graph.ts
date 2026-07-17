@@ -231,11 +231,10 @@ export async function resolveGraphToken(
 
   // Try delegated token if requested and configured
   if (options?.preferDelegated && msteamsCfg?.delegatedAuth?.enabled && creds.type === "secret") {
-    const { appPassword, appId: clientId, tenantId } = creds;
     const delegated = await resolveDelegatedAccessToken({
-      tenantId,
-      clientId,
-      clientSecret: appPassword,
+      tenantId: creds.tenantId,
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
     });
     if (delegated) {
       return delegated;
