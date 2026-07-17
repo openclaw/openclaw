@@ -373,6 +373,16 @@ function stubMinimaxOkFetch() {
   minimaxUnderstandImageMock.mockReset();
   vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
   minimaxUnderstandImageMock.mockResolvedValue("ok");
+  // Tests that fall back to the generic image runtime still hit a mocked
+  // global.fetch because media-understanding/image.ts is not behind the
+  // minimax-vlm module mock.
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content: "ok",
+      base_resp: { status_code: 0, status_msg: "" },
+    }),
+  );
+  global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
 
@@ -389,6 +399,13 @@ function stubMinimaxFetch(baseResp: { status_code: number; status_msg: string },
   } else {
     minimaxUnderstandImageMock.mockResolvedValue(content);
   }
+  const fetch = vi.fn().mockImplementation(async () =>
+    Response.json({
+      content,
+      base_resp: baseResp,
+    }),
+  );
+  global.fetch = withFetchPreconnect(fetch);
   return minimaxUnderstandImageMock;
 }
 
@@ -1918,7 +1935,15 @@ describe("image tool implicit imageModel config", () => {
           },
         },
       });
-      const fetch = stubMinimaxOkFetch();
+      // The generic image runtime still uses global.fetch, so mock it directly.
+      const fetch = vi.fn().mockImplementation(async () =>
+        Response.json({
+          content: "ok",
+          base_resp: { status_code: 0, status_msg: "" },
+        }),
+      );
+      global.fetch = withFetchPreconnect(fetch);
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2712,7 +2737,7 @@ describe("image tool managed inbound media", () => {
 
   it("resolves media://inbound refs", async () => {
     await withManagedInboundPng(async ({ stateDir, mediaId }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       const workspaceDir = path.join(stateDir, "workspace-agent");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -2732,7 +2757,7 @@ describe("image tool managed inbound media", () => {
 
   it("allows managed inbound absolute paths when workspaceOnly is enabled", async () => {
     await withManagedInboundPng(async ({ mediaPath }) => {
-      installImageUnderstandingProviderStubs();
+      installImageUnderstandingProviderStubs(minimaxProvider);
       const fetch = stubMinimaxOkFetch();
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({

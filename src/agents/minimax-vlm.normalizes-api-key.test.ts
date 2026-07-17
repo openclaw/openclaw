@@ -183,7 +183,7 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
   });
 
   describe("SSRF policy", () => {
-    it("pins a default hostname without granting private-network access", async () => {
+    it("pins a default hostname without granting broad private-network access", async () => {
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
       await expect(
@@ -198,11 +198,11 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      // Default hosts must not grant private-network authorization.
+      // The canonical provider policy pins the configured origin for default
+      // public hosts too; it does not grant blanket private-network access.
+      expect(opts?.policy.allowedOrigins).toEqual(["https://api.minimax.io"]);
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
-      // Default public hosts do not need allowedOrigins.
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
     });
 
     it("pins a custom public hostname and preserves the configured origin", async () => {
@@ -251,10 +251,11 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
 
-    it("drops allowedOrigins when allowPrivateNetwork is explicitly false", async () => {
+    it("does not grant broad private-network access when allowPrivateNetwork is explicitly false", async () => {
       // Operators who set models.providers.<id>.request.allowPrivateNetwork: false
-      // opt out of private-network access. Even custom/loopback origins must not
-      // receive an allowedOrigins exception when the operator denied it.
+      // opt out of broad private-network access. The configured origin is still
+      // pinned by the canonical provider policy; the explicit opt-out only
+      // withholds the global private-network flag.
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
       await expect(
@@ -270,9 +271,9 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["localhost"]);
-      // Explicit opt-out must remove the origin exception.
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
-      // Private-network flags remain absent — the operator denied trust.
+      // The configured origin remains pinned; the explicit opt-out removes only
+      // the broad private-network authorization.
+      expect(opts?.policy.allowedOrigins).toEqual(["https://localhost:8080"]);
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
@@ -293,12 +294,15 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["custom-minimax.example.com"]);
-      // Explicit allow keeps the configured origin.
+      // Explicit allow keeps the configured origin and grants broad private-network
+      // access, matching the canonical provider transport semantics.
       expect(opts?.policy.allowedOrigins).toEqual(["https://custom-minimax.example.com"]);
+      expect(opts?.policy.allowPrivateNetwork).toBe(true);
+      expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
     });
 
     it("keeps default-host policy unchanged when allowPrivateNetwork is false", async () => {
-      // Default public hosts should never gain private-network trust, and
+      // Default public hosts should never gain broad private-network trust, and
       // allowPrivateNetwork: false must not accidentally widen their policy.
       fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
 
@@ -315,9 +319,45 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
       const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
       expect(opts?.policy).toBeDefined();
       expect(opts?.policy.hostnameAllowlist).toEqual(["api.minimax.io"]);
-      expect(opts?.policy.allowedOrigins).toBeUndefined();
+      expect(opts?.policy.allowedOrigins).toEqual(["https://api.minimax.io"]);
       expect(opts?.policy.allowPrivateNetwork).toBeUndefined();
       expect(opts?.policy.dangerouslyAllowPrivateNetwork).toBeUndefined();
+    });
+
+    it("refuses metadata-like configured origins", async () => {
+      // The canonical provider policy deliberately excludes metadata- and
+      // link-local-like origins from implicit trust.
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://metadata.minimax.local",
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      // No policy is produced for metadata-like origins, so guarded fetch uses
+      // its default restrictions.
+      expect(opts?.policy).toBeUndefined();
+    });
+
+    it("refuses link-local configured origins", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValueOnce(guardedOk());
+
+      await expect(
+        minimaxUnderstandImage({
+          apiKey: "minimax-test-key",
+          prompt: "hi",
+          imageDataUrl: "data:image/png;base64,AAAA",
+          apiHost: "https://169.254.1.1",
+        }),
+      ).resolves.toBe("ok");
+
+      const opts = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+      expect(opts?.policy).toBeUndefined();
     });
   });
 
