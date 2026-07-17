@@ -33,6 +33,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
+const ZAI_LIVE_TEST_FILE = "src/agents/zai.live.test.ts";
 
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
@@ -246,9 +247,13 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+      return files.filter(
+        (file) =>
+          file !== ZAI_LIVE_TEST_FILE &&
+          (file.startsWith("src/agents/") || file.startsWith("src/llm/")),
+      );
     case "native-live-src-agents-zai-coding":
-      return files.filter((file) => file === "src/agents/zai.live.test.ts");
+      return files.filter((file) => file === ZAI_LIVE_TEST_FILE);
     case "native-live-src-gateway":
       return files.filter(
         (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
