@@ -40,6 +40,10 @@ import {
 } from "../../components/command-palette-contract.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  resolveControlUiFollowUpMode,
+  resolveControlUiServerQueueMode,
+} from "../../lib/chat/follow-up-mode.ts";
 import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { clampText } from "../../lib/format.ts";
@@ -2182,6 +2186,14 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
+    const configSnapshot = this.context.runtimeConfig.state.configSnapshot;
+    const serverQueueMode = configSnapshot
+      ? resolveControlUiServerQueueMode(configSnapshot.runtimeConfig)
+      : undefined;
+    state.chatFollowUpMode = resolveControlUiFollowUpMode(
+      state.settings.chatFollowUpMode,
+      serverQueueMode,
+    );
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     // Tool rows consult the global title store while rendering; point its
@@ -2272,7 +2284,7 @@ class ChatPane extends OpenClawLightDomElement {
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
-      followUpMode: state.settings.chatFollowUpMode,
+      followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
       queue: state.chatQueue,
       realtimeTalkActive: state.realtimeTalkActive,

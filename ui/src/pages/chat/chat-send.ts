@@ -130,6 +130,8 @@ export type ChatHost = ChatInputHistoryState &
     assistantAgentId?: string | null;
     agentsList?: ChatAgentsListSnapshot | null;
     settings?: { chatFollowUpMode?: ChatFollowUpMode };
+    /** Prepared from the browser override and current Gateway runtime config. */
+    chatFollowUpMode?: ChatFollowUpMode;
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
     /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
@@ -2454,7 +2456,8 @@ export async function handleSendChat(
         // message stays queued, keeping the queue row as the visible fallback.
         if (
           !skillWorkshopRevision &&
-          normalizeChatFollowUpMode(host.settings?.chatFollowUpMode) === "steer" &&
+          (host.chatFollowUpMode ?? normalizeChatFollowUpMode(host.settings?.chatFollowUpMode)) ===
+            "steer" &&
           host.connected &&
           hasAbortableSessionRun(host)
         ) {

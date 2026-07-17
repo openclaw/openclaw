@@ -1,0 +1,24 @@
+import { describe, expect, it } from "vitest";
+import { resolveControlUiFollowUpMode, resolveControlUiServerQueueMode } from "./follow-up-mode.js";
+
+describe("Control UI follow-up mode", () => {
+  it("matches webchat queue resolution precedence", () => {
+    expect(resolveControlUiServerQueueMode({})).toBe("steer");
+    expect(resolveControlUiServerQueueMode({ messages: { queue: { mode: "followup" } } })).toBe(
+      "followup",
+    );
+    expect(
+      resolveControlUiServerQueueMode({
+        messages: { queue: { byChannel: { webchat: "collect" }, mode: "interrupt" } },
+      }),
+    ).toBe("collect");
+  });
+
+  it("inherits the server behavior until the browser has an explicit override", () => {
+    expect(resolveControlUiFollowUpMode(undefined, undefined)).toBe("queue");
+    expect(resolveControlUiFollowUpMode(undefined, "steer")).toBe("steer");
+    expect(resolveControlUiFollowUpMode(undefined, "followup")).toBe("queue");
+    expect(resolveControlUiFollowUpMode("queue", "steer")).toBe("queue");
+    expect(resolveControlUiFollowUpMode("steer", "interrupt")).toBe("steer");
+  });
+});

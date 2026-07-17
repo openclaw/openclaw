@@ -2021,7 +2021,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("steers ordinary follow-ups into the active run by default", async () => {
+  it("steers ordinary follow-ups when the server default is steer", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2032,7 +2032,21 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         : {}),
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "steer" }, mode: "followup" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-steer-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
@@ -2066,7 +2080,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps a steerable queued message above the composer in queue mode", async () => {
+  it("inherits a non-steer server default for active-run follow-ups", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await newBrowserContext({
       locale: "en-US",
@@ -2074,15 +2088,44 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page);
+    const runtimeConfig = {
+      messages: { queue: { byChannel: { webchat: "followup" }, mode: "steer" } },
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "config.get": {
+          config: runtimeConfig,
+          hash: "queue-followup-config",
+          issues: [],
+          raw: JSON.stringify(runtimeConfig),
+          runtimeConfig,
+          valid: true,
+        },
+      },
+    });
 
     try {
       await page.goto(`${server.baseUrl}settings/appearance`);
       const followUpSelect = page.locator("[data-settings-follow-up-mode]");
       await followUpSelect.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await followUpSelect.inputValue()).toBe("steer");
-      await followUpSelect.selectOption("queue");
-      expect(await followUpSelect.inputValue()).toBe("queue");
+      expect(await followUpSelect.inputValue()).toBe("server");
+      await page.getByText("Using server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-setting.png`,
+          fullPage: true,
+        });
+      }
+      await followUpSelect.selectOption("steer");
+      await page.getByText("Overriding server default (followup)").waitFor({ timeout: 10_000 });
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/server-followup-override.png`,
+          fullPage: true,
+        });
+      }
+      await page.getByRole("button", { name: "Reset to server default" }).click();
+      expect(await followUpSelect.inputValue()).toBe("server");
 
       await page.goto(`${server.baseUrl}chat`);
 
@@ -2104,7 +2147,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({
-          path: `${artifactDir}/queue-mode.png`,
+          path: `${artifactDir}/server-followup-default.png`,
           fullPage: true,
         });
       }
