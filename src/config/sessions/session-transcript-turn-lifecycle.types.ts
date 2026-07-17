@@ -37,6 +37,7 @@ export type SessionTranscriptTurnLifecyclePatch = {
   pendingFinalDeliveryLastAttemptAt?: SessionEntry["pendingFinalDeliveryLastAttemptAt"];
   pendingFinalDeliveryLastError?: SessionEntry["pendingFinalDeliveryLastError"];
   pendingFinalDeliveryText?: SessionEntry["pendingFinalDeliveryText"];
+  mainRestartRecovery?: SessionEntry["mainRestartRecovery"];
   restartRecoveryBeforeAgentReplyState?: SessionRestartRecoveryState["restartRecoveryBeforeAgentReplyState"];
   restartRecoveryDeliveryReceiptState?: SessionRestartRecoveryState["restartRecoveryDeliveryReceiptState"];
   restartRecoveryDeliveryToolCallId?: SessionRestartRecoveryState["restartRecoveryDeliveryToolCallId"];

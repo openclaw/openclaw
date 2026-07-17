@@ -1043,6 +1043,53 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
+  it("retries reservation cleanup after a transient session-store failure", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    let dispatchFailed = false;
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      dispatchFailed = true;
+      throw new Error("gateway unavailable");
+    });
+    const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    let cleanupFailures = 0;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        if (dispatchFailed && params.requireWriteSuccess && cleanupFailures < 2) {
+          cleanupFailures += 1;
+          throw new Error("transient session-store failure");
+        }
+        return await applySessionEntryReplacements(params);
+      });
+
+    try {
+      await expect(
+        recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir }),
+      ).resolves.toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    } finally {
+      replacementSpy.mockRestore();
+    }
+
+    expect(cleanupFailures).toBe(2);
+    const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
+    expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
   it("refunds an explicit Gateway rejection before recovery admission", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -2066,6 +2113,74 @@ describe("main-session-restart-recovery", () => {
       status: "failed",
       mainRestartRecovery: { tombstone: expect.any(Object) },
     });
+  });
+
+  it("does not append an exhausted notice after a foreground takeover", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: {
+          cycleId: "cycle-exhausted",
+          revision: 1,
+          chargedAttempts: 3,
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "continue this turn" },
+    ]);
+    const appendAssistantMessageToSessionTranscript =
+      transcriptMocks.appendAssistantMessageToSessionTranscript.getMockImplementation();
+    if (!appendAssistantMessageToSessionTranscript) {
+      throw new Error("expected transcript append implementation");
+    }
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(
+      async (params) => {
+        const owner = await claimMainSessionRecoveryOwner({
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId: "main-session",
+          target: { sessionKey, storePath },
+        });
+        expect(owner.kind).toBe("claimed");
+        return await appendAssistantMessageToSessionTranscript(params);
+      },
+    );
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 1,
+    });
+
+    const entry = loadSessionEntry({ sessionKey, storePath });
+    expect(entry).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      mainRestartRecovery: { foregroundClaims: { tokens: [expect.any(String)] } },
+    });
+    expect(entry?.mainRestartRecovery?.tombstone).toBeUndefined();
+    const notices = (
+      await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey,
+        storePath,
+      })
+    ).filter((event) => {
+      const record = event as { type?: unknown; message?: { idempotencyKey?: unknown } };
+      return (
+        record.type === "message" &&
+        typeof record.message?.idempotencyKey === "string" &&
+        record.message.idempotencyKey.endsWith(":failed-notice")
+      );
+    });
+    expect(notices).toEqual([]);
   });
 
   it("tombstones when the final owner-release retry consumes the last charge", async () => {

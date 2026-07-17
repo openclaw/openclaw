@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTrustedMessageActionTurnIngress } from "../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findRestartRecoveryUnsafeReplyHook } from "../plugins/restart-recovery-hook-safety.js";
 import { CommandLane } from "../process/lanes.js";
@@ -464,14 +465,22 @@ export async function resumeMainSession(params: {
       }
     }
     if (reservation) {
-      await commitMainSessionRecovery({
-        command: {
-          kind:
-            dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation",
-          reservation,
-        },
-        target: { sessionKey: params.sessionKey, storePath: params.storePath },
-      }).catch((rollbackError: unknown) => {
+      await retryAsync(
+        async () =>
+          await commitMainSessionRecovery({
+            command: {
+              kind:
+                dispatchStarted && !explicitlyRejected
+                  ? "abandon_reservation"
+                  : "cancel_reservation",
+              reservation,
+            },
+            requireWriteSuccess: true,
+            target: { sessionKey: params.sessionKey, storePath: params.storePath },
+          }),
+        3,
+        25,
+      ).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );

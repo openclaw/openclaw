@@ -55,8 +55,8 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     sessionKey: params.sessionKey,
   });
   if (!deliveryContext) {
-    // Transcript-only sessions need the notice durable before the tombstone hides
-    // them from later scans; a failed append must leave the exhausted cycle retryable.
+    // The transcript notice and tombstone share one SQLite transaction so a
+    // foreground takeover cannot leave behind a false terminal notice.
     const notice = await writeUnresumableSessionNotice({
       ...params,
       text: TOMBSTONED_SESSION_NOTICE,
@@ -67,6 +67,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
     if (notice === "failed") {
       return "notice_failed";
     }
+    return "tombstoned";
   }
   const tombstonedEntry = await claimMainRestartRecoveryTombstone(params);
   if (!tombstonedEntry) {
@@ -128,10 +129,20 @@ async function sendUnresumableSessionNotice(params: {
 async function writeUnresumableSessionNotice(params: {
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
+  reason: string;
   sessionKey: string;
   storePath: string;
   text: string;
 }): Promise<"failed" | "stale" | "written"> {
+  const recoveryState = params.entry.mainRestartRecovery;
+  if (
+    !recoveryState ||
+    recoveryState.cycleId !== params.observation.cycleId ||
+    recoveryState.revision !== params.observation.revision
+  ) {
+    return "stale";
+  }
+  const now = Date.now();
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     sessionKey: params.sessionKey,
@@ -156,6 +167,18 @@ async function writeUnresumableSessionNotice(params: {
       restartRecoveryTerminalRunIds: params.entry.restartRecoveryTerminalRunIds,
       status: params.entry.status,
       updatedAt: params.entry.updatedAt,
+    },
+    sessionLifecyclePatch: {
+      abortedLastRun: false,
+      endedAt: now,
+      mainRestartRecovery: {
+        ...recoveryState,
+        revision: recoveryState.revision + 1,
+        tombstone: { reason: params.reason },
+      },
+      runtimeMs: Math.max(0, now - (params.entry.startedAt ?? now)),
+      status: "failed",
+      updatedAt: now,
     },
     storePath: params.storePath,
     text: params.text,
