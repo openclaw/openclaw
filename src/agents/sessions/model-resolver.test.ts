@@ -26,6 +26,7 @@ function registry(models: Model[]): ModelRegistry {
     find: (provider: string, modelId: string) =>
       models.find((entry) => entry.provider === provider && entry.id === modelId),
     getAvailable: () => models,
+    getAll: () => models,
     hasConfiguredAuth: (entry: Model) => models.includes(entry),
   } as ModelRegistry;
 }
@@ -67,5 +68,21 @@ describe("parseModelPattern version sorting", () => {
     ];
     const result = parseModelPattern("opus", models);
     expect(result.model?.id).toBe("claude-opus-4-11");
+  });
+});
+
+describe("findInitialModel CLI model resolution", () => {
+  it("throws instead of calling process.exit when CLI model resolves to an error", async () => {
+    const reg = registry([]);
+
+    await expect(
+      findInitialModel({
+        cliProvider: "nonexistent",
+        cliModel: "some-model",
+        scopedModels: [],
+        isContinuing: false,
+        modelRegistry: reg,
+      }),
+    ).rejects.toThrow("No models available");
   });
 });
