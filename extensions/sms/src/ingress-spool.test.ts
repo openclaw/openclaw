@@ -5,8 +5,13 @@ import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
-import { createSmsIngressSpool, type SmsIngressPayload } from "./ingress-spool.js";
+import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
+
+type SmsIngressPayload = {
+  version: 1;
+  form: Record<string, string>;
+};
 
 const account: ResolvedSmsAccount = {
   accountId: "default",

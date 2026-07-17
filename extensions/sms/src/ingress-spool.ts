@@ -17,7 +17,7 @@ const SMS_COMPLETED_MAX_ENTRIES = 20_000;
 const SMS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SMS_FAILED_MAX_ENTRIES = 1_000;
 
-export type SmsIngressPayload = {
+type SmsIngressPayload = {
   version: typeof SMS_INGRESS_PAYLOAD_VERSION;
   form: Record<string, string>;
 };
