@@ -1,4 +1,3 @@
-// Msteams plugin module owns feedback-learning persistence.
 import crypto from "node:crypto";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -15,19 +14,15 @@ function learningStoreKey(storePath: string, sessionKey: string): string {
   return crypto.createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }
 
-function openLearningStore() {
-  return getMSTeamsRuntime().state.openKeyedStore<FeedbackLearningEntry>({
-    namespace: LEARNINGS_NAMESPACE,
-    maxEntries: MAX_LEARNING_ENTRIES,
-  });
-}
-
 export async function storeSessionLearning(params: {
   storePath: string;
   sessionKey: string;
   learning: string;
 }): Promise<void> {
-  const store = openLearningStore();
+  const store = getMSTeamsRuntime().state.openKeyedStore<FeedbackLearningEntry>({
+    namespace: LEARNINGS_NAMESPACE,
+    maxEntries: MAX_LEARNING_ENTRIES,
+  });
   const key = learningStoreKey(params.storePath, params.sessionKey);
   if (!store.update) {
     throw new Error("plugin state atomic update is unavailable");

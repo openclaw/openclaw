@@ -22,7 +22,6 @@ describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("runs reflection in the original session and enforces cooldown", async () => {
-    const onLearning = vi.fn(async () => undefined);
     dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({
         text: JSON.stringify({
@@ -43,11 +42,12 @@ describe("channel feedback reflection", () => {
       conversationKind: "group" as const,
       thumbedDownResponse: "Too much detail",
       userComment: "Be concise",
-      onLearning,
     };
 
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({
       status: "complete",
+      learning: "Answer the direct question first.",
+      storePath: "/state/main/sessions.json",
       followUp: true,
       userMessage: "Want a shorter version?",
       responseLength: 104,
@@ -60,17 +60,11 @@ describe("channel feedback reflection", () => {
         ctxPayload: expect.objectContaining({ ChatType: "group" }),
       }),
     );
-    expect(onLearning).toHaveBeenCalledWith({
-      learning: "Answer the direct question first.",
-      sessionKey: params.sessionKey,
-      storePath: "/state/main/sessions.json",
-    });
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({ status: "cooldown" });
     expect(dispatchChannelInboundTurn).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a plain-text reflection as internal learning", async () => {
-    const onLearning = vi.fn(async () => undefined);
     dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
       await plan.delivery.deliver({ text: "Answer the direct question first." });
       return { admission: { kind: "dispatch" }, dispatched: true };
@@ -85,19 +79,36 @@ describe("channel feedback reflection", () => {
         sessionKey: "agent:main:msteams:feedback-plain",
         conversationId: "conversation-plain",
         conversationKind: "direct",
-        onLearning,
       }),
     ).resolves.toEqual({
       status: "complete",
+      learning: "Answer the direct question first.",
+      storePath: "/state/main/sessions.json",
       followUp: false,
       userMessage: undefined,
       responseLength: 33,
     });
-    expect(onLearning).toHaveBeenCalledWith({
-      learning: "Answer the direct question first.",
-      sessionKey: "agent:main:msteams:feedback-plain",
-      storePath: "/state/main/sessions.json",
+  });
+
+  it("does not treat structured follow-up values as directives", async () => {
+    dispatchChannelInboundTurn.mockImplementationOnce(async (plan) => {
+      await plan.delivery.deliver({
+        text: JSON.stringify({ learning: "Be concise.", followUp: ["yes"] }),
+      });
+      return { admission: { kind: "dispatch" }, dispatched: true };
     });
+
+    await expect(
+      runChannelFeedbackReflection({
+        cfg,
+        channel: "msteams",
+        channelLabel: "Teams",
+        agentId: "main",
+        sessionKey: "agent:main:msteams:feedback-structured",
+        conversationId: "conversation-structured",
+        conversationKind: "direct",
+      }),
+    ).resolves.toMatchObject({ status: "complete", followUp: false });
   });
 
   it("records feedback through the canonical transcript accessor", async () => {

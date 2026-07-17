@@ -259,8 +259,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // after harvesting exports orphaned by the split-out WhatsApp adapter (#108656).
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
       // Harvest: retired dual-field plan payload builder -1.
-      // +23: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
-      // and memory config contracts.
+      // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
       8068,
       env,
     ),
@@ -293,8 +292,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // WhatsApp-split harvest (#108656).
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
       // Harvest: retired dual-field plan payload builder -1.
-      // +13: core-owned channel turn, envelope, direct-DM, feedback, legacy-payload,
-      // and memory config operations.
+      // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
       4501,
       env,
     ),

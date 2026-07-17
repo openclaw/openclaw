@@ -74,34 +74,27 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
 };
 const log = createSubsystemLogger("channels/turn/kernel");
 
-function assembleChannelTurnPlan(plan: ChannelTurnPlan): AssembledChannelTurn {
-  const { route, ...turn } = plan;
-  return {
-    ...turn,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath: resolveStorePath(plan.cfg.session?.store, { agentId: route.agentId }),
-    recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher,
-  };
-}
-
 function assembleResolvedChannelTurn<TDispatchResult>(
   value: ChannelTurnResolved<TDispatchResult>,
 ): AssembledChannelTurn | PreparedChannelTurn<TDispatchResult> {
   if (!("route" in value)) {
     return value;
   }
-  if (!("runDispatch" in value)) {
-    return assembleChannelTurnPlan(value);
-  }
   const { cfg, route, ...turn } = value;
-  return {
+  const assembled = {
     ...turn,
     routeSessionKey: route.sessionKey,
     storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     recordInboundSession,
   };
+  return "runDispatch" in value
+    ? assembled
+    : {
+        ...assembled,
+        cfg,
+        agentId: route.agentId,
+        dispatchReplyWithBufferedBlockDispatcher,
+      };
 }
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
@@ -498,7 +491,9 @@ export function dispatchChannelInboundTurn(plan: ChannelTurnPlan): Promise<Chann
 export async function dispatchChannelInboundTurn(
   plan: ChannelTurnPlan,
 ): Promise<ChannelTurnResult> {
-  return await dispatchAssembledChannelTurn(assembleChannelTurnPlan(plan));
+  return await dispatchAssembledChannelTurn(
+    assembleResolvedChannelTurn(plan) as AssembledChannelTurn,
+  );
 }
 
 function isPreparedChannelTurn<TDispatchResult>(

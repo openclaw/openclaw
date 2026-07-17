@@ -311,23 +311,18 @@ export type ChannelTurnRoute = {
   sessionKey: string;
 };
 
-export type ChannelTurnPlan = Omit<
-  AssembledChannelTurn,
-  | "agentId"
-  | "routeSessionKey"
-  | "storePath"
-  | "recordInboundSession"
-  | "dispatchReplyWithBufferedBlockDispatcher"
-> & {
+type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInboundSession"> & {
   route: ChannelTurnRoute;
 };
 
-export type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = Omit<
-  PreparedChannelTurn<TDispatchResult>,
-  "routeSessionKey" | "storePath" | "recordInboundSession"
+export type ChannelTurnPlan = RoutedChannelTurn<
+  Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
+>;
+
+export type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
+  PreparedChannelTurn<TDispatchResult>
 > & {
   cfg: OpenClawConfig;
-  route: ChannelTurnRoute;
 };
 
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */

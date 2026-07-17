@@ -45,10 +45,11 @@ export async function runWithSessionInitConflictRetry<T>(
   },
 ): Promise<T> {
   const retryDelaysMs = options?.retryDelaysMs;
-  const maxAttempts =
-    options?.maxAttempts ??
-    (retryDelaysMs ? retryDelaysMs.length + 1 : SESSION_INIT_CONFLICT_MAX_ATTEMPTS);
-  const maxRetries = Math.min(maxAttempts - 1, retryDelaysMs?.length ?? Number.POSITIVE_INFINITY);
+  const maxRetries = Math.min(
+    (options?.maxAttempts ??
+      (retryDelaysMs ? retryDelaysMs.length + 1 : SESSION_INIT_CONFLICT_MAX_ATTEMPTS)) - 1,
+    retryDelaysMs?.length ?? Number.POSITIVE_INFINITY,
+  );
   const sleep = options?.sleep ?? sleepWithAbort;
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     try {
@@ -65,7 +66,7 @@ export async function runWithSessionInitConflictRetry<T>(
         retryDelaysMs?.[attemptIndex] ??
         computeBackoff(SESSION_INIT_CONFLICT_BACKOFF_POLICY, attemptIndex + 1);
       log.debug(
-        `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxAttempts})`,
+        `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxRetries + 1})`,
       );
       // Cancellation must interrupt the wait itself; otherwise shutdown can
       // sleep through the backoff and start one more session-init attempt.

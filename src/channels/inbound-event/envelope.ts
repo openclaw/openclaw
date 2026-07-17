@@ -12,15 +12,13 @@ import {
   type ResolveAgentRouteInput,
 } from "../../routing/resolve-route.js";
 
-type ChannelInboundEnvelopeRoute = Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
-
 export type ChannelInboundEnvelopeInput = Omit<AgentEnvelopeParams, "previousTimestamp"> & {
   previousTimestamp?: AgentEnvelopeParams["previousTimestamp"] | null;
 };
 
 export function createChannelInboundEnvelopeBuilder(params: {
   cfg: OpenClawConfig;
-  route: ChannelInboundEnvelopeRoute;
+  route: Pick<ResolvedAgentRoute, "agentId" | "sessionKey">;
 }) {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
@@ -40,10 +38,7 @@ export function createChannelInboundEnvelopeBuilder(params: {
   };
 }
 
-export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput): {
-  route: ResolvedAgentRoute;
-  buildEnvelope: ReturnType<typeof createChannelInboundEnvelopeBuilder>;
-} {
+export function resolveChannelInboundRouteEnvelope(params: ResolveAgentRouteInput) {
   const route = resolveAgentRoute(params);
   return {
     route,

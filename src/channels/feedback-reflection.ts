@@ -43,41 +43,35 @@ export type ChannelFeedbackReflectionResult =
   | { status: "empty" }
   | {
       status: "complete";
+      learning: string;
+      storePath: string;
       followUp: boolean;
       userMessage?: string;
       responseLength: number;
     };
 
-type ParsedReflectionResponse = {
-  learning: string;
-  followUp: boolean;
-  userMessage?: string;
-};
-
 function buildReflectionPrompt(params: {
   thumbedDownResponse?: string;
   userComment?: string;
 }): string {
-  const parts = ["A user indicated your previous response wasn't helpful."];
-  if (params.thumbedDownResponse) {
-    const response =
-      params.thumbedDownResponse.length > MAX_RESPONSE_CHARS
-        ? `${truncateUtf16Safe(params.thumbedDownResponse, MAX_RESPONSE_CHARS)}...`
-        : params.thumbedDownResponse;
-    parts.push(`\nYour response was:\n> ${response}`);
-  }
-  if (params.userComment) {
-    parts.push(`\nUser's comment: "${params.userComment}"`);
-  }
-  parts.push(
+  const response = params.thumbedDownResponse;
+  const truncated =
+    response && response.length > MAX_RESPONSE_CHARS
+      ? `${truncateUtf16Safe(response, MAX_RESPONSE_CHARS)}...`
+      : response;
+  return [
+    "A user indicated your previous response wasn't helpful.",
+    truncated ? `\nYour response was:\n> ${truncated}` : undefined,
+    params.userComment ? `\nUser's comment: "${params.userComment}"` : undefined,
     "\nBriefly reflect: what could you improve? Consider tone, length, accuracy, relevance, and specificity. " +
       'Reply with one JSON object only: {"learning":"...","followUp":false,"userMessage":""}. ' +
       "Keep learning to 1-2 sentences. Set followUp only when the user needs a direct reply.",
-  );
-  return parts.join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-function parseReflectionResponse(text: string): ParsedReflectionResponse | null {
+function parseReflectionResponse(text: string) {
   const trimmed = text.trim();
   const candidates = [
     trimmed,
@@ -85,11 +79,7 @@ function parseReflectionResponse(text: string): ParsedReflectionResponse | null 
   ];
   for (const candidate of candidates) {
     try {
-      const value = JSON.parse(candidate.trim()) as {
-        learning?: unknown;
-        followUp?: unknown;
-        userMessage?: unknown;
-      };
+      const value = JSON.parse(candidate.trim()) as Record<string, unknown>;
       const learning = typeof value.learning === "string" ? value.learning.trim() : "";
       if (!learning) {
         continue;
@@ -117,18 +107,14 @@ export async function runChannelFeedbackReflection(params: {
   thumbedDownResponse?: string;
   userComment?: string;
   cooldownMs?: number;
-  onLearning?: (learning: {
-    learning: string;
-    sessionKey: string;
-    storePath: string;
-  }) => void | Promise<void>;
   onRecordError?: (error: unknown) => void;
   onDispatchError?: (error: unknown) => void;
 }): Promise<ChannelFeedbackReflectionResult> {
   const cooldownMs = params.cooldownMs ?? DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS;
-  const previousReflection =
-    lastReflectionBySession.get(params.sessionKey) ?? Number.NEGATIVE_INFINITY;
-  if (Date.now() - previousReflection < cooldownMs) {
+  if (
+    Date.now() - (lastReflectionBySession.get(params.sessionKey) ?? Number.NEGATIVE_INFINITY) <
+    cooldownMs
+  ) {
     return { status: "cooldown" };
   }
   const prompt = buildReflectionPrompt(params);
@@ -187,21 +173,16 @@ export async function runChannelFeedbackReflection(params: {
   }
   lastReflectionBySession.set(params.sessionKey, Date.now());
   if (lastReflectionBySession.size > MAX_COOLDOWN_ENTRIES) {
-    const now = Date.now();
     for (const [key, time] of lastReflectionBySession) {
-      if (now - time >= cooldownMs) {
+      if (Date.now() - time >= cooldownMs) {
         lastReflectionBySession.delete(key);
       }
     }
   }
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-  await params.onLearning?.({
-    learning: parsed.learning,
-    sessionKey: params.sessionKey,
-    storePath,
-  });
   return {
     status: "complete",
+    learning: parsed.learning,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
     followUp: parsed.followUp,
     userMessage: parsed.userMessage,
     responseLength: response.trim().length,

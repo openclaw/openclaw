@@ -108,25 +108,27 @@ function buildDirectDmContext(
   });
 }
 
-export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmParams): Promise<{
-  route: DirectDmRoute;
-  ctxPayload: FinalizedMsgContext;
-}> {
+function prepareDirectDmTurn(params: DispatchInboundDirectDmParams) {
   const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
   });
-
   const body = buildEnvelope({
     channel: params.channelLabel,
     from: params.conversationLabel,
     body: params.rawBody,
     timestamp: params.timestamp,
   });
+  return { route, ctxPayload: buildDirectDmContext(params, route, body) };
+}
 
-  const ctxPayload = buildDirectDmContext(params, route, body);
+export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmParams): Promise<{
+  route: DirectDmRoute;
+  ctxPayload: FinalizedMsgContext;
+}> {
+  const { route, ctxPayload } = prepareDirectDmTurn(params);
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,
@@ -154,7 +156,6 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   return { route, ctxPayload };
 }
 
-/** Released runtime-shaped facade retained for external channel plugins. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: DispatchInboundDirectDmParams & { runtime: PluginRuntime },
 ): Promise<{
@@ -162,20 +163,8 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-  });
+  const { route, ctxPayload } = prepareDirectDmTurn(params);
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: route.agentId });
-  const body = buildEnvelope({
-    channel: params.channelLabel,
-    from: params.conversationLabel,
-    body: params.rawBody,
-    timestamp: params.timestamp,
-  });
-  const ctxPayload = buildDirectDmContext(params, route, body);
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,

@@ -74,6 +74,18 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(state.calls).toBe(4);
   });
 
+  it("retries conflict messages rejected as strings", async () => {
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(`reply session initialization conflicted for ${SESSION_KEY}`)
+      .mockResolvedValue("ok");
+
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
+      "ok",
+    );
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
   it("rethrows the conflict after exhausting all attempts", async () => {
     const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
     await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(

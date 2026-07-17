@@ -117,8 +117,7 @@ function collectLegacyZalouserDmEntries(
       const pending = entries.get(groupKey) ?? {
         agentId,
         canonicalKey,
-        // Identity links can collapse several legacy peers. Preserve the freshest
-        // session, preferring an existing canonical row when timestamps tie.
+        // Identity links can collapse peers; preserve the freshest row, preferring canonical ties.
         entry:
           canonicalEntry && canonicalEntry.updatedAt >= entry.updatedAt ? canonicalEntry : entry,
         legacyKeys: [],
@@ -230,10 +229,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "zalouser-direct-session-keys",
     label: "Zalo Personal direct-message sessions",
     detectLegacyState({ config, env }) {
-      const count = collectLegacyZalouserDmEntries(config, env).reduce(
-        (total, { legacyKeys }) => total + legacyKeys.length,
-        0,
-      );
+      const count = collectLegacyZalouserDmEntries(config, env).flatMap(
+        ({ legacyKeys }) => legacyKeys,
+      ).length;
       return count > 0
         ? { preview: [`- Zalo Personal direct-message session keys: ${count} legacy row(s)`] }
         : null;

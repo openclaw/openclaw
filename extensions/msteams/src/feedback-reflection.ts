@@ -82,13 +82,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       thumbedDownResponse: params.thumbedDownResponse,
       userComment: params.userComment,
       cooldownMs,
-      onLearning: async (learning) => {
-        try {
-          await storeSessionLearning(learning);
-        } catch (err) {
-          log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
-        }
-      },
       onRecordError: (err) =>
         log.debug?.("reflection session record failed", { error: formatUnknownError(err) }),
       onDispatchError: (err) =>
@@ -111,6 +104,15 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     responseLength: reflection.responseLength,
     followUp: reflection.followUp,
   });
+  try {
+    await storeSessionLearning({
+      storePath: reflection.storePath,
+      sessionKey,
+      learning: reflection.learning,
+    });
+  } catch (err) {
+    log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
+  }
 
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
