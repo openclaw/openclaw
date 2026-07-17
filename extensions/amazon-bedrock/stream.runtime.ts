@@ -75,6 +75,14 @@ import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 
+function clearStreamingScratch(blocks: Array<TextContent | ThinkingContent | ToolCall>): void {
+  for (const block of blocks) {
+    delete (block as Block).index;
+    // partialJson is only a streaming scratch buffer; never persist it.
+    delete (block as Block).partialJson;
+  }
+}
+
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
 }
@@ -280,6 +288,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       }
 
       let sawMessageStop = false;
+      // Bedrock emits reasoning signature bytes before the content-block
+      // lifecycle proves they are complete. Keep partial bytes out of the
+      // replay-visible output until contentBlockStop commits them.
+      const pendingThinkingSignatures = new Map<number, string>();
       for await (const item of response.stream!) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
@@ -291,9 +303,21 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         } else if (item.contentBlockStart) {
           handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
         } else if (item.contentBlockDelta) {
-          handleContentBlockDelta(item.contentBlockDelta, blocks, output, eventSink);
+          handleContentBlockDelta(
+            item.contentBlockDelta,
+            blocks,
+            output,
+            eventSink,
+            pendingThinkingSignatures,
+          );
         } else if (item.contentBlockStop) {
-          handleContentBlockStop(item.contentBlockStop, blocks, output, eventSink);
+          handleContentBlockStop(
+            item.contentBlockStop,
+            blocks,
+            output,
+            eventSink,
+            pendingThinkingSignatures,
+          );
         } else if (item.messageStop) {
           sawMessageStop = true;
           if ((item.messageStop.stopReason as string | undefined) === "refusal") {
@@ -336,14 +360,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       }
 
       refusalBuffer?.flush();
+      clearStreamingScratch(output.content);
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) {
-        delete (block as Block).index;
-        // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as Block).partialJson;
-      }
+      clearStreamingScratch(output.content);
       if (refusalBuffer) {
         refusalBuffer.discard();
         output.content = [];
@@ -499,6 +520,7 @@ function handleContentBlockDelta(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  pendingThinkingSignatures: Map<number, string>,
 ): void {
   const contentBlockIndex = event.contentBlockIndex!;
   const delta = event.delta;
@@ -555,8 +577,16 @@ function handleContentBlockDelta(
         });
       }
       if (delta.reasoningContent.signature) {
-        thinkingBlock.thinkingSignature =
-          (thinkingBlock.thinkingSignature || "") + delta.reasoningContent.signature;
+        const pendingSignature = pendingThinkingSignatures.get(contentBlockIndex);
+        if (pendingSignature === undefined) {
+          thinkingBlock.thinkingSignature = "";
+          pendingThinkingSignatures.set(contentBlockIndex, delta.reasoningContent.signature);
+        } else {
+          pendingThinkingSignatures.set(
+            contentBlockIndex,
+            pendingSignature + delta.reasoningContent.signature,
+          );
+        }
       }
     }
   }
@@ -582,8 +612,15 @@ function handleContentBlockStop(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  pendingThinkingSignatures: Map<number, string>,
 ): void {
-  const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
+  const contentBlockIndex = event.contentBlockIndex;
+  const pendingSignature =
+    contentBlockIndex === undefined ? undefined : pendingThinkingSignatures.get(contentBlockIndex);
+  if (contentBlockIndex !== undefined) {
+    pendingThinkingSignatures.delete(contentBlockIndex);
+  }
+  const index = blocks.findIndex((b) => b.index === contentBlockIndex);
   const block = blocks[index];
   if (!block) {
     return;
@@ -595,6 +632,9 @@ function handleContentBlockStop(
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
+      if (pendingSignature !== undefined) {
+        block.thinkingSignature = pendingSignature;
+      }
       stream.push({
         type: "thinking_end",
         contentIndex: index,

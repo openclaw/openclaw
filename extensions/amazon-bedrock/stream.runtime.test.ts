@@ -52,6 +52,15 @@ async function* streamEvents(events: unknown[]) {
   }
 }
 
+function thinkingBlocks(message: { content?: unknown[] }) {
+  return (message.content ?? []).filter(
+    (block): block is { type: "thinking"; thinking?: string; thinkingSignature?: string } =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "thinking",
+  );
+}
+
 async function captureClientRegion(
   model: Parameters<typeof streamBedrock>[0],
   options: Parameters<typeof streamBedrock>[2] = {},
@@ -214,6 +223,157 @@ describe("Bedrock reasoning replay", () => {
     );
 
     expect(messages).toEqual([]);
+  });
+});
+
+describe("Bedrock reasoning stream ingest", () => {
+  const model = () =>
+    bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+
+  it("commits streamed reasoning signatures only after the content block stops", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { text: "step by step" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { signature: "chunk1" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { signature: "chunk2" } },
+          },
+        },
+        { contentBlockStop: { contentBlockIndex: 0 } },
+        { messageStop: { stopReason: BedrockStopReason.END_TURN } },
+      ]),
+    } as never);
+
+    const result = await streamBedrock(model(), {
+      messages: [{ role: "user", content: "Think.", timestamp: 0 }],
+    } as never).result();
+
+    expect(thinkingBlocks(result)).toEqual([
+      { type: "thinking", thinking: "step by step", thinkingSignature: "chunk1chunk2" },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "the stream ends before contentBlockStop",
+      events: [
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { text: "partial reasoning" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { signature: "partial-signature" } },
+          },
+        },
+      ],
+      stopReason: "stop",
+    },
+    {
+      name: "the provider errors before contentBlockStop",
+      events: [
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { text: "partial reasoning" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { signature: "partial-signature" } },
+          },
+        },
+        {
+          validationException: Object.assign(new Error("Invalid signature in thinking block"), {
+            name: "ValidationException",
+          }),
+        },
+      ],
+      stopReason: "error",
+    },
+  ])("does not persist signature deltas when $name", async ({ events, stopReason }) => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents(events),
+    } as never);
+
+    const result = await streamBedrock(model(), {
+      messages: [{ role: "user", content: "Think.", timestamp: 0 }],
+    } as never).result();
+
+    expect(result.stopReason).toBe(stopReason);
+    expect(thinkingBlocks(result)).toEqual([
+      { type: "thinking", thinking: "partial reasoning", thinkingSignature: "" },
+    ]);
+  });
+
+  it("commits only stopped signatures across interleaved thinking blocks", async () => {
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { text: "first" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 1,
+            delta: { reasoningContent: { text: "second" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 1,
+            delta: { reasoningContent: { signature: "complete-second" } },
+          },
+        },
+        {
+          contentBlockDelta: {
+            contentBlockIndex: 0,
+            delta: { reasoningContent: { signature: "partial-first" } },
+          },
+        },
+        { contentBlockStop: { contentBlockIndex: 1 } },
+      ]),
+    } as never);
+
+    const result = await streamBedrock(model(), {
+      messages: [{ role: "user", content: "Think.", timestamp: 0 }],
+    } as never).result();
+
+    expect(thinkingBlocks(result)).toEqual([
+      { type: "thinking", thinking: "first", thinkingSignature: "" },
+      { type: "thinking", thinking: "second", thinkingSignature: "complete-second" },
+    ]);
   });
 });
 
