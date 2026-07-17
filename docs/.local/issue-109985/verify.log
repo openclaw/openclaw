@@ -1,0 +1,76 @@
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+
+ RUN  v4.1.10 /home/lizeyu/workspace/openclaw/.worktree/pr-109985
+
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+   Start at  05:12:44
+   Duration  885ms (transform 712ms, setup 558ms, import 11ms, tests 153ms, environment 0ms)
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `externalize-deps`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `inject-file-scope-variables`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+
+ RUN  v4.1.10 /home/lizeyu/workspace/openclaw/.worktree/pr-109985
+
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  05:13:07
+   Duration  1.05s (transform 803ms, setup 552ms, import 242ms, tests 140ms, environment 0ms)
+
