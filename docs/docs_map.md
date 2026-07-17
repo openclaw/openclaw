@@ -5195,6 +5195,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Quick Chat
   - H3: Canvas
   - H2: CLI and SSH alternative
   - H2: Node capabilities

@@ -65,6 +65,17 @@
           "local": true,
           "windows": ["canvas"],
           "permissions": ["allow-canvas-a2ui-action"]
+        },
+        {
+          "identifier": "quickchat",
+          "description": "Quick Chat can load the default agent, send a message, and receive window events.",
+          "local": true,
+          "windows": ["quickchat"],
+          "permissions": [
+            "allow-quickchat",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
         }
       ]
     }
