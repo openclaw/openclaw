@@ -425,7 +425,10 @@ describe("session-store-runtime compatibility surface", () => {
       abortedLastRun: false,
       sessionId: "compat-replacement-session",
     });
-    const replacedEntry = loadInternalSessionEntry({ sessionKey: keptKey, storePath });
+    const replacedEntry = loadInternalSessionEntry({
+      sessionKey: keptKey,
+      storePath,
+    }) as InternalSessionEntry | undefined;
     expect(replacedEntry?.mainRestartRecovery).toBeUndefined();
     expect(replacedEntry?.restartRecoveryRuns).toBeUndefined();
   });

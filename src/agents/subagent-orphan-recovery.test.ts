@@ -724,7 +724,7 @@ describe("subagent-orphan-recovery", () => {
     });
 
     expect(result.recovered).toBe(1);
-    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(dispatchAgent).toHaveBeenCalledOnce();
     expect(sessionAccessor.patchSessionEntry).toHaveBeenCalledOnce();
     const sessionEntry = requireRecord(
       store["agent:main:subagent:test-session-1"],

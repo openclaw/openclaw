@@ -49,8 +49,8 @@ describe("agent command restart recovery ownership", () => {
     ).rejects.toThrow("interrupted work pending restart recovery");
     expect(run).not.toHaveBeenCalled();
     expect(
-      loadSessionEntry({ sessionKey, storePath: target.storePath })?.mainRestartRecovery
-        ?.foregroundClaims,
+      (loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry | undefined)
+        ?.mainRestartRecovery?.foregroundClaims,
     ).toBeUndefined();
   });
 

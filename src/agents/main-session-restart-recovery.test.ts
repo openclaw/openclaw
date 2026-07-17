@@ -9,7 +9,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   listSessionEntries,
-  loadSessionEntry,
+  loadSessionEntry as loadSessionEntryRaw,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -118,6 +118,12 @@ vi.mock("../plugins/restart-recovery-hook-safety.js", () => ({
 }));
 
 let tmpDir: string;
+
+function loadSessionEntry(
+  scope: Parameters<typeof loadSessionEntryRaw>[0],
+): SessionEntry | undefined {
+  return loadSessionEntryRaw(scope) as SessionEntry | undefined;
+}
 
 beforeEach(async () => {
   vi.clearAllMocks();
