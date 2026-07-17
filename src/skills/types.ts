@@ -115,7 +115,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 2;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
 
 export type SkillSnapshot = {
   prompt: string;

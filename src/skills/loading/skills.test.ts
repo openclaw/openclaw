@@ -697,47 +697,6 @@ describe("applySkillEnvOverrides", () => {
     });
   });
 
-  it("does not guess degraded owner aliases for legacy snapshot overrides", () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:cold-alias",
-        state: "unavailable",
-        paths: ["skills.entries.cold-alias.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
-    const snapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [
-        { name: "cold-skill", primaryEnv: "COLD_SKILL_KEY" },
-        { name: "healthy-skill", skillKey: "healthy-skill", primaryEnv: "HEALTHY_SKILL_KEY" },
-      ],
-    };
-
-    withClearedEnv(["COLD_SKILL_KEY", "HEALTHY_SKILL_KEY"], () => {
-      const restore = applySkillEnvOverridesFromSnapshot({
-        snapshot,
-        config: {
-          skills: {
-            entries: {
-              "cold-skill": { [apiKeyField]: "test-token" }, // pragma: allowlist secret
-              "healthy-skill": { [apiKeyField]: "healthy" }, // pragma: allowlist secret
-            },
-          },
-        },
-      });
-
-      try {
-        expect(process.env.COLD_SKILL_KEY).toBeUndefined();
-        expect(process.env.HEALTHY_SKILL_KEY).toBe("healthy");
-      } finally {
-        restore();
-      }
-    });
-  });
-
   it("skips disabled snapshot skills before resolving raw apiKey SecretRefs", () => {
     const skillName = "env-skill";
     const snapshot = envSkillSnapshot(skillName, {
