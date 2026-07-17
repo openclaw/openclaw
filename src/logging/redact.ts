@@ -1,4 +1,9 @@
-import { findStructuredAuthParamRanges, redactStructuredAuthHeaders } from "@openclaw/acp-core";
+import {
+  findStructuredAuthParamRanges,
+  HTTP_AUTH_SCHEME_PATTERN,
+  HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
+  redactStructuredAuthHeaders,
+} from "@openclaw/acp-core";
 import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -132,10 +137,10 @@ const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
 const TELEGRAM_BOT_TOKEN_REDACT_PATTERN = String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const TELEGRAM_TOKEN_REDACT_PATTERN = String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`;
 const HTTP_AUTH_HEADER_REDACT_PATTERNS = [
-  String.raw`(^|[\s,{])Proxy-Authorization\s*[:=]\s*[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)`,
-  String.raw`(^|[\s,{])Proxy-Authorization\s*[:=]\s*([^\s"',;]+)(?=$|[\r\n,;])`,
-  String.raw`(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic|Bot)\b)[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)`,
-  String.raw`(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic|Bot)\b)([^\s"',;]+)(?=$|[\r\n,;])`,
+  String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+  String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
+  String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=\s))${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+  String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic|Bot)(?=\s))([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
   String.raw`(^|[\s,{])(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)\s*[:=]\s*([^\s"',;]+)`,
 ] as const;
 const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
@@ -171,12 +176,12 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // CLI flags.
   String.raw`--(?:api[-_]?key|hook[-_]?token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|credential|private[-_]?key|client[-_]?secret|${PAYMENT_CREDENTIAL_QUERY_KEYS})\s+(?!(?:or|and)\b(?=\s+--))(["']?)([^\s"']+)\1`,
   // Authorization headers.
-  String.raw`(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
-  String.raw`(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)`,
-  String.raw`(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Bot\s+([A-Za-z0-9._\-+=]{18,})`,
+  String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer\s+([-A-Za-z0-9._~+/=]+)`,
+  String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic\s+([A-Za-z0-9+/=]+)`,
+  String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bot\s+([A-Za-z0-9._\-+=]{18,})`,
   ...HTTP_AUTH_HEADER_REDACT_PATTERNS,
   String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
-  String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
+  String.raw`\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])`,
   // URL userinfo and common connection-string password slots.
   String.raw`\b(?:https?|wss?|ftp):\/\/[^\/\s:@]*:([^\/\s@]+)@`,
   String.raw`\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqps?):\/\/[^:\s/@]*:([^@\s]+)@`,

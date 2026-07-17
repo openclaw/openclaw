@@ -1,5 +1,11 @@
-const STRUCTURED_AUTH_HEADER_RE =
-  /(^|[^A-Za-z0-9_-])(["']?)(?:Proxy-)?Authorization\2\s*[:=]\s*(["']?)([A-Za-z0-9!#$%&'*+.^_`|~-]+)\s+/giu;
+export const HTTP_AUTH_SCHEME_PATTERN = "[A-Za-z0-9!#$%&'*+.^_`|~-]+";
+// Each JSON encoding doubles delimiter slashes and adds one. The cap covers six nested
+// encodings while keeping credential redaction regex work bounded on hostile diagnostics.
+export const HTTP_AUTH_SERIALIZED_QUOTE_PATTERN = String.raw`(?:\\{1,64}["']|["']|)`;
+const STRUCTURED_AUTH_HEADER_RE = new RegExp(
+  String.raw`(^|[^A-Za-z0-9_-])(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})\s+`,
+  "giu",
+);
 const AUTH_PARAM_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AUTH_PARAM_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
 const AWS_SCOPE_VALUE_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~:/-]+/u;
@@ -24,9 +30,13 @@ function readParamValue(
   start: number,
   options: { awsScope: boolean; signedHeaders: boolean },
 ): number | null {
-  const escapedQuotes = value[start] === "\\" && value[start + 1] === '"';
+  let escapedQuoteSlashCount = 0;
+  while (value[start + escapedQuoteSlashCount] === "\\") {
+    escapedQuoteSlashCount += 1;
+  }
+  const escapedQuotes = escapedQuoteSlashCount > 0 && value[start + escapedQuoteSlashCount] === '"';
   if (value[start] === '"' || escapedQuotes) {
-    let cursor = start + (escapedQuotes ? 2 : 1);
+    let cursor = start + (escapedQuotes ? escapedQuoteSlashCount + 1 : 1);
     while (cursor < value.length && value[cursor] !== "\r" && value[cursor] !== "\n") {
       if (escapedQuotes && value[cursor] === "\\") {
         let slashEnd = cursor + 1;
@@ -35,7 +45,7 @@ function readParamValue(
         }
         if (value[slashEnd] === '"') {
           const slashCount = slashEnd - cursor;
-          if (slashCount % 4 === 1) {
+          if (slashCount % (2 * (escapedQuoteSlashCount + 1)) === escapedQuoteSlashCount) {
             return slashEnd + 1;
           }
           cursor = slashEnd + 1;
@@ -83,7 +93,7 @@ function readParamValue(
 export function findStructuredAuthParamRanges(value: string): StructuredAuthParamRange[] {
   const ranges: StructuredAuthParamRange[] = [];
   for (const header of value.matchAll(STRUCTURED_AUTH_HEADER_RE)) {
-    const scheme = (header[4] ?? "").toLowerCase();
+    const scheme = (header[2] ?? "").toLowerCase();
     let cursor = (header.index ?? 0) + header[0].length;
     const rangeStart = cursor;
     let rangeEnd = cursor;

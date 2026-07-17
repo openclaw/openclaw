@@ -457,6 +457,62 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText(input, { mode: "tools" })).toBe(`{"Authorization":"***"}`);
   });
 
+  it("masks nested serialized auth objects", () => {
+    const response = ["nested", "digest", "response", "1234567890abcdef"].join("-");
+    const header = { Authorization: `Digest response="${response}\\\\"` };
+    const input = JSON.stringify(JSON.stringify(header));
+
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Digest ***" })),
+    );
+    expect(redactSensitiveText(JSON.stringify(header), { mode: "tools" })).toBe(
+      JSON.stringify({ Authorization: "***" }),
+    );
+  });
+
+  it("masks token credentials for punctuated auth schemes", () => {
+    const token = ["extension", "token", "1234567890abcdef"].join("-");
+    const basicCredential = ["dXNl", "cjpw", "YXNz"].join("");
+    const nestedBasic = JSON.stringify(
+      JSON.stringify({ Authorization: `Basic ${basicCredential}` }),
+    );
+    const bearerCredential = ["/opaque", "~bearer", "1234567890abcdef"].join("-");
+    const nestedBearer = JSON.stringify(
+      JSON.stringify({ Authorization: `Bearer ${bearerCredential}` }),
+    );
+    const opaqueCredential = ["opaque", "credential", "1234567890abcdef"].join("-");
+    const nestedOpaque = JSON.stringify(
+      JSON.stringify({
+        Authorization: opaqueCredential,
+        "Proxy-Authorization": opaqueCredential,
+      }),
+    );
+
+    expect(
+      redactSensitiveText(`Authorization: Foo+Bar ${token}; status=401`, { mode: "tools" }),
+    ).toBe("Authorization: Foo+Bar extens…cdef; status=401");
+    expect(
+      redactSensitiveText(`Authorization: Basic+Foo ${token}; status=401`, { mode: "tools" }),
+    ).toBe("Authorization: Basic+Foo extens…cdef; status=401");
+    expect(redactSensitiveText(nestedBasic, { mode: "tools" })).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Basic ***" })),
+    );
+    expect(
+      redactSensitiveText(`Authorization: Bearer ${bearerCredential}`, { mode: "tools" }),
+    ).toBe("Authorization: Bearer /opaqu…cdef");
+    expect(redactSensitiveText(nestedBearer, { mode: "tools" })).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Bearer /opaqu…cdef" })),
+    );
+    expect(redactSensitiveText(nestedOpaque, { mode: "tools" })).toBe(
+      JSON.stringify(
+        JSON.stringify({
+          Authorization: "opaque…cdef",
+          "Proxy-Authorization": "opaque…cdef",
+        }),
+      ),
+    );
+  });
+
   it("keeps token68 padding out of structured auth parsing", () => {
     expect(
       redactSensitiveText("Authorization: Basic dXNlcg==, status=401", { mode: "tools" }),

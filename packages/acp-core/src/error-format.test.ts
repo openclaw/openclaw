@@ -112,6 +112,61 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  it("redacts nested serialized headers and punctuated token schemes", () => {
+    const response = ["nested", "digest", "response", "1234567890abcdef"].join("-");
+    const header = { Authorization: `Digest response="${response}\\\\"` };
+    const serialized = JSON.stringify(JSON.stringify(header));
+    const token = ["extension", "token", "1234567890abcdef"].join("-");
+    const basicCredential = ["dXNl", "cjpw", "YXNz"].join("");
+    const nestedBasic = JSON.stringify(
+      JSON.stringify({ Authorization: `Basic ${basicCredential}` }),
+    );
+    const bearerCredential = ["/opaque", "~bearer", "1234567890abcdef"].join("-");
+    const nestedBearer = JSON.stringify(
+      JSON.stringify({ Authorization: `Bearer ${bearerCredential}` }),
+    );
+    const opaqueCredential = ["opaque", "credential", "1234567890abcdef"].join("-");
+    const nestedOpaque = JSON.stringify(
+      JSON.stringify({
+        Authorization: opaqueCredential,
+        "Proxy-Authorization": opaqueCredential,
+      }),
+    );
+
+    expect(redactSensitiveText(serialized)).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Digest [REDACTED]" })),
+    );
+    expect(redactSensitiveText(JSON.stringify(header))).toBe(
+      JSON.stringify({ Authorization: "[REDACTED]" }),
+    );
+    expect(redactSensitiveText(`Authorization: Foo+Bar ${token}; status=401`)).toBe(
+      "Authorization: Foo+Bar [REDACTED]; status=401",
+    );
+    expect(redactSensitiveText(`Authorization: Basic+Foo ${token}; status=401`)).toBe(
+      "Authorization: Basic+Foo [REDACTED]; status=401",
+    );
+    expect(redactSensitiveText(nestedBasic)).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Basic [REDACTED]" })),
+    );
+    expect(redactSensitiveText(`Authorization: Bearer ${bearerCredential}`)).toBe(
+      "Authorization: Bearer [REDACTED]",
+    );
+    expect(redactSensitiveText(`request failed: Bearer ${bearerCredential}`)).toBe(
+      "request failed: Bearer [REDACTED]",
+    );
+    expect(redactSensitiveText(nestedBearer)).toBe(
+      JSON.stringify(JSON.stringify({ Authorization: "Bearer [REDACTED]" })),
+    );
+    expect(redactSensitiveText(nestedOpaque)).toBe(
+      JSON.stringify(
+        JSON.stringify({
+          Authorization: "[REDACTED]",
+          "Proxy-Authorization": "[REDACTED]",
+        }),
+      ),
+    );
+  });
+
   it("does not confuse real marker prefixes with internal redaction state", () => {
     const envKey = ["API", "_", "KEY"].join("");
     const prefixedSecret = ["***", "live", "secret", "1234567890abcdef"].join("-");

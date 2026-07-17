@@ -1,5 +1,9 @@
 // ACP Core helper module supports error format behavior.
-import { redactStructuredAuthHeaders } from "./structured-auth-redaction.js";
+import {
+  HTTP_AUTH_SCHEME_PATTERN,
+  HTTP_AUTH_SERIALIZED_QUOTE_PATTERN,
+  redactStructuredAuthHeaders,
+} from "./structured-auth-redaction.js";
 
 const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g,
@@ -9,15 +13,33 @@ const SECRET_PATTERNS: RegExp[] = [
   /(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
   /(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
   /--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token)\s+(["']?)([^\s"']+)\1/gi,
-  /(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
-  /(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
-  /(^|[\s,{])Proxy-Authorization\s*[:=]\s*[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)/gi,
-  /(^|[\s,{])Proxy-Authorization\s*[:=]\s*([^\s"',;]+)(?=$|[\r\n,;])/gi,
-  /(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic)\b)[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)/gi,
-  /(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic)\b)([^\s"',;]+)(?=$|[\r\n,;])/gi,
+  new RegExp(
+    String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Bearer\s+([-A-Za-z0-9._~+/=]+)`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`(?<![A-Za-z0-9_-])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}Basic\s+([A-Za-z0-9+/=]+)`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`(^|[\s,{\\\["'])Proxy-Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=\s))${HTTP_AUTH_SCHEME_PATTERN}\s+([^\s\\"',;]+)`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`(^|[\s,{\\\["'])Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}\s*[:=]\s*${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?!(?:Bearer|Basic)(?=\s))([^\s\\"',;]+)(?=${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(?:$|[\r\n,;}\]]))`,
+    "gi",
+  ),
   /(^|[\s,{])(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)\s*[:=]\s*([^\s"',;]+)/gi,
   /(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
-  /\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b/g,
+  /\bBearer\s+([-A-Za-z0-9._~+/=]{18,})(?![-A-Za-z0-9._~+/=])/g,
   /(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token)=([^\s&#]+)/gi,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----/g,
   /\b(sk-[A-Za-z0-9_-]{8,})\b/g,
