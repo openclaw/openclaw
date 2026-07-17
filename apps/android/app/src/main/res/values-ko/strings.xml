@@ -265,6 +265,7 @@
     <string name="native_2cad0766accc2d3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"세션 이름 바꾸기"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사진 보관함 접근을 허용하세요."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"이전 응답에서 이미 이 승인을 처리했습니다."</string>
+    <string name="native_2df01a03ff43400b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"일치하는 항목 없음"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"선택한 앱의 알림 읽기"</string>
     <string name="native_2e0078a8322d6f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"사용 가능 여부 알 수 없음"</string>
     <string name="native_2e1a9e093a59670c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"대화 설정"</string>
@@ -460,6 +461,7 @@
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 인증을 확인해야 합니다."</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"연결 세부 정보"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"밀리초"</string>
+    <string name="native_526c70b826b96818" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"음성 인식"</string>
     <string name="native_526e0087cc3f254d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"설명"</string>
     <string name="native_529ef4c48988f2fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"최근 대화"</string>
     <string name="native_52aadec039d80320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"휴대폰은 이 정보를 OpenClaw가 운영하는 서버가 아니라 사용자의 Gateway로 전송합니다. Gateway는 사용자가 선택한 AI 제공자에 대한 요청에 이 정보를 포함할 수 있습니다."</string>

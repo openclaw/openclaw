@@ -265,6 +265,7 @@
     <string name="native_2cad0766accc2d3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessie hernoemen"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Toegang tot fotobibliotheek toestaan."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Een eerdere reactie heeft deze goedkeuring al afgehandeld."</string>
+    <string name="native_2df01a03ff43400b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen overeenkomsten"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meldingen van geselecteerde apps lezen"</string>
     <string name="native_2e0078a8322d6f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beschikbaarheid onbekend"</string>
     <string name="native_2e1a9e093a59670c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Talk instellen"</string>
@@ -460,6 +461,7 @@
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway-authenticatie vereist aandacht."</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbindingsdetails"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Milliseconden"</string>
+    <string name="native_526c70b826b96818" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spraakherkenning"</string>
     <string name="native_526e0087cc3f254d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beschrijving"</string>
     <string name="native_529ef4c48988f2fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Recente gesprekken"</string>
     <string name="native_52aadec039d80320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Je telefoon verzendt deze informatie naar je Gateway, niet naar een server die door OpenClaw wordt beheerd. Je Gateway kan deze opnemen in verzoeken aan de door jou gekozen AI-provider."</string>

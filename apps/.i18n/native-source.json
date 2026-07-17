@@ -835,7 +835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1943,
+      "line": 1944,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This automation already has a queued run.",
       "surface": "android",
@@ -843,7 +843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1973,
+      "line": 1974,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation run queued.",
       "surface": "android",
@@ -851,7 +851,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1973,
+      "line": 1974,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation started.",
       "surface": "android",
@@ -859,7 +859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1986,
+      "line": 1987,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway rejected the automation run.",
       "surface": "android",
@@ -867,7 +867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2017,
+      "line": 2018,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation enabled.",
       "surface": "android",
@@ -875,7 +875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2017,
+      "line": 2018,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation paused.",
       "surface": "android",
@@ -883,7 +883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2039,
+      "line": 2040,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This automation changed on the gateway. Review the latest version before saving again.",
       "surface": "android",
@@ -891,7 +891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2045,
+      "line": 2046,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation updated.",
       "surface": "android",
@@ -899,7 +899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2060,
+      "line": 2061,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Automation deleted.",
       "surface": "android",
@@ -907,7 +907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2265,
+      "line": 2266,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Node offline. Reconnect and retry.",
       "surface": "android",
@@ -915,7 +915,7 @@
     },
     {
       "kind": "ui-named-argument-concatenated",
-      "line": 2276,
+      "line": 2277,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Restore canvas now for session=$sessionKey source=$source. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas.",
       "surface": "android",
@@ -923,7 +923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2297,
+      "line": 2298,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed to request restore. Tap to retry.",
       "surface": "android",
@@ -931,7 +931,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 2308,
+      "line": 2309,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "No canvas update yet. Tap to retry.",
       "surface": "android",
@@ -939,7 +939,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3206,
+      "line": 3237,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect to a Gateway to save wake words",
       "surface": "android",
@@ -947,7 +947,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3234,
+      "line": 3265,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Wake words saved",
       "surface": "android",
@@ -955,7 +955,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3243,
+      "line": 3274,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not save wake words",
       "surface": "android",
@@ -963,7 +963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3930,
+      "line": 3966,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -971,7 +971,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3934,
+      "line": 3970,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -979,7 +979,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 3938,
+      "line": 3974,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -987,7 +987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 3982,
+      "line": 4018,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -995,7 +995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 4165,
+      "line": 4201,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -1003,7 +1003,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4899,
+      "line": 4935,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load provider catalog.",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4930,
+      "line": 4966,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Update your Gateway to view provider model config.",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4932,
+      "line": 4968,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load provider model config.",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 4948,
+      "line": 4984,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Provider models loaded, but readiness is unavailable.",
       "surface": "android",
@@ -1035,7 +1035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5035,
+      "line": 5071,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automations.",
       "surface": "android",
@@ -1043,7 +1043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5121,
+      "line": 5157,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect automations.",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5131,
+      "line": 5167,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway returned an invalid automation.",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5135,
+      "line": 5171,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automation.",
       "surface": "android",
@@ -1067,7 +1067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5147,
+      "line": 5183,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect automation run history.",
       "surface": "android",
@@ -1075,7 +1075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5178,
+      "line": 5214,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load automation run history.",
       "surface": "android",
@@ -1083,7 +1083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5195,
+      "line": 5231,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron changes require operator.admin access.",
       "surface": "android",
@@ -1091,7 +1091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5204,
+      "line": 5240,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to manage automations.",
       "surface": "android",
@@ -1099,7 +1099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5216,
+      "line": 5252,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Another cron action is still finishing.",
       "surface": "android",
@@ -1107,7 +1107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5263,
+      "line": 5299,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron action failed.",
       "surface": "android",
@@ -1115,7 +1115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5390,
+      "line": 5426,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load usage.",
       "surface": "android",
@@ -1123,7 +1123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5425,
+      "line": 5461,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load skills.",
       "surface": "android",
@@ -1131,7 +1131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5438,
+      "line": 5474,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to update skills.",
       "surface": "android",
@@ -1139,7 +1139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5442,
+      "line": 5478,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This gateway connection needs operator.admin to update skills.",
       "surface": "android",
@@ -1147,7 +1147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5457,
+      "line": 5493,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not disable skill.",
       "surface": "android",
@@ -1155,7 +1155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5457,
+      "line": 5493,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not enable skill.",
       "surface": "android",
@@ -1163,7 +1163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5475,
+      "line": 5511,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to search ClawHub skills.",
       "surface": "android",
@@ -1171,7 +1171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5521,
+      "line": 5557,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not search ClawHub skills.",
       "surface": "android",
@@ -1179,7 +1179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5534,
+      "line": 5570,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect ClawHub skills.",
       "surface": "android",
@@ -1187,7 +1187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5567,
+      "line": 5603,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "ClawHub did not return an installable version for ${skill.slug}.",
       "surface": "android",
@@ -1195,7 +1195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5583,
+      "line": 5619,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load ClawHub details for ${skill.slug}.",
       "surface": "android",
@@ -1203,7 +1203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5599,
+      "line": 5635,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to install ClawHub skills.",
       "surface": "android",
@@ -1211,7 +1211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5615,
+      "line": 5651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This gateway connection needs operator.admin to install ClawHub skills.",
       "surface": "android",
@@ -1219,7 +1219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 5705,
+      "line": 5741,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Installed $slug.",
       "surface": "android",
@@ -1227,7 +1227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5712,
+      "line": 5748,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not install ${slug} from ClawHub.",
       "surface": "android",
@@ -1235,7 +1235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5752,
+      "line": 5788,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to load Skill Workshop proposals.",
       "surface": "android",
@@ -1243,7 +1243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5792,
+      "line": 5828,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load Skill Workshop proposals.",
       "surface": "android",
@@ -1251,7 +1251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5812,
+      "line": 5848,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to inspect Skill Workshop proposals.",
       "surface": "android",
@@ -1259,7 +1259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5864,
+      "line": 5900,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not inspect Skill Workshop proposal.",
       "surface": "android",
@@ -1267,7 +1267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5884,
+      "line": 5920,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Skill Workshop proposal actions require operator.admin scope.",
       "surface": "android",
@@ -1275,7 +1275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 5889,
+      "line": 5925,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "surface": "android",
@@ -1283,7 +1283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 6048,
+      "line": 6084,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected",
       "surface": "android",
@@ -1291,7 +1291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6074,
+      "line": 6110,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load nodes and devices.",
       "surface": "android",
@@ -1299,7 +1299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6732,
+      "line": 6768,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load channels.",
       "surface": "android",
@@ -1307,7 +1307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6762,
+      "line": 6798,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load dreaming.",
       "surface": "android",
@@ -1315,7 +1315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 6799,
+      "line": 6835,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Could not load gateway logs.",
       "surface": "android",
@@ -1323,7 +1323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7256,
+      "line": 7292,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "One time",
       "surface": "android",
@@ -1331,7 +1331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7265,
+      "line": 7301,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron",
       "surface": "android",
@@ -1339,7 +1339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7266,
+      "line": 7302,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Scheduled",
       "surface": "android",
@@ -1347,7 +1347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7274,
+      "line": 7310,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${days}d",
       "surface": "android",
@@ -1355,7 +1355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7275,
+      "line": 7311,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${hours}h",
       "surface": "android",
@@ -1363,7 +1363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7276,
+      "line": 7312,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Every ${minutes}m",
       "surface": "android",
@@ -1371,7 +1371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7277,
+      "line": 7313,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Repeating",
       "surface": "android",
@@ -1379,7 +1379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7293,
+      "line": 7329,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "No prompt",
       "surface": "android",
@@ -1387,7 +1387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7310,
+      "line": 7346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway",
       "surface": "android",
@@ -1395,7 +1395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7318,
+      "line": 7354,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connected to $gatewayLabel",
       "surface": "android",
@@ -1403,7 +1403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7319,
+      "line": 7355,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Your agents are ready",
       "surface": "android",
@@ -1411,7 +1411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7321,
+      "line": 7357,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
       "surface": "android",
@@ -1419,7 +1419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7325,
+      "line": 7361,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Selected on this phone",
       "surface": "android",
@@ -1427,7 +1427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7328,
+      "line": 7364,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The overview refreshes on reconnect and when this screen opens.",
       "surface": "android",
@@ -1435,7 +1435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7333,
+      "line": 7369,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Reconnecting",
       "surface": "android",
@@ -1443,7 +1443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7334,
+      "line": 7370,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "OpenClaw is syncing back up",
       "surface": "android",
@@ -1451,7 +1451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7336,
+      "line": 7372,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
       "surface": "android",
@@ -1459,7 +1459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7340,
+      "line": 7376,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Gateway session in progress",
       "surface": "android",
@@ -1467,7 +1467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7343,
+      "line": 7379,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "If the gateway is reachable, reconnect should complete without intervention.",
       "surface": "android",
@@ -1475,7 +1475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7348,
+      "line": 7384,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Welcome to OpenClaw",
       "surface": "android",
@@ -1483,7 +1483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7349,
+      "line": 7385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Your phone stays quiet until it is needed",
       "surface": "android",
@@ -1491,7 +1491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7351,
+      "line": 7387,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
       "surface": "android",
@@ -1499,7 +1499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7355,
+      "line": 7391,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Connect to load your agents",
       "surface": "android",
@@ -1507,7 +1507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7358,
+      "line": 7394,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
       "surface": "android",
@@ -1515,7 +1515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7390,
+      "line": 7426,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Main",
       "surface": "android",
@@ -1523,7 +1523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7405,
+      "line": 7441,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Active on this phone",
       "surface": "android",
@@ -1531,7 +1531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7406,
+      "line": 7442,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Default agent",
       "surface": "android",
@@ -1539,7 +1539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7407,
+      "line": 7443,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Ready",
       "surface": "android",
@@ -1547,7 +1547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 7966,
+      "line": 8002,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Dream",
       "surface": "android",

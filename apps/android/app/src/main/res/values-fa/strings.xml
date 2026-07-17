@@ -265,6 +265,7 @@
     <string name="native_2cad0766accc2d3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تغییر نام جلسه"</string>
     <string name="native_2d4dfe885f84629e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"اجازه دسترسی به کتابخانه عکس را بدهید."</string>
     <string name="native_2d6416405eb44982" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"پاسخ قبلی این تأیید را حل کرده است."</string>
+    <string name="native_2df01a03ff43400b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"موردی یافت نشد"</string>
     <string name="native_2df30b117ad829ab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"خواندن اعلان‌های برنامه‌های انتخاب‌شده"</string>
     <string name="native_2e0078a8322d6f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وضعیت دسترسی نامشخص است"</string>
     <string name="native_2e1a9e093a59670c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"راه‌اندازی مکالمه"</string>
@@ -460,6 +461,7 @@
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"احراز هویت Gateway نیاز به رسیدگی دارد."</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"جزئیات اتصال"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"میلی‌ثانیه"</string>
+    <string name="native_526c70b826b96818" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تشخیص گفتار"</string>
     <string name="native_526e0087cc3f254d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"توضیحات"</string>
     <string name="native_529ef4c48988f2fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"گفتگوهای اخیر"</string>
     <string name="native_52aadec039d80320" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تلفن شما این اطلاعات را به Gateway شما ارسال می‌کند، نه به سروری که توسط OpenClaw اجرا می‌شود. ممکن است Gateway شما آن را در درخواست‌ها به ارائه‌دهندهٔ هوش مصنوعی که انتخاب کرده‌اید بگنجاند."</string>
