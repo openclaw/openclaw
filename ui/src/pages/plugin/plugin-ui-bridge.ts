@@ -45,6 +45,7 @@ export class PluginUiBridgeController {
   private port: MessagePort | null = null;
   private loadHandler: (() => void) | null = null;
   private readyHandler: ((event: MessageEvent) => void) | null = null;
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private bridgeKey = "";
 
   sync(target: PluginUiBridgeTarget | null) {
@@ -75,7 +76,7 @@ export class PluginUiBridgeController {
       }
       this.bridgeKey = nextBridgeKey;
       if (shouldReconnect) {
-        this.connect();
+        this.scheduleConnect();
       }
       return;
     }
@@ -83,7 +84,7 @@ export class PluginUiBridgeController {
     this.clear();
     this.target = target;
     this.bridgeKey = nextBridgeKey;
-    this.loadHandler = () => this.connect();
+    this.loadHandler = () => this.scheduleConnect();
     target.frame.addEventListener("load", this.loadHandler);
     this.readyHandler = (event: MessageEvent) => {
       const data = event.data as { v?: unknown; type?: unknown } | null;
@@ -93,10 +94,23 @@ export class PluginUiBridgeController {
         data?.v === 1 &&
         data.type === "openclaw.pluginUi.ready"
       ) {
-        this.connect();
+        this.scheduleConnect();
       }
     };
     window.addEventListener("message", this.readyHandler);
+  }
+
+  private scheduleConnect() {
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+    }
+    // A sandboxed frame commonly emits its ready message immediately before
+    // the iframe load event. Coalesce both triggers so an action sent on the
+    // first transferred port cannot be orphaned by an immediate replacement.
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      this.connect();
+    }, 20);
   }
 
   private connect() {
@@ -211,11 +225,15 @@ export class PluginUiBridgeController {
     if (this.readyHandler) {
       window.removeEventListener("message", this.readyHandler);
     }
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+    }
     this.port?.close();
     this.target = null;
     this.port = null;
     this.loadHandler = null;
     this.readyHandler = null;
+    this.connectTimer = null;
     this.bridgeKey = "";
   }
 }
