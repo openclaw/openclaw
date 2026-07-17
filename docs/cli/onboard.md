@@ -102,8 +102,11 @@ wizard shows the same page after it prepares the workspace.
 After inference passes (and the memory-import offer), guided onboarding
 applies the standard setup automatically — workspace, Gateway, and sessions,
 the same plan the conversational `openclaw setup` chat would apply on "yes" —
-announces where to find OpenClaw later, and hatches your agent directly in the
-terminal chat. If applying setup fails, onboarding falls back to the
+then offers plugin and skill recommendations from installed apps; app names
+are matched through your configured model and ClawHub search, and the step can
+be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
+It then announces where to find OpenClaw later and hatches your agent directly
+in the terminal chat. If applying setup fails, onboarding falls back to the
 conversational OpenClaw chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel

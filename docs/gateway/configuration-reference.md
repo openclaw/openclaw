@@ -1460,7 +1460,7 @@ Behavior and metadata for CLI guided setup flows (`onboard`, `configure`, `docto
 
 - `wizard.accessMode`: discovery consent chosen at the start of guided onboarding. `"full"` (recommended) lets setup look for AI apps, keys, and local runtimes automatically; `"guarded"` makes setup ask once before looking around and offers manual configuration instead.
 
-`wizard.appRecommendations` defaults to `true`. Set it to `false` to disable installed-application recommendations during classic macOS onboarding and block Gateway `device.apps` access. Node hosts still require their separate, default-off installed-app sharing flag before they advertise the command.
+- `wizard.appRecommendations` defaults to `true`. Set it to `false` to disable installed-application recommendations during guided or classic onboarding and block Gateway `device.apps` access. Node hosts still require their separate, default-off installed-app sharing flag before they advertise the command.
 
 ---
 

@@ -48,6 +48,7 @@ export type GuidedOnboardingDeps = {
   applySetup?: typeof import("../system-agent/setup-apply.js").applySystemAgentSetup;
   launchHatchTui?: (workspace: string) => Promise<void>;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
+  runAppRecommendations?: typeof import("../wizard/setup.app-recommendations.js").setupAppRecommendations;
 };
 
 export type GuidedAccessMode = "full" | "guarded";
@@ -603,7 +604,7 @@ async function runGuidedOnboardingFlow(
 
   await prompter.note(resultLines.join("\n"), t("wizard.guided.appliedTitle"));
   const persistedSnapshot = await readConfigFileSnapshot();
-  const persistedConfig = persistedSnapshot.valid
+  let persistedConfig = persistedSnapshot.valid
     ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
     : acknowledgedConfig;
   // Memory import scans local Claude/Codex/Hermes data; a declined look-around
@@ -642,6 +643,11 @@ async function runGuidedOnboardingFlow(
       if (applied.lines.length > 0) {
         await prompter.note(applied.lines.join("\n"), t("wizard.guided.appliedTitle"));
       }
+      const appliedSnapshot = await readConfigFileSnapshot();
+      if (!appliedSnapshot.valid) {
+        throw new Error("Setup wrote an invalid OpenClaw config.");
+      }
+      persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
     } catch (error) {
       applyProgress.stop(t("wizard.guided.testFailed"));
       await prompter.note(
@@ -651,6 +657,37 @@ async function runGuidedOnboardingFlow(
         t("wizard.guided.aiAccessTitle"),
       );
       return { workspace, next: "chat" };
+    }
+  }
+  if (wantsDiscovery) {
+    const runAppRecommendations =
+      deps.runAppRecommendations ??
+      (await import("../wizard/setup.app-recommendations.js")).setupAppRecommendations;
+    const recommendedConfig = await runAppRecommendations({
+      config: persistedConfig,
+      prompter,
+      runtime,
+      workspaceDir: workspace,
+      modelRouteVerified: true,
+    });
+    if (recommendedConfig !== persistedConfig) {
+      const latestSnapshot = await readConfigFileSnapshot();
+      if (!latestSnapshot.valid) {
+        throw new Error("App recommendations could not update an invalid OpenClaw config.");
+      }
+      const latestConfig = latestSnapshot.sourceConfig ?? latestSnapshot.config;
+      const { mergeWizardConfigOntoLatest, writeWizardConfigFile } =
+        await import("../wizard/setup.shared.js");
+      const mergedConfig = mergeWizardConfigOntoLatest(
+        latestConfig,
+        persistedConfig,
+        recommendedConfig,
+      );
+      await writeWizardConfigFile(mergedConfig, {
+        allowConfigSizeDrop: false,
+        ...(latestSnapshot.hash ? { baseHash: latestSnapshot.hash } : {}),
+        migrationBaseConfig: latestConfig,
+      });
     }
   }
   await prompter.note(t("wizard.guided.findMeLater"), t("wizard.guided.welcomeTitle"));

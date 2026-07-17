@@ -42,15 +42,15 @@ Design principles (decided, do not relitigate casually):
 
 ## Phases
 
-| #   | Phase                                                                                                                                                                     | Surface                  | Status                                                                     |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------- |
-| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | service + classic wizard | PR [#109668](https://github.com/openclaw/openclaw/pull/109668) — in review |
-| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI               | PR [#109841](https://github.com/openclaw/openclaw/pull/109841) — in review |
-| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web                | planned                                                                    |
-| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI               | planned                                                                    |
-| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap          | planned                                                                    |
-| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels           | planned                                                                    |
-| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway                  | follow-up                                                                  |
+| #   | Phase                                                                                                                                                                     | Surface              | Status                                                                                                          |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 1   | Installed-app plugin recommendations (scan, candidates, AI matcher, wizard step, `device.apps` node command)                                                              | classic + guided CLI | PR [#109668](https://github.com/openclaw/openclaw/pull/109668) — in review                                      |
+| 2   | CLI custodian spine (question zero, discovery theater, auto-apply + hatch)                                                                                                | guided CLI           | merged ([`a83ed13204f1`](https://github.com/openclaw/openclaw/commit/a83ed13204f118adf1009e5ac88d5afe1905b86c)) |
+| 3   | Browser-first handoff (GUI-session detection, wait-for-dashboard-connect, TUI as fallback)                                                                                | CLI → web            | planned                                                                                                         |
+| 4   | Web custodian surface (option-card renderer shared with the question tool, scripted pre-AI states over `openclaw.chat`, post-wizard chat handoff)                         | Control UI           | planned                                                                                                         |
+| 5   | Hatch and bootstrap (blank-agent creation, self-naming, self-drawn avatar via image-gen when available, recommendations as the last bootstrap step, self-learning opt-in) | agent bootstrap      | planned                                                                                                         |
+| 6   | Custodian presence (pinned sidebar entry, Settings dock with event-reactive commentary, channel summon and agent-down recovery, weak-model script)                        | web + channels       | planned                                                                                                         |
+| 7   | Resilience (custodian reachable on broken config, partial-surface salvage, auto-doctor)                                                                                   | gateway              | follow-up                                                                                                       |
 
 ## Implementation notes per phase
 
@@ -63,9 +63,9 @@ Design principles (decided, do not relitigate casually):
   the model rejects coincidental name overlaps.
 - Node command `device.apps` (TS node-host, Android envelope parity), sharing
   off by default; gateway kill switch `wizard.appRecommendations`.
-- Delivery currently lives in the classic wizard
-  (`src/wizard/setup.app-recommendations.ts`); it re-targets to the bootstrap
-  tail in phase 5 (the service already takes an injectable inventory source).
+- Delivery lives in the classic wizard and guided custodian flow
+  (`src/wizard/setup.app-recommendations.ts`); re-targeting to the bootstrap
+  tail remains phase 5 (the service already takes an injectable inventory source).
 - Also fixed: custom `completeSetupInference` prompts no longer inherit the
   32-token verification-probe output cap.
 
