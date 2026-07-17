@@ -1,6 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  SHELL_NAV_DRAWER_TOGGLE_EVENT,
+  type ShellNavDrawerToggleDetail,
+} from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import "../../../components/tooltip.ts";
@@ -13,6 +18,7 @@ type ChatPaneHeaderProps = {
   paneId: string;
   active: boolean;
   narrow: boolean;
+  mergedChrome: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
   catalog: boolean;
@@ -121,6 +127,24 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       class="chat-pane__header ${props.active ? "chat-pane__header--active" : ""}"
       @mousedown=${beginNativeWindowDrag}
     >
+      ${props.mergedChrome
+        ? html`<openclaw-tooltip .content=${t("nav.expand")}>
+            <button
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+              type="button"
+              aria-label=${t("nav.expand")}
+              @click=${(event: MouseEvent) => {
+                window.dispatchEvent(
+                  new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                    detail: { trigger: event.currentTarget as HTMLElement },
+                  }),
+                );
+              }}
+            >
+              ${icons.menu}
+            </button>
+          </openclaw-tooltip>`
+        : nothing}
       ${cloud
         ? html`<span
             class="chat-pane__cloud"
@@ -251,6 +275,18 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                 @click=${() => props.onClosePane?.(props.paneId)}
               >
                 ${icons.x}
+              </button>
+            </openclaw-tooltip>`
+          : nothing}
+        ${props.mergedChrome
+          ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
+              <button
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
+                type="button"
+                aria-label=${t("chat.openCommandPalette")}
+                @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
+              >
+                ${icons.search}
               </button>
             </openclaw-tooltip>`
           : nothing}

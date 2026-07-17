@@ -1,18 +1,25 @@
-// Telegram plugin module implements telegram ingress claim-owner identity.
+/**
+ * Process-liveness identity for durable channel-ingress claims.
+ *
+ * ownerId = pid:startToken:uuid. Starttime binds the PID to one process instance so
+ * Linux TIDs and recycled PIDs cannot impersonate a dead claim owner.
+ */
 import childProcess from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import type { ChannelIngressQueueCorruptClaim } from "openclaw/plugin-sdk/channel-outbound";
-import type {
-  ClaimedTelegramSpooledUpdate,
-  TelegramSpooledUpdateClaimOwner,
-} from "./telegram-ingress-spool.types.js";
+import type { ChannelIngressQueueClaim, ChannelIngressQueueCorruptClaim } from "./ingress-queue.js";
 
 // Liveness default: a claim older than its lease is never live-owner protected,
 // so recovery can reclaim it even when the owner process still exists.
-const TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS = 30 * 60 * 1000;
+export const INGRESS_CLAIM_LEASE_MS = 30 * 60 * 1000;
 
-type TelegramSpooledClaimLivenessOptions = {
+type IngressClaimOwnerIdentity = {
+  processId: string;
+  processPid: number;
+  claimedAt: number;
+};
+
+type IngressClaimLivenessOptions = {
   maxAgeMs?: number;
   now?: number;
   /** Test seam for PID existence (including Linux TID impersonation). */
@@ -27,11 +34,15 @@ function readProcessStartTime(pid: number): number | null {
   }
   if (process.platform === "darwin") {
     try {
+      // Bounded: this runs on shared channel/SDK init paths, so a hung /bin/ps must
+      // not block startup. Timeout -> null -> "unknown liveness" (callers hold claims).
       const startedAt = childProcess
         .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
           encoding: "utf8",
           env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
           stdio: ["ignore", "pipe", "ignore"],
+          timeout: 2000,
+          killSignal: "SIGKILL",
         })
         .trim();
       const startedAtMs = Date.parse(`${startedAt} UTC`);
@@ -59,18 +70,58 @@ function readProcessStartTime(pid: number): number | null {
   }
 }
 
-const TELEGRAM_SPOOLED_UPDATE_PROCESS_START_TIME = readProcessStartTime(process.pid);
-// ownerId = pid:startToken:uuid. Starttime binds the PID to one process instance so
-// Linux TIDs and recycled PIDs cannot impersonate a dead claim owner.
-export const TELEGRAM_SPOOLED_UPDATE_PROCESS_ID = [
+const INGRESS_CLAIM_PROCESS_START_TIME = readProcessStartTime(process.pid);
+
+export const INGRESS_CLAIM_PROCESS_ID = [
   process.pid,
-  TELEGRAM_SPOOLED_UPDATE_PROCESS_START_TIME ?? "x",
+  INGRESS_CLAIM_PROCESS_START_TIME ?? "x",
   randomUUID(),
 ].join(":");
+
+/** Process-local live drain instance UUIDs (ownerId third field). */
+const liveIngressDrainInstanceIds = new Set<string>();
 
 export function processPidFromOwnerId(ownerId: string): number {
   const pid = Number.parseInt(ownerId.split(":", 1)[0] ?? "", 10);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : -1;
+}
+
+/** Instance UUID from ownerId `pid:startToken:uuid`. */
+function processInstanceIdFromOwnerId(ownerId: string): string | null {
+  const parts = ownerId.split(":");
+  if (parts.length < 3) {
+    return null;
+  }
+  const instanceId = parts[2];
+  return instanceId && instanceId.length > 0 ? instanceId : null;
+}
+
+/** Mint a unique per-drain ownerId (`pid:startToken:uuid`). Caller registers via drain. */
+export function createIngressDrainOwnerId(): string {
+  return [process.pid, INGRESS_CLAIM_PROCESS_START_TIME ?? "x", randomUUID()].join(":");
+}
+
+export function registerLiveIngressDrainInstance(ownerId: string): void {
+  const instanceId = processInstanceIdFromOwnerId(ownerId);
+  if (instanceId) {
+    liveIngressDrainInstanceIds.add(instanceId);
+  }
+}
+
+export function deregisterLiveIngressDrainInstance(ownerId: string): void {
+  const instanceId = processInstanceIdFromOwnerId(ownerId);
+  if (instanceId) {
+    liveIngressDrainInstanceIds.delete(instanceId);
+  }
+}
+
+/**
+ * True when a same-process drain instance still holds this ownerId.
+ * Recovery must not steal claims from a live peer drain on the same queue.
+ */
+export function isLiveLocalIngressDrainOwner(ownerId: string): boolean {
+  const instanceId = processInstanceIdFromOwnerId(ownerId);
+  return instanceId != null && liveIngressDrainInstanceIds.has(instanceId);
 }
 
 // Canonical ownerId: pid:startToken:uuid. startToken is a numeric starttime, or
@@ -117,17 +168,17 @@ function processExists(pid: number): boolean {
 }
 
 function isFreshClaimOwner(
-  claim: TelegramSpooledUpdateClaimOwner,
+  claim: Pick<IngressClaimOwnerIdentity, "claimedAt">,
   options?: { maxAgeMs?: number; now?: number },
 ): boolean {
   const now = options?.now ?? Date.now();
-  const maxAgeMs = options?.maxAgeMs ?? TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS;
+  const maxAgeMs = options?.maxAgeMs ?? INGRESS_CLAIM_LEASE_MS;
   return now - claim.claimedAt < maxAgeMs;
 }
 
 function isClaimOwnerProcessInstanceLive(
-  claim: Pick<TelegramSpooledUpdateClaimOwner, "processId" | "processPid">,
-  options?: TelegramSpooledClaimLivenessOptions,
+  claim: Pick<IngressClaimOwnerIdentity, "processId" | "processPid">,
+  options?: IngressClaimLivenessOptions,
 ): boolean {
   const exists = options?.processExists ?? processExists;
   const readStart = options?.readProcessStartTime ?? readProcessStartTime;
@@ -154,31 +205,61 @@ function isClaimOwnerProcessInstanceLive(
   return actualStart === startToken.value;
 }
 
-export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
-  claim: ClaimedTelegramSpooledUpdate,
-  options?: TelegramSpooledClaimLivenessOptions,
+function toOwnerIdentity(claim: { ownerId: string; claimedAt: number }): IngressClaimOwnerIdentity {
+  return {
+    processId: claim.ownerId,
+    processPid: processPidFromOwnerId(claim.ownerId),
+    claimedAt: claim.claimedAt,
+  };
+}
+
+type IngressClaimOwnerSource =
+  | { claim?: IngressClaimOwnerIdentity | null }
+  | Pick<ChannelIngressQueueClaim<unknown>, "claim">;
+
+function resolveOwnerIdentity(claim: IngressClaimOwnerSource): IngressClaimOwnerIdentity | null {
+  const raw = claim.claim;
+  if (!raw) {
+    return null;
+  }
+  if ("ownerId" in raw) {
+    return toOwnerIdentity(raw);
+  }
+  return {
+    processId: raw.processId,
+    processPid: raw.processPid,
+    claimedAt: raw.claimedAt,
+  };
+}
+
+/** True when another live process still holds a fresh claim on this event. */
+export function isIngressClaimOwnedByOtherLiveProcess(
+  claim: IngressClaimOwnerSource,
+  options?: IngressClaimLivenessOptions,
 ): boolean {
-  return Boolean(
-    claim.claim &&
-    claim.claim.processId !== TELEGRAM_SPOOLED_UPDATE_PROCESS_ID &&
-    claim.claim.processPid !== process.pid &&
-    isFreshClaimOwner(claim.claim, options) &&
-    isClaimOwnerProcessInstanceLive(claim.claim, options),
+  const owner = resolveOwnerIdentity(claim);
+  if (!owner) {
+    return false;
+  }
+  return (
+    owner.processId !== INGRESS_CLAIM_PROCESS_ID &&
+    owner.processPid !== process.pid &&
+    isFreshClaimOwner(owner, options) &&
+    isClaimOwnerProcessInstanceLive(owner, options)
   );
 }
 
-export function isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(
+/** True when a corrupt claimed row is still live-owned by this or another process. */
+export function isIngressCorruptClaimOwnedByOtherLiveProcess(
   claim: ChannelIngressQueueCorruptClaim,
-  options?: TelegramSpooledClaimLivenessOptions,
+  options?: IngressClaimLivenessOptions,
 ): boolean {
-  const processId = claim.claim.ownerId;
-  const processPid = processPidFromOwnerId(processId);
-  const owner = { processId, processPid, claimedAt: claim.claim.claimedAt };
-  if (processId === TELEGRAM_SPOOLED_UPDATE_PROCESS_ID) {
+  const owner = toOwnerIdentity(claim.claim);
+  if (owner.processId === INGRESS_CLAIM_PROCESS_ID) {
     return isFreshClaimOwner(owner, options);
   }
   return (
-    processPid !== process.pid &&
+    owner.processPid !== process.pid &&
     isFreshClaimOwner(owner, options) &&
     isClaimOwnerProcessInstanceLive(owner, options)
   );

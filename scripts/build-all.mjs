@@ -13,24 +13,49 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
-const BUILD_CACHE_VERSION = 3;
+const BUILD_CACHE_VERSION = 4;
 const PLUGIN_SDK_ENTRY_DTS_CACHE_ENV = [
   "OPENCLAW_BUILD_PRIVATE_QA",
   "OPENCLAW_PLUGIN_SDK_CANONICAL_DTS",
 ];
-const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+const PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS = [
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entries.mjs",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-public-subpaths.json",
   "scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json",
+];
+const PLUGIN_SDK_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
   { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS = [
+  ...PLUGIN_SDK_ENTRY_DTS_SHARED_CACHE_INPUTS,
+  "package.json",
+  "pnpm-lock.yaml",
+  "npm-shrinkwrap.json",
+  "tsconfig.json",
+  "tsconfig.plugin-sdk.dts.json",
+  {
+    path: "src",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
+  {
+    path: "packages",
+    extensions: [".ts", ".tsx", ".mts", ".cts", ".json"],
+    excludeDirectories: ["dist", "node_modules"],
+  },
 ];
 const PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS = [
   "dist/plugin-sdk/webhook-path.js",
   "dist/plugin-sdk/.boundary-entry-shims.stamp",
   ...pluginSdkEntrypoints.map((entry) => `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`),
+];
+const PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS = [
+  { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+  ...PLUGIN_SDK_ENTRY_DTS_CACHE_OUTPUTS,
 ];
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
@@ -275,14 +300,18 @@ export function resolveBuildAllSteps(profile = "full") {
     }
     const mergedEnv = Object.assign({}, step.env, env);
     const merged = Object.assign({}, step, { env: mergedEnv });
-    // Self-built plugin-sdk declarations depend on the whole SDK source
-    // graph, which the canonical-mode cache inputs do not cover; a cache hit
-    // here would restore stale declarations after source changes.
+    // Self-built declarations need both the complete repository-owned type
+    // graph and the flat declarations that this step generates after tsdown
+    // clears dist. Canonical mode keeps its narrower generated-dts cache.
     if (
       step.label === "write-plugin-sdk-entry-dts" &&
       mergedEnv.OPENCLAW_PLUGIN_SDK_CANONICAL_DTS !== "1"
     ) {
-      delete merged.cache;
+      merged.cache = {
+        ...step.cache,
+        inputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_INPUTS,
+        outputs: PLUGIN_SDK_SELF_BUILT_ENTRY_DTS_CACHE_OUTPUTS,
+      };
     }
     return merged;
   });
@@ -396,6 +425,10 @@ function cacheEntryIncludesFile(entry, filePath) {
   return entry.extensions.some((extension) => filePath.endsWith(extension));
 }
 
+function cacheEntryExcludesDirectory(entry, name) {
+  return entry.excludeDirectories?.includes(name) ?? false;
+}
+
 function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath }) {
   let stat;
   try {
@@ -417,6 +450,9 @@ function listFilesRecursively(rootPath, fsImpl, cacheEntry = { path: rootPath })
       continue;
     }
     const entryPath = path.join(rootPath, dirent.name);
+    if (dirent.isDirectory() && cacheEntryExcludesDirectory(cacheEntry, dirent.name)) {
+      continue;
+    }
     if (dirent.isDirectory() && recursive) {
       out.push(...listFilesRecursively(entryPath, fsImpl, cacheEntry));
     } else if (dirent.isFile() && cacheEntryIncludesFile(cacheEntry, entryPath)) {

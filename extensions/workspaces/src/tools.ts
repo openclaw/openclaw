@@ -539,22 +539,31 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
     {
       name: "workspace_tab_update",
       label: "Workspace Tab Update",
-      description: toolDescription("Update a workspace tab title, icon, or hidden state."),
+      description: toolDescription("Update a workspace tab title, icon, hidden state, or layout."),
       parameters: Type.Object(
         {
           slug: Type.String({ description: "Tab slug." }),
           title: Type.Optional(Type.String({ description: "New title." })),
           icon: Type.Optional(Type.String({ description: "New icon." })),
           hidden: Type.Optional(Type.Boolean({ description: "Hide or show the tab." })),
+          layout: Type.Optional(
+            Type.Union([Type.Literal("grid"), Type.Literal("full")], {
+              description: "Grid layout, or one full-bleed app widget.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = readRecord(rawParams, ["slug", "title", "icon", "hidden"]);
+        const record = readRecord(rawParams, ["slug", "title", "icon", "hidden", "layout"]);
         const slug = readSlug(record);
         const title = readOptionalString(record, "title");
         const icon = readOptionalString(record, "icon");
         const hidden = readOptionalBoolean(record, "hidden");
+        const layout = record.layout;
+        if (layout !== undefined && layout !== "grid" && layout !== "full") {
+          throw new Error('layout must be "grid" or "full"');
+        }
         return await runMutation({
           ...mutationBase,
           changedTabSlug: slug,
@@ -563,6 +572,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
               ...(title !== undefined ? { title } : {}),
               ...(icon !== undefined ? { icon } : {}),
               ...(hidden !== undefined ? { hidden } : {}),
+              ...(layout !== undefined ? { layout } : {}),
             });
           },
         });

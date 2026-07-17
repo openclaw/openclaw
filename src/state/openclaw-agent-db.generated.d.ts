@@ -203,6 +203,17 @@ export interface Sessions {
   updated_at: number;
 }
 
+export interface StateLeases {
+  created_at: number;
+  expires_at: number | null;
+  heartbeat_at: number | null;
+  lease_key: string;
+  owner: string;
+  payload_json: string | null;
+  scope: string;
+  updated_at: number;
+}
+
 export interface TrajectoryRuntimeEvents {
   created_at: number;
   event_json: string;
@@ -251,6 +262,7 @@ export interface DB {
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
   session_transcript_index_state: SessionTranscriptIndexState;
   sessions: Sessions;
+  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

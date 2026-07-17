@@ -15,7 +15,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache, listManagedPlugins } =
+const { clearManagedPluginOfficialCatalogCache, listManagedPlugins, resolveManagedPluginIconUrl } =
   await import("./management-service.js");
 
 function metadataSnapshot(params: {
@@ -25,6 +25,8 @@ function metadataSnapshot(params: {
   packageName?: string | null;
   installRecord?: Record<string, unknown>;
   featured?: boolean;
+  description?: string;
+  icon?: string;
 }) {
   const id = params.id ?? "workboard";
   const packageName =
@@ -32,8 +34,9 @@ function metadataSnapshot(params: {
   const manifest = {
     id,
     name: params.name ?? "Workboard",
-    description: "Coordinate agent work in a shared board.",
+    description: params.description ?? "Coordinate agent work in a shared board.",
     catalog: { featured: params.featured ?? true, order: 10 },
+    ...(params.icon ? { icon: params.icon } : {}),
     channels: [],
     providers: [],
     cliBackends: [],
@@ -89,10 +92,14 @@ function hostedFeedEntry(params: {
   pluginId?: string;
   catalogFeatured?: boolean;
   order?: number;
+  description?: string;
+  icon?: string;
 }) {
   return {
     id: params.packageName,
     title: params.title,
+    ...(params.description ? { description: params.description } : {}),
+    ...(params.icon ? { icon: params.icon } : {}),
     state: "available",
     ...(params.featured === undefined ? {} : { featured: params.featured }),
     publisher: { id: "openclaw", trust: "official" },
@@ -134,6 +141,42 @@ const hostedImpostorEntry = hostedFeedEntry({
 });
 
 describe("plugin management Featured authority", () => {
+  it("projects listing metadata from a top-level hosted feed entry", async () => {
+    const icon = "https://cdn.example.test/expedia.png";
+    const officialCatalog = {
+      entries: [
+        hostedFeedEntry({
+          packageName: "@expediagroup/expedia-openclaw",
+          title: "Expedia Travel",
+          featured: true,
+          pluginId: "@expediagroup/expedia-openclaw",
+          order: 10,
+          description: "Search flights, stays, and travel options.",
+          icon,
+        }),
+      ],
+    };
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+
+    const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
+    const resolved = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "@expediagroup/expedia-openclaw",
+      officialCatalog,
+    });
+
+    expect(catalog.plugins[0]).toMatchObject({
+      id: "@expediagroup/expedia-openclaw",
+      name: "Expedia Travel",
+      description: "Search flights, stays, and travel options.",
+      featured: true,
+      order: 10,
+      hasIcon: true,
+    });
+    expect(resolved).toBe(icon);
+  });
+
   beforeEach(() => {
     clearManagedPluginOfficialCatalogCache();
     mocks.metadata.mockReset();
@@ -335,12 +378,15 @@ describe("plugin management Featured authority", () => {
   });
 
   it("applies hosted curation to the exact published package for bundled FireCrawl", async () => {
+    const hostedIcon = "https://cdn.example.test/firecrawl-company.png";
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
         id: "firecrawl",
-        name: "FireCrawl",
+        name: "firecrawl",
         packageName: "@openclaw/firecrawl-plugin",
         featured: false,
+        description: "Optional OpenClaw capability.",
+        icon: "https://cdn.example.test/firecrawl-bundled.png",
       }),
     );
     mocks.officialCatalog.mockResolvedValue(
@@ -350,21 +396,31 @@ describe("plugin management Featured authority", () => {
           title: "FireCrawl",
           featured: true,
           pluginId: "firecrawl",
+          description: "Crawl, scrape, search, and extract web content with FireCrawl.",
+          icon: hostedIcon,
         }),
       ]),
     );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
+    const resolvedIcon = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "firecrawl",
+    });
 
     expect(catalog.plugins).toEqual([
       expect.objectContaining({
         id: "firecrawl",
         name: "FireCrawl",
+        description: "Crawl, scrape, search, and extract web content with FireCrawl.",
         packageName: "@openclaw/firecrawl-plugin",
         featured: true,
         order: 10,
+        hasIcon: true,
       }),
     ]);
+    expect(resolvedIcon).toBe(hostedIcon);
   });
 
   it("keeps local curation for an unproven global package identity", async () => {
@@ -392,18 +448,42 @@ describe("plugin management Featured authority", () => {
   });
 
   it("does not identify a package-less private bundled plugin by hosted runtime id", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ packageName: null }));
-    mocks.officialCatalog.mockResolvedValue(hostedCatalog([hostedImpostorEntry]));
+    const localIcon = "https://cdn.example.test/private-workboard.png";
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        packageName: null,
+        description: "Private local workboard.",
+        icon: localIcon,
+      }),
+    );
+    mocks.officialCatalog.mockResolvedValue(
+      hostedCatalog([
+        {
+          ...hostedImpostorEntry,
+          title: "Hosted impostor",
+          description: "Untrusted hosted copy.",
+          icon: "https://cdn.example.test/impostor.png",
+        },
+      ]),
+    );
 
     const catalog = await listManagedPlugins({ config: {}, env: {} });
+    const resolvedIcon = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "workboard",
+    });
 
     expect(catalog.plugins).toEqual([
       expect.objectContaining({
         id: "workboard",
+        name: "Workboard",
+        description: "Private local workboard.",
         featured: true,
         order: 10,
       }),
     ]);
+    expect(resolvedIcon).toBe(localIcon);
   });
 
   it("does not identify a package-less global plugin by hosted runtime id alone", async () => {

@@ -13,6 +13,7 @@ import {
   type CustomWidgetHostContext,
 } from "../../components/workspace-custom-widget.ts";
 import {
+  renderWorkspaceWidgetBody,
   renderWidgetCell,
   type WorkspaceCustomWidgetContext,
   type WorkspaceWidgetCellCallbacks,
@@ -551,6 +552,36 @@ function buildCustomContext(
   };
 }
 
+/** Shared ambient builtin state; full-bleed tabs must preserve every grid capability. */
+function buildBuiltinContext(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+): BuiltinWidgetContext {
+  const decideCustomWidget = props.canApproveWidgets
+    ? (name: string, decision: "approved" | "rejected") => {
+        void approveWidget(state, props.client, { name, decision });
+      }
+    : undefined;
+  return {
+    basePath: props.basePath ?? "",
+    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    preview: {
+      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
+      setViewport: (widgetId, viewport) => {
+        viewState.previewViewports.set(widgetId, viewport);
+        props.onRequestUpdate?.();
+      },
+    },
+    customWidgetApprovals: buildCustomWidgetApprovalsSource(
+      workspace,
+      state.pendingApprovalNames,
+      decideCustomWidget,
+    ),
+  };
+}
+
 function renderGrid(
   props: WorkspaceProps,
   state: WorkspaceUiState,
@@ -571,28 +602,11 @@ function renderGrid(
       </div>
     `;
   }
+  if (tab.layout === "full") {
+    return renderFullBleed(props, state, viewState, workspace, tab);
+  }
   const callbacks = makeCallbacks(props, state, viewState, tab);
-  const decideCustomWidget = props.canApproveWidgets
-    ? (name: string, decision: "approved" | "rejected") => {
-        void approveWidget(state, props.client, { name, decision });
-      }
-    : undefined;
-  const builtinContext: BuiltinWidgetContext = {
-    basePath: props.basePath ?? "",
-    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
-    preview: {
-      getViewport: (widgetId, fallback) => viewState.previewViewports.get(widgetId) ?? fallback,
-      setViewport: (widgetId, viewport) => {
-        viewState.previewViewports.set(widgetId, viewport);
-        props.onRequestUpdate?.();
-      },
-    },
-    customWidgetApprovals: buildCustomWidgetApprovalsSource(
-      workspace,
-      state.pendingApprovalNames,
-      decideCustomWidget,
-    ),
-  };
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
   return html`
@@ -613,6 +627,33 @@ function renderGrid(
       ${renderDragGhost(viewState, tab)}
     </div>
   `;
+}
+
+/** App-like tabs render their first widget through the same approval and sandbox path. */
+function renderFullBleed(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  tab: WorkspaceTab,
+): TemplateResult {
+  const widget = tab.widgets[0]!;
+  const callbacks = makeCallbacks(props, state, viewState, tab);
+  const builtinContext = buildBuiltinContext(props, state, viewState, workspace);
+  const custom = buildCustomContext(props, state, viewState, workspace, widget);
+  return html`<div
+    class="workspace-fullbleed"
+    data-test-id="workspace-fullbleed"
+    data-widget-id=${widget.id}
+  >
+    ${renderWorkspaceWidgetBody(
+      widget,
+      viewState.bindingResults.get(widget.id) ?? null,
+      builtinContext,
+      callbacks,
+      custom ?? undefined,
+    )}
+  </div>`;
 }
 
 /**

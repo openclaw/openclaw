@@ -28,6 +28,10 @@ import { coerceSecretRef, isSecretRef, type SecretRef } from "../config/types.se
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { isRecord } from "../utils.js";
+import {
+  setActiveDegradedSecretOwners,
+  type DegradedSecretOwner,
+} from "./runtime-degraded-state.js";
 import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
@@ -42,6 +46,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   authStores: Array<{ agentDir: string; store: RuntimeAuthProfileStore }>;
   authStoreCredentialsRevision: number;
   warnings: SecretResolverWarning[];
+  degradedOwners?: DegradedSecretOwner[];
   webTools: RuntimeWebToolsMetadata;
 };
 
@@ -126,6 +131,14 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
+    degradedOwners: (snapshot.degradedOwners ?? []).map((owner) => ({
+      ownerKind: owner.ownerKind,
+      ownerId: owner.ownerId,
+      state: owner.state,
+      paths: [...owner.paths],
+      refKeys: [...owner.refKeys],
+      reason: owner.reason,
+    })),
     webTools: structuredClone(snapshot.webTools),
   };
 }
@@ -817,6 +830,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
     preparedSnapshotRefreshContext.set(next, cloneSecretsRuntimeRefreshContext(nextRefreshContext));
   }
   setActiveRuntimeWebToolsMetadata(next.webTools);
+  setActiveDegradedSecretOwners(next.degradedOwners ?? []);
   setRuntimeConfigSnapshotRefreshHandler(params.refreshHandler);
 }
 
@@ -1012,6 +1026,7 @@ export function clearSecretsRuntimeSnapshot(): void {
   activeSnapshot = null;
   activeRefreshContext = null;
   clearActiveRuntimeWebToolsMetadata();
+  setActiveDegradedSecretOwners([]);
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();

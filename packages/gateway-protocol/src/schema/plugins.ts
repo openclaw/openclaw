@@ -185,6 +185,14 @@ export const PluginsInstallResultSchema = closedObject({
   warnings: Type.Optional(Type.Array(Type.String())),
 });
 
+/** Internal signal that persisted plugin metadata changed outside the Gateway process. */
+export const PluginsRefreshParamsSchema = closedObject({});
+
+/** Successful plugin metadata refresh admission. */
+export const PluginsRefreshResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
 /** Request payload for removing one installed plugin and its managed files. */
 export const PluginsUninstallParamsSchema = closedObject({
   pluginId: NonEmptyString,
@@ -220,6 +228,8 @@ export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
 export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
 export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
+export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
+export type PluginsRefreshResult = Static<typeof PluginsRefreshResultSchema>;
 export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>;
 export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
 export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;

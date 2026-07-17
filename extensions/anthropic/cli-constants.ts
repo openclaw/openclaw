@@ -4,6 +4,10 @@
  */
 /** Synthetic provider/backend id for Claude Code CLI-backed Anthropic models. */
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
+/** Non-secret marker for Claude Code settings.json apiKeyHelper auth. */
+export const CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER = ["openclaw", "claude-cli-api-key-helper"].join(
+  ":",
+);
 /** Default Claude CLI model ref for agent defaults and live tests. */
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-8`;
 /** Provider-relative model id for Anthropic runtime-policy resolution. */

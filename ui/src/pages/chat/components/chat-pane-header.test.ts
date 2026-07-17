@@ -4,6 +4,11 @@ import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  SHELL_NAV_DRAWER_TOGGLE_EVENT,
+  type ShellNavDrawerToggleDetail,
+} from "../../../components/command-palette-contract.ts";
+import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneWorkspace,
@@ -29,6 +34,7 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
     paneId: "pane-1",
     active: true,
     narrow: false,
+    mergedChrome: false,
     title: "Session title",
     session: row(),
     catalog: false,
@@ -58,6 +64,38 @@ function mount(patch: Partial<ChatPaneHeaderProps> = {}) {
 }
 
 describe("chat pane header", () => {
+  it("renders and dispatches merged chrome actions for catalog sessions", () => {
+    const drawerEvents: CustomEvent<ShellNavDrawerToggleDetail>[] = [];
+    const paletteEvents: Event[] = [];
+    const onDrawer = (event: Event) =>
+      drawerEvents.push(event as CustomEvent<ShellNavDrawerToggleDetail>);
+    const onPalette = (event: Event) => paletteEvents.push(event);
+    window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, onPalette);
+    const { container } = mount({ mergedChrome: true, catalog: true, session: undefined });
+    const drawer = container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
+    const palette = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open command palette"]',
+    );
+
+    drawer?.click();
+    palette?.click();
+
+    expect(drawer).not.toBeNull();
+    expect(palette).not.toBeNull();
+    expect(drawerEvents).toHaveLength(1);
+    expect(drawerEvents[0]?.detail.trigger).toBe(drawer);
+    expect(paletteEvents).toHaveLength(1);
+    window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
+    window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, onPalette);
+  });
+
+  it("omits shell chrome actions when the header is not merged", () => {
+    const { container } = mount();
+    expect(container.querySelector(".chat-pane__nav-toggle")).toBeNull();
+    expect(container.querySelector(".chat-pane__palette-open")).toBeNull();
+  });
+
   it("renders an editable title and workspace chip", () => {
     const { container, props } = mount();
     const title = container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button");

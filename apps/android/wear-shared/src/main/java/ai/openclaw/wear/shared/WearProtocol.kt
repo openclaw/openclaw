@@ -19,6 +19,7 @@ object WearProtocol {
   const val RESPONSE_PATH = "/openclaw/wear/v1/response"
   const val EVENT_PATH = "/openclaw/wear/v1/event"
   const val PHONE_CAPABILITY = "openclaw_phone_proxy_v1"
+  const val WATCH_CAPABILITY = "openclaw_wear_companion_v1"
 
   // MessageClient has a 100 KiB ceiling. Keep headroom for transport metadata and
   // force transcript pagination instead of depending on an edge-sized message.
@@ -53,6 +54,9 @@ enum class WearEventType {
 
   @SerialName("connection")
   Connection,
+
+  @SerialName("resync")
+  Resync,
 }
 
 @Serializable
@@ -76,12 +80,15 @@ sealed interface WearMessage {
     val ok: Boolean,
     val result: JsonElement? = null,
     val error: WearRpcError? = null,
+    val eventStreamId: String? = null,
+    val eventSequence: Long? = null,
   ) : WearMessage
 
   @Serializable
   @SerialName("event")
   data class Event(
     override val version: Int = WearProtocol.VERSION,
+    val streamId: String? = null,
     val sequence: Long,
     val event: WearEventType,
     val payload: JsonElement? = null,
@@ -249,11 +256,15 @@ object WearProtocolCodec {
       is WearMessage.Request -> message.requestId.isNotBlank()
       is WearMessage.Response ->
         message.requestId.isNotBlank() &&
+          (message.eventStreamId == null || message.eventStreamId.isNotBlank()) &&
+          (message.eventSequence == null || message.eventSequence >= 0) &&
           if (message.ok) {
             message.error == null
           } else {
             message.error != null && message.result == null && message.error.code.isNotBlank()
           }
-      is WearMessage.Event -> message.sequence >= 0
+      is WearMessage.Event ->
+        (message.streamId == null || message.streamId.isNotBlank()) &&
+          message.sequence >= 0
     }
 }

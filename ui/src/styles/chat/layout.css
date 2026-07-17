@@ -2267,6 +2267,25 @@ openclaw-chat-page {
   box-shadow: none;
 }
 
+.agent-chat__video-preview {
+  align-self: flex-end;
+  width: min(240px, 45vw);
+  margin: 4px 8px 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: #000;
+  box-shadow: var(--shadow-md);
+}
+
+.agent-chat__video-preview video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
 /* Live voice input: the level meter itself is the control. Keeping it accent
    (vs the danger stop square) is what disambiguates the two controls when a
    run is abortable while recording; the stop glyph only crossfades in on
