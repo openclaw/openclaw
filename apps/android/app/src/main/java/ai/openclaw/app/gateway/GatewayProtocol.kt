@@ -282,7 +282,6 @@ enum class GatewayMethod(
   NodeRename("node.rename"),
   NodeList("node.list"),
   NodeDescribe("node.describe"),
-  PluginSurfaceRefresh("plugin.surface.refresh"),
   NodePluginSurfaceRefresh("node.pluginSurface.refresh"),
   NodePluginToolsUpdate("node.pluginTools.update"),
   NodeSkillsUpdate("node.skills.update"),
@@ -380,6 +379,7 @@ enum class GatewayMethod(
   MigrationsMemoryApply("migrations.memory.apply"),
   UiCommand("ui.command"),
   ApprovalHistory("approval.history"),
+  PluginSurfaceRefresh("plugin.surface.refresh"),
 }
 
 enum class GatewayEvent(
