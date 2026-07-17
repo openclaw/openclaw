@@ -50,7 +50,7 @@ const deepSeekTools = buildProviderToolCompatFamilyHooks("deepseek");
 const geminiTools = buildProviderToolCompatFamilyHooks("gemini");
 
 function resolveOpenRouterToolFamily(modelId: string) {
-  const normalized = modelId.toLowerCase();
+  const normalized = (normalizeOpenRouterApiModelId(modelId) ?? modelId).toLowerCase();
   if (normalized.startsWith("deepseek/")) return deepSeekTools;
   if (normalized.startsWith("google/")) return geminiTools;
   if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/"))

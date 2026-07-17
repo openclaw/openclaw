@@ -1351,5 +1351,88 @@ describe("tool schema compatibility", () => {
     expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
     expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
   });
+
+  it("strips anyOf/oneOf for canonical openrouter/moonshotai/ model IDs", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const tool = {
+      name: "example__get_data",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            anyOf: [{ type: "string" }, { type: "integer" }],
+          },
+        },
+      },
+      execute: () => undefined,
+    } as never;
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "openrouter",
+      modelId: "openrouter/moonshotai/kimi-k3",
+      modelApi: "openai-completions",
+      model: { id: "openrouter/moonshotai/kimi-k3", provider: "openrouter" },
+      tools: [tool],
+    } as never);
+
+    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
+    expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
+  });
+
+  it("strips unsupported schema keywords for canonical openrouter/google/ model IDs", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const tool = {
+      name: "example__get_data",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            anyOf: [{ type: "string" }, { type: "integer" }],
+          },
+        },
+      },
+      execute: () => undefined,
+    } as never;
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "openrouter",
+      modelId: "openrouter/google/gemini-3-pro",
+      modelApi: "openai-completions",
+      model: { id: "openrouter/google/gemini-3-pro", provider: "openrouter" },
+      tools: [tool],
+    } as never);
+
+    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
+  });
+
+  it("applies DeepSeek tool compat for canonical openrouter/deepseek/ model IDs", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const tool = {
+      name: "example__get_data",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            anyOf: [{ type: "string" }, { type: "integer" }],
+          },
+        },
+      },
+      execute: () => undefined,
+    } as never;
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "openrouter",
+      modelId: "openrouter/deepseek/deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: { id: "openrouter/deepseek/deepseek-v4-pro", provider: "openrouter" },
+      tools: [tool],
+    } as never);
+
+    expect(normalized?.[0]?.parameters?.properties?.date).not.toHaveProperty("anyOf");
+    expect(normalized?.[0]?.parameters?.properties?.date).toEqual({ type: "string" });
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
