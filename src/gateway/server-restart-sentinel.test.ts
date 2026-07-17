@@ -110,6 +110,15 @@ const mocks = vi.hoisted(() => {
     enqueueDeliveryOnce: vi.fn(async (_payload: unknown, id: string) => ({ id, created: true })),
     ackDelivery: vi.fn(async () => {}),
     failDelivery: vi.fn(async () => {}),
+    failDeliveryAfterPlatformSend: vi.fn(async () => {}),
+    failDeliveryBeforePlatformSend: vi.fn(async () => {}),
+    failPendingDelivery: vi.fn(async () => ({ status: "failed" as const })),
+    loadPendingDelivery: vi.fn(async () => null),
+    drainPendingDeliveries: vi.fn(async () => {}),
+    reserveDeliveryAttempt: vi.fn(async () => ({
+      status: "reserved" as const,
+      attemptCount: 1,
+    })),
     withActiveDeliveryClaim: vi.fn(async (_id: string, fn: () => Promise<unknown>) => ({
       status: "claimed" as const,
       value: await fn(),
@@ -347,7 +356,16 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
   enqueueDeliveryOnce: mocks.enqueueDeliveryOnce,
   ackDelivery: mocks.ackDelivery,
   failDelivery: mocks.failDelivery,
+  failDeliveryAfterPlatformSend: mocks.failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend: mocks.failDeliveryBeforePlatformSend,
+  drainPendingDeliveries: mocks.drainPendingDeliveries,
   withActiveDeliveryClaim: mocks.withActiveDeliveryClaim,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-storage.js", () => ({
+  failPendingDelivery: mocks.failPendingDelivery,
+  loadPendingDelivery: mocks.loadPendingDelivery,
+  reserveDeliveryAttempt: mocks.reserveDeliveryAttempt,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -517,6 +535,13 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.enqueueDeliveryOnce.mockImplementation(async (_payload, id) => ({ id, created: true }));
     mocks.ackDelivery.mockClear();
     mocks.failDelivery.mockClear();
+    mocks.failDeliveryAfterPlatformSend.mockClear();
+    mocks.failDeliveryBeforePlatformSend.mockClear();
+    mocks.failPendingDelivery.mockClear();
+    mocks.loadPendingDelivery.mockReset();
+    mocks.loadPendingDelivery.mockResolvedValue(null);
+    mocks.drainPendingDeliveries.mockClear();
+    mocks.reserveDeliveryAttempt.mockClear();
     mocks.withActiveDeliveryClaim.mockClear();
     mocks.enqueueSystemEvent.mockClear();
     mocks.requestHeartbeat.mockClear();
@@ -568,8 +593,13 @@ describe("scheduleRestartSentinelWake", () => {
       payloads: [{ text: "restart message" }],
       bestEffort: false,
       completionRetention: "permanent",
+      maxRetries: 45,
     });
     expect(mocks.ackDelivery).toHaveBeenCalledWith("restart-sentinel-notice:agent:main:main:123");
+    expect(mocks.reserveDeliveryAttempt).toHaveBeenCalledWith(
+      "restart-sentinel-notice:agent:main:main:123",
+      45,
+    );
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(expect.anything());
     expect(mocks.summarizeRestartSentinel).toHaveBeenCalledWith(expect.anything());
@@ -689,6 +719,13 @@ describe("scheduleRestartSentinelWake", () => {
 
   it("queues a failed outbound notice for durable recovery without dropping the agent wake", async () => {
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("platform outcome unknown"));
+    mocks.loadPendingDelivery
+      .mockResolvedValueOnce({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        retryCount: 1,
+        lastError: "platform outcome unknown",
+      } as never)
+      .mockResolvedValue(null);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -703,10 +740,113 @@ describe("scheduleRestartSentinelWake", () => {
       "restart-sentinel-notice:agent:main:main:123",
       "platform outcome unknown",
     );
+    expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
+    const drain = expectRecordFields(mockCallArg(mocks.drainPendingDeliveries), {
+      drainKey: "restart-recovery:restart-sentinel-notice:agent:main:main:123",
+      deliver: expect.any(Function),
+    });
+    const selectEntry = drain.selectEntry as (entry: { id: string }) => {
+      match: boolean;
+      bypassBackoff?: boolean;
+    };
+    expect(selectEntry({ id: "restart-sentinel-notice:agent:main:main:123" })).toEqual({
+      match: true,
+      bypassBackoff: true,
+    });
+    expect(selectEntry({ id: "other" })).toEqual({ match: false, bypassBackoff: true });
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
       "restart summary: outbound delivery failed; queued for recovery: Error: platform outcome unknown",
+      {
+        channel: "whatsapp",
+        to: "+15550002",
+        sessionKey: "agent:main:main",
+      },
+    );
+  });
+
+  it("starts a terminal drain when the persisted retry budget is exhausted", async () => {
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("transport unavailable"));
+    mocks.loadPendingDelivery.mockResolvedValue({
+      id: "restart-sentinel-notice:agent:main:main:123",
+      retryCount: 45,
+      attemptCount: 45,
+      lastError: "transport unavailable",
+    } as never);
+    mocks.drainPendingDeliveries.mockImplementationOnce(async () => {
+      mocks.loadPendingDelivery.mockResolvedValue(null);
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a notice whose persisted retry budget is not exhausted", async () => {
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("transport unavailable"));
+    mocks.loadPendingDelivery.mockResolvedValue({
+      id: "restart-sentinel-notice:agent:main:main:123",
+      retryCount: 7,
+      lastError: "database busy",
+    } as never);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.drainPendingDeliveries).toHaveBeenCalledTimes(46);
+    expect(mocks.failPendingDelivery).not.toHaveBeenCalled();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      "restart summary: restart notice remains queued after bounded recovery",
+      {
+        queueId: "restart-sentinel-notice:agent:main:main:123",
+        sessionKey: "agent:main:main",
+        retryCount: 7,
+        attemptCount: null,
+        maxAttempts: 45,
+      },
+    );
+  });
+
+  it("continues exact-id recovery after another owner releases the notice", async () => {
+    mocks.withActiveDeliveryClaim.mockResolvedValueOnce({
+      status: "claimed-by-other-owner",
+    });
+    mocks.loadPendingDelivery
+      .mockResolvedValueOnce({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        retryCount: 0,
+      } as never)
+      .mockResolvedValue(null);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(mocks.logInfo).toHaveBeenCalledWith(
+      "restart summary: durable restart notice claimed by recovery",
+      { sessionKey: "agent:main:main" },
+    );
+  });
+
+  it("schedules safe recovery when the delivered notice cannot be acknowledged", async () => {
+    mocks.ackDelivery.mockRejectedValueOnce(new Error("ack unavailable"));
+    mocks.loadPendingDelivery
+      .mockResolvedValueOnce({
+        id: "restart-sentinel-notice:agent:main:main:123",
+        retryCount: 1,
+        recoveryState: "unknown_after_send",
+      } as never)
+      .mockResolvedValue(null);
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
+      "restart-sentinel-notice:agent:main:main:123",
+      "ack unavailable",
+    );
+    expect(mocks.drainPendingDeliveries).toHaveBeenCalledOnce();
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      "restart summary: outbound delivery ack failed; queued for recovery: ack unavailable",
       {
         channel: "whatsapp",
         to: "+15550002",

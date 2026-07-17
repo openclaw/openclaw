@@ -31,6 +31,8 @@ export type DeliveryQueueEntryState = {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  /** Durable delivery-call count reserved before invoking the provider path. */
+  attemptCount?: number;
   completionRetention?: DeliveryQueueCompletionRetention;
   acknowledgedAt?: number;
   lastAttemptAt?: number;
@@ -497,6 +499,59 @@ export function updateDeliveryQueueEntry(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
+}
+
+export type ReserveDeliveryQueueAttemptResult =
+  | { status: "reserved"; attemptCount: number }
+  | { status: "exhausted"; attemptCount: number };
+
+/** Atomically reserve one provider-delivery call before executing it. */
+export function reserveDeliveryQueueEntryAttempt(params: {
+  queueName: string;
+  id: string;
+  maxAttempts: number;
+  stateDir?: string;
+}): ReserveDeliveryQueueAttemptResult {
+  if (!Number.isInteger(params.maxAttempts) || params.maxAttempts <= 0) {
+    throw new Error(`Invalid delivery attempt budget: ${params.maxAttempts}`);
+  }
+  const database = openStateDatabase(params.stateDir);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const current = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
+      if (!current) {
+        throw enoent(params.queueName, params.id);
+      }
+      const persistedAttemptCount =
+        typeof current.attemptCount === "number" &&
+        Number.isInteger(current.attemptCount) &&
+        current.attemptCount >= 0
+          ? current.attemptCount
+          : 0;
+      const attemptCount = Math.max(persistedAttemptCount, current.retryCount);
+      if (attemptCount >= params.maxAttempts) {
+        return { status: "exhausted", attemptCount };
+      }
+      const reservedAttemptCount = attemptCount + 1;
+      const updated = upsertDeliveryQueueEntryInDatabase(
+        {
+          queueName: params.queueName,
+          entry: { ...current, attemptCount: reservedAttemptCount },
+          updatePendingOnly: true,
+        },
+        database,
+      );
+      if (!updated) {
+        throw enoent(params.queueName, params.id);
+      }
+      return { status: "reserved", attemptCount: reservedAttemptCount };
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: `reserve ${params.queueName} delivery attempt`,
+    },
+  );
 }
 
 /** Dead-lettered entry counts for one queue namespace. */

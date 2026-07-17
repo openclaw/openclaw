@@ -14,6 +14,7 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
+  reserveDeliveryQueueEntryAttempt,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
   type DeliveryQueueRowMetadata,
@@ -89,12 +90,15 @@ export type QueuedDeliveryPayload = {
   deliveryCompletion?: DurableDeliveryCompletion;
   /** Retain a terminal receipt when the producer may replay this stable intent indefinitely. */
   completionRetention?: DeliveryQueueCompletionRetention;
+  /** Producer-specific retry budget; omitted entries use the queue default. */
+  maxRetries?: number;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
   retryCount: number;
+  attemptCount: number;
   lastAttemptAt?: number;
   lastError?: string;
   platformSendStartedAt?: number;
@@ -140,7 +144,9 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
     completionRetention: params.completionRetention,
+    maxRetries: params.maxRetries,
     retryCount: 0,
+    attemptCount: 0,
   };
 }
 
@@ -295,6 +301,16 @@ export async function failDeliveryAfterPlatformSend(
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     recoveryState: "unknown_after_send",
   }));
+}
+
+/** Reserve one durable delivery call before invoking the provider path. */
+export async function reserveDeliveryAttempt(id: string, maxAttempts: number, stateDir?: string) {
+  return reserveDeliveryQueueEntryAttempt({
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    maxAttempts,
+    stateDir,
+  });
 }
 
 function updateQueuedDelivery(
