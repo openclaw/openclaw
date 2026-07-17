@@ -9,7 +9,7 @@ import { t } from "../../../i18n/index.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
-export type ChatPaneHeaderProps = {
+type ChatPaneHeaderProps = {
   paneId: string;
   active: boolean;
   narrow: boolean;
@@ -51,7 +51,7 @@ function revealLabel(platform: string | null): string {
   return t("chat.sessionHeader.revealFileManager");
 }
 
-export function pathBasename(value: string): string {
+function pathBasename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).pop() || trimmed;
 }

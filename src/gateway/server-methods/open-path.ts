@@ -1,7 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { runExec } from "../../process/exec.js";
 
-export type OpenPathCommand = {
+type OpenPathCommand = {
   command: string;
   args: string[];
 };

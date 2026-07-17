@@ -7,8 +7,9 @@ import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
   resolveChatPaneWorkspace,
-  type ChatPaneHeaderProps,
 } from "./chat-pane-header.ts";
+
+type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
 
 const containers: HTMLElement[] = [];
 
