@@ -62,6 +62,12 @@ inputs:
       snapshots.
     required: false
     default: "false"
+  build-all-cache-scope:
+    description: >
+      Namespace for restoring and saving build-all's content-addressed step cache.
+      Leave empty to disable; use only for declaration builds with public inputs.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -362,6 +368,17 @@ runs:
             bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE"
           fi
         fi
+
+    - name: Restore and save build-all cache
+      if: inputs.build-all-cache-scope != ''
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: .artifacts/build-all-cache
+        # Exact keys deduplicate concurrent jobs. Coarse restore supplies the
+        # newest declaration groups; build-all rehashes every group's inputs.
+        key: ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'tsconfig*.json', 'tsdown*.config.ts', 'scripts/build-all.mjs', 'scripts/tsdown-build.mjs', 'scripts/lib/tsdown-*.mjs', 'scripts/lib/plugin-sdk-*', 'scripts/lib/bundled-plugin-*', 'scripts/lib/optional-bundled-clusters.mjs', 'src/**', 'packages/**', 'extensions/**') }}
+        restore-keys: |
+          ${{ github.repository }}-build-all-v1-${{ inputs.build-all-cache-scope }}-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Save pnpm store cache
       if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}

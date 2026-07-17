@@ -1744,6 +1744,7 @@ jobs:
         with:
           node-version: "22.22.3"
           install-bun: "false"
+          build-all-cache-scope: full
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -2843,6 +2844,9 @@ jobs:
             exit 1
           fi
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
+
+      - name: OpenClawKit tests
+        run: swift test --package-path apps/shared/OpenClawKit --parallel
 
       - name: Swift test
         run: |

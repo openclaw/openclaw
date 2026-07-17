@@ -1156,6 +1156,174 @@ public struct AgentEvent: Codable, Sendable {
     }
 }
 
+public struct ConversationSendParams: Codable, Sendable {
+    public let agentid: String
+    public let sourcesessionkey: String?
+    public let operationid: String
+    public let conversationref: String
+    public let message: String
+
+    public init(
+        agentid: String,
+        sourcesessionkey: String? = nil,
+        operationid: String,
+        conversationref: String,
+        message: String)
+    {
+        self.agentid = agentid
+        self.sourcesessionkey = sourcesessionkey
+        self.operationid = operationid
+        self.conversationref = conversationref
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sourcesessionkey = "sourceSessionKey"
+        case operationid = "operationId"
+        case conversationref = "conversationRef"
+        case message
+    }
+}
+
+public struct ConversationSendResult: Codable, Sendable {
+    public let status: AnyCodable
+    public let conversationref: String
+    public let channel: String
+    public let messageid: String?
+    public let queueid: String?
+
+    public init(
+        status: AnyCodable,
+        conversationref: String,
+        channel: String,
+        messageid: String? = nil,
+        queueid: String? = nil)
+    {
+        self.status = status
+        self.conversationref = conversationref
+        self.channel = channel
+        self.messageid = messageid
+        self.queueid = queueid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case conversationref = "conversationRef"
+        case channel
+        case messageid = "messageId"
+        case queueid = "queueId"
+    }
+}
+
+public struct ConversationTurnCancelParams: Codable, Sendable {
+    public let agentid: String
+    public let turnid: String
+
+    public init(
+        agentid: String,
+        turnid: String)
+    {
+        self.agentid = agentid
+        self.turnid = turnid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case turnid = "turnId"
+    }
+}
+
+public struct ConversationTurnCancelResult: Codable, Sendable {
+    public let cancelled: Bool
+
+    public init(
+        cancelled: Bool)
+    {
+        self.cancelled = cancelled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cancelled
+    }
+}
+
+public struct ConversationTurnParams: Codable, Sendable {
+    public let agentid: String
+    public let sourcesessionkey: String?
+    public let turnid: String
+    public let conversationref: String
+    public let message: String
+    public let timeoutms: Int
+
+    public init(
+        agentid: String,
+        sourcesessionkey: String? = nil,
+        turnid: String,
+        conversationref: String,
+        message: String,
+        timeoutms: Int)
+    {
+        self.agentid = agentid
+        self.sourcesessionkey = sourcesessionkey
+        self.turnid = turnid
+        self.conversationref = conversationref
+        self.message = message
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case sourcesessionkey = "sourceSessionKey"
+        case turnid = "turnId"
+        case conversationref = "conversationRef"
+        case message
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct ConversationTurnReply: Codable, Sendable {
+    public let conversationref: String
+    public let messageid: String
+    public let replytoid: String?
+    public let threadid: String?
+    public let text: String
+    public let timestamp: Int
+    public let transcriptartifactid: String?
+    public let transcriptmessageid: String?
+
+    public init(
+        conversationref: String,
+        messageid: String,
+        replytoid: String? = nil,
+        threadid: String? = nil,
+        text: String,
+        timestamp: Int,
+        transcriptartifactid: String? = nil,
+        transcriptmessageid: String? = nil)
+    {
+        self.conversationref = conversationref
+        self.messageid = messageid
+        self.replytoid = replytoid
+        self.threadid = threadid
+        self.text = text
+        self.timestamp = timestamp
+        self.transcriptartifactid = transcriptartifactid
+        self.transcriptmessageid = transcriptmessageid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationref = "conversationRef"
+        case messageid = "messageId"
+        case replytoid = "replyToId"
+        case threadid = "threadId"
+        case text
+        case timestamp
+        case transcriptartifactid = "transcriptArtifactId"
+        case transcriptmessageid = "transcriptMessageId"
+    }
+}
+
 public struct MessageActionParams: Codable, Sendable {
     public let channel: String
     public let action: String

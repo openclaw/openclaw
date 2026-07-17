@@ -2555,7 +2555,7 @@ describe("loadPluginManifestRegistry", () => {
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
-          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+          paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
         },
       },
     });
@@ -2572,7 +2572,7 @@ describe("loadPluginManifestRegistry", () => {
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
-        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
       },
     });
   });

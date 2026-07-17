@@ -2008,6 +2008,44 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("persists content-validated public full-build declarations", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const installStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Install dependencies",
+    );
+    const cacheStep = action.runs.steps.find(
+      (step: WorkflowStep) => step.name === "Restore and save build-all cache",
+    );
+
+    expect(action.inputs["build-all-cache-scope"].default).toBe("");
+    expect(cacheStep).toMatchObject({
+      if: "inputs.build-all-cache-scope != ''",
+      uses: "actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      with: { path: ".artifacts/build-all-cache" },
+    });
+    expect(cacheStep.with.key).toContain("build-all-v1-${{ inputs.build-all-cache-scope }}");
+    expect(cacheStep.with.key).toContain("${{ runner.os }}-${{ runner.arch }}");
+    expect(cacheStep.with.key).toContain("scripts/lib/optional-bundled-clusters.mjs");
+    expect(cacheStep.with.key).toContain("'src/**', 'packages/**', 'extensions/**'");
+    expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
+    expect(action.runs.steps.indexOf(installStep)).toBeLessThan(
+      action.runs.steps.indexOf(cacheStep),
+    );
+
+    const privateQaWorkflows = [
+      ".github/workflows/mantis-discord-smoke.yml",
+      ".github/workflows/mantis-discord-status-reactions.yml",
+      ".github/workflows/mantis-discord-thread-attachment.yml",
+      ".github/workflows/mantis-slack-desktop-smoke.yml",
+      ".github/workflows/mantis-telegram-live.yml",
+      ".github/workflows/qa-live-transports-convex.yml",
+    ];
+    for (const workflowPath of privateQaWorkflows) {
+      const source = readFileSync(workflowPath, "utf8");
+      expect(source, workflowPath).not.toContain("build-all-cache-scope:");
+    }
+  });
+
   it("restores importer-local node_modules from sticky snapshots", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-sticky-importers-"));
     try {

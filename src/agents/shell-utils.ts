@@ -13,9 +13,17 @@ import {
 } from "../process/kill-tree.js";
 import { getBinDir } from "./config.js";
 
-interface ShellConfig {
+type ShellConfig = {
   shell: string;
   args: string[];
+} & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
+
+type ShellCommandInvocation =
+  | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
+  | { argv: [string, ...string[]]; input: string; stdin: "pipe" };
+
+function createArgvShellConfig(shell: string, args: string[]): ShellConfig {
+  return { shell, args, commandTransport: "argv" };
 }
 
 function resolvePowerShellPath(): string {
@@ -93,12 +101,38 @@ function resolveWindowsBashPath(env: NodeJS.ProcessEnv = process.env): string | 
   return resolveShellFromPath("bash.exe", env) ?? resolveShellFromPath("bash", env);
 }
 
+function isLegacyWslBashPath(shellPath: string): boolean {
+  const normalized = shellPath.replace(/\//g, "\\").toLowerCase();
+  return /(?:^|\\)windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
+}
+
+function resolveBashCommandConfig(shell: string): ShellConfig {
+  if (isLegacyWslBashPath(shell)) {
+    return { shell, args: ["-s"], commandTransport: "stdin" };
+  }
+  return createArgvShellConfig(
+    shell,
+    process.platform === "win32" ? ["-c"] : getPosixShellArgs(shell),
+  );
+}
+
+export function buildShellCommandInvocation(
+  command: string,
+  config: ShellConfig,
+): ShellCommandInvocation {
+  if (config.commandTransport === "stdin") {
+    // The legacy WSL launcher mangles command argv, so its -s mode must read the command from stdin.
+    return { argv: [config.shell, ...config.args], input: command, stdin: "pipe" };
+  }
+  return { argv: [config.shell, ...config.args, command], stdin: "ignore" };
+}
+
 export function getShellConfig(customShellPath?: string): ShellConfig {
   if (customShellPath) {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    return createArgvShellConfig(customShellPath, getPosixShellArgs(customShellPath));
   }
 
   if (process.platform === "win32") {
@@ -107,10 +141,11 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return {
-      shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
+    return createArgvShellConfig(resolvePowerShellPath(), [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+    ]);
   }
 
   const rawEnvShell = process.env.SHELL?.trim();
@@ -120,20 +155,20 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: getPosixShellArgs(bash) };
+      return createArgvShellConfig(bash, getPosixShellArgs(bash));
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: getPosixShellArgs(sh) };
+      return createArgvShellConfig(sh, getPosixShellArgs(sh));
     }
   }
   if (envShell) {
-    return { shell: envShell, args: getPosixShellArgs(envShell) };
+    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
   const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
-  return { shell, args: getPosixShellArgs(shell) };
+  return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
 export function getBashShellConfig(customShellPath?: string): ShellConfig {
@@ -141,19 +176,19 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     if (!fs.existsSync(customShellPath)) {
       throw new Error(`Custom shell path not found: ${customShellPath}`);
     }
-    return { shell: customShellPath, args: getPosixShellArgs(customShellPath) };
+    return resolveBashCommandConfig(customShellPath);
   }
 
   if (process.platform === "win32") {
     const bash = resolveWindowsBashPath();
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return resolveBashCommandConfig(bash);
     }
     throw new Error("No bash shell found. Install Git for Windows or add bash.exe to PATH.");
   }
 
   if (fs.existsSync("/bin/bash")) {
-    return { shell: "/bin/bash", args: getPosixShellArgs("/bin/bash") };
+    return resolveBashCommandConfig("/bin/bash");
   }
 
   const shell =
@@ -161,7 +196,7 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     resolveShellFromWhich("bash") ??
     resolveShellFromPath("sh") ??
     "sh";
-  return { shell, args: getPosixShellArgs(shell) };
+  return resolveBashCommandConfig(shell);
 }
 
 function resolveShellFromPath(

@@ -15,6 +15,7 @@ import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.t
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import {
+  assertOpenClawAgentDatabaseForMaintenance,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -1573,15 +1574,17 @@ describe("openclaw agent database", () => {
       new URL("./openclaw-agent-schema.sql", import.meta.url),
       "utf8",
     );
-    const v7Schema = currentSchema.replace(
-      [
-        "  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),\n",
-        "  acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),\n",
-        "  plugin_owner_id TEXT,\n",
-        "  hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),\n",
-      ].join(""),
-      "",
-    );
+    const v7Schema = currentSchema
+      .replace(
+        [
+          "  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),\n",
+          "  acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1)),\n",
+          "  plugin_owner_id TEXT,\n",
+          "  hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook')),\n",
+        ].join(""),
+        "",
+      )
+      .replace("  delivery_target TEXT NOT NULL,\n", "");
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
     db.exec(v7Schema);
@@ -1597,7 +1600,7 @@ describe("openclaw agent database", () => {
       VALUES (
         'agent:worker-1:main',
         'session-1',
-        '{"sessionId":"session-1","pluginOwnerId":"history-owner","acp":{"backend":"acpx"}}',
+        '{"sessionId":"session-1","pluginOwnerId":"history-owner","acp":{"backend":"acpx"},"chatType":"direct","deliveryContext":{"channel":"reef","accountId":"default","to":"reef:peer-a"}}',
         20,
         'done'
       );
@@ -1617,6 +1620,20 @@ describe("openclaw agent database", () => {
       session_entry_provenance: 1,
       acp_owned: 1,
       plugin_owner_id: "history-owner",
+    });
+    expect(
+      database.db
+        .prepare(
+          `SELECT sc.role, c.channel, c.peer_id, c.delivery_target
+           FROM session_conversations AS sc
+           JOIN conversations AS c ON c.conversation_id = sc.conversation_id`,
+        )
+        .get(),
+    ).toEqual({
+      role: "primary",
+      channel: "reef",
+      peer_id: "peer-a",
+      delivery_target: "reef:peer-a",
     });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   });
@@ -1691,6 +1708,67 @@ describe("openclaw agent database", () => {
         .get(),
     ).toEqual({ name: "session_transcript_active_events" });
     expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  });
+
+  it("adds durable conversation delivery state when upgrading the canonical v10 schema", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(currentSchema);
+    db.exec(`
+      DROP TABLE conversation_deliveries;
+      ALTER TABLE conversations DROP COLUMN delivery_target;
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 10, 'worker-1', NULL, 1, 1);
+      INSERT INTO sessions
+        (session_id, session_key, session_scope, created_at, updated_at, chat_type)
+      VALUES ('session-1', 'agent:worker-1:main', 'shared-main', 10, 20, 'direct');
+      INSERT INTO session_entries
+        (session_key, session_id, entry_json, updated_at, status)
+      VALUES (
+        'agent:worker-1:main',
+        'session-1',
+        '{"sessionId":"session-1","chatType":"direct","deliveryContext":{"channel":"reef","accountId":"default","to":"reef:peer-a"}}',
+        20,
+        'done'
+      );
+      PRAGMA user_version = 10;
+    `);
+    db.close();
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(database.db.prepare("SELECT peer_id, delivery_target FROM conversations").get()).toEqual(
+      { peer_id: "peer-a", delivery_target: "reef:peer-a" },
+    );
+    expect(
+      database.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'conversation_deliveries'",
+        )
+        .get(),
+    ).toEqual({ name: "conversation_deliveries" });
+    expect(() =>
+      assertOpenClawAgentDatabaseForMaintenance(database.db, {
+        agentId: "worker-1",
+        pathname: database.path,
+      }),
+    ).not.toThrow();
   });
 
   it("inspects registered database ownership without mutating the database", () => {

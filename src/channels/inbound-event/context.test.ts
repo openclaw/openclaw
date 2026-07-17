@@ -195,6 +195,8 @@ describe("buildChannelInboundEventContext", () => {
       },
     });
 
+    expect(ctx.InboundAccessAuthorized).toBe(true);
+
     const expectedFields = {
       Body: "[User One] hello",
       InboundEventKind: "user_request",

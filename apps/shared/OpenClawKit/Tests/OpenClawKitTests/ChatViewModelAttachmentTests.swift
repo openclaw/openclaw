@@ -447,7 +447,9 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
         await MainActor.run { viewModel.load() }
         try await waitUntil("legacy gateway bootstrap completed") {
-            await MainActor.run { viewModel.healthOK && !viewModel.isLoading }
+            await MainActor.run {
+                viewModel.healthOK && !viewModel.isLoading && viewModel.hasRestoredOutboxMessages
+            }
         }
         await MainActor.run {
             viewModel.attachments = [

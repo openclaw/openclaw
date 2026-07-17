@@ -95,6 +95,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       }
       const transport =
         normalizeOptionalLowercaseString(typedParams.transport) ?? realtimeConfig.transport;
+      const wantsCameraFrames = typedParams.capabilities?.includes("camera-frame") === true;
       if (transport === "managed-room") {
         respond(
           false,
@@ -112,7 +113,9 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `talk.client.create is client-owned; use talk.session.create for gateway-relay`,
+            wantsCameraFrames
+              ? "gateway-relay does not support browser video frames"
+              : `talk.client.create is client-owned; use talk.session.create for gateway-relay`,
           ),
         );
         return;
@@ -125,17 +128,24 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         defaultModel: realtimeConfig.model,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
+      if (wantsCameraFrames && resolution.provider.capabilities?.supportsVideoFrames !== true) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Realtime provider ${resolution.provider.id} does not support browser video frames`,
+          ),
+        );
+        return;
+      }
       const launchOptions = buildRealtimeVoiceLaunchOptions({
         requested: typedParams,
         defaults: realtimeConfig,
       });
       if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
         const tools = [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL];
-        if (
-          resolution.provider.id === "openai" &&
-          transport === "webrtc" &&
-          typedParams.capabilities?.includes("camera-frame")
-        ) {
+        if (wantsCameraFrames) {
           tools.push(REALTIME_VOICE_DESCRIBE_VIEW_TOOL);
         }
         const session = await resolution.provider.createBrowserSession({
@@ -146,6 +156,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           ...launchOptions,
         });
         if (
+          (session.transport === "webrtc" || session.transport === "provider-websocket") &&
           !isUnsupportedBrowserWebRtcSession(session) &&
           (!transport || session.transport === transport)
         ) {

@@ -249,6 +249,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           ...dispatchContent,
           messageId: message.id,
           commandAuthorized: false,
+          // ReefMessageFlow invokes ingress only after peer trust and guard approval.
+          inboundAccessAuthorized: true,
           deliver: async (payload) => {
             const text = replyText(payload);
             if (text.trim()) {

@@ -191,15 +191,18 @@ export function upsertDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams)
   return upsertDeliveryQueueEntryInDatabase(params, openStateDatabase(params.stateDir));
 }
 
-/** Atomically publish a queue row only while its staging row still exists. */
-export function commitStagedDeliveryQueueEntry(params: {
+type CommitStagedDeliveryQueueEntryParams = {
   queueName: string;
   entry: DeliveryQueueEntryState;
   metadata?: DeliveryQueueRowMetadata;
   stagingId: string;
   stagingQueueName: string;
   stateDir?: string;
-}): boolean {
+};
+
+function commitStagedDeliveryQueueEntryInternal(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
   const database = openStateDatabase(params.stateDir);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   return runSqliteImmediateTransactionSync(
@@ -215,7 +218,7 @@ export function commitStagedDeliveryQueueEntry(params: {
           .where("status", "=", "pending"),
       ) as { id: string } | undefined;
       if (!staging) {
-        return false;
+        return "missing";
       }
       const inserted = upsertDeliveryQueueEntryInDatabase(
         {
@@ -227,9 +230,7 @@ export function commitStagedDeliveryQueueEntry(params: {
         database,
       );
       if (!inserted) {
-        throw new Error(
-          `Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`,
-        );
+        return "existing";
       }
       const deleted = executeSqliteQuerySync(
         database.db,
@@ -244,13 +245,31 @@ export function commitStagedDeliveryQueueEntry(params: {
           `Delivery queue staging row changed during commit: ${params.stagingQueueName}/${params.stagingId}`,
         );
       }
-      return true;
+      return "created";
     },
     {
       databaseLabel: "openclaw-state",
       operationLabel: "commit staged delivery queue entry",
     },
   );
+}
+
+/** Atomically publish a queue row only while its staging row still exists. */
+export function commitStagedDeliveryQueueEntry(
+  params: CommitStagedDeliveryQueueEntryParams,
+): boolean {
+  const result = commitStagedDeliveryQueueEntryInternal(params);
+  if (result === "existing") {
+    throw new Error(`Delivery queue entry already exists: ${params.queueName}/${params.entry.id}`);
+  }
+  return result === "created";
+}
+
+/** Atomically publishes a stable queue id while preserving prior ownership. */
+export function commitStagedDeliveryQueueEntryOnce(
+  params: CommitStagedDeliveryQueueEntryParams,
+): "created" | "existing" | "missing" {
+  return commitStagedDeliveryQueueEntryInternal(params);
 }
 
 /**

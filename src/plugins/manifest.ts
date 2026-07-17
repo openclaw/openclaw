@@ -259,6 +259,8 @@ type PluginManifestSecretInputPath = {
   path: string;
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
+  /** Runtime owner kind used to isolate this surface when resolution fails. */
+  ownerKind?: "route";
 };
 
 type PluginManifestSecretInputContracts = {
@@ -972,9 +974,11 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
+    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),
+      ...(ownerKind ? { ownerKind } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;

@@ -247,18 +247,20 @@ export async function prepareSecretsRuntimeSnapshot(params: {
         })
       : [];
 
+  const webTools = await resolveRuntimeWebTools({
+    sourceConfig,
+    resolvedConfig,
+    context,
+    allowUnavailableSecretOwners: params.allowUnavailableSecretOwners,
+  });
   const snapshot = {
     sourceConfig,
     config: resolvedConfig,
     authStores,
     authStoreCredentialsRevision,
     warnings: context.warnings,
-    degradedOwners,
-    webTools: await resolveRuntimeWebTools({
-      sourceConfig,
-      resolvedConfig,
-      context,
-    }),
+    degradedOwners: [...degradedOwners, ...webTools.degradedOwners],
+    webTools: webTools.metadata,
   };
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,

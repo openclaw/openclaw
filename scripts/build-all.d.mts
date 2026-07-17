@@ -4,6 +4,7 @@ export type BuildCacheEntry =
   | string
   | {
       path: string;
+      excludeDirectories?: string[];
       extensions?: string[];
       recursive?: boolean;
     };
@@ -20,6 +21,9 @@ export type BuildAllStep = {
     inputs: BuildCacheEntry[];
     outputs: BuildCacheEntry[];
     restore?: "always";
+    runOnHit?: {
+      env?: NodeJS.ProcessEnv;
+    };
   };
 };
 
@@ -68,6 +72,7 @@ export function resolveBuildAllStep(
     windowsVerbatimArguments?: boolean;
   };
 };
+export function resolveBuildAllStepOnCacheHit(step: BuildAllStep): BuildAllStep | null;
 export function resolveBuildAllStepCacheState(
   step: BuildAllStep,
   params?: { rootDir?: string; fs?: typeof fs; env?: NodeJS.ProcessEnv },
@@ -85,6 +90,16 @@ export function resolveBuildAllStepCacheStampState(
 export function restoreBuildAllStepCacheOutputs(
   cacheState: BuildAllCacheState,
   params?: { rootDir?: string; fs?: typeof fs },
+): boolean;
+export function finalizeBuildAllStepCache(
+  step: BuildAllStep,
+  cacheState: BuildAllCacheState,
+  params?: {
+    rootDir?: string;
+    fs?: typeof fs;
+    env?: NodeJS.ProcessEnv;
+    reusedCache?: boolean;
+  },
 ): boolean;
 export function formatBuildAllDuration(durationMs: number): string;
 export function formatBuildAllTimingSummary(
