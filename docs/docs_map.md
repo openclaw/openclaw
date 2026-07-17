@@ -3384,6 +3384,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Environment
   - H3: env (inline env vars)
   - H3: Env var substitution
+  - H4: ${VAR:json} (array/object coercion)
   - H2: Secrets
   - H3: SecretRef
   - H3: Supported credential surface

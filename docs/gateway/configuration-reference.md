@@ -1064,6 +1064,32 @@ Reference env vars in any config string with `${VAR_NAME}`:
 - Missing/empty vars throw an error at config load.
 - Escape with `$${VAR}` for a literal `${VAR}`.
 - Works with `$include`.
+- Plain `${VAR}` always resolves to a string. Use `${VAR:json}` to coerce an
+  array/object value (see below).
+
+#### `${VAR:json}` (array/object coercion)
+
+For config keys that expect an array or object, opt into coercion with the
+`${VAR:json}` modifier:
+
+```json5
+{
+  // ALLOW_FROM='["alice","bob"]'
+  channels: { discord: { allowFrom: "${ALLOW_FROM:json}" } },
+}
+```
+
+- Opt-in and whole-value only: the value must be exactly one `${VAR:json}`
+  reference. Plain `${VAR}` is never coerced, so string-typed fields keep their
+  string value.
+- Only JSON arrays and objects are parsed; JSON primitives, scalars, embedded
+  refs (`"prefix-${VAR:json}"`), multi-var strings, and malformed JSON stay
+  strings.
+- `$${VAR:json}` stays literal; an unset var still throws at load; unknown
+  modifiers like `${VAR:foo}` are left as literal placeholders.
+- Write-back preserves an authored `${VAR:json}` reference (instead of inlining
+  the resolved structure) when the current value still deep-equals the
+  env-resolved array/object.
 
 ---
 

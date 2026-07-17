@@ -689,6 +689,41 @@ Rules:
 - Escape with `$${VAR}` for literal output
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
+- Plain `${VAR}` always resolves to a **string**; opt into array/object values with `${VAR:json}` (see below)
+
+</Accordion>
+
+<Accordion title="Injecting arrays or objects from env vars (`${VAR:json}`)">
+  Plain `${VAR}` always yields a string, so a config key that expects an array
+  or object (allowlists, id lists, structured limits) cannot be supplied through
+  an env var with `${VAR}` alone. Opt in with the `${VAR:json}` modifier:
+
+```json5
+{
+  // ALLOW_FROM='["alice","bob"]'
+  channels: { discord: { allowFrom: "${ALLOW_FROM:json}" } },
+}
+```
+
+resolves `allowFrom` to the real array `["alice", "bob"]`.
+
+Rules:
+
+- Coercion is **opt-in and whole-value only**: the value must be exactly one
+  `${VAR:json}` reference. Plain `${VAR}` is never coerced, so string-typed
+  fields (for example `env.vars`) keep their string value even when the env
+  value looks like JSON.
+- Only JSON **arrays and objects** are parsed. JSON primitives (numbers,
+  booleans, `null`, quoted strings), scalars, and malformed JSON stay strings.
+- Embedded or multi-var forms are not coerced: `"prefix-${VAR:json}"` and
+  `"${A:json}${B:json}"` resolve to strings.
+- Escaping and missing-var behavior are unchanged: `$${VAR:json}` stays the
+  literal text `${VAR:json}`, and an unset `VAR` still throws at load time.
+- Unknown modifiers such as `${VAR:foo}` are left as literal placeholders.
+- **Write-back preservation:** when config is written back to disk, an authored
+  `${VAR:json}` reference is restored (not inlined) as long as the current value
+  still deep-equals the env-resolved array/object, so the reference survives
+  config round-trips.
 
 </Accordion>
 
