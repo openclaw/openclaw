@@ -2441,20 +2441,6 @@ export const zh_TW: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "尚無代理程式或工作階段。",
-        busy: "忙碌中",
-        idle: "閒置",
-        progress: "已完成 {percent}%",
-      },
-      customWidgetApprovals: {
-        empty: "沒有自訂小工具正在等候核准。",
-        kind: "自訂小工具",
-        requestedBy: "由 {agent} 提出要求",
-        approve: "核准",
-        reject: "拒絕",
-        permissionRequired: "需要核准權限",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

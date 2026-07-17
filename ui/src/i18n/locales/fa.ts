@@ -2486,20 +2486,6 @@ export const fa: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "هنوز هیچ عامل یا جلسه‌ای وجود ندارد.",
-        busy: "مشغول",
-        idle: "بی‌کار",
-        progress: "{percent}٪ تکمیل شده",
-      },
-      customWidgetApprovals: {
-        empty: "هیچ ویجت سفارشی در انتظار تأیید نیست.",
-        kind: "ویجت سفارشی",
-        requestedBy: "درخواست‌شده توسط {agent}",
-        approve: "تأیید",
-        reject: "رد کردن",
-        permissionRequired: "مجوز تأیید لازم است",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

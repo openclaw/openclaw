@@ -2479,20 +2479,6 @@ export const ko: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "아직 에이전트 또는 세션이 없습니다.",
-        busy: "작업 중",
-        idle: "유휴",
-        progress: "{percent}% 완료",
-      },
-      customWidgetApprovals: {
-        empty: "승인을 기다리는 사용자 지정 위젯이 없습니다.",
-        kind: "사용자 지정 위젯",
-        requestedBy: "{agent}의 요청",
-        approve: "승인",
-        reject: "거부",
-        permissionRequired: "승인 권한 필요",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

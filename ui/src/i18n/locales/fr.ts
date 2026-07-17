@@ -2537,20 +2537,6 @@ export const fr: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "Aucun agent ni aucune session pour le moment.",
-        busy: "Occupé",
-        idle: "Inactive",
-        progress: "{percent} % terminé",
-      },
-      customWidgetApprovals: {
-        empty: "Aucun widget personnalisé n’est en attente d’approbation.",
-        kind: "Widget personnalisé",
-        requestedBy: "Demandé par {agent}",
-        approve: "Approuver",
-        reject: "Rejeter",
-        permissionRequired: "Autorisation d’approbation requise",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

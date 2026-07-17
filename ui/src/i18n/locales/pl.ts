@@ -2510,20 +2510,6 @@ export const pl: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "Brak agentów lub sesji.",
-        busy: "Zajęty",
-        idle: "Bezczynna",
-        progress: "Ukończono {percent}%",
-      },
-      customWidgetApprovals: {
-        empty: "Brak niestandardowych widżetów oczekujących na zatwierdzenie.",
-        kind: "Niestandardowy widżet",
-        requestedBy: "Żądanie od: {agent}",
-        approve: "Zatwierdź",
-        reject: "Odrzuć",
-        permissionRequired: "Wymagane uprawnienie do zatwierdzania",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

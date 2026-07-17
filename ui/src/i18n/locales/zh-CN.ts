@@ -2438,20 +2438,6 @@ export const zh_CN: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "暂无代理或会话。",
-        busy: "忙碌",
-        idle: "空闲",
-        progress: "已完成 {percent}%",
-      },
-      customWidgetApprovals: {
-        empty: "没有自定义小组件等待批准。",
-        kind: "自定义小组件",
-        requestedBy: "请求者：{agent}",
-        approve: "批准",
-        reject: "拒绝",
-        permissionRequired: "需要批准权限",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

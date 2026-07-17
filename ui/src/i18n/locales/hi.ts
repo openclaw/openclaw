@@ -2465,20 +2465,6 @@ export const hi: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "अभी तक कोई एजेंट या सत्र नहीं है।",
-        busy: "व्यस्त",
-        idle: "निष्क्रिय",
-        progress: "{percent}% पूर्ण",
-      },
-      customWidgetApprovals: {
-        empty: "कोई भी कस्टम विजेट अनुमोदन की प्रतीक्षा में नहीं है।",
-        kind: "कस्टम विजेट",
-        requestedBy: "{agent} द्वारा अनुरोधित",
-        approve: "स्वीकृत करें",
-        reject: "अस्वीकार करें",
-        permissionRequired: "अनुमोदन की अनुमति आवश्यक है",
-      },
       usage: {
         cost: "लागत",
         tokens: "टोकन",

@@ -2469,20 +2469,6 @@ export const ar: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
-      agentStatus: {
-        empty: "لا يوجد وكلاء أو جلسات حتى الآن.",
-        busy: "مشغول",
-        idle: "خامل",
-        progress: "اكتمل {percent}%",
-      },
-      customWidgetApprovals: {
-        empty: "لا توجد أدوات مخصصة بانتظار الموافقة.",
-        kind: "أداة مخصصة",
-        requestedBy: "طلبها {agent}",
-        approve: "موافقة",
-        reject: "رفض",
-        permissionRequired: "يلزم إذن الموافقة",
-      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",
