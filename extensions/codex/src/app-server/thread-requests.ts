@@ -38,6 +38,10 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.apply_patch_streaming_events": true,
 };
 
+const CODEX_NATIVE_PROTOCOL_THREAD_CONFIG: JsonObject = {
+  "features.goals": true,
+};
+
 const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.code_mode": false,
   "features.code_mode_only": false,
@@ -265,6 +269,8 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
+  // Native goals replace OpenClaw's projected goal tools for Codex turns.
+  // Keep this final in normal config merges so the model never loses both surfaces.
   const codeModeConfig: JsonObject = {
     ...CODEX_CODE_MODE_THREAD_CONFIG,
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
@@ -273,6 +279,7 @@ export function buildCodexRuntimeThreadConfig(
     const disabledConfig = mergeCodexThreadConfigs(
       config,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+      CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
     ) ?? {
       ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
     };
@@ -282,16 +289,27 @@ export function buildCodexRuntimeThreadConfig(
     return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
-    const merged = mergeCodexThreadConfigs(codeModeConfig, config, {
-      "features.code_mode_only": true,
-    }) ?? {
+    const merged = mergeCodexThreadConfigs(
+      codeModeConfig,
+      config,
+      CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+      {
+        "features.code_mode_only": true,
+      },
+    ) ?? {
       ...codeModeConfig,
+      ...CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
       "features.code_mode_only": true,
     };
     return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
   }
-  const merged = mergeCodexThreadConfigs(codeModeConfig, config) ?? {
+  const merged = mergeCodexThreadConfigs(
+    codeModeConfig,
+    config,
+    CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+  ) ?? {
     ...codeModeConfig,
+    ...CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
   };
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
