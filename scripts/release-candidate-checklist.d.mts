@@ -206,4 +206,9 @@ declare function loadCandidateShippedBaseline(ref: unknown): {
   ref: unknown;
   pullRequests: Set<unknown>;
 };
+export function isDirectReleaseCandidateExecution(
+  directPath: unknown,
+  modulePath: unknown,
+  resolveRealPath?: unknown,
+): boolean;
 import type { ShippedBaselineExclusion } from "./render-github-release-notes.mjs";
