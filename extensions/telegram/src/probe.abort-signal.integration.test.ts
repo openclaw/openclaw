@@ -75,6 +75,9 @@ describe("probeTelegram startup retry loop honors abortSignal", () => {
       apiRoot,
       includeWebhookInfo: false,
       abortSignal: abortController.signal,
+      // Disable the transport's internal dispatcher fallbacks so request
+      // counts isolate the outer startup-probe retry loop under test.
+      network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
     });
 
     expect(result.ok).toBe(false);
