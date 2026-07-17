@@ -176,6 +176,7 @@ type AzureIdentityModule = {
 };
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
+const MAX_MSTEAMS_CERTIFICATE_FILE_BYTES = 64 * 1024;
 
 const loadAzureIdentity = createLazyRuntimeModule(
   () => import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>,
@@ -319,6 +320,10 @@ function createFederatedApp(
 
   let privateKey: string;
   try {
+    const certificateSize = fs.statSync(creds.certificatePath).size;
+    if (certificateSize > MAX_MSTEAMS_CERTIFICATE_FILE_BYTES) {
+      throw new Error(`certificate file exceeds ${MAX_MSTEAMS_CERTIFICATE_FILE_BYTES} bytes`);
+    }
     privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

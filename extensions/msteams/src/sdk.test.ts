@@ -8,6 +8,7 @@ vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    statSync: vi.fn(() => ({ size: 1024 }) as fs.Stats),
     readFileSync: vi.fn(
       () => "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----",
     ),
@@ -76,7 +77,23 @@ describe("createMSTeamsApp", () => {
 
     const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
+    expect(fs.statSync).toHaveBeenCalledWith("/path/to/cert.pem");
     expect(fs.readFileSync).toHaveBeenCalledWith("/path/to/cert.pem", "utf-8");
+  });
+
+  it("rejects oversized certificate files before reading them", async () => {
+    vi.mocked(fs.readFileSync).mockClear();
+    vi.mocked(fs.statSync).mockReturnValueOnce({ size: 64 * 1024 + 1 } as fs.Stats);
+
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+      certificatePath: "/path/to/oversized-cert.pem",
+    };
+
+    await expect(createMSTeamsApp(creds)).rejects.toThrow("certificate file exceeds 65536 bytes");
+    expect(fs.readFileSync).not.toHaveBeenCalled();
   });
 
   it("throws when certificate file is missing", async () => {
