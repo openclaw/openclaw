@@ -117,15 +117,17 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   protected getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
+    const useAllAgentsResult = this.sessionsAllAgents && this.allAgentsResult !== null;
     const navigation = resolveSessionNavigation({
-      result: this.sessionsResult,
-      resultAgentId: this.sessionsAgentId,
+      result: useAllAgentsResult ? this.allAgentsResult : this.sessionsResult,
+      resultAgentId: useAllAgentsResult ? null : this.sessionsAgentId,
       sessionKey: routeSessionKey,
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
       showCron: this.sessionsShowCron,
       compareSessions: this.compareSidebarSessionRows,
+      allAgents: useAllAgentsResult,
     });
     const highlightCurrentSession = this.activeRouteId === "chat";
     const toSidebarSession = (row: SessionsListResult["sessions"][number], isChild = false) => {
@@ -419,7 +421,11 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   protected knownSessionGroups(): string[] {
     const catalog = this.context?.sessions.state.groups ?? [];
     const catalogSet = new Set(catalog);
-    const discovered = (this.sessionsResult?.sessions ?? [])
+    const activeResult =
+      this.sessionsAllAgents && this.allAgentsResult !== null
+        ? this.allAgentsResult
+        : this.sessionsResult;
+    const discovered = (activeResult?.sessions ?? [])
       .map((row) => normalizeOptionalString(row.category))
       .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
       .toSorted((a, b) => a.localeCompare(b));
@@ -431,6 +437,21 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     navigationState: ReturnType<AppSidebarSessionNavigationElement["getSessionNavigationState"]>,
   ): SidebarRecentSession[] {
     const adopted = adoptedCatalogSessionKeys(this.sessionCatalogs);
+    // All-agents mode projects the cross-agent snapshot directly; the chip
+    // selection no longer narrows the visible root rows.
+    if (this.sessionsAllAgents && this.allAgentsResult !== null) {
+      const allRows = this.allAgentsResult.sessions;
+      const rowsByKey = new Map(allRows.map((row) => [row.key, row]));
+      const rootRows = navigationState.visibleSessions.flatMap((session) => {
+        const row = rowsByKey.get(session.key);
+        return row ? [row] : [];
+      });
+      return this.projectSessionTree(
+        rootRows.filter((row) => !adopted.has(row.key)),
+        allRows,
+        navigationState.toSidebarSession,
+      );
+    }
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);

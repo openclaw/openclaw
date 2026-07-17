@@ -47,6 +47,9 @@ type SidebarLifecycleState = HTMLElement & {
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
+  sessionsAllAgents: boolean;
+  allAgentsResult: SessionsListResult | null;
+  allAgentsLoading: boolean;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
@@ -99,7 +102,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
   };
 }
 
-function createSessionState(agentId: string, keys: string[]): SessionState {
+function createSessionState(agentId: string | null, keys: string[]): SessionState {
   const result = {
     ts: 1,
     path: "",
@@ -168,9 +171,8 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
-  const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
-    Promise.resolve<SessionsListResult | null>(null),
-  );
+  const createdListeners = new Set<(key: string) => void>();
+  const list = vi.fn(async () => state.result);
   const sessions = {
     get state() {
       return state;
@@ -182,7 +184,10 @@ function createSessionsHarness(agentId: string, keys: string[]) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    subscribeCreated: () => () => undefined,
+    subscribeCreated(listener: (key: string) => void) {
+      createdListeners.add(listener);
+      return () => createdListeners.delete(listener);
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,
@@ -217,6 +222,11 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
       publish(statePatch);
+    },
+    publishCreated(key: string) {
+      for (const listener of createdListeners) {
+        listener(key);
+      }
     },
   };
 }
@@ -3415,6 +3425,284 @@ describe("AppSidebar custom group reordering", () => {
     expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
   });
 });
+
+describe("AppSidebar session scope", () => {
+  function allAgentsResult(childKey: string): SessionsListResult {
+    const state = createSessionState(null, []);
+    if (!state.result) {
+      throw new Error("expected all-agents session result");
+    }
+    return {
+      ...state.result,
+      count: 2,
+      sessions: [
+        { key: "agent:main:main", kind: "direct", updatedAt: 20 },
+        {
+          key: childKey,
+          kind: "direct",
+          spawnedBy: "agent:work:main",
+          updatedAt: 30,
+        },
+      ],
+    };
+  }
+
+  function deferredResult() {
+    let resolve!: (result: SessionsListResult | null) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<SessionsListResult | null>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("keeps the all-agents result visible during a later scoped canonical refresh", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const backgroundRefresh = deferredResult();
+    sessions.list
+      .mockResolvedValueOnce(allAgentsResult("agent:work:subagent:child"))
+      .mockImplementationOnce(() => backgroundRefresh.promise);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const scopeButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope");
+    expect(scopeButton?.getAttribute("aria-pressed")).toBe("false");
+    expect(sessions.list).not.toHaveBeenCalled();
+
+    scopeButton?.click();
+    await vi.waitFor(() => {
+      expect(sessions.list).toHaveBeenCalledWith({});
+      expect(scopeButton?.getAttribute("aria-pressed")).toBe("true");
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:child"]'),
+      ).not.toBeNull();
+    });
+
+    const scopedState = createSessionState("main", ["agent:main:replacement"]);
+    sessions.publishList({ result: scopedState.result, agentId: scopedState.agentId });
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledTimes(2));
+
+    expect(scopeButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(scopeButton?.getAttribute("aria-busy")).toBe("true");
+    expect(sidebar.querySelector('[data-session-key="agent:work:subagent:child"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:replacement"]')).toBeNull();
+
+    backgroundRefresh.resolve(allAgentsResult("agent:work:subagent:child"));
+    await vi.waitFor(() => expect(scopeButton?.getAttribute("aria-busy")).toBe("false"));
+
+    scopeButton?.click();
+    await sidebar.updateComplete;
+    expect(scopeButton?.getAttribute("aria-pressed")).toBe("false");
+    expect(sidebar.querySelector('[data-session-key="agent:work:subagent:child"]')).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:replacement"]')).not.toBeNull();
+  });
+
+  it("keeps discovered cross-agent categories available to group controls", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    sessions.publish({ groups: ["Alpha"] });
+    const remoteResult = allAgentsResult("agent:work:subagent:child");
+    remoteResult.sessions[1] = { ...remoteResult.sessions[1], category: "Remote" };
+    sessions.list.mockResolvedValueOnce(remoteResult);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope")?.click();
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector('[data-session-section="category:Remote"]')).not.toBeNull();
+    });
+
+    const remoteHeader = sidebar.querySelector<HTMLElement>(
+      '[data-session-section="category:Remote"] .sidebar-recent-sessions__head',
+    );
+    const alphaSection = sidebar.querySelector<HTMLElement>(
+      '[data-session-section="category:Alpha"]',
+    );
+    if (!remoteHeader || !alphaSection) {
+      throw new Error("expected all-agent category sections");
+    }
+    expect(remoteHeader.getAttribute("draggable")).toBe("true");
+
+    const dataTransfer = createDataTransferStub();
+    dispatchDragEvent(remoteHeader, "dragstart", dataTransfer);
+    dispatchDragEvent(alphaSection, "drop", dataTransfer);
+
+    expect(sessions.groupsPut).toHaveBeenCalledWith(["Remote", "Alpha"]);
+  });
+
+  it("refreshes the local all-agents list after canonical revisions and created events", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    sessions.list
+      .mockResolvedValueOnce(allAgentsResult("agent:work:subagent:first"))
+      .mockResolvedValueOnce(allAgentsResult("agent:work:subagent:second"))
+      .mockResolvedValueOnce(allAgentsResult("agent:work:subagent:third"));
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const scopeButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope");
+    scopeButton?.click();
+    await vi.waitFor(() => {
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:first"]'),
+      ).not.toBeNull();
+    });
+
+    const scopedState = createSessionState("main", ["agent:main:replacement"]);
+    sessions.publishList({ result: scopedState.result, agentId: scopedState.agentId });
+    await vi.waitFor(() => {
+      expect(sessions.list).toHaveBeenCalledTimes(2);
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:second"]'),
+      ).not.toBeNull();
+    });
+
+    sessions.publishCreated("agent:work:subagent:third");
+    await vi.waitFor(() => {
+      expect(sessions.list).toHaveBeenCalledTimes(3);
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:third"]'),
+      ).not.toBeNull();
+    });
+    expect(sessions.list).toHaveBeenNthCalledWith(1, {});
+    expect(sessions.list).toHaveBeenNthCalledWith(2, {});
+    expect(sessions.list).toHaveBeenNthCalledWith(3, {});
+  });
+
+  it("queues a forced refresh when a session is created during an unscoped request", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const initial = deferredResult();
+    const createdRefresh = deferredResult();
+    sessions.list
+      .mockImplementationOnce(() => initial.promise)
+      .mockImplementationOnce(() => createdRefresh.promise);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope")?.click();
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledTimes(1));
+
+    sessions.publishCreated("agent:work:subagent:new-child");
+    initial.resolve(allAgentsResult("agent:work:subagent:first"));
+    await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledTimes(2));
+
+    createdRefresh.resolve(allAgentsResult("agent:work:subagent:new-child"));
+    await vi.waitFor(() => {
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:new-child"]'),
+      ).not.toBeNull();
+    });
+  });
+
+  it("keeps canonical visibility while loading and ignores stale unscoped requests", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const first = deferredResult();
+    const second = deferredResult();
+    sessions.list
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const scopeButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope");
+    scopeButton?.click();
+    await sidebar.updateComplete;
+    expect(scopeButton?.getAttribute("aria-pressed")).toBe("true");
+    expect(scopeButton?.getAttribute("aria-busy")).toBe("true");
+    expect(sidebar.querySelector('[data-session-key="agent:work:subagent:first"]')).toBeNull();
+
+    scopeButton?.click();
+    scopeButton?.click();
+    await sidebar.updateComplete;
+    first.resolve(allAgentsResult("agent:work:subagent:first"));
+    await Promise.resolve();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:work:subagent:first"]')).toBeNull();
+
+    second.resolve(allAgentsResult("agent:work:subagent:second"));
+    await vi.waitFor(() => {
+      expect(
+        sidebar.querySelector('[data-session-key="agent:work:subagent:second"]'),
+      ).not.toBeNull();
+      expect(scopeButton?.getAttribute("aria-busy")).toBe("false");
+    });
+  });
+
+  it("resets local scope on connection and sessions capability changes", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGatewayHarness(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    sessions.list.mockResolvedValueOnce(allAgentsResult("agent:work:subagent:child"));
+    const { provider, sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const scopeButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope");
+    scopeButton?.click();
+    await vi.waitFor(() => expect(sidebar.sessionsAllAgents).toBe(true));
+
+    const canonicalResult = sidebar.sessionsResult;
+    gateway.publish({ connected: false, reconnecting: true });
+    await sidebar.updateComplete;
+    expect(sidebar.sessionsAllAgents).toBe(false);
+    expect(sidebar.allAgentsResult).toBeNull();
+    expect(sidebar.sessionsResult).toBe(canonicalResult);
+
+    gateway.publish({ connected: true, reconnecting: false });
+    await sidebar.updateComplete;
+    const pending = deferredResult();
+    sessions.list.mockImplementationOnce(() => pending.promise);
+    scopeButton?.click();
+    await sidebar.updateComplete;
+
+    const replacement = createSessionsHarness("other", ["agent:other:main"]);
+    provider.setContext(createContext(gateway.gateway, replacement.sessions));
+    await sidebar.updateComplete;
+    pending.resolve(allAgentsResult("agent:work:subagent:stale"));
+    await Promise.resolve();
+    await sidebar.updateComplete;
+
+    expect(sidebar.sessionsAllAgents).toBe(false);
+    expect(sidebar.allAgentsResult).toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:work:subagent:stale"]')).toBeNull();
+  });
+
+  it("returns to canonical scope when the unscoped request fails", async () => {
+    const client = {} as GatewayBrowserClient;
+    const gateway = createGateway(client);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const pending = deferredResult();
+    sessions.list.mockImplementationOnce(() => pending.promise);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const scopeButton = sidebar.querySelector<HTMLButtonElement>(".sidebar-recent-sessions__scope");
+    scopeButton?.click();
+    pending.reject(new Error("list failed"));
+
+    await vi.waitFor(() => {
+      expect(sidebar.sessionsAllAgents).toBe(false);
+      expect(sidebar.allAgentsLoading).toBe(false);
+      expect(sidebar.querySelector('[data-session-key="agent:main:main"]')).not.toBeNull();
+    });
+  });
+});
+
 describe("AppSidebar catalog session rows", () => {
   const catalogList = (
     sessions: Array<Record<string, unknown>>,
