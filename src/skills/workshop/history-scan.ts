@@ -61,7 +61,7 @@ function finalizeUnreplayableSkillHistoryScan(
   });
 }
 
-function toStoredState(params: {
+export function toStoredState(params: {
   previous: StoredSkillHistoryScanState | undefined;
   direction: SkillHistoryScanDirection;
   considered: readonly SkillHistoryScanCandidate[];
@@ -405,6 +405,3 @@ export function runSkillHistoryScan(
     .catch(() => undefined);
   return run;
 }
-
-const testing = { toStoredState };
-export { testing as __testing };

@@ -32,7 +32,7 @@ import {
   collectSkillHistoryScanBatch,
   resolveSkillHistoryScanTranscriptBudget,
 } from "./history-scan-transcript.js";
-import { runSkillHistoryScan, __testing } from "./history-scan.js";
+import { runSkillHistoryScan, toStoredState } from "./history-scan.js";
 
 function summary(sessionKey: string, overrides: Partial<SessionEntrySummary["entry"]> = {}) {
   return {
@@ -605,7 +605,7 @@ describe("toStoredState date bounds", () => {
   });
 
   it("filters invalid updatedAt timestamps instead of corrupting bounds with NaN", () => {
-    const result = __testing.toStoredState({
+    const result = toStoredState({
       previous: undefined,
       direction: "older",
       considered: [],
@@ -623,7 +623,7 @@ describe("toStoredState date bounds", () => {
   });
 
   it("omits reviewed timestamps when all sessions have invalid dates", () => {
-    const result = __testing.toStoredState({
+    const result = toStoredState({
       previous: undefined,
       direction: "older",
       considered: [],
@@ -648,7 +648,7 @@ describe("toStoredState date bounds", () => {
       oldestReviewedAt: "not-a-date",
       newestReviewedAt: "also-not-a-date",
     };
-    const result = __testing.toStoredState({
+    const result = toStoredState({
       previous,
       direction: "older",
       considered: [],
