@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type ConversationTurnReply = {
+type ConversationTurnReply = {
   conversationRef: string;
   messageId: string;
   replyToId?: string;
@@ -28,7 +28,7 @@ type PendingConversationTurn = {
   settle: (reply: ConversationTurnReply | undefined) => void;
 };
 
-export type PendingConversationTurnHandle = {
+type PendingConversationTurnHandle = {
   id: string;
   setOutboundMessageId: (messageId: string | undefined) => void;
   markReady: () => void;
@@ -36,7 +36,7 @@ export type PendingConversationTurnHandle = {
   cancel: () => void;
 };
 
-export type ConversationTurnReplyClaim = {
+type ConversationTurnReplyClaim = {
   turnId: string;
   sessionId: string;
   complete: (params?: { transcriptArtifactId?: string; transcriptMessageId?: string }) => void;

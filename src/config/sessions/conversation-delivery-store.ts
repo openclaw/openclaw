@@ -10,7 +10,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 
-export type ConversationDeliveryStatus =
+type ConversationDeliveryStatus =
   | "created"
   | "queued"
   | "sent"

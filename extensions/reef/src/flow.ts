@@ -102,7 +102,7 @@ export function prepareReefMessageId(): string {
 }
 
 /** Local policy or trust rejection that is safe to retire without retrying. */
-export class ReefOutboundRejectedError extends Error {
+class ReefOutboundRejectedError extends Error {
   constructor(message: string, options: { cause?: unknown } = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ReefOutboundRejectedError";

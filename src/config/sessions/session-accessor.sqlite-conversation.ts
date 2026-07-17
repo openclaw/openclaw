@@ -7,9 +7,9 @@ import {
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionConversationRole = "participant" | "primary" | "related";
+type SessionConversationRole = "participant" | "primary" | "related";
 
-export type PreparedSessionConversation = {
+type PreparedSessionConversation = {
   identity: ConversationIdentity;
   role: SessionConversationRole;
 };

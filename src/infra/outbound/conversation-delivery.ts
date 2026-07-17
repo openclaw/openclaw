@@ -34,14 +34,14 @@ export const defaultConversationDeliveryDeps: ConversationDeliveryDeps = {
   runMessageAction,
 };
 
-export type ConversationDeliveryContext = {
+type ConversationDeliveryContext = {
   agentId: string;
   sourceSessionKey?: string;
   config: OpenClawConfig;
   senderIsOwner?: boolean;
 };
 
-export type ConversationMessageDeliveryResult = {
+type ConversationMessageDeliveryResult = {
   deliveryStatus: "sent" | "suppressed" | "queued" | "unknown";
   operation: ConversationDeliveryRecord;
   messageId?: string;
@@ -65,7 +65,7 @@ function buildConversationDeliveryIntentId(agentId: string, operationId: string)
   return `convq_${digest}`;
 }
 
-export function resolveConversationDeliveryStoreScope(
+function resolveConversationDeliveryStoreScope(
   context: ConversationDeliveryContext,
 ): ConversationDeliveryStoreScope {
   return {
