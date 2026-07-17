@@ -61,6 +61,29 @@ interface ProviderHttpMocks {
   >;
 }
 
+// Mirror production resolveProviderOperationTimeoutMs: remaining budget from
+// deadlineAtMs, fail closed when exhausted (never restart the original timeoutMs).
+const resolveMockProviderOperationTimeoutMs = vi.hoisted(
+  () =>
+    ({
+      defaultTimeoutMs,
+      deadline,
+    }: {
+      defaultTimeoutMs: number;
+      deadline: { label: string; timeoutMs?: number; deadlineAtMs?: number };
+    }): number => {
+      const deadlineAtMs = deadline.deadlineAtMs;
+      if (typeof deadlineAtMs !== "number") {
+        return defaultTimeoutMs;
+      }
+      const remainingMs = deadlineAtMs - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`);
+      }
+      return Math.max(1, Math.min(defaultTimeoutMs, remainingMs));
+    },
+);
+
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   executeProviderOperationWithRetryMock: vi.fn(),
@@ -275,6 +298,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
   assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
+  // Match production deadline semantics: absolute deadlineAtMs so remaining
+  // budget decays across poll/header/body stages instead of restarting.
   createProviderOperationDeadline: ({
     label,
     timeoutMs,
@@ -284,11 +309,20 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   }) => ({
     label,
     timeoutMs,
+    ...(typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? { deadlineAtMs: Date.now() + timeoutMs }
+      : {}),
   }),
   createProviderOperationTimeoutResolver:
-    ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    () =>
+    ({
       defaultTimeoutMs,
+      deadline,
+    }: {
+      defaultTimeoutMs: number;
+      deadline: { label: string; timeoutMs?: number; deadlineAtMs?: number };
+    }) =>
+    () =>
+      resolveMockProviderOperationTimeoutMs({ defaultTimeoutMs, deadline }),
   executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
   fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
   fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
@@ -299,8 +333,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
   providerOperationRetryConfig: (_stage: string) => true,
   readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
-  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    defaultTimeoutMs,
+  resolveProviderOperationTimeoutMs: resolveMockProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
   resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
   [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:

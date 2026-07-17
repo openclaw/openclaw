@@ -104,6 +104,18 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
+/** Accepts headers then never sends body chunks — exercises download idle timeout. */
+function stalledVideoResponse(): Response {
+  return new Response(
+    new ReadableStream({
+      start() {
+        // Intentionally leave the stream open with no chunks.
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
 // Response.json keeps object fixtures on the standard Response body path so the
 // create read exercises the byte-bounded reader instead of an unbounded res.json().
 function streamedJsonResponse(payload: unknown): Response {
@@ -256,6 +268,39 @@ describe("openai video generation provider", () => {
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
       }),
     ).rejects.toThrow("OpenAI generated video download exceeds 1 bytes");
+  });
+
+  it("times out stalled generated video download bodies via chunkTimeoutMs", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({
+        id: "vid_stalled",
+        model: "sora-2",
+        status: "queued",
+      }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_stalled",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce(stalledVideoResponse());
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    const startedAt = Date.now();
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "short video",
+        timeoutMs: 80,
+        cfg: {},
+      }),
+    ).rejects.toThrow(/OpenAI generated video download stalled: no data received for \d+ms/);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
   it("uses JSON input_reference.image_url for image-to-video requests", async () => {

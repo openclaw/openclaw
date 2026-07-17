@@ -184,10 +184,18 @@ async function pollOpenAIVideo(
 }
 
 function resolveOpenAIVideoDownloadTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined) {
+  // Re-resolve at each download stage so body reads use the remaining operation
+  // budget. A non-positive remaining budget must fail closed — never revive a
+  // fresh DEFAULT_TIMEOUT_MS after headers already consumed the deadline.
   const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : DEFAULT_TIMEOUT_MS;
+  const downloadTimeoutMs =
+    typeof resolved === "number" && Number.isFinite(resolved)
+      ? Math.max(0, Math.floor(resolved))
+      : DEFAULT_TIMEOUT_MS;
+  if (downloadTimeoutMs <= 0) {
+    throw new Error("OpenAI generated video download stalled: remaining budget exhausted");
+  }
+  return downloadTimeoutMs;
 }
 
 async function fetchOpenAIVideoDownload(
@@ -267,9 +275,14 @@ async function downloadOpenAIVideo(
   });
   try {
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
+    // Resolve after headers so the body idle timer sees the remaining budget.
+    const chunkTimeoutMs = resolveOpenAIVideoDownloadTimeoutMs(params.timeoutMs);
     const buffer = await readResponseWithLimit(response, params.maxBytes, {
+      chunkTimeoutMs,
       onOverflow: ({ maxBytes }) =>
         new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
+      onIdleTimeout: ({ chunkTimeoutMs: idleMs }) =>
+        new Error(`OpenAI generated video download stalled: no data received for ${idleMs}ms`),
     });
     return {
       buffer,
