@@ -61,7 +61,7 @@ function finalizeUnreplayableSkillHistoryScan(
   });
 }
 
-export function toStoredState(params: {
+function toStoredState(params: {
   previous: StoredSkillHistoryScanState | undefined;
   direction: SkillHistoryScanDirection;
   considered: readonly SkillHistoryScanCandidate[];
