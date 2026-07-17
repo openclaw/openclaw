@@ -26,6 +26,8 @@ const {
   proxyAgentSpy,
   envAgentSpy,
   getLastAgent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
   const undiciFetchLocal = vi.fn();
@@ -65,6 +67,12 @@ const {
     FormData: MockUndiciFormDataLocal,
     fetch: undiciFetchLocal,
   }));
+  const createHttp1ProxyAgentLocal = vi.fn(
+    (options: { uri?: string; proxyTls?: unknown } | string) => new ProxyAgent(options),
+  );
+  const createHttp1EnvHttpProxyAgentLocal = vi.fn(
+    (options?: Record<string, unknown>) => new EnvHttpProxyAgentLocal(options),
+  );
 
   return {
     ProxyAgent,
@@ -73,6 +81,8 @@ const {
     undiciFetch: undiciFetchLocal,
     proxyAgentSpy: proxyAgentSpyLocal,
     envAgentSpy: envAgentSpyLocal,
+    createHttp1EnvHttpProxyAgent: createHttp1EnvHttpProxyAgentLocal,
+    createHttp1ProxyAgent: createHttp1ProxyAgentLocal,
     getLastAgent: () => ProxyAgent.lastCreated,
     loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
   };
@@ -81,6 +91,8 @@ const {
 const mockedModuleIds = ["./undici-runtime.js"] as const;
 
 vi.mock("./undici-runtime.js", () => ({
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 }));
 

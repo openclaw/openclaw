@@ -7,7 +7,11 @@ import {
   resolveManagedEnvHttpProxyAgentOptions,
 } from "./proxy/managed-proxy-undici.js";
 import { fetchWithPreparedRuntimeDispatcher } from "./runtime-fetch.js";
-import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
+import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  loadUndiciRuntimeDeps,
+} from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
@@ -21,11 +25,10 @@ type ProxyFetchWithMetadata = typeof fetch & {
  */
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const runtimeDeps = loadUndiciRuntimeDeps();
-  const { ProxyAgent } = runtimeDeps;
-  let agent: InstanceType<typeof ProxyAgent> | null = null;
-  const resolveAgent = (): InstanceType<typeof ProxyAgent> => {
+  let agent: ReturnType<typeof createHttp1ProxyAgent> | null = null;
+  const resolveAgent = (): ReturnType<typeof createHttp1ProxyAgent> => {
     if (!agent) {
-      agent = new ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
+      agent = createHttp1ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
     }
     return agent;
   };
@@ -68,8 +71,7 @@ export function resolveProxyFetchFromEnv(
   }
   try {
     const runtimeDeps = loadUndiciRuntimeDeps();
-    const { EnvHttpProxyAgent } = runtimeDeps;
-    const agent = new EnvHttpProxyAgent(proxyOptions);
+    const agent = createHttp1EnvHttpProxyAgent(proxyOptions);
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
         ...init,

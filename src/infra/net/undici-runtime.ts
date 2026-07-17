@@ -1,8 +1,11 @@
 // Undici runtime helpers lazily load dispatcher constructors and enforce
 // OpenClaw HTTP/1, timeout, proxy TLS, and IP-safe proxy policies.
+import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import net from "node:net";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { logDebug } from "../../logger.js";
+import { formatErrorMessage } from "../errors.js";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 
@@ -12,8 +15,10 @@ const requireUndici = createRequire(import.meta.url);
 /** Runtime-loaded undici constructors/functions used where static imports would affect globals. */
 export type UndiciRuntimeDeps = {
   Agent: typeof import("undici").Agent;
+  Client: typeof import("undici").Client;
   EnvHttpProxyAgent: typeof import("undici").EnvHttpProxyAgent;
   FormData?: typeof import("undici").FormData;
+  Pool: typeof import("undici").Pool;
   ProxyAgent: typeof import("undici").ProxyAgent;
   fetch: typeof import("undici").fetch;
 };
@@ -25,12 +30,14 @@ export type UndiciGlobalDispatcherDeps = Pick<UndiciRuntimeDeps, "Agent" | "EnvH
 };
 
 type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
+type UndiciClientOptions = ConstructorParameters<UndiciRuntimeDeps["Client"]>[1];
 type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
   UndiciRuntimeDeps["EnvHttpProxyAgent"]
 >[0];
 type UndiciProxyAgentOptions = ConstructorParameters<UndiciRuntimeDeps["ProxyAgent"]>[0];
 type UndiciProxyAgentOptionsRecord = Exclude<UndiciProxyAgentOptions, string | URL>;
 type UndiciProxyClientFactory = NonNullable<UndiciProxyAgentOptionsRecord["clientFactory"]>;
+type UndiciDispatcher = import("undici").Dispatcher;
 type UnknownFunction = (...args: unknown[]) => unknown;
 
 // Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
@@ -39,6 +46,19 @@ type UnknownFunction = (...args: unknown[]) => unknown;
 const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
+
+function logUndiciDispatcherError(error: unknown): void {
+  logDebug(`undici: internal dispatcher error: ${formatErrorMessage(error)}`);
+}
+
+function withUndiciErrorDiagnostics<T extends UndiciDispatcher>(dispatcher: T): T {
+  // Body consumers already receive the failure. This listener prevents the
+  // EventEmitter error channel from turning that same failure into a crash.
+  if (dispatcher instanceof EventEmitter) {
+    EventEmitter.prototype.on.call(dispatcher, "error", logUndiciDispatcherError);
+  }
+  return dispatcher;
+}
 
 function applyMissingConnectOptions(
   connect: Record<string, unknown>,
@@ -89,16 +109,44 @@ function stripIpServernameFromConnect(connect: unknown): unknown {
 
 function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
   return (origin, options) => {
-    const { Pool } = loadUndiciModule(["Pool"]);
     // HTTPS proxies addressed by IP can arrive with an IP servername. Strip it
     // before TLS connect because OpenSSL rejects IP literals as SNI values.
     const clientOptions = isObjectRecord(options)
       ? { ...options, connect: stripIpServernameFromConnect(options.connect) }
       : options;
-    return new Pool(
-      origin,
-      clientOptions as ConstructorParameters<typeof import("undici").Pool>[1],
-    );
+    return createUndiciPool(origin, clientOptions);
+  };
+}
+
+function createUndiciClient(origin: string | URL, options: object): UndiciDispatcher {
+  const { Client } = loadUndiciModule(["Client"]);
+  return withUndiciErrorDiagnostics(new Client(origin, options as UndiciClientOptions));
+}
+
+function createUndiciPool(origin: string | URL, options: unknown): UndiciDispatcher {
+  const { Pool } = loadUndiciModule(["Pool"]);
+  const poolOptions = isObjectRecord(options) ? options : {};
+  return withUndiciErrorDiagnostics(
+    new Pool(origin, {
+      ...poolOptions,
+      factory: createUndiciClient,
+    }),
+  );
+}
+
+function createUndiciOriginDispatcher(origin: string | URL, options: object): UndiciDispatcher {
+  return isObjectRecord(options) && options.connections === 1
+    ? createUndiciClient(origin, options)
+    : createUndiciPool(origin, options);
+}
+
+function addUndiciAgentFactory<TOptions extends object>(options: TOptions): TOptions {
+  if ("factory" in options) {
+    return options;
+  }
+  return {
+    ...options,
+    factory: createUndiciOriginDispatcher,
   };
 }
 
@@ -179,7 +227,9 @@ export function createHttp1Agent(
   timeoutMs?: number,
 ): import("undici").Agent {
   const { Agent } = loadUndiciRuntimeDeps();
-  return new Agent(withHttp1OnlyDispatcherOptions(options, timeoutMs));
+  return withUndiciErrorDiagnostics(
+    new Agent(addUndiciAgentFactory(withHttp1OnlyDispatcherOptions(options, timeoutMs))),
+  );
 }
 
 /**
@@ -191,14 +241,18 @@ export function createHttp1EnvHttpProxyAgent(
   timeoutMs?: number,
 ): import("undici").EnvHttpProxyAgent {
   const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-  return new EnvHttpProxyAgent(
-    withHttp1OnlyDispatcherOptions(
-      addIpSafeProxyClientFactory(addActiveManagedProxyTlsOptions(options) ?? {}),
-      timeoutMs,
-      {
-        connect: true,
-        proxyTls: true,
-      },
+  return withUndiciErrorDiagnostics(
+    new EnvHttpProxyAgent(
+      withHttp1OnlyDispatcherOptions(
+        addIpSafeProxyClientFactory(
+          addUndiciAgentFactory(addActiveManagedProxyTlsOptions(options) ?? {}),
+        ),
+        timeoutMs,
+        {
+          connect: true,
+          proxyTls: true,
+        },
+      ),
     ),
   );
 }
@@ -216,13 +270,17 @@ export function createHttp1ProxyAgent(
     typeof options === "string" || options instanceof URL
       ? { uri: options.toString() }
       : { ...options };
-  return new ProxyAgent(
-    withHttp1OnlyDispatcherOptions(
-      addIpSafeProxyClientFactory(addActiveManagedProxyTlsOptions(normalized as object)),
-      timeoutMs,
-      {
-        proxyTls: true,
-      },
-    ) as UndiciProxyAgentOptions,
+  return withUndiciErrorDiagnostics(
+    new ProxyAgent(
+      withHttp1OnlyDispatcherOptions(
+        addIpSafeProxyClientFactory(
+          addUndiciAgentFactory(addActiveManagedProxyTlsOptions(normalized as object)),
+        ),
+        timeoutMs,
+        {
+          proxyTls: true,
+        },
+      ) as UndiciProxyAgentOptions,
+    ),
   );
 }
