@@ -35,6 +35,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -819,7 +820,6 @@ export function registerMcpCli(program: Command) {
         });
       // A probe can start one process or connection per server. Keep large
       // registries from fanning out every transport at once.
-      const { runTasksWithConcurrency } = await import("../utils/run-with-concurrency.js");
       const {
         results: servers,
         firstError,
@@ -827,7 +827,6 @@ export function registerMcpCli(program: Command) {
       } = await runTasksWithConcurrency({
         tasks,
         limit: MCP_DOCTOR_CONCURRENCY,
-        errorMode: "stop",
       });
       if (hasError) {
         throw firstError;

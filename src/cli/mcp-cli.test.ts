@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { createDeferred } from "../shared/deferred.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
 const mocks = vi.hoisted(() => {
@@ -544,12 +545,9 @@ describe("mcp cli", () => {
         ]);
       }
 
-      let releaseChecks!: () => void;
-      const checksBlocked = new Promise<void>((resolve) => {
-        releaseChecks = resolve;
-      });
+      const checksBlocked = createDeferred();
       readMcpOAuthCredentialsStatus.mockImplementation(async () => {
-        await checksBlocked;
+        await checksBlocked.promise;
         return {
           hasTokens: false,
           hasClientInformation: false,
@@ -567,7 +565,7 @@ describe("mcp cli", () => {
         setImmediate(resolve);
       });
       const startedBeforeRelease = readMcpOAuthCredentialsStatus.mock.calls.length;
-      releaseChecks();
+      checksBlocked.resolve();
       await doctorPromise;
 
       expect(readMcpOAuthCredentialsStatus).toHaveBeenCalledTimes(6);
