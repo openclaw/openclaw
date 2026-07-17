@@ -1,6 +1,7 @@
 // Voice Call plugin module implements twilio behavior.
 import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "../http-headers.js";
@@ -766,9 +767,12 @@ export class TwilioProvider implements VoiceCallProvider {
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
         if (waitMs > 0) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, Math.ceil(waitMs));
-          });
+          try {
+            await sleepWithAbort(Math.ceil(waitMs), signal);
+          } catch {
+            // Sleep rejected because the signal aborted; the post-delay
+            // abort check below exits the loop cleanly.
+          }
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {
