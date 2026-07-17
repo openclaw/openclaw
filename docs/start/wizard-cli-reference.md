@@ -91,7 +91,7 @@ not install or modify anything on the remote host.
     - Native Windows: Scheduled Task first
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
-    - Runtime selection: only Node is offered interactively. Bun can corrupt memory on WhatsApp/Telegram reconnect and is not a supported daemon runtime for those channels; pass `--daemon-runtime bun` only outside that combination.
+    - Runtime selection: Node is required because OpenClaw's canonical runtime state store uses `node:sqlite`.
 
   </Step>
   <Step title="Health check">
@@ -341,7 +341,10 @@ Typical fields in `~/.openclaw/openclaw.json`:
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
+Active sessions and transcripts are stored in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. The
+`~/.openclaw/agents/<agentId>/sessions/` directory is used for legacy migration
+inputs and archive/support artifacts.
 
 <Note>
 Some channels are delivered as plugins. When selected during setup, the wizard

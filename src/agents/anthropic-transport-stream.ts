@@ -44,6 +44,7 @@ import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
+  isImageWithMediaPayload,
 } from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
@@ -342,12 +343,7 @@ function toClaudeCodeName(name: string): string {
 function convertContentBlocks(content: readonly unknown[]) {
   const text = extractToolResultText(content);
   const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
-  const hasImages =
-    Array.isArray(content) &&
-    content.some(
-      (item) =>
-        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
-    );
+  const hasImages = content.some(isImageWithMediaPayload);
   if (!hasImages) {
     return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
@@ -359,7 +355,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       }
   > = [];
   let hasTextBlock = false;
-  for (const block of Array.isArray(content) ? content : []) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
@@ -369,7 +365,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
       hasTextBlock = true;
     }
-    if (record.type !== "image") {
+    if (!isImageWithMediaPayload(record)) {
       continue;
     }
     blocks.push({
@@ -377,7 +373,7 @@ function convertContentBlocks(content: readonly unknown[]) {
       source: {
         type: "base64",
         media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
-        data: typeof record.data === "string" ? record.data : "",
+        data: record.data,
       },
     });
   }
@@ -410,6 +406,9 @@ function convertAnthropicMessages(
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
     if (msg.role === "user") {
       const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
@@ -564,11 +563,11 @@ function convertAnthropicMessages(
         },
       ];
       let j = i + 1;
-      while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as Extract<
-          Context["messages"][number],
-          { role: "toolResult" }
-        >;
+      while (j < transformedMessages.length) {
+        const nextMsg = transformedMessages.at(j);
+        if (nextMsg?.role !== "toolResult") {
+          break;
+        }
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1467,8 +1466,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
               calculateCost(costModel, output.usage);
               eventSink.push({ type: "start", partial: output as never });
-              for (let i = 0; i < output.content.length; i += 1) {
-                const block = output.content[i];
+              for (const [i, block] of output.content.entries()) {
                 if (block.type !== "text") {
                   continue;
                 }
@@ -1748,9 +1746,6 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
-              if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
-                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
-              }
               delete block.partialJson;
               eventSink.push({
                 type: "toolcall_end",
@@ -1881,3 +1876,4 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     return eventStream as ReturnType<StreamFn>;
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

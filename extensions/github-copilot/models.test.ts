@@ -1,7 +1,12 @@
 // Github Copilot tests cover models plugin behavior.
+import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { deriveCopilotApiBaseUrlFromToken } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
+import type { CachedCopilotToken } from "./token-cache.js";
+import { resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
@@ -51,6 +56,10 @@ function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
     throw new Error(`expected model ${ctx.modelId} to resolve`);
   }
   return result;
+}
+
+function copilotCredentialFixture(proxyHost: string): string {
+  return `test-token-placeholder;proxy-ep=${proxyHost};`;
 }
 
 describe("resolveCopilotForwardCompatModel", () => {
@@ -233,6 +242,22 @@ describe("fetchCopilotUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("cancels failed response bodies", async () => {
+    let canceled = false;
+    const body = new ReadableStream({
+      cancel() {
+        canceled = true;
+        throw new Error("stream already closed");
+      },
+    });
+    const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
+
+    const result = await fetchCopilotUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("HTTP 500");
+    expect(canceled).toBe(true);
+  });
+
   it("parses premium/chat usage from remaining percentages", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
@@ -339,17 +364,18 @@ describe("github-copilot token", () => {
   const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
 
   beforeEach(() => {
-    jsonStoreMocks.loadJsonFile.mockClear();
-    jsonStoreMocks.saveJsonFile.mockClear();
+    jsonStoreMocks.loadJsonFile.mockReset();
+    jsonStoreMocks.saveJsonFile.mockReset();
   });
 
-  it("derives baseUrl from token", () => {
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
-      "https://api.example.com",
-    );
-    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBe(
-      "https://api.foo.bar",
-    );
+  it("derives baseUrl only from trusted Copilot token hosts", () => {
+    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBeNull();
+    expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=https://proxy.foo.bar;")).toBeNull();
+    expect(
+      deriveCopilotApiBaseUrlFromToken(
+        copilotCredentialFixture("proxy.individual.githubcopilot.com"),
+      ),
+    ).toBe("https://api.individual.githubcopilot.com");
   });
 
   it("uses cache when token is still valid", async () => {
@@ -359,6 +385,7 @@ describe("github-copilot token", () => {
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
       integrationId: "vscode-chat",
+      sourceCredentialFingerprint: createHash("sha256").update("gh").digest("hex"),
       domain: "github.com",
     });
 
@@ -372,7 +399,7 @@ describe("github-copilot token", () => {
     });
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
-    expect(res.baseUrl).toBe("https://api.example.com");
+    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
     expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -402,12 +429,54 @@ describe("github-copilot token", () => {
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
-    expect(res.baseUrl).toBe("https://api.contoso.test");
+    expect(res.baseUrl).toBe("https://api.individual.githubcopilot.com");
     const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
     expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
       "identity",
     );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps exchanges per source credential in plugin state", async () => {
+    const values = new Map<string, CachedCopilotToken>();
+    const register = vi.fn((key: string, value: CachedCopilotToken) => {
+      values.set(key, value);
+    });
+    const store = {
+      lookup: vi.fn((key: string) => values.get(key)),
+      register,
+    } as unknown as PluginStateSyncKeyedStore<CachedCopilotToken>;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const source = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/u, "");
+      const exchange = `exchange-${source};proxy-ep=proxy.individual.githubcopilot.com;`;
+      return new Response(
+        JSON.stringify(
+          Object.fromEntries([
+            ["token", exchange],
+            ["expires_at", 2_000_000_000],
+          ]),
+        ),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const resolve = (githubToken: string) =>
+      resolveCopilotApiToken({
+        githubToken,
+        fetchImpl: fetchImpl as typeof fetch,
+        openCacheStore: () => store,
+      });
+
+    const firstA = await resolve("source-a");
+    const firstB = await resolve("source-b");
+    const secondA = await resolve("source-a");
+
+    expect(firstA.token).toContain("exchange-source-a");
+    expect(firstB.token).toContain("exchange-source-b");
+    expect(secondA.token).toBe(firstA.token);
+    expect(secondA.source).toBe("cache:plugin-state");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(values.size).toBe(2);
   });
 });
 
@@ -652,7 +721,7 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("GPT-5.5");
+    expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
   it("falls back from malformed live token limits", async () => {
@@ -710,8 +779,17 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out[1]).not.toHaveProperty("contextTokens");
   });
 
-  it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(makeResponse(401, {}));
+  it("cancels stalled non-2xx response bodies before the caller falls back", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 401 },
+    );
+    const fetchImpl = vi.fn().mockResolvedValue(response);
 
     await expect(
       fetchCopilotModelCatalog({
@@ -720,6 +798,8 @@ describe("fetchCopilotModelCatalog", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).rejects.toThrow(/HTTP 401/);
+
+    expect(canceled).toBe(true);
   });
 
   it("throws provider-owned errors for malformed successful /models payloads", async () => {

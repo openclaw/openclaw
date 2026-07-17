@@ -57,6 +57,30 @@ describe("boolean config validation", () => {
     const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
   });
+
+  it.each([
+    ["root", true, "mcp.servers.example.disabled", "enabled: false"],
+    ["root", false, "mcp.servers.example.disabled", "enabled: true"],
+    ["node-host", true, "nodeHost.mcp.servers.example.disabled", "enabled: false"],
+  ])(
+    'rejects %s MCP server "disabled: %s" with the inverse canonical value',
+    (scope, disabled, path, replacement) => {
+      const server = { command: "example-mcp", disabled };
+      const config =
+        scope === "root"
+          ? { mcp: { servers: { example: server } } }
+          : { nodeHost: { mcp: { servers: { example: server } } } };
+      const result = validateConfigObjectRaw(config);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected disabled MCP server config to fail validation");
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path, message: expect.stringContaining(replacement) }),
+      );
+    },
+  );
 });
 
 describe("agent timeoutSeconds config", () => {
@@ -400,10 +424,10 @@ describe("models.pricing", () => {
   });
 });
 
-describe("crestodian.rescue", () => {
+describe("systemAgent.rescue", () => {
   it("accepts documented rescue config", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: "auto",
           ownerDmOnly: false,
@@ -416,7 +440,7 @@ describe("crestodian.rescue", () => {
 
   it("accepts boolean rescue enablement", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           ownerDmOnly: true,
@@ -428,7 +452,7 @@ describe("crestodian.rescue", () => {
 
   it("rejects unknown rescue keys", () => {
     const result = OpenClawSchema.safeParse({
-      crestodian: {
+      systemAgent: {
         rescue: {
           enabled: true,
           shell: true,
@@ -721,6 +745,39 @@ describe("plugins.entries.*.hooks", () => {
   });
 });
 
+describe("mcp.apps.enabled", () => {
+  it.each([true, false])("accepts %s", (enabled) => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled } } }).success).toBe(true);
+  });
+
+  it("rejects non-boolean values", () => {
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled: "yes" } } }).success).toBe(false);
+  });
+
+  it("accepts only a bare HTTP(S) sandbox origin", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          apps: {
+            enabled: true,
+            sandboxOrigin: "https://mcp-apps.example.com",
+            sandboxPort: 29000,
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxPort: 65536 } } }).success).toBe(false);
+    for (const sandboxOrigin of [
+      "https://mcp-apps.example.com/path",
+      "https://mcp-apps.example.com?query=1",
+      "https://user:pass@mcp-apps.example.com",
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxOrigin } } }).success).toBe(false);
+    }
+  });
+});
+
 describe("plugins.entries.*.subagent", () => {
   it("accepts trusted subagent override settings", () => {
     const result = OpenClawSchema.safeParse({
@@ -813,7 +870,6 @@ describe("gateway.remote.transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
-          enabled: true,
           transport: "direct",
           url: "wss://gateway.example.ts.net",
         },
@@ -1222,7 +1278,7 @@ describe("config paths", () => {
   it("sets, gets, and unsets nested values", () => {
     const root: Record<string, unknown> = {};
     const parsed = parseConfigPath("foo.bar");
-    if (!parsed.ok || !parsed.path) {
+    if (!parsed.ok) {
       throw new Error("path parse failed");
     }
     setConfigValueAtPath(root, parsed.path, 123);
@@ -1466,3 +1522,4 @@ describe("config strict validation", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

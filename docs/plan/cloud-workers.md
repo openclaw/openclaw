@@ -94,12 +94,12 @@ No bespoke worker artifact, and no dependence on npm availability:
 
 Worker mode (`openclaw worker`) is an entry point, not a fork: connection handling plus the embedded agent runner, with session persistence and model calls backed by gateway RPCs. It must not start gateway surfaces: no channels, no plugin auto-start beyond the session toolset, throwaway state dir, no local auth profiles.
 
-### 3. Transport: everything over one SSH connection
+### 3. Transport: everything over SSH
 
 The gateway owns connectivity; the worker requires nothing but sshd:
 
 - Gateway opens SSH to the worker (credentials from the provider lease, host key pinned from provisioning output — no `StrictHostKeyChecking=no`) and establishes a reverse tunnel forwarding a worker-local socket to the gateway's WS endpoint.
-- Control/model traffic and workspace transfer use separate SSH channels so rsync cannot head-of-line-block token streams.
+- Control/model traffic and workspace transfer use separate SSH connections with the same pinned trust material so rsync cannot head-of-line-block token streams.
 - Tunnel lifecycle (keepalive, reconnect with backoff) is owned by the environment runtime on the gateway. A tunnel blip is invisible at the session level: durable protocol state (below) lets the worker re-attach and resume.
 
 ### 4. Worker protocol (dedicated; not the node protocol)

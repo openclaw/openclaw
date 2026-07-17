@@ -40,6 +40,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
+  findCliMaxTurnsError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
   resolveModelFallbackError,
@@ -151,7 +152,7 @@ type FailoverAttribution = {
  * exhausted. Carries per-attempt details so callers can build informative
  * user-facing messages (e.g. "rate-limited, retry in 30 s").
  */
-export class FallbackSummaryError extends Error {
+class FallbackSummaryError extends Error {
   readonly attempts: FallbackAttempt[];
   readonly soonestCooldownExpiry: number | null;
   readonly sessionId?: string;
@@ -704,10 +705,9 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
-    const candidate = params.candidates[i];
+  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
     if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return i;
+      return params.currentIndex + 1 + offset;
     }
   }
   return null;
@@ -888,14 +888,6 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
   }
   return DEFAULT_PROVIDER;
 }
-
-export const testing = {
-  resolveFallbackCandidates: resolveModelCandidateChain,
-  resolveImageFallbackCandidates,
-  resolveCooldownDecision,
-  resolveSessionSuspensionReason,
-  shouldDiscardDeferredSessionSuspension,
-} as const;
 
 export function resolveModelCandidateChain(
   params: {
@@ -1412,6 +1404,13 @@ function shouldDiscardDeferredSessionSuspension(params: {
   );
 }
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.modelFallbackTestApi")] = {
+    resolveCooldownDecision,
+    shouldDiscardDeferredSessionSuspension,
+  };
+}
+
 export async function runWithModelFallback<T>(
   params: RunWithModelFallbackParams<T>,
 ): Promise<ModelFallbackRunResult<T>> {
@@ -1503,7 +1502,10 @@ async function runWithModelFallbackInternal<T>(
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+    const candidate = candidates.at(i);
+    if (!candidate) {
+      throw new Error(`Missing model fallback candidate at index ${i}`);
+    }
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -1576,6 +1578,12 @@ async function runWithModelFallbackInternal<T>(
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
+      });
+      authRuntime.maybeReprobeWhamBlockedProfiles({
+        store: authStore,
+        profileIds,
+        agentDir: params.agentDir,
+        forModel: candidate.model,
       });
       const isAnyProfileAvailable = profileIds.some(
         (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
@@ -1802,6 +1810,11 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
+    // Max-turn termination can follow successful tool actions. Stop before
+    // candidate fallback so the user can verify effects before any replay.
+    if (findCliMaxTurnsError(err)) {
+      throw err;
+    }
     if (
       !attemptRun.classifiedResult &&
       params.canFallbackAfterError &&
@@ -2032,8 +2045,7 @@ export async function runWithImageModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+  for (const [i, candidate] of candidates.entries()) {
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -2071,4 +2083,4 @@ export async function runWithImageModelFallback<T>(params: {
     cfg: params.cfg,
   });
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

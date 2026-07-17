@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
@@ -258,7 +259,10 @@ describe("watch-node script", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(loadChokidar).toHaveBeenCalledTimes(1);
     expect(spawn.mock.invocationCallOrder[0]).toBeLessThan(
-      loadChokidar.mock.invocationCallOrder[0],
+      expectDefined(
+        loadChokidar.mock.invocationCallOrder[0],
+        "loadChokidar.mock.invocationCallOrder[0] test invariant",
+      ),
     );
 
     resolveLoadChokidar({ watch });
@@ -362,7 +366,6 @@ describe("watch-node script", () => {
       "--non-interactive",
     ]);
     expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
-    expect(requireSpawnEnv(spawn, 1).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS).toBe("1");
 
     doctor.emit("exit", 0, null);
     await new Promise((resolve) => {
@@ -374,9 +377,6 @@ describe("watch-node script", () => {
     expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
     expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
     expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
-    expect(
-      requireSpawnEnv(spawn, 2).OPENCLAW_DOCTOR_DISABLE_CROSS_STATE_DIR_IMPORTS,
-    ).toBeUndefined();
 
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;

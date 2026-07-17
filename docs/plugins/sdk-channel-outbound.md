@@ -12,10 +12,14 @@ Channel plugins expose outbound message behavior from
 `openclaw/plugin-sdk/channel-inbound` for receive/context/dispatch
 orchestration.
 
-Core owns queueing, durability, generic retry policy, hooks, receipts, and
-the shared `message` tool. The plugin owns native send/edit/delete calls,
-target normalization, platform threading, selected quotes, notification
-flags, account state, and platform-specific side effects.
+Core owns queueing, durability, the durable **ingress drain**
+(`createChannelIngressDrain` / `openChannelIngressDrain`), generic retry
+policy, turn-adoption lifecycle (`turnAdoptionLifecycle` /
+`bindIngressLifecycleToReplyOptions`), hooks, receipts, and the shared
+`message` tool. The plugin owns native send/edit/delete calls, target
+normalization, platform threading, selected quotes, notification flags,
+account state, accept-side enqueue, lane keys, non-retryable predicates,
+optional supersede authorization, and platform-specific side effects.
 
 ## Adapter
 
@@ -65,6 +69,24 @@ export const demoMessageAdapter = defineChannelMessageAdapter({
 Only declare capabilities the native transport actually preserves. Cover
 each declared send, receipt, live-preview, and receive-ack capability with
 the contract helpers exported from this subpath.
+
+## Plain-text sanitization
+
+Use `sanitizeForPlainText(...)` when an outbound adapter needs to convert the
+supported HTML formatting tags into lightweight text markup. The default keeps
+the existing chat-style bold and strikethrough markers. Pass
+`{ style: "markdown" }` only when the channel reparses the result as Markdown:
+
+```ts
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
+
+const chatText = sanitizeForPlainText(text);
+const markdownText = sanitizeForPlainText(text, { style: "markdown" });
+```
+
+The Markdown style uses `**bold**` and `~~strikethrough~~`; italic and inline
+code keep `_italic_` and backtick markers in both styles. Select the style at
+the channel boundary instead of rewriting marker text after sanitization.
 
 ## Delivery Evidence
 

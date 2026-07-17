@@ -22,6 +22,7 @@ import {
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -35,7 +36,11 @@ import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
+import {
+  loadSkillsFromDirSafe,
+  readSkillFrontmatterSafe,
+  type LocalSkillLoadDiagnostic,
+} from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
@@ -169,6 +174,17 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 
 function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
+}
+
+function warnInvalidSkillFrontmatter(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
+  skillsLogger.warn("Skipping skill with invalid frontmatter.", {
+    source,
+    filePath: diagnostic.path,
+    error: diagnostic.message,
+    consoleMessage:
+      `Skipping skill with invalid frontmatter: ` +
+      `file=${compactPathForConsoleMessage(diagnostic.path)} error=${diagnostic.message}`,
+  });
 }
 
 function filterSkillEntries(
@@ -621,6 +637,7 @@ function loadContainedSkillRecords(params: {
     dir: params.skillDir,
     source: params.source,
     maxBytes: params.maxSkillFileBytes,
+    onDiagnostic: (diagnostic) => warnInvalidSkillFrontmatter(params.source, diagnostic),
   });
   const records = unwrapLoadedSkillRecords(loaded).filter(
     (record) => path.resolve(record.skill.baseDir) === expectedBaseDir,
@@ -1349,6 +1366,9 @@ export function formatSkillsCompact(
       }
     }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.locationNote) {
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
+    }
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
@@ -1486,6 +1506,9 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(opts?.eligibility?.nodeSkills
+      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
+      : {}),
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -1540,7 +1563,10 @@ function resolveWorkspaceSkillPromptState(
   }
   const skillEntries = opts?.entries
     ? filterArchivedSkillEntries(opts.entries)
-    : loadSkillEntries(workspaceDir, opts);
+    : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+        canExec: opts?.eligibility?.nodeSkills?.canExec,
+        node: opts?.eligibility?.nodeSkills?.node,
+      });
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
@@ -1610,7 +1636,10 @@ export function loadWorkspaceSkillEntries(
     includeArchived?: boolean;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   if (effectiveSkillFilter === undefined && opts?.eligibility === undefined) {
     return entries;
@@ -1629,7 +1658,10 @@ export function loadVisibleWorkspaceSkillEntries(
     eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
@@ -1786,4 +1818,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -21,7 +22,8 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
-import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { testing, resolveImageModelConfigForTool } from "./image-tool.test-support.js";
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
@@ -221,9 +223,6 @@ vi.mock("../model-auth.js", () => ({
     modelApi?: string;
   }) => {
     const providerConfig = params.cfg?.models?.providers?.[params.provider];
-    if (params.provider === "codex") {
-      return process.env.OPENCLAW_TEST_CODEX_ROUTE === "1";
-    }
     if (params.provider === "openai" && params.modelApi === "openai-responses") {
       return Boolean(process.env.OPENAI_API_KEY || providerConfig?.apiKey);
     }
@@ -302,7 +301,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
       offset += 1;
       continue;
     }
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
     offset += 2;
     if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
       continue;
@@ -580,6 +579,12 @@ const moonshotProvider = {
   describeImages: describeMoonshotImages,
 } satisfies MediaUnderstandingProvider;
 
+const codexMediaProvider = {
+  id: "codex",
+  capabilities: ["image"],
+  defaultModels: { image: "gpt-5.5" },
+} satisfies MediaUnderstandingProvider;
+
 const resolveConfiguredImageModelForTest: NonNullable<
   Parameters<typeof testing.setProviderDepsForTest>[0]
 >["resolveModelAsync"] = async (provider, model, _agentDir, cfg) => {
@@ -644,6 +649,11 @@ function installImageUnderstandingProviderDeps(
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
       capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+    resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
+      imageProviderHarness.getMediaUnderstandingProvider(
+        providerId,
+        imageProviderHarness.buildProviderRegistry(),
+      ),
     resolveModelAsync: options?.resolveModelAsync ?? resolveConfiguredImageModelForTest,
     ...(options?.resolveImageCompressionPolicy
       ? { resolveImageCompressionPolicy: options.resolveImageCompressionPolicy }
@@ -827,7 +837,7 @@ describe("image tool implicit imageModel config", () => {
     name: string;
     cfg: OpenClawConfig;
     profiles?: Profiles;
-    codexRoute?: boolean;
+    codexProvider?: boolean;
     openAiApiKey?: boolean;
     expected: ReturnType<typeof resolveImageModelConfigForTool>;
   };
@@ -873,7 +883,6 @@ describe("image tool implicit imageModel config", () => {
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
     "OPENCLAW_TEST_CODEX_CLI_OAUTH",
-    "OPENCLAW_TEST_CODEX_ROUTE",
     // Avoid implicit Copilot provider discovery hitting the network in tests.
     "COPILOT_GITHUB_TOKEN",
     "GH_TOKEN",
@@ -894,21 +903,21 @@ describe("image tool implicit imageModel config", () => {
       name: "uses Codex media for implicit OpenAI image defaults on canonical OAuth-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image defaults on canonical token-only auth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai:token": openAiTokenProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
       name: "uses Codex media for implicit OpenAI image auto candidates on OAuth-only auth",
       cfg: anthropicPrimaryCfg,
       profiles: { "openai:chatgpt": openAiOAuthProfile() },
-      codexRoute: true,
+      codexProvider: true,
       expected: codexImageModel,
     },
     {
@@ -933,7 +942,7 @@ describe("image tool implicit imageModel config", () => {
       name: "does not treat legacy openai-codex profiles as canonical Codex OAuth",
       cfg: openAiPrimaryCfg,
       profiles: { "openai-codex:default": openAiOAuthProfile("openai-codex") },
-      codexRoute: true,
+      codexProvider: true,
       expected: null,
     },
   ];
@@ -947,9 +956,13 @@ describe("image tool implicit imageModel config", () => {
 
   it.each(implicitImageRoutingCases)(
     "$name",
-    async ({ cfg, profiles, codexRoute, openAiApiKey, expected }) => {
-      if (codexRoute) {
-        vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+    async ({ cfg, profiles, codexProvider, openAiApiKey, expected }) => {
+      if (codexProvider) {
+        installImageUnderstandingProviderStubs(
+          minimaxProvider,
+          moonshotProvider,
+          codexMediaProvider,
+        );
       }
       if (openAiApiKey) {
         vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -972,7 +985,7 @@ describe("image tool implicit imageModel config", () => {
   it("uses Codex media when OAuth-only OpenAI has configured vision model metadata", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
       const cfg: OpenClawConfig = {
         ...openAiPrimaryCfg,
         models: {
@@ -1048,7 +1061,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive the candidate auth filter", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(resolveImageModelConfigForTool({ cfg: openAiPrimaryCfg, agentDir })).toEqual(
         codexImageModel,
@@ -1059,7 +1072,7 @@ describe("image tool implicit imageModel config", () => {
   it("lets external CLI Codex OAuth survive a supplied scoped auth store", async () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("OPENCLAW_TEST_CODEX_CLI_OAUTH", "1");
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({
@@ -1074,7 +1087,7 @@ describe("image tool implicit imageModel config", () => {
   it("does not re-import persisted OpenAI OAuth when a scoped auth store is supplied", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeProfiles(agentDir, { "openai:chatgpt": openAiOAuthProfile() });
-      vi.stubEnv("OPENCLAW_TEST_CODEX_ROUTE", "1");
+      installImageUnderstandingProviderStubs(minimaxProvider, moonshotProvider, codexMediaProvider);
 
       expect(
         resolveImageModelConfigForTool({
@@ -1731,17 +1744,14 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
-  it("keeps image tool available when primary model supports images (for explicit requests)", async () => {
-    // When the primary model supports images, we still keep the tool available
-    // because images are auto-injected into prompts. The tool description is
-    // adjusted via modelHasVision to discourage redundant usage.
-    vi.stubEnv("OPENAI_API_KEY", "test-key");
+  it("loads images directly for native-vision models without resolving an image model", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
             model: { primary: "acme/vision-1" },
-            imageModel: { primary: "openai/gpt-5.4-mini" },
+            imageModel: { primary: "moondream" },
+            imageMaxDimensionPx: 32,
           },
         },
         models: {
@@ -1750,18 +1760,50 @@ describe("image tool implicit imageModel config", () => {
               baseUrl: "https://example.com",
               models: [makeModelDefinition("vision-1", ["text", "image"])],
             },
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
           },
         },
       };
-      // Tool should still be available for explicit image analysis requests
-      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5.4-mini",
+      const describeImageWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
       });
-      const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
-      expect(typeof tool?.execute).toBe("function");
-      expect(tool?.description).toContain(
-        "Only use this tool when images were NOT already provided",
-      );
+      const describeImagesWithModel = vi.fn(async () => {
+        throw new Error("native image loading must not call a fallback model");
+      });
+      testing.setProviderDepsForTest({ describeImageWithModel, describeImagesWithModel });
+
+      const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision: true });
+      expect(tool.label).toBe("View Image");
+      expect(tool.catalogMode).toBe("direct-only");
+      expect(tool.description).toContain("direct visual inspection");
+
+      const result = await tool.execute("native-image", {
+        prompt: "Read the screenshot error.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+      const content = (
+        result as {
+          content?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          details?: Record<string, unknown>;
+        }
+      ).content;
+
+      expect(content).toEqual([
+        { type: "text", text: "Loaded 1 image for direct visual inspection." },
+        expect.objectContaining({ type: "image", mimeType: "image/jpeg" }),
+      ]);
+      expect((result as { details?: Record<string, unknown> }).details).toMatchObject({
+        transport: "native",
+      });
+      expect(describeImageWithModel).not.toHaveBeenCalled();
+      expect(describeImagesWithModel).not.toHaveBeenCalled();
     });
   });
 
@@ -3191,3 +3233,4 @@ describe("image compression policy", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,18 +16,27 @@ export function collectHostedGateEvidence({
   sha,
   pr,
   recentSha,
+  pullRequestCommitShas,
+  pullRequestHeadBranch,
+  pullRequestHeadRepository,
   workflowRuns,
+  ciGateJobs,
   changelogOnly,
   nowMs,
 }: {
   sha: string;
   pr?: number;
   recentSha?: string;
+  pullRequestCommitShas?: string[];
+  pullRequestHeadBranch?: string;
+  pullRequestHeadRepository?: string;
   workflowRuns: Array<Record<string, unknown>>;
+  ciGateJobs?: Array<Record<string, unknown>>;
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
 }): {
-  headSha: unknown;
+  headSha: string;
+  evidenceHeadSha?: string;
   workflows: {
     id: unknown;
     name: unknown;
@@ -40,7 +49,13 @@ export function collectHostedGateEvidence({
     updatedAt: unknown;
     url: unknown;
   }[];
+  fallbackCoveredWorkflows?: {
+    name: string;
+    coveredBy: string;
+    reason: string;
+  }[];
 };
+export function compareCommitPageCount(totalCommits: number): number;
 export function workflowRunQueryPaths(
   repo: string,
   {
@@ -56,4 +71,4 @@ export function workflowRunQueryPaths(
 ): string[];
 export function main(argv?: string[]): void;
 export const SCHEDULED_HOSTED_WORKFLOWS: string[];
-export const HOSTED_GATE_MAX_AGE_HOURS: 12;
+export const HOSTED_GATE_MAX_AGE_HOURS: 24;

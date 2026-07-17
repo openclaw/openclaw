@@ -1,14 +1,19 @@
 import OpenClawChatUI
+import OpenClawKit
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    @Test func `mac chat advertises inline widgets`() {
+        #expect(GatewayConnection.operatorClientCaps == [OpenClawGatewayClientCapability.inlineWidgets])
+    }
+
     @Test func `bare global session target carries normalized selected agent`() {
         let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
 
         #expect(transport.sessionTarget(for: " GLOBAL ") == .init(
-            sessionKey: " GLOBAL ",
+            sessionKey: "GLOBAL",
             agentID: "agent-a"))
         #expect(transport.sessionTarget(for: "agent:agent-a:main") == .init(
             sessionKey: "agent:agent-a:main",

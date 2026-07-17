@@ -912,7 +912,7 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. The manifest also enables Slack assistant threads with `features.assistant_view`, `assistant:write`, `assistant_thread_started`, and `assistant_thread_context_changed`; assistant threads route to their own OpenClaw thread sessions and keep Slack-provided thread context available to the agent.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1203,7 +1203,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            C12345678: { allow: true, requireMention: true },
+            C12345678: { enabled: true, requireMention: true },
           },
         },
       },
@@ -1218,7 +1218,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
         slack: {
           groupPolicy: "allowlist",
           channels: {
-            "#eng-my-channel": { allow: true, requireMention: true },
+            "#eng-my-channel": { enabled: true, requireMention: true },
           },
         },
       },
@@ -1236,7 +1236,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - explicit app mention (`<@botId>`)
     - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
-    - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
+    - replies to the bot's own Slack message (`implicitMentions.replyToBot`)
+    - follow-ups in threads where the bot participated (`implicitMentions.threadParticipation`)
 
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
@@ -1271,7 +1272,9 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - OpenClaw seeds an eligible top-level channel root into `agent:<agentId>:slack:channel:<channelId>:thread:<rootTs>` when that root is expected to start a visible Slack thread, so the root and later thread replies share one OpenClaw session. This applies to `app_mention` events, explicit bot or configured mention-pattern matches, and `requireMention: false` channels with non-`off` `replyToMode`.
 - `channels.slack.thread.historyScope` default is `thread`; `thread.inheritParent` default is `false`.
 - `channels.slack.thread.initialHistoryLimit` controls how many existing thread messages are fetched when a new thread session starts (default `20`; set `0` to disable).
-- `channels.slack.thread.requireExplicitMention` (default `false`): when `true`, suppress implicit thread mentions so the bot only responds to explicit `@bot` mentions inside threads, even when the bot already participated in the thread. Without this, replies in a bot-participated thread bypass `requireMention` gating.
+- `channels.slack.implicitMentions.replyToBot` controls whether a reply to the bot's own message bypasses mention gating (default `true`).
+- `channels.slack.implicitMentions.threadParticipation` controls whether follow-ups in a thread where the bot has replied bypass mention gating (default `true`). Set it to `false` to require a new explicit mention in those follow-ups. `openclaw doctor --fix` migrates the former `channels.slack.thread.requireExplicitMention` key to this positive canonical flag.
+- Account overrides live at `channels.slack.accounts.<id>.implicitMentions`; shared defaults live at `channels.defaults.implicitMentions`.
 
 Reply threading controls:
 
@@ -1413,10 +1416,10 @@ Opt in to Slack native progress task cards:
 
 Legacy keys:
 
-- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy runtime alias for `channels.slack.streaming.mode`.
-- boolean `channels.slack.streaming` is a legacy runtime alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
-- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy runtime aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
-- Run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
+- `channels.slack.streamMode` (`replace | status_final | append`) is a legacy alias for `channels.slack.streaming.mode`.
+- boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
+- top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
+- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
 
 ## Typing reaction fallback
 
@@ -1546,13 +1549,13 @@ readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
 deterministic chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks` during a phased rollout, OpenClaw
-retries once with the native chart replaced by visible mrkdwn fallback sections;
-valid sibling blocks remain intact.
+removes the rejected native data blocks, keeps any sibling controls, and sends
+the complete chart representation as visible text.
 
 Slack currently accepts up to two `data_visualization` blocks per message. When
-a presentation contains more than two valid charts, OpenClaw renders the first
-two natively and preserves each additional chart as deterministic visible text
-in the same message.
+a presentation contains more than two valid charts, OpenClaw keeps their order
+and continues native rendering in follow-up messages, with no more than two
+charts in each message.
 
 Slack's [developer launch](https://docs.slack.dev/changelog/2026/06/16/block-kit-data-visualization-block/)
 documents the block as an app-facing Block Kit feature and publishes no paid
@@ -1590,7 +1593,7 @@ No additional OAuth scope or Slack configuration is required beyond normal
 OpenClaw maps header and string cells to Slack `raw_text` cells. Numeric cells
 map to `raw_number`, with the finite numeric value preserved for native sorting
 and filtering. `rowHeaderColumnIndex`, when present, marks that zero-based
-column as Slack row headers; when omitted, Slack defaults to column `0`.
+column as Slack row headers.
 
 Slack's published `data_table` limits are enforced before native rendering:
 
@@ -1602,25 +1605,21 @@ Slack's published `data_table` limits are enforced before native rendering:
 Multiple valid table blocks can render natively while the message remains
 within the aggregate character limit. A table that cannot render within the
 native envelope becomes complete deterministic text instead of losing rows or
-cells. If that text exceeds one OpenClaw Slack text chunk, sends and slash
-responses use ordered chunks. Table edits fail with an explicit size error
-instead of silently truncating rows from an existing message.
-
-Slack permits at most [five messages from one interaction `response_url`](https://docs.slack.dev/interactivity/handling-user-interaction/#message_responses).
-OpenClaw shares that budget across streamed slash payloads, accounts for a
-possible native-block retry, and returns size guidance before publishing a
-partial table. Send exceptionally large results as a regular channel message
-instead.
+cells. If that text exceeds one Slack message, sends and slash responses use
+ordered text chunks. Table edits fail with an explicit size error instead of
+silently truncating rows from an existing message.
 
 Every native table produced from portable presentation also carries a top-level
 text representation for screen readers, notifications, session mirroring, and
 clients that cannot render the block. Raw chart and table values stay literal
-in that mrkdwn fallback, so cell data such as `<@U123>` does not become a Slack
-mention. If Slack rejects native chart or table blocks with `invalid_blocks`,
-OpenClaw retries once with those native blocks replaced by visible mrkdwn
-fallback sections. A genuinely invalid sibling block still fails closed. Table
-and chart sends preserve the complete representation through ordered preflight
-chunks whenever the top-level accessibility text exceeds one Slack post.
+in the fallback, so cell data such as `<@U123>` does not become a Slack mention.
+If Slack rejects native chart or table blocks with `invalid_blocks`, OpenClaw
+removes every native data block in one bounded recovery step, retains valid
+sibling blocks such as buttons and selects, and sends complete visible chart
+and table text with Slack formatting disabled. Slash-command delivery
+tracks Slack's five-call `response_url` budget across the command. Before each
+reply batch, it selects a complete plan that fits the remaining calls or fails
+before posting that batch.
 
 Only explicit `presentation` table blocks are promoted to native tables.
 Markdown pipe tables remain authored text; OpenClaw does not guess at table
@@ -1788,6 +1787,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Thread broadcasts ("Also send to channel" thread replies) are processed as normal user messages.
 - Reaction add/remove events are mapped into system events.
 - Member join/leave, channel created/renamed, and pin add/remove events are mapped into system events.
+- Optional presence polling can map an observed human participant's `away` to `active` transition into the participant's most recently active eligible Slack session. The default is off.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
@@ -1799,6 +1799,32 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 
 Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
+### Presence events
+
+Slack does not send presence changes through the Events API or Socket Mode. OpenClaw can instead poll [`users.getPresence`](https://docs.slack.dev/reference/methods/users.getPresence/) for human participants whose messages passed normal Slack access and routing checks.
+
+```json5
+{
+  channels: {
+    slack: {
+      presenceEvents: { mode: "auto" },
+      channels: {
+        C0123456789: { presenceEvents: { mode: "on" } },
+        C0987654321: { presenceEvents: { mode: "off" } },
+      },
+    },
+  },
+}
+```
+
+- `off` (default): no presence timer or Slack API calls.
+- `auto`: monitor DMs, MPIMs, and Slack threads active in the last 24 hours with at most 8 observed human participants. Top-level channel sessions are excluded.
+- `on`: monitor the same conversations without the participant cap and include top-level channel sessions. Use a per-channel override to force or suppress one channel.
+
+OpenClaw polls at most 45 unique users per minute per Slack account, seeds the first result without waking the agent, and only wakes on an observed `away` to `active` transition. A durable 8-hour cooldown applies per Slack account and user, even if that person participates in several threads. The event routes only to that person's most recently active eligible conversation and tells the agent to consult memory/wiki and known timezone context before deciding whether to send one short greeting. The agent may stay silent.
+
+The bot token needs `users:read`, which is already included in the recommended manifest. Presence events are unavailable for Enterprise Grid org-wide installs.
+
 ## Configuration reference
 
 Primary reference: [Configuration reference - Slack](/gateway/config-channels#slack).
@@ -1808,8 +1834,9 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
 - mode/auth: `mode`, `enterpriseOrgInstall`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
 - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
 - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
-- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
+- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`, `implicitMentions.*`
 - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- presence wakes: `presenceEvents.mode`, `channels.*.presenceEvents.mode` (`off|auto|on`; default `off`)
 - delivery: `textChunkLimit`, `streaming.chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
 - unfurls: `unfurlLinks` (default: `false`), `unfurlMedia` for `chat.postMessage` link/media preview control; set `unfurlLinks: true` to opt back into link previews
 - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`

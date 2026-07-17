@@ -1,23 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createWidgetBridge,
-  isRpcMethodAllowed,
-  isWellFormedInbound,
-  resetPromptRateStatesForTest,
-  type WidgetBridgeDeps,
-  type WidgetErrorCode,
-  type WidgetOutboundMessage,
-} from "./bridge.ts";
+import { createWidgetBridge, type WidgetOutboundMessage } from "./bridge.ts";
 import type { WidgetManifestView } from "./types.ts";
 
+type WidgetBridgeDeps = Parameters<typeof createWidgetBridge>[0];
+
+let testWidgetSequence = 0;
+
 beforeEach(() => {
-  // Rate-limit state is module-level (keyed by widget name); reset between tests.
-  resetPromptRateStatesForTest();
+  testWidgetSequence += 1;
 });
 
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {
   return {
-    name: "revenue-chart",
+    name: `revenue-chart-${testWidgetSequence}`,
     frameToken: "11111111-1111-4111-8111-111111111111",
     entrypoint: "index.html",
     bindings: { value: { source: "static", value: null } },
@@ -39,22 +34,6 @@ function makeBridge(overrides?: Partial<WidgetBridgeDeps>) {
   };
   return { bridge: createWidgetBridge(deps), posted };
 }
-
-describe("isWellFormedInbound", () => {
-  it("accepts a known v1 type", () => {
-    expect(isWellFormedInbound({ v: 1, type: "workspace:ready" })).toBe(true);
-  });
-  it("rejects a wrong envelope version", () => {
-    expect(isWellFormedInbound({ v: 2, type: "workspace:ready" })).toBe(false);
-  });
-  it("rejects an unknown type", () => {
-    expect(isWellFormedInbound({ v: 1, type: "workspace:evil" })).toBe(false);
-  });
-  it("rejects non-objects", () => {
-    expect(isWellFormedInbound("nope")).toBe(false);
-    expect(isWellFormedInbound(null)).toBe(false);
-  });
-});
 
 describe("createWidgetBridge accept filter", () => {
   it("drops malformed messages and counts them", () => {
@@ -354,32 +333,7 @@ describe("rate-limit state persists across bridge re-instantiation (remount)", (
   });
 });
 
-describe("resolve-time rpc allowlist re-check (defense-in-depth)", () => {
-  // The mirror-vs-server keep-in-sync guard lives in the node-rooted extension
-  // suite (extensions/workspaces/src/rpc-allowlist-sync.test.ts), which can import
-  // both the browser mirror and the node-side binding-contract; the browser-rooted
-  // UI vitest cannot resolve imports outside ui/.
-  it("isRpcMethodAllowed accepts allowlisted and rejects non-allowlisted methods", () => {
-    expect(isRpcMethodAllowed("sessions.list")).toBe(true);
-    expect(isRpcMethodAllowed("sessions.delete")).toBe(false);
-    expect(isRpcMethodAllowed("")).toBe(false);
-  });
-
-  it("denies a getData whose gate returns a code and NEVER calls resolveBinding", async () => {
-    const resolveBinding = vi.fn(async () => ({ ok: true }));
-    const assertBindingAllowed = (bindingId: string): WidgetErrorCode | null =>
-      bindingId === "value" ? "binding_denied" : null;
-    const { bridge, posted } = makeBridge({ resolveBinding, assertBindingAllowed });
-    bridge.handleMessage({ v: 1, type: "workspace:getData", requestId: "r1", bindingId: "value" });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toMatchObject({
-      type: "workspace:error",
-      code: "binding_denied",
-      requestId: "r1",
-    });
-    expect(resolveBinding).not.toHaveBeenCalled();
-  });
-
+describe("resolve-time binding re-check", () => {
   it("does not push a binding the gate denies (never calls resolveBinding)", async () => {
     const resolveBinding = vi.fn(async () => 1);
     const { bridge, posted } = makeBridge({

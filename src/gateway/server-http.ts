@@ -26,7 +26,11 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+import { CONTROL_UI_PLUGIN_ICON_PATH_PREFIX } from "./control-ui-contract.js";
+import {
+  isControlUiApprovalDocumentPath,
+  isControlUiPluginManagerRequest,
+} from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
@@ -47,7 +51,12 @@ import {
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  type GatewayIngressWebSocket,
+  type GatewayWsClient,
+} from "./server/ws-types.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -88,6 +97,8 @@ const getManagedImageAttachmentsModule = createLazyRuntimeModule(
   () => import("./managed-image-attachments.js"),
 );
 
+const getPluginIconHttpModule = createLazyRuntimeModule(() => import("./plugin-icon-http.js"));
+
 const getModelsHttpModule = createLazyRuntimeModule(() => import("./models-http.js"));
 
 const getOpenAiHttpModule = createLazyRuntimeModule(() => import("./openai-http.js"));
@@ -118,6 +129,12 @@ const GATEWAY_PROBE_STATUS_BY_PATH = new Map<string, "live" | "ready">([
   ["/ready", "ready"],
   ["/readyz", "ready"],
 ]);
+
+function isControlUiPluginIconRequest(pathname: string, basePath: string): boolean {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return pathname.startsWith(`${normalizedBasePath}${CONTROL_UI_PLUGIN_ICON_PATH_PREFIX}/`);
+}
 const pluginGatewayAuthBypassPathsCache = new WeakMap<
   OpenClawConfig,
   Promise<ReadonlySet<string>>
@@ -323,7 +340,7 @@ type GatewayHttpRequestStage = {
   continueOnError?: boolean;
 };
 
-export async function runGatewayHttpRequestStages(
+async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
@@ -389,26 +406,25 @@ function buildPluginRequestStages(params: {
         // Bypass paths come only from activated channel plugins' gateway-auth
         // artifacts (bundled or installed); all other protected plugin routes must
         // produce an AuthorizedGatewayHttpRequest before runtime scopes are derived.
-        const { authorizeGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
-        const requestAuth = await authorizeGatewayHttpRequestOrReply({
+        const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
+        const { resolvePluginRouteRuntimeOperatorScopes } =
+          await getPluginRouteRuntimeScopesModule();
+        const authResult = await authorizePluginGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
           auth: params.resolvedAuth,
           trustedProxies: params.trustedProxies,
           allowRealIpFallback: params.allowRealIpFallback,
           rateLimiter: params.rateLimiter,
+          requestPath: params.requestPath,
+          resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
         });
-        if (!requestAuth) {
+        if (!authResult) {
           return true;
         }
         pluginGatewayAuthSatisfied = true;
-        pluginGatewayRequestAuth = requestAuth;
-        const { resolvePluginRouteRuntimeOperatorScopes } =
-          await getPluginRouteRuntimeScopesModule();
-        pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
-          params.req,
-          requestAuth,
-        );
+        pluginGatewayRequestAuth = authResult.requestAuth;
+        pluginRequestOperatorScopes = authResult.operatorScopes;
         return false;
       },
     },
@@ -539,6 +555,19 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
       const resolvedAuthValue = getResolvedAuth();
+      const handleControlUiRequest = async () =>
+        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+          basePath: controlUiBasePath,
+          config: configSnapshot,
+          terminalEnabled:
+            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          root: controlUiRoot,
+          auth: resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        });
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "gateway-probes",
@@ -670,6 +699,32 @@ export function createGatewayHttpServer(opts: {
         });
       }
       if (
+        isControlUiApprovalDocumentPath({
+          basePath: controlUiBasePath,
+          pathname: scopedRequestPath,
+        })
+      ) {
+        requestStages.push({
+          name: "control-ui-approval-document",
+          run: async () => {
+            if (!controlUiEnabled) {
+              res.statusCode = 404;
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.end("Not Found");
+              return true;
+            }
+            const handled = await handleControlUiRequest();
+            if (handled) {
+              return true;
+            }
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+            return true;
+          },
+        });
+      }
+      if (
         handlePluginRequest &&
         pluginPathContext &&
         resolvePluginNodeCapabilityRoute?.(pluginPathContext)
@@ -765,6 +820,20 @@ export function createGatewayHttpServer(opts: {
         });
       }
 
+      if (controlUiEnabled && isControlUiPluginIconRequest(scopedRequestPath, controlUiBasePath)) {
+        requestStages.push({
+          name: "control-ui-plugin-icon",
+          run: async () =>
+            (await getPluginIconHttpModule()).handlePluginIconHttpRequest(req, res, {
+              basePath: controlUiBasePath,
+              config: configSnapshot,
+              auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-assistant-media",
@@ -795,19 +864,7 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "control-ui-http",
-          run: async () =>
-            (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
-              basePath: controlUiBasePath,
-              config: configSnapshot,
-              terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
-              agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
-              root: controlUiRoot,
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+          run: handleControlUiRequest,
         });
       }
 
@@ -1007,3 +1064,60 @@ export function attachGatewayUpgradeHandler(opts: {
     });
   });
 }
+
+/** Attach the loopback-only worker ingress and force every accepted socket into worker mode. */
+export function attachWorkerGatewayUpgradeHandler(params: {
+  httpServer: HttpServer;
+  wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
+  log?: { warn: (message: string) => void };
+}): void {
+  params.httpServer.on("upgrade", (req, socket, head) => {
+    if (isGatewayWorkAdmissionClosed()) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket admission closed");
+      socket.destroy();
+      return;
+    }
+    const preauthBudgetKey = req.socket.remoteAddress;
+    if (params.wss.listenerCount("connection") === 0) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket handlers unavailable");
+      socket.destroy();
+      return;
+    }
+    if (!params.preauthConnectionBudget.acquire(preauthBudgetKey)) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+      socket.destroy();
+      return;
+    }
+    let budgetTransferred = false;
+    const releaseUpgradeBudget = () => {
+      if (budgetTransferred) {
+        return;
+      }
+      budgetTransferred = true;
+      params.preauthConnectionBudget.release(preauthBudgetKey);
+    };
+    socket.once("close", releaseUpgradeBudget);
+    try {
+      params.wss.handleUpgrade(req, socket, head, (ws) => {
+        const workerSocket = ws as GatewayIngressWebSocket;
+        workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+        workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+        workerSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
+        params.wss.emit("connection", ws, req);
+        if (workerSocket["__openclawPreauthBudgetClaimed"]) {
+          budgetTransferred = true;
+          socket.off("close", releaseUpgradeBudget);
+        }
+      });
+    } catch (error) {
+      socket.off("close", releaseUpgradeBudget);
+      releaseUpgradeBudget();
+      params.log?.warn(
+        `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      socket.destroy();
+    }
+  });
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

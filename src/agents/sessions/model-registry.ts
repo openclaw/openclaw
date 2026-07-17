@@ -19,7 +19,6 @@ import type {
   OpenAIResponsesCompat,
   SimpleStreamOptions,
 } from "../../llm/types.js";
-import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
@@ -30,6 +29,7 @@ import {
   listPluginModelCatalogFiles,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
@@ -130,6 +130,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 });
 
 const OpenAIResponsesCompatSchema = Type.Object({
+  supportsTemperature: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -220,10 +221,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   }
   const path = error.instancePath.replace(/^\//, "").replace(/\//g, ".");
   return path || "root";
-}
-
-function allowsMissingProviderApiKey(auth: ProviderAuthMode | undefined): boolean {
-  return auth === "aws-sdk" || auth === "oauth";
 }
 
 /** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
@@ -358,7 +355,7 @@ export class ModelRegistry {
 
     // Ensure dynamic API/OAuth registrations are rebuilt from current provider state.
     resetApiProviders(defaultApiRegistry);
-    resetOAuthProviders();
+    getAuthStorageOAuthProviderRegistry(this.authStorage).reset();
 
     this.loadModels();
 
@@ -502,12 +499,6 @@ export class ModelRegistry {
           `Provider ${providerName}: "baseUrl" is required when defining custom models.`,
         );
       }
-      if (!providerConfig.apiKey && !allowsMissingProviderApiKey(providerConfig.auth)) {
-        throw new Error(
-          `Provider ${providerName}: "apiKey" is required when defining custom models.`,
-        );
-      }
-
       for (const modelDef of models) {
         const hasModelApi = Boolean(modelDef.api);
 
@@ -840,12 +831,6 @@ export class ModelRegistry {
     if (!config.baseUrl) {
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining models.`);
     }
-    if (!config.apiKey && !config.oauth && !allowsMissingProviderApiKey(config.auth)) {
-      throw new Error(
-        `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`,
-      );
-    }
-
     for (const modelDef of config.models) {
       const api = modelDef.api || config.api;
       if (!api) {
@@ -862,7 +847,7 @@ export class ModelRegistry {
         ...config.oauth,
         id: providerName,
       };
-      registerOAuthProvider(oauthProvider);
+      getAuthStorageOAuthProviderRegistry(this.authStorage).register(oauthProvider);
     }
 
     if (config.streamSimple) {
@@ -952,3 +937,4 @@ export interface ProviderConfigInput {
     compat?: Model["compat"];
   }>;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

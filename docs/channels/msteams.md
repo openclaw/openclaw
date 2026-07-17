@@ -728,7 +728,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size in characters (default `4000`, and hard-capped at `4000` regardless of a higher configured value).
-- `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
 - `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](#channelgroup-file-recovery-graphmediafallback)).
@@ -851,7 +851,7 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 
 1. **Add Graph API permissions** in Entra ID (Azure AD) → App Registration:
    - `Sites.ReadWrite.All` (Application) - upload files to SharePoint.
-   - `Chat.Read.All` (Application) - optional, enables per-user sharing links.
+   - `ChatMember.Read.All` (Application) - least-privileged tenant-wide permission for group-chat file sends. `Chat.Read.All` also works and already covers this when group-chat history is enabled. As a per-chat alternative, use the `ChatMember.Read.Chat` [resource-specific consent permission](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent).
 2. **Grant admin consent** for the tenant.
 3. **Get your SharePoint site ID:**
 
@@ -882,21 +882,23 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 
 ### Sharing behavior
 
-| Permission                              | Sharing behavior                                          |
-| --------------------------------------- | --------------------------------------------------------- |
-| `Sites.ReadWrite.All` only              | Organization-wide sharing link (anyone in org can access) |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | Per-user sharing link (only chat members can access)      |
+| Context and permission                                                  | Sharing behavior                                          |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
+| Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
+| Group chat without a supported chat-member read grant                   | Send fails closed                                         |
 
-Per-user sharing is more secure since only chat participants can access the file. If `Chat.Read.All` is missing, the bot falls back to organization-wide sharing.
+Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 
 ### Fallback behavior
 
-| Scenario                                          | Result                                           |
-| ------------------------------------------------- | ------------------------------------------------ |
-| Group chat + file + `sharePointSiteId` configured | Upload to SharePoint, send a native file card    |
-| Group chat + file + no `sharePointSiteId`         | Fail with an actionable configuration error      |
-| Personal chat + file                              | FileConsentCard flow (works without SharePoint)  |
-| Any context + image                               | Base64-encoded inline (works without SharePoint) |
+| Scenario                                                         | Result                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------ |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card    |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error      |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card    |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)  |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint) |
 
 ### Files stored location
 

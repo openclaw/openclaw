@@ -15,6 +15,8 @@ import { resolveWebProviderConfig } from "../../../packages/web-content-core/src
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
+import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -62,7 +64,7 @@ const WEB_FETCH_PROGRESS_THRESHOLD_MS = 5_000;
 const WEB_FETCH_PROGRESS_TEXT = "Fetching page content...";
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
-export const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
+const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
 const DEFAULT_FETCH_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -364,7 +366,12 @@ function normalizeContentType(value: string | null | undefined): string | undefi
   }
   const [raw] = value.split(";");
   const trimmed = raw?.trim();
-  return trimmed || undefined;
+  return trimmed ? trimmed.toLowerCase() : undefined;
+}
+
+function isJsonMediaType(value: string): boolean {
+  // Structured +json subtypes are single JSON documents; sequence formats are not.
+  return value === "application/json" || value.endsWith("+json");
 }
 
 type WebFetchRuntimeParams = {
@@ -428,7 +435,7 @@ function throwIfFetchAborted(signal: AbortSignal | undefined): void {
  * throw. Path and query whitespace is intentionally preserved — the WHATWG URL
  * parser percent-encodes those characters correctly per RFC 3986.
  */
-export function sanitizeWebFetchUrl(raw: string): string {
+function sanitizeWebFetchUrl(raw: string): string {
   let end = raw.length;
   while (end > 0 && raw.charCodeAt(end - 1) <= 0x20) {
     end -= 1;
@@ -436,6 +443,12 @@ export function sanitizeWebFetchUrl(raw: string): string {
   const trimmed = raw.slice(0, end).replace(/^\s+/, "");
   const repaired = trimmed.replace(/^(https?:\/\/)\s+/i, "$1");
   return repaired.replace(/^(https?:\/\/[^/?#\s]+)\s+$/i, "$1");
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.webFetchTestApi")] = {
+    sanitizeWebFetchUrl,
+  };
 }
 
 async function normalizeProviderWebFetchPayload(params: {
@@ -655,13 +668,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     let title: string | undefined;
     let extractor = "raw";
     let text = body;
-    if (contentType.includes("text/markdown")) {
+    if (normalizedContentType === "text/markdown") {
       // Cloudflare Markdown for Agents: server returned pre-rendered markdown
       extractor = "cf-markdown";
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (contentType.includes("text/html")) {
+    } else if (normalizedContentType === "text/html") {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -718,7 +731,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Web fetch extraction failed: Readability disabled and no fetch provider is available.",
         );
       }
-    } else if (contentType.includes("application/json")) {
+    } else if (isJsonMediaType(normalizedContentType)) {
       try {
         text = JSON.stringify(JSON.parse(body), null, 2);
         extractor = "json";
@@ -785,20 +798,24 @@ export function createWebFetchTool(options?: {
   const tool: AnyAgentTool = {
     label: "Web Fetch",
     name: "web_fetch",
-    description:
-      "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
+    description: "Fetch URL; extract readable markdown/text. Lightweight; no browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
-        {
+      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebFetch } =
+        resolveWebFetchToolRuntimeContext({
           config: options?.config,
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebFetch: options?.runtimeWebFetch,
-        },
-      );
+        });
       const executionFetch = resolveFetchConfig(config);
       if (!resolveFetchEnabled({ fetch: executionFetch, sandboxed: options?.sandboxed })) {
         throw new Error("web_fetch is disabled.");
+      }
+      if (providerSelectionId) {
+        assertSecretOwnerAvailable(
+          "capability",
+          runtimeWebSecretOwnerId("fetch", providerSelectionId),
+        );
       }
       const providerCacheKey =
         normalizeOptionalLowercaseString(runtimeWebFetch?.selectedProvider) ??
@@ -883,3 +900,4 @@ export function createWebFetchTool(options?: {
     formatWebFetchTerminalPresentation(result),
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

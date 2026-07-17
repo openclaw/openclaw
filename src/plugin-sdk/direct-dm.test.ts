@@ -15,12 +15,12 @@ const baseCfg = {
 } as unknown as OpenClawConfig;
 
 function createDirectDmRuntime() {
-  const recordInboundSession = vi.fn(async () => {});
+  const recordInboundSessionMock = vi.fn(async () => {});
   const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
     await dispatcherOptions.deliver({ text: "reply text" });
   });
   return {
-    recordInboundSession,
+    recordInboundSession: recordInboundSessionMock,
     dispatchReplyWithBufferedBlockDispatcher,
     runtime: {
       channel: {
@@ -34,7 +34,7 @@ function createDirectDmRuntime() {
         session: {
           resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
           readSessionUpdatedAt: vi.fn(() => 1234),
-          recordInboundSession,
+          recordInboundSession: recordInboundSessionMock,
         },
         reply: {
           resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
@@ -233,6 +233,11 @@ describe("plugin-sdk/direct-dm", () => {
       conversationLabel: "sender-1",
       rawBody: "hello world",
       messageId: "event-123",
+      extraContext: {
+        ReplyToId: "event-parent",
+        ReplyToIdFull: "event-parent",
+        MessageThreadId: "thread-7",
+      },
       timestamp: 1_710_000_000_000,
       commandAuthorized: true,
       deliver,
@@ -250,6 +255,10 @@ describe("plugin-sdk/direct-dm", () => {
     expect(result.ctxPayload.To).toBe("nostr:bot-1");
     expect(result.ctxPayload.SenderId).toBe("sender-1");
     expect(result.ctxPayload.MessageSid).toBe("event-123");
+    expect(result.ctxPayload.ReplyToId).toBe("event-parent");
+    expect(result.ctxPayload.MessageThreadId).toBe("thread-7");
+    expect(result.ctxPayload.NativeDirectUserId).toBe("sender-1");
+    expect(result.ctxPayload.OriginatingTo).toBe("nostr:bot-1");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);

@@ -246,6 +246,8 @@ export async function ensureOutboundSessionEntry(params: {
     MessageThreadId: params.route.threadId,
     OriginatingChannel: params.channel,
     OriginatingTo: params.route.to,
+    NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
+    NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
   };
   try {
     await recordInboundSessionMeta({

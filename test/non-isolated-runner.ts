@@ -1,7 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTask, type RunnerTestFile, type RunnerTestSuite, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -22,6 +22,7 @@ type TestRunnerInternals = {
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
 const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
+const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const nativeTimerGlobals = {
   setTimeout: globalThis.setTimeout,
   clearTimeout: globalThis.clearTimeout,
@@ -134,6 +135,13 @@ type ReplyRunStateForTest = {
   waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
 };
 
+type DiagnosticEventsStateForTest = {
+  listeners?: Set<unknown>;
+  trustedListeners?: Set<unknown>;
+  toolExecutionListeners?: Set<unknown>;
+  asyncQueue?: unknown[];
+};
+
 function runCleanupActions(actions: CleanupAction[]): unknown {
   let firstError: unknown;
   for (const action of actions) {
@@ -207,6 +215,18 @@ function resetOpenClawGlobalRunState(): void {
   replyRunState?.waitersByKey?.clear();
 }
 
+function resetOpenClawGlobalDiagnosticState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = globalStore[DIAGNOSTIC_EVENTS_STATE] as DiagnosticEventsStateForTest | undefined;
+  // The dispatcher intentionally survives module reloads. Mirror isolate mode
+  // without duplicating its private state defaults in the test runner.
+  state?.listeners?.clear();
+  state?.trustedListeners?.clear();
+  state?.toolExecutionListeners?.clear();
+  state?.asyncQueue?.splice(0);
+  Reflect.deleteProperty(globalStore, DIAGNOSTIC_EVENTS_STATE);
+}
+
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
@@ -231,15 +251,24 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onBeforeTryTask(test);
   }
 
-  override async onAfterRunSuite(suite: RunnerTestSuite) {
-    await super.onAfterRunSuite(suite);
-    if (this.config.isolate || !("filepath" in suite) || typeof suite.filepath !== "string") {
+  // Cross-file cleanup lives in onAfterRunFiles, not onAfterRunSuite: vitest
+  // early-returns runSuite for files that failed during collection (and for
+  // skipped file suites) without firing onAfterRunSuite, which used to leave
+  // the crashed file's evaluated real modules cached in the shared worker so
+  // the next file's vi.mock factories silently never applied. The worker loop
+  // calls startTests per file, so this hook runs after every file regardless
+  // of its collect/run outcome.
+  override onAfterRunFiles(files?: RunnerTestFile[]) {
+    super.onAfterRunFiles();
+    if (this.config.isolate) {
       return;
     }
 
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
     if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `END ${suite.filepath}\n`);
+      for (const file of files ?? []) {
+        fs.appendFileSync(orderLogPath, `END ${file.filepath}\n`);
+      }
     }
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
@@ -252,6 +281,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     restoreSharedTestHomeAfterEnvUnstub(testHome);
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
+    resetOpenClawGlobalDiagnosticState();
     vi.resetModules();
     const internals = this as unknown as TestRunnerInternals;
     internals.moduleRunner?.mocker?.reset?.();

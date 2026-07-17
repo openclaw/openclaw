@@ -13,8 +13,10 @@ import {
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import { getPluginModuleLoaderStats } from "../../src/plugins/plugin-module-loader-cache.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
+import { createHappyPathPromptSnapshotFiles } from "../helpers/agents/happy-path-prompt-snapshots.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -131,6 +133,24 @@ describe("happy path prompt snapshots", () => {
     ]);
   });
 
+  it("generates snapshots without jiti plugin-loader fallbacks", async () => {
+    // Perf contract for the check-prompt-snapshots CI lane: scenario channel
+    // plugins are preloaded through the ambient module graph. A jiti
+    // plugin-loader call here means a scenario channel (or another plugin
+    // surface) fell back to source re-transpilation, which re-evaluates the
+    // core graph and stalls the lane by minutes.
+    const callsBefore = getPluginModuleLoaderStats().calls;
+    const files = await createHappyPathPromptSnapshotFiles();
+    expect(files.length).toBeGreaterThan(0);
+    const stats = getPluginModuleLoaderStats();
+    expect(
+      stats.calls - callsBefore,
+      `prompt snapshot generation hit the jiti plugin loader; targets: ${stats.topSourceTransformTargets
+        .map((entry) => entry.target)
+        .join(", ")}`,
+    ).toBe(0);
+  });
+
   it("deletes stale generated snapshot artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-stale-"));
     try {
@@ -180,7 +200,7 @@ describe("happy path prompt snapshots", () => {
     const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
-    const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+    const heartbeatPhrase = "Heartbeat = useful proactive progress";
     const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');

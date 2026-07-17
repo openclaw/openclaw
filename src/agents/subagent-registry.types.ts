@@ -4,6 +4,7 @@
  * Defines execution, completion, delivery, pending-delivery, and attachment state stored for child runs.
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -33,7 +34,7 @@ export type SubagentExecutionState = {
   outcome?: SubagentRunOutcome;
   interruptedAt?: number;
   interruptionReason?: "gateway-restart" | "lost-execution-context";
-  transcriptFile?: string;
+  transcriptTarget?: AgentRunSessionTarget;
 };
 
 export type SubagentCompletionState = {
@@ -82,6 +83,22 @@ export type SubagentCompletionDeliveryState = {
     | "sink_unavailable"
     | "dedupe"
     | "waiting_for_requester_turn";
+};
+
+/** Durable outbox state for the top-level requester settle wake. */
+export type RequesterSettleWakeState = {
+  status: "pending" | "dispatching";
+  /** Number of delivery attempts already admitted. */
+  attemptCount: number;
+  /** Ambiguous transport replays made with the current idempotency key. */
+  replayCount?: number;
+  /** Persisted retry deadline; restore waits until this instant. */
+  nextAttemptAt?: number;
+  /** Frozen wave membership once the first delivery attempt is admitted. */
+  batchRunIds?: string[];
+  lastError?: string | null;
+  /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
+  retireAfterSettle?: boolean;
 };
 
 type SubagentKillReconciliationState = {
@@ -143,6 +160,8 @@ export type SubagentRunRecord = {
   deleteCleanupDispatchedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
+  /** Durable top-level requester wake obligation, replayed after restart. */
+  requesterSettleWake?: RequesterSettleWakeState;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

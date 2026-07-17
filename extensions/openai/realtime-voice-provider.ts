@@ -27,7 +27,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
@@ -41,6 +41,11 @@ import {
   resolveOpenAIProviderConfigRecord,
   trimToUndefined,
 } from "./realtime-provider-shared.js";
+import {
+  isOpenAIGptLiveModel,
+  OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE,
+  OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE,
+} from "./realtime-quicksilver.js";
 
 type OpenAIRealtimeVoice =
   | "alloy"
@@ -268,6 +273,9 @@ function resolveKeychainSecretRef(value: string): string | undefined {
     return cached;
   }
   const [, service, account] = match;
+  if (!service || !account) {
+    return undefined;
+  }
   try {
     const resolved =
       execFileSync(
@@ -498,6 +506,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private sessionReadyFired = false;
   private reconnectReason: string | undefined;
   private activeConnectionReason: string | undefined;
+  private reconnectAbortController = new AbortController();
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
@@ -506,6 +515,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
+    if (this.reconnectAbortController.signal.aborted) {
+      this.reconnectAbortController = new AbortController();
+    }
     this.reconnectAttempts = 0;
     await this.doConnect();
   }
@@ -570,15 +582,18 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.requestResponseCreate();
   }
 
-  acknowledgeMark(): void {
-    if (this.markQueue.length === 0) {
-      return;
+  acknowledgeMark(markName?: string): void {
+    const index = markName === undefined ? 0 : this.markQueue.indexOf(markName);
+    if (index >= 0) {
+      this.markQueue.splice(index, 1);
     }
-    this.markQueue.shift();
   }
 
   close(): void {
     this.intentionallyClosed = true;
+    // The bridge owns both its active socket and reconnect delay; canceling
+    // both keeps terminal close from retaining callbacks for the full backoff.
+    this.reconnectAbortController.abort();
     this.connected = false;
     this.sessionConfigured = false;
     if (this.ws) {
@@ -873,9 +888,15 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       type: "session.reconnect.scheduled",
       detail: `reason=${reason} attempt=${attempt} delayMs=${delay}`,
     });
-    await new Promise((resolve) => {
-      setTimeout(resolve, delay);
-    });
+    const reconnectSignal = this.reconnectAbortController.signal;
+    try {
+      await sleepWithAbort(delay, reconnectSignal);
+    } catch (error) {
+      if (!reconnectSignal.aborted) {
+        throw error;
+      }
+      return;
+    }
     if (this.intentionallyClosed) {
       return;
     }
@@ -1456,6 +1477,9 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  if (isOpenAIGptLiveModel(model)) {
+    throw new Error(OPENAI_GPT_LIVE_BROWSER_SESSION_UNSUPPORTED_MESSAGE);
+  }
   const auth = await requireOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
@@ -1536,6 +1560,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       supportsBargeIn: true,
       handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
+      supportsVideoFrames: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ cfg, providerConfig }) => {
@@ -1550,6 +1575,9 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     },
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
+      if (isOpenAIGptLiveModel(config.model)) {
+        throw new Error(OPENAI_GPT_LIVE_BRIDGE_UNSUPPORTED_MESSAGE);
+      }
       return new OpenAIRealtimeVoiceBridge({
         ...req,
         apiKey: config.apiKey,
@@ -1571,3 +1599,4 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

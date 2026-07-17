@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import pMap from "p-map";
 import {
   acquireLocalHeavyCheckLockSync,
   resolveLocalHeavyCheckEnv,
@@ -18,6 +19,11 @@ const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
+// CI runners are dedicated: Blacksmith's 16 vCPU class carries 32GB, which the
+// local-Mac threshold above misreads as too small and forces serial shards.
+// Three concurrent oxlint shards peak well under 24GB.
+const CI_PARALLEL_MIN_CPUS = 8;
+const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
@@ -154,8 +160,8 @@ export function shouldRunOxlintShardsSerial({
   const resources = resolveHostResources(hostResources);
   if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
     return (
-      resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
-      resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+      resources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES ||
+      resources.logicalCpuCount < CI_PARALLEL_MIN_CPUS
     );
   }
   return (
@@ -272,21 +278,19 @@ export async function main(extraArgs = process.argv.slice(2), runtimeEnv = proce
         platform: process.platform,
         splitCore: shardArgs.splitCore,
       });
-      const results =
-        shardConcurrency <= 1
-          ? await runShardsSerial({
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            })
-          : await runShardsParallel({
-              concurrency: Math.min(shardConcurrency, selectedShards.length),
-              entries: selectedShards,
-              env,
-              extraArgs: shardArgs.oxlintArgs,
-              runner,
-            });
+      const hostResources = resolveHostResources();
+      // stderr: stdout may carry machine-readable oxlint output for callers.
+      console.error(
+        `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
+          `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
+      );
+      const results = await runShards({
+        concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
+        entries: selectedShards,
+        env,
+        extraArgs: shardArgs.oxlintArgs,
+        runner,
+      });
       process.exitCode = results.find((status) => status !== 0) ?? 0;
     }
   } finally {
@@ -385,38 +389,17 @@ export function resolveOxlintShardConcurrency({
   );
 }
 
-async function runShardsSerial({ entries, env, extraArgs, runner }) {
-  const results = [];
-  for (const shard of entries) {
-    results.push(await runShard({ env, extraArgs, runner, shard }));
-    if (isParentTerminationRequested()) {
-      break;
-    }
-  }
-  return results;
-}
-
-async function runShardsParallel({ concurrency, entries, env, extraArgs, runner }) {
-  const results = [];
-  results.length = entries.length;
-  let nextIndex = 0;
-
-  const workers = Array.from({ length: concurrency }, async () => {
-    for (;;) {
+async function runShards({ concurrency, entries, env, extraArgs, runner }) {
+  const results = await pMap(
+    entries,
+    async (shard) => {
       if (isParentTerminationRequested()) {
-        return;
+        return undefined;
       }
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      const shard = entries[currentIndex];
-      if (!shard) {
-        return;
-      }
-      results[currentIndex] = await runShard({ env, extraArgs, runner, shard });
-    }
-  });
-
-  await Promise.all(workers);
+      return await runShard({ env, extraArgs, runner, shard });
+    },
+    { concurrency, stopOnError: true },
+  );
   return results.filter((status) => status !== undefined);
 }
 

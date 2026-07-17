@@ -1,4 +1,5 @@
 // Imessage plugin module implements the same-sender inbound debounce merge.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { IMessagePayload } from "./types.js";
 
@@ -14,10 +15,10 @@ import type { IMessagePayload } from "./types.js";
  * prompt past a safe ceiling. Every source GUID still surfaces via
  * `coalescedMessageGuids` so a future replay path can recognize duplicates.
  */
-export const MAX_COALESCED_TEXT_CHARS = 4000;
-export const MAX_COALESCED_ATTACHMENTS = 20;
-export const MAX_COALESCED_ENTRIES = 10;
-export const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
+const MAX_COALESCED_TEXT_CHARS = 4000;
+const MAX_COALESCED_ATTACHMENTS = 20;
+const MAX_COALESCED_ENTRIES = 10;
+const IMESSAGE_URL_BALLOON_BUNDLE_ID = "com.apple.messages.URLBalloonProvider";
 
 export function hasIMessageUrlBalloonBundleID(payload: IMessagePayload): boolean {
   return payload.balloon_bundle_id === IMESSAGE_URL_BALLOON_BUNDLE_ID;
@@ -104,12 +105,12 @@ export function combineIMessagePayloads(payloads: IMessagePayload[]): CoalescedI
   if (payloads.length === 0) {
     throw new Error("combineIMessagePayloads: cannot combine empty payloads");
   }
+  const first = expectDefined(payloads[0], "first iMessage payload to coalesce");
   if (payloads.length === 1) {
-    return payloads[0];
+    return first;
   }
 
-  const first = payloads[0];
-  const last = payloads[payloads.length - 1];
+  const last = expectDefined(payloads.at(-1), "last iMessage payload to coalesce");
 
   // Cap entries: keep first (preserves command/context) + most recent
   // (preserves latest payload) when a flood exceeds the cap.

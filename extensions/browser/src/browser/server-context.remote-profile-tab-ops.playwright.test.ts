@@ -1,4 +1,5 @@
 // Browser tests cover server context.remote profile tab ops.playwright plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   installRemoteProfileTestLifecycle,
@@ -81,6 +82,22 @@ describe("browser remote profile tab ops via Playwright", () => {
       ssrfPolicy: permissiveRemoteCdpPolicy,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid labels before Playwright creates a page", async () => {
+    const createPageViaPlaywright = vi.fn(async () => page("NEVER"));
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue({
+      createPageViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof deps.pwAiModule.getPwAiModule>>);
+    const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
+
+    await expect(remote.openTab("https://example.com", { label: "not allowed" })).rejects.toThrow(
+      /tab label/i,
+    );
+
+    expect(createPageViaPlaywright).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(state.profiles.get("remote")?.tabAliases).toBeUndefined();
   });
 
   it("assigns stable tab ids and resolves labels", async () => {
@@ -371,8 +388,9 @@ describe("browser remote profile tab ops via Playwright", () => {
       dangerouslyAllowPrivateNetwork: false,
       hostnameAllowlist: ["browserless.example.com"],
     };
+    const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
     state.resolved.profiles.remote = {
-      ...state.resolved.profiles.remote,
+      ...remoteProfile,
       cdpUrl: "http://10.0.0.42:9222",
       cdpPort: 9222,
     };

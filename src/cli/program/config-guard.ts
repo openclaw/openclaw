@@ -4,12 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  resolveLegacyStateDirs,
-  resolveNewStateDir,
-  resolveOAuthDir,
-  resolveStateDir,
-} from "../../config/paths.js";
+import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
@@ -100,23 +95,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
-function hasCrossStateDirApprovalMigrationInputs(stateDir: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
-    return false;
-  }
-  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
-  const defaultStateDir = resolveNewStateDir(() => homeDir);
-  if (path.resolve(defaultStateDir) === path.resolve(stateDir)) {
-    return false;
-  }
-  const execApprovalsSource = path.join(defaultStateDir, "exec-approvals.json");
-  const execApprovalsTarget = path.join(stateDir, "exec-approvals.json");
-  return (
-    (fileOrDirExists(execApprovalsSource) && !fileOrDirExists(execApprovalsTarget)) ||
-    fileOrDirExists(path.join(defaultStateDir, "plugin-binding-approvals.json"))
-  );
-}
-
 function hasPendingSqliteSidecarArchive(sourcePath: string): boolean {
   return (
     fileOrDirExists(`${sourcePath}.migrated`) &&
@@ -152,8 +130,7 @@ function hasLegacyStateMigrationInputs(): boolean {
     sqliteSidecarPaths.some(
       (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
     ) ||
-    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
-    hasCrossStateDirApprovalMigrationInputs(stateDir)
+    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 
@@ -214,6 +191,8 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   const commandName = commandPath[0];
@@ -229,12 +208,17 @@ export async function ensureConfigReady(params: {
         migrateLegacyConfig: false,
         invalidConfigNote: false,
         ...(commandName === "status" ? { observe: false } : {}),
-        crossStateDirImports: false,
         ...(shouldRequireStartupMigrationCheckpoint(commandPath)
           ? { requireStartupMigrationCheckpoint: true }
           : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
+          : {}),
+        ...(params.skipPristineStartupStateMigrations
+          ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
           : {}),
       });
     try {
@@ -353,4 +337,3 @@ export async function ensureConfigReady(params: {
 export const testApi = {
   resetConfigGuardStateForTests,
 };
-export { testApi as __test__ };

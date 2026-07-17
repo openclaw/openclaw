@@ -354,6 +354,7 @@ export function createExecApprovalHandlers(
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;
@@ -448,6 +449,7 @@ export function createExecApprovalHandlers(
       const { inputId, decision } = resolveParams;
       let autoReviewResolution = false;
       await handleApprovalResolve({
+        approvalKind: "exec",
         manager,
         inputId,
         decision,

@@ -1,4 +1,5 @@
 // Line tests cover send plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -92,6 +93,14 @@ const LINE_TEST_CFG = {
     },
   },
 };
+
+function createCredentialBearingHttpUrl(): string {
+  const url = new URL("http://example.com/image.jpg");
+  url.username = ["line", "user"].join("-");
+  url.password = ["line", "fixture"].join("-");
+  url.searchParams.set("auth", ["line", "query"].join("-"));
+  return url.href;
+}
 
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
@@ -287,6 +296,17 @@ describe("LINE send helpers", () => {
     });
   });
 
+  it("preserves literal internal-looking text in low-level sends", async () => {
+    const text = "⚠️ 🛠️ `search repos (agent)` failed";
+
+    await sendModule.sendMessageLine("line:user:U123", text, { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [{ type: "text", text }],
+    });
+  });
+
   it("sends video with explicit image preview URL", async () => {
     await sendModule.sendMessageLine("line:user:U100", "Video", {
       cfg: LINE_TEST_CFG,
@@ -338,6 +358,48 @@ describe("LINE send helpers", () => {
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "send media URL",
+      run: () =>
+        sendModule.sendMessageLine("line:user:U200", "Image", {
+          cfg: LINE_TEST_CFG,
+          mediaUrl: createCredentialBearingHttpUrl(),
+        }),
+    },
+    {
+      name: "send preview URL",
+      run: () =>
+        sendModule.sendMessageLine("line:user:U200", "Video", {
+          cfg: LINE_TEST_CFG,
+          mediaUrl: "https://example.com/video.mp4",
+          mediaKind: "video",
+          previewImageUrl: createCredentialBearingHttpUrl(),
+        }),
+    },
+    {
+      name: "push image URL",
+      run: () =>
+        sendModule.pushImageMessage("line:user:U200", createCredentialBearingHttpUrl(), undefined, {
+          cfg: LINE_TEST_CFG,
+        }),
+    },
+    {
+      name: "push image preview URL",
+      run: () =>
+        sendModule.pushImageMessage(
+          "line:user:U200",
+          "https://example.com/image.jpg",
+          createCredentialBearingHttpUrl(),
+          { cfg: LINE_TEST_CFG },
+        ),
+    },
+  ])("does not expose credentials from an insecure $name", async ({ run }) => {
+    await expect(run()).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
+    expect(pushMessageMock).not.toHaveBeenCalled();
+    expect(replyMessageMock).not.toHaveBeenCalled();
+  });
+
   it("omits trackingId for non-user destinations", async () => {
     await sendModule.sendMessageLine("line:group:C100", "Video", {
       cfg: LINE_TEST_CFG,
@@ -381,6 +443,24 @@ describe("LINE send helpers", () => {
         { cfg: LINE_TEST_CFG },
       ),
     ).rejects.toThrow(/Recipient is not a valid LINE id/);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves UTF-16 boundaries in invalid recipient diagnostics", async () => {
+    await expect(
+      sendModule.pushMessagesLine(`aab😀${"x".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aab…",
+    );
+    await expect(
+      sendModule.pushMessagesLine(`aa😀${"y".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aa😀…",
+    );
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
@@ -459,6 +539,9 @@ describe("LINE send helpers", () => {
     const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
-    expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
+    const payload = expectDefined(firstCall[0], "LINE push payload");
+    expect(expectDefined(payload.messages[0], "LINE push message").quickReply?.items).toHaveLength(
+      13,
+    );
   });
 });

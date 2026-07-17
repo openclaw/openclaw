@@ -14,7 +14,6 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   loadSessionStoreMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
-  pruneLegacyStoreKeysMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   dispatchGatewayMethodInProcessMock: vi.fn(),
@@ -23,7 +22,7 @@ const hoisted = vi.hoisted(() => ({
   configOverride: {} as Record<string, unknown>,
 }));
 
-let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 function createConfigOverride(overrides?: Record<string, unknown>) {
@@ -74,7 +73,6 @@ describe("spawnSubagentDirect seam flow", () => {
       getRuntimeConfig: () => hoisted.configOverride,
       loadSessionStoreMock: hoisted.loadSessionStoreMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
-      pruneLegacyStoreKeysMock: hoisted.pruneLegacyStoreKeysMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       resolveAgentConfig: hoisted.resolveAgentConfigMock,
@@ -89,7 +87,6 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.callGatewayMock.mockReset();
     hoisted.loadSessionStoreMock.mockReset();
     hoisted.updateSessionStoreMock.mockReset();
-    hoisted.pruneLegacyStoreKeysMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.dispatchGatewayMethodInProcessMock.mockReset();
@@ -275,7 +272,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
     const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
@@ -1109,3 +1105,4 @@ describe("spawnSubagentDirect seam flow", () => {
     ).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
+  resolveInboundSupplementalSenderAllowed,
   type BuildChannelInboundEventContextParams,
 } from "./context.js";
 
@@ -34,6 +35,71 @@ function createBaseContextParams(
     ...overrides,
   };
 }
+
+describe("resolveInboundSupplementalSenderAllowed", () => {
+  it.each([
+    {
+      name: "allows direct context without consulting the channel matcher",
+      isGroup: false,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows open group context without consulting the channel matcher",
+      isGroup: true,
+      groupPolicy: "open",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: true,
+      matcherCalls: 0,
+    },
+    {
+      name: "allows an allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: true,
+      expected: true,
+      matcherCalls: 1,
+    },
+    {
+      name: "blocks a non-allowlisted supplemental sender",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: ["alice"],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+    {
+      name: "delegates empty allowlists to the channel matcher",
+      isGroup: true,
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      matcherResult: false,
+      expected: false,
+      matcherCalls: 1,
+    },
+  ])("$name", ({ isGroup, groupPolicy, allowFrom, matcherResult, expected, matcherCalls }) => {
+    const isSenderAllowed = vi.fn(() => matcherResult);
+
+    expect(
+      resolveInboundSupplementalSenderAllowed({
+        isGroup,
+        groupPolicy,
+        allowFrom,
+        isSenderAllowed,
+      }),
+    ).toBe(expected);
+    expect(isSenderAllowed).toHaveBeenCalledTimes(matcherCalls);
+    if (matcherCalls > 0) {
+      expect(isSenderAllowed).toHaveBeenCalledWith(allowFrom);
+    }
+  });
+});
 
 describe("buildChannelInboundEventContext", () => {
   it("maps normalized inbound facts into a finalized message context", async () => {
@@ -82,7 +148,7 @@ describe("buildChannelInboundEventContext", () => {
       },
       access: {
         commands: {
-          authorizers: [{ configured: true, allowed: true }],
+          authorized: true,
         },
         mentions: {
           canDetectMention: true,
@@ -128,6 +194,8 @@ describe("buildChannelInboundEventContext", () => {
         groupSystemPrompt: "group prompt",
       },
     });
+
+    expect(ctx.InboundAccessAuthorized).toBe(true);
 
     const expectedFields = {
       Body: "[User One] hello",
@@ -216,17 +284,12 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.BodyForAgent).not.toContain("customSenderField");
   });
 
-  it("uses resolved command authorization instead of recomputing authorizers", async () => {
+  it("uses resolved command authorization", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         access: {
           commands: {
             authorized: false,
-            shouldBlockControlCommand: true,
-            reasonCode: "control_command_unauthorized",
-            allowTextCommands: true,
-            useAccessGroups: true,
-            authorizers: [{ configured: true, allowed: true }],
           },
         },
       }),
@@ -346,20 +409,6 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.To).toBe("test:room:room-1");
     expect(ctx.OriginatingTo).toBe("test:room:room-1:topic:topic-42");
     expect(ctx.MessageThreadId).toBe("topic-42");
-  });
-
-  it("keeps legacy command authorization fallback for authorizer arrays", async () => {
-    const ctx = buildChannelInboundEventContext(
-      createBaseContextParams({
-        access: {
-          commands: {
-            authorizers: [{ configured: true, allowed: true }],
-          },
-        },
-      }),
-    );
-
-    expect(ctx.CommandAuthorized).toBe(true);
   });
 
   it("derives command turns from normalized command facts", async () => {

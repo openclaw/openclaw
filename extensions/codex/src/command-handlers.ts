@@ -1,6 +1,7 @@
 // Codex plugin module implements command handlers behavior.
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
@@ -37,8 +38,17 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
+import {
+  parseCodexUserInputActionAnswer,
+  resolveCodexUserInputAction,
+} from "./app-server/user-input-actions.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
+import {
+  codexDiagnosticsFeedbackState,
+  type CodexDiagnosticsTarget,
+  type PendingCodexDiagnosticsConfirmation,
+} from "./command-diagnostics-state.js";
 import {
   buildHelp,
   formatAccount,
@@ -90,7 +100,7 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-export type CodexCommandDeps = {
+type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
   codexControlRequest: CodexControlRequestFn;
   listCodexAppServerModels: typeof listAllCodexAppServerModels;
@@ -171,6 +181,7 @@ type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
   hasOverrides: boolean;
+  persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
 
@@ -194,23 +205,6 @@ type ParsedDiagnosticsArgs =
   | { action: "cancel"; token: string }
   | { action: "usage" };
 
-type CodexDiagnosticsTarget = {
-  threadId: string;
-  identity: CodexAppServerBindingIdentity;
-  agentDir: string;
-  connectionScope?: "supervision";
-  appServerRuntimeFingerprint?: string;
-  pendingSupervisionBranch?: CodexAppServerThreadBinding["pendingSupervisionBranch"];
-  authProfileId?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-};
-
 type CodexDiagnosticsCandidate = Omit<
   CodexDiagnosticsTarget,
   | "threadId"
@@ -219,22 +213,6 @@ type CodexDiagnosticsCandidate = Omit<
   | "pendingSupervisionBranch"
   | "authProfileId"
 >;
-
-type PendingCodexDiagnosticsConfirmation = {
-  token: string;
-  targets: CodexDiagnosticsTarget[];
-  note?: string;
-  senderId: string;
-  channel: string;
-  accountId?: string;
-  channelId?: string;
-  messageThreadId?: string;
-  threadParentId?: string;
-  sessionKey?: string;
-  scopeKey: string;
-  privateRouted?: boolean;
-  createdAt: number;
-};
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
@@ -256,6 +234,7 @@ const CODEX_NATIVE_EXECUTION_SUBCOMMANDS = new Set([
   "permissions",
   "compact",
   "review",
+  "goal",
 ]);
 const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   ...CODEX_NATIVE_EXECUTION_SUBCOMMANDS,
@@ -264,17 +243,12 @@ const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   "stop",
 ]);
 
-const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
-const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
-const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
-const pendingCodexDiagnosticsConfirmationTokensByScope = new Map<string, string[]>();
-
-export function resetCodexDiagnosticsFeedbackStateForTests(): void {
-  lastCodexDiagnosticsUploadByThread.clear();
-  lastCodexDiagnosticsUploadByScope.clear();
-  pendingCodexDiagnosticsConfirmations.clear();
-  pendingCodexDiagnosticsConfirmationTokensByScope.clear();
-}
+const {
+  lastUploadByThread: lastCodexDiagnosticsUploadByThread,
+  lastUploadByScope: lastCodexDiagnosticsUploadByScope,
+  pendingConfirmations: pendingCodexDiagnosticsConfirmations,
+  pendingTokensByScope: pendingCodexDiagnosticsConfirmationTokensByScope,
+} = codexDiagnosticsFeedbackState;
 
 /**
  * No-arg `/codex` picker. Codex owns the command tree; channels render the
@@ -408,9 +382,28 @@ export async function handleCodexSubcommand(
   if (normalized === "help") {
     return { text: buildHelp() };
   }
+  if (normalized === "answer") {
+    if (rest.length !== 2) {
+      return { text: "Usage: /codex answer <request-token> <choice>" };
+    }
+    if (!canMutateCodexHost(ctx)) {
+      return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
+    }
+    const [token = "", encodedAnswer = ""] = rest;
+    const answer = parseCodexUserInputActionAnswer(encodedAnswer);
+    if (!answer) {
+      return { text: "Invalid Codex answer encoding." };
+    }
+    return {
+      text: resolveCodexUserInputAction(token, answer)
+        ? "Answered Codex."
+        : "That Codex question is no longer pending.",
+    };
+  }
   if (
     CODEX_NATIVE_CONTROL_SUBCOMMANDS.has(normalized) &&
     !returnsBeforeNativeCodexExecution(normalized, rest) &&
+    !isReadOnlyCodexGoalCommand(normalized, rest) &&
     !canMutateCodexHost(ctx)
   ) {
     return { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR };
@@ -433,24 +426,31 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex status" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
-      text: formatCodexStatus(await deps.readCodexStatusProbes(options.pluginConfig, ctx.config)),
+      text: formatCodexStatus(
+        await deps.readCodexStatusProbes(options.pluginConfig, ctx.config, agentDir),
+      ),
     };
   }
   if (normalized === "models") {
     if (rest.length > 0) {
       return { text: "Usage: /codex models" };
     }
+    const { agentDir } = resolveCodexConversationControlScope(ctx);
     return {
       text: formatModels(
         await deps.listCodexAppServerModels(
-          deps.requestOptions(options.pluginConfig, 100, ctx.config),
+          deps.requestOptions(options.pluginConfig, 100, ctx.config, agentDir),
         ),
       ),
     };
   }
   if (normalized === "threads") {
     return { text: await buildThreads(deps, ctx, options.pluginConfig, rest.join(" ")) };
+  }
+  if (normalized === "goal") {
+    return { text: await handleNativeGoal(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "sessions") {
     return { text: await buildCodexCliSessions(deps, rest) };
@@ -585,6 +585,7 @@ export async function handleCodexSubcommand(
         limits,
         await readCodexAccountAuthOverview({
           ctx,
+          agentDir: scope.agentDir,
           pluginConfig: options.pluginConfig,
           safeCodexControlRequest: deps.safeCodexControlRequest,
           account,
@@ -619,6 +620,9 @@ function resolveCodexNativeCommandSandboxBlock(
   subcommand: string,
   args: readonly string[],
 ): string | undefined {
+  if (isReadOnlyCodexGoalCommand(subcommand, args)) {
+    return undefined;
+  }
   if (!CODEX_NATIVE_EXECUTION_SUBCOMMANDS.has(subcommand)) {
     return undefined;
   }
@@ -640,6 +644,14 @@ function resolveCodexNativeCommandSandboxBlock(
     sessionId: ctx.sessionId,
     surface: `/${["codex", subcommand].join(" ")}`,
   });
+}
+
+function isReadOnlyCodexGoalCommand(subcommand: string, args: readonly string[]): boolean {
+  if (subcommand !== "goal" || args.length > 1) {
+    return false;
+  }
+  const action = (args[0] ?? "status").toLowerCase();
+  return action === "status" || action === "get";
 }
 
 function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly string[]): boolean {
@@ -702,11 +714,17 @@ async function handleComputerUseCommand(
       "Checks or installs the configured Codex Computer Use plugin through app-server.",
     ].join("\n");
   }
+  if (Object.keys(parsed.persistentIdentity).length > 0) {
+    return formatComputerUsePersistentIdentityMigration(parsed);
+  }
   if (parsed.action === "install" && !canMutateCodexHost(ctx)) {
     return "Only an owner or operator.admin gateway client can configure Codex Computer Use.";
   }
+  const { agentDir } = resolveCodexConversationControlScope(ctx);
   const params: CodexComputerUseSetupParams = {
     pluginConfig,
+    config: ctx.config,
+    agentDir,
     forceEnable: parsed.action === "install" || parsed.hasOverrides,
     ...(Object.keys(parsed.overrides).length > 0 ? { overrides: parsed.overrides } : {}),
   };
@@ -876,6 +894,107 @@ async function buildThreads(
     { config: ctx.config, ...scope },
   );
   return formatThreads(response);
+}
+
+async function handleNativeGoal(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  args: string[],
+): Promise<string> {
+  const action = (args[0] ?? "status").toLowerCase();
+  const objective = args.slice(1).join(" ").trim();
+  const target = await resolveControlTarget(ctx);
+  if (!target) {
+    return "Cannot manage the Codex goal because this command has no stable binding identity.";
+  }
+  const binding = await deps.bindingStore.read(target.identity);
+  if (!binding?.threadId) {
+    return "No Codex thread is attached to this OpenClaw session yet.";
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding.authProfileId,
+    pluginConfig,
+  });
+  const goalRequestOptions: CodexControlRequestOptions = {
+    agentDir: target.agentDir,
+    authProfileId: connection.clientAuthProfileId,
+    config: ctx.config,
+    ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
+  };
+  if (action === "status" || action === "get") {
+    if (args.length > 1) {
+      return "Usage: /codex goal [status]";
+    }
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.getThreadGoal,
+      { threadId: binding.threadId },
+      goalRequestOptions,
+    );
+    return formatNativeGoal(response);
+  }
+  if (action === "clear") {
+    if (args.length > 1) {
+      return "Usage: /codex goal clear";
+    }
+    const response = await deps.codexControlRequest(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.clearThreadGoal,
+      { threadId: binding.threadId },
+      goalRequestOptions,
+    );
+    return isJsonObject(response) && response.cleared === true
+      ? "Cleared the Codex goal."
+      : "No Codex goal was active.";
+  }
+  const requestedStatus =
+    action === "pause"
+      ? "paused"
+      : action === "resume"
+        ? "active"
+        : action === "block"
+          ? "blocked"
+          : action === "complete"
+            ? "complete"
+            : undefined;
+  const isObjectiveUpdate = action === "set";
+  if ((!requestedStatus && !isObjectiveUpdate) || (isObjectiveUpdate && !objective)) {
+    return "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]";
+  }
+  if (requestedStatus && args.length > 1) {
+    return `Usage: /codex goal ${action}`;
+  }
+  const response = await deps.codexControlRequest(
+    pluginConfig,
+    CODEX_CONTROL_METHODS.setThreadGoal,
+    {
+      threadId: binding.threadId,
+      ...(objective ? { objective } : {}),
+      // Upstream thread/goal/set creates or partially updates the native goal;
+      // omitted status and budget preserve Codex's canonical state.
+      ...(requestedStatus ? { status: requestedStatus } : {}),
+    },
+    goalRequestOptions,
+  );
+  return formatNativeGoal(response);
+}
+
+function formatNativeGoal(response: JsonValue | undefined): string {
+  const goal = isJsonObject(response) && isJsonObject(response.goal) ? response.goal : undefined;
+  if (!goal) {
+    return "No Codex goal is active.";
+  }
+  const objective = readString(goal, "objective") ?? "unknown";
+  const status = readString(goal, "status") ?? "unknown";
+  const tokensUsed = typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0;
+  const tokenBudget = typeof goal.tokenBudget === "number" ? goal.tokenBudget : undefined;
+  return [
+    `Codex goal: ${formatCodexDisplayText(objective)}`,
+    `- Status: ${formatCodexDisplayText(status)}`,
+    `- Tokens: ${tokensUsed}${tokenBudget === undefined ? "" : ` / ${tokenBudget}`}`,
+  ].join("\n");
 }
 
 async function buildCodexCliSessions(deps: CodexCommandDeps, args: string[]): Promise<string> {
@@ -1214,8 +1333,8 @@ async function resolveControlTarget(
 
 type CommandAppServerScope = Pick<
   CodexControlRequestOptions,
-  "agentDir" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
-> & { agentId: string };
+  "authProfileId" | "sessionId" | "sessionKey" | "startOptions"
+> & { agentId: string; agentDir: string };
 
 async function resolveCommandAppServerScope(
   deps: CodexCommandDeps,
@@ -2325,7 +2444,7 @@ function splitArgs(value: string | undefined): string[] {
 function parseBindArgs(args: string[]): ParsedBindArgs {
   const parsed: ParsedBindArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex bind argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2377,7 +2496,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
   const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
   const filter: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex sessions argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2417,7 +2536,7 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
 function parseResumeArgs(args: string[]): ParsedResumeArgs {
   const parsed: ParsedResumeArgs = {};
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], "current Codex resume argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
@@ -2458,6 +2577,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     action: "status",
     overrides: {},
     hasOverrides: false,
+    persistentIdentity: {},
   };
   let sawAction = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -2505,23 +2625,14 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       index += 1;
       continue;
     }
-    if (arg === "--plugin") {
+    if (arg === "--plugin" || arg === "--server" || arg === "--mcp-server") {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.pluginName !== undefined) {
+      const configKey = arg === "--plugin" ? "pluginName" : "mcpServerName";
+      if (!value || parsed.persistentIdentity[configKey] !== undefined) {
         parsed.help = true;
         continue;
       }
-      parsed.overrides.pluginName = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--server" || arg === "--mcp-server") {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.overrides.mcpServerName !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.overrides.mcpServerName = value;
+      parsed.persistentIdentity[configKey] = value.trim();
       index += 1;
       continue;
     }
@@ -2530,6 +2641,34 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   parsed.overrides = normalizeComputerUseStringOverrides(parsed.overrides);
   parsed.hasOverrides = Object.values(parsed.overrides).some(Boolean);
   return parsed;
+}
+
+function formatComputerUsePersistentIdentityMigration(parsed: ParsedComputerUseArgs): string {
+  const configPrefix = "plugins.entries.codex.config.computerUse";
+  const settings = [
+    parsed.persistentIdentity.pluginName
+      ? `${configPrefix}.pluginName = ${JSON.stringify(parsed.persistentIdentity.pluginName)}`
+      : undefined,
+    parsed.persistentIdentity.mcpServerName
+      ? `${configPrefix}.mcpServerName = ${JSON.stringify(parsed.persistentIdentity.mcpServerName)}`
+      : undefined,
+  ].filter((setting): setting is string => Boolean(setting));
+  const retryArgs = [
+    `/codex computer-use ${parsed.action}`,
+    parsed.overrides.marketplaceSource
+      ? `--source ${JSON.stringify(parsed.overrides.marketplaceSource)}`
+      : undefined,
+    parsed.overrides.marketplacePath
+      ? `--marketplace-path ${JSON.stringify(parsed.overrides.marketplacePath)}`
+      : undefined,
+    parsed.overrides.marketplaceName
+      ? `--marketplace ${JSON.stringify(parsed.overrides.marketplaceName)}`
+      : undefined,
+  ].filter((arg): arg is string => Boolean(arg));
+  return [
+    "One-off Computer Use plugin/server overrides are no longer supported.",
+    `Set ${settings.join(" and ")} persistently, then rerun ${retryArgs.join(" ")}.`,
+  ].join(" ");
 }
 
 function readRequiredOptionValue(args: string[], index: number): string | undefined {
@@ -2557,13 +2696,6 @@ function normalizeComputerUseStringOverrides(
   if (marketplaceName) {
     normalized.marketplaceName = marketplaceName;
   }
-  const pluginName = normalizeOptionalString(overrides.pluginName);
-  if (pluginName) {
-    normalized.pluginName = pluginName;
-  }
-  const mcpServerName = normalizeOptionalString(overrides.mcpServerName);
-  if (mcpServerName) {
-    normalized.mcpServerName = mcpServerName;
-  }
   return normalized;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

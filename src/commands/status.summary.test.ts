@@ -1,5 +1,6 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
@@ -204,6 +205,7 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    setActiveDegradedSecretOwners([]);
     statusSummaryMocks.taskRegistrySummary = {
       total: 0,
       active: 0,
@@ -272,6 +274,32 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("reports degraded SecretRef owners without exposing ref identifiers", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        refKeys: ["env:default:PRIVATE_REF_ID"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    const summary = await getStatusSummary();
+
+    expect(summary.degradedSecretOwners).toEqual([
+      {
+        ownerKind: "provider",
+        ownerId: "openai",
+        state: "unavailable",
+        paths: ["models.providers.openai.apiKey"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    expect(JSON.stringify(summary.degradedSecretOwners)).not.toContain("PRIVATE_REF_ID");
   });
 
   it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {
