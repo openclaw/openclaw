@@ -128,7 +128,14 @@ function compactSchemaUnion(
     return UNKNOWN_HINT;
   }
   const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
-  if (!Array.isArray(variants) || variants.length === 0) {
+  // Bound before any per-variant scan: neither the eight-value literal cap nor
+  // the four-variant structural cap can render a larger union, so oversized
+  // unions must be rejected in O(1) instead of O(variants).
+  if (
+    !Array.isArray(variants) ||
+    variants.length === 0 ||
+    variants.length > MAX_COMPACT_ENUM_VALUES
+  ) {
     return UNKNOWN_HINT;
   }
   // A union plus a base structural shape is an intersection. This compact
