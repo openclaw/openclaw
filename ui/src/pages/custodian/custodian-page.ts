@@ -1,0 +1,367 @@
+import { consume } from "@lit/context";
+import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
+import { html, nothing, type PropertyValues } from "lit";
+import { state } from "lit/decorators.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import "../../components/option-card.ts";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/custodian.css";
+import { parseCustodianReply, type CustodianStructuredQuestion } from "./structured-question.ts";
+
+const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
+
+type CustodianMessage = {
+  id: number;
+  role: "assistant" | "user";
+  text: string;
+  question: CustodianStructuredQuestion | null;
+};
+
+function createSessionId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return `control-ui-onboarding-${crypto.randomUUID()}`;
+  }
+  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
+    .map((value) => value.toString(16).padStart(8, "0"))
+    .join("");
+  return `control-ui-onboarding-${suffix}`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : t("custodian.requestFailed");
+}
+
+export class CustodianPage extends OpenClawLightDomElement {
+  @consume({ context: applicationContext, subscribe: true })
+  private context!: ApplicationContext;
+
+  @state() private messages: CustodianMessage[] = [];
+  @state() private input = "";
+  @state() private sending = false;
+  @state() private sensitive = false;
+  @state() private error: string | null = null;
+  @state() private dismissedQuestions = new Set<string>();
+  @state() private answeredQuestions = new Set<string>();
+  @state() private activeClient: GatewayBrowserClient | null = null;
+  @state() private chatAvailable = false;
+
+  private sessionId = createSessionId();
+  private requestEpoch = 0;
+  private nextMessageId = 1;
+  private retryParams: SystemAgentChatParams | null = null;
+  private sessionGatewayUrl: string | null = null;
+  private sessionStarted = false;
+  private readonly subscriptions = new SubscriptionsController(this).watch(
+    () => this.context?.gateway,
+    (gateway, notify) => gateway.subscribe(notify),
+  );
+
+  override disconnectedCallback(): void {
+    this.requestEpoch += 1;
+    this.subscriptions.clear();
+    super.disconnectedCallback();
+  }
+
+  override updated(changedProperties: PropertyValues): void {
+    this.synchronizeClient();
+    if (changedProperties.has("messages")) {
+      const lastMessage = this.querySelector(".custodian__messages")?.lastElementChild;
+      if (lastMessage instanceof HTMLElement) {
+        lastMessage.scrollIntoView?.({ block: "nearest" });
+      }
+    }
+  }
+
+  private synchronizeClient(): void {
+    const snapshot = this.context.gateway.snapshot;
+    const client = snapshot.connected ? snapshot.client : null;
+    const gatewayUrl = this.context.gateway.connection.gatewayUrl;
+    const gatewayChanged = this.sessionGatewayUrl !== null && this.sessionGatewayUrl !== gatewayUrl;
+    if (client === this.activeClient && !gatewayChanged) {
+      return;
+    }
+    const requestWasPending = this.sending && this.retryParams !== null;
+    this.activeClient = client;
+    this.requestEpoch += 1;
+    this.sending = false;
+    this.chatAvailable = false;
+    if (gatewayChanged) {
+      this.sessionGatewayUrl = gatewayUrl;
+      this.sessionStarted = false;
+      this.clearConversation();
+    } else if (requestWasPending) {
+      this.error = t("custodian.connectionChanged");
+    }
+    if (!client) {
+      return;
+    }
+    if (isGatewayMethodAdvertised(snapshot, "openclaw.chat") !== true) {
+      this.error = t("custodian.unsupportedGateway");
+      return;
+    }
+    this.chatAvailable = true;
+    if (this.sessionStarted && this.sessionGatewayUrl === gatewayUrl) {
+      if (!this.retryParams) {
+        this.error = null;
+      }
+      return;
+    }
+    this.sessionId = createSessionId();
+    this.sessionGatewayUrl = gatewayUrl;
+    this.sessionStarted = true;
+    this.clearConversation();
+    void this.requestReply(client, { sessionId: this.sessionId, welcomeVariant: "onboarding" });
+  }
+
+  private clearConversation(): void {
+    this.messages = [];
+    this.dismissedQuestions = new Set();
+    this.answeredQuestions = new Set();
+    this.retryParams = null;
+    this.error = null;
+    this.input = "";
+    this.sensitive = false;
+  }
+
+  private appendAssistant(reply: string): void {
+    const parsed = parseCustodianReply(reply);
+    this.messages = [
+      ...this.messages,
+      {
+        id: this.nextMessageId++,
+        role: "assistant",
+        text: parsed.text,
+        question: parsed.question,
+      },
+    ];
+  }
+
+  private async requestReply(
+    client: GatewayBrowserClient,
+    params: SystemAgentChatParams,
+  ): Promise<void> {
+    const epoch = ++this.requestEpoch;
+    this.sending = true;
+    this.error = null;
+    this.retryParams = params;
+    try {
+      const result = await client.request<SystemAgentChatResult>("openclaw.chat", params, {
+        timeoutMs: SYSTEM_AGENT_CHAT_TIMEOUT_MS,
+      });
+      if (epoch !== this.requestEpoch || client !== this.activeClient) {
+        return;
+      }
+      this.sessionId = result.sessionId;
+      this.sensitive = result.sensitive === true;
+      this.retryParams = null;
+      this.appendAssistant(result.reply);
+      if (result.action === "open-agent" || result.action === "exit") {
+        this.exitSetup();
+      }
+    } catch (error) {
+      if (epoch === this.requestEpoch && client === this.activeClient) {
+        this.error = errorMessage(error);
+      }
+    } finally {
+      if (epoch === this.requestEpoch) {
+        this.sending = false;
+      }
+    }
+  }
+
+  private send(text = this.input): void {
+    const message = text.trim();
+    const client = this.activeClient;
+    if (!message || !client || !this.chatAvailable || this.sending) {
+      return;
+    }
+    const displayText = this.sensitive ? t("custodian.sensitiveReply") : message;
+    this.retireQuestions();
+    this.messages = [
+      ...this.messages,
+      { id: this.nextMessageId++, role: "user", text: displayText, question: null },
+    ];
+    this.input = "";
+    void this.requestReply(client, {
+      sessionId: this.sessionId,
+      welcomeVariant: "onboarding",
+      message,
+    });
+  }
+
+  private dismissQuestion(message: CustodianMessage): void {
+    const questionId = message.question?.id;
+    if (!questionId) {
+      return;
+    }
+    this.dismissedQuestions = new Set(this.dismissedQuestions).add(`${message.id}:${questionId}`);
+    this.send(t("optionCard.skip"));
+  }
+
+  private answerQuestion(message: CustodianMessage, label: string): void {
+    const questionId = message.question?.id;
+    if (!questionId) {
+      return;
+    }
+    this.answeredQuestions = new Set(this.answeredQuestions).add(`${message.id}:${questionId}`);
+    this.send(label);
+  }
+
+  private retireQuestions(): void {
+    const answered = new Set(this.answeredQuestions);
+    for (const message of this.messages) {
+      if (message.question) {
+        answered.add(`${message.id}:${message.question.id}`);
+      }
+    }
+    this.answeredQuestions = answered;
+  }
+
+  private exitSetup(): void {
+    this.context.navigate("chat");
+  }
+
+  private retry(): void {
+    const client = this.activeClient;
+    const params = this.retryParams;
+    if (client && params && this.chatAvailable && !this.sending) {
+      void this.requestReply(client, params);
+    }
+  }
+
+  private handleComposerKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    this.send();
+  }
+
+  override render() {
+    return html`
+      <section class="custodian">
+        <header class="custodian__header">
+          <div class="custodian__identity">
+            <div class="custodian__mark" aria-hidden="true">OC</div>
+            <div>
+              <h1>${t("custodian.title")}</h1>
+              <p>${t("custodian.subtitle")}</p>
+            </div>
+          </div>
+          <button class="btn btn--ghost" type="button" @click=${() => this.exitSetup()}>
+            ${t("custodian.exitSetup")}
+          </button>
+        </header>
+
+        <div class="custodian__messages" aria-live="polite">
+          ${this.messages.map((message) => {
+            const questionKey = message.question ? `${message.id}:${message.question.id}` : "";
+            const showQuestion =
+              message.question !== null && !this.dismissedQuestions.has(questionKey);
+            return html`
+              <article class=${`custodian__message custodian__message--${message.role}`}>
+                ${message.text
+                  ? html`<div class="custodian__message-text chat-text">
+                      ${message.role === "assistant"
+                        ? unsafeHTML(toSanitizedMarkdownHtml(message.text))
+                        : message.text}
+                    </div>`
+                  : nothing}
+                ${showQuestion
+                  ? html`<openclaw-option-card
+                      .props=${{
+                        header: message.question!.header,
+                        question: message.question!.question,
+                        options: message.question!.options.map((option) => ({
+                          value: option.label,
+                          label: option.label,
+                          description: option.description,
+                          recommended: option.recommended,
+                        })),
+                        disabled:
+                          this.sending ||
+                          !this.chatAvailable ||
+                          this.answeredQuestions.has(questionKey),
+                        onSelect: (label: string) => this.answerQuestion(message, label),
+                        onSkip: () => this.dismissQuestion(message),
+                      }}
+                    ></openclaw-option-card>`
+                  : nothing}
+              </article>
+            `;
+          })}
+          ${this.sending
+            ? html`<div class="custodian__thinking" role="status">
+                <span></span><span></span><span></span>
+                <span class="sr-only">${t("custodian.thinking")}</span>
+              </div>`
+            : nothing}
+          ${this.error
+            ? html`<div class="custodian__error" role="alert">
+                <span>${this.error}</span>
+                ${this.activeClient && this.chatAvailable && this.retryParams
+                  ? html`<button class="btn btn--sm" type="button" @click=${() => this.retry()}>
+                      ${t("common.retry")}
+                    </button>`
+                  : nothing}
+              </div>`
+            : nothing}
+        </div>
+
+        <div class="custodian__composer">
+          ${this.sensitive
+            ? html`<input
+                type="password"
+                .value=${this.input}
+                autocomplete="off"
+                placeholder=${t("custodian.sensitivePlaceholder")}
+                aria-label=${t("custodian.sensitivePlaceholder")}
+                ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
+                @input=${(event: Event) => (this.input = (event.target as HTMLInputElement).value)}
+                @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+              />`
+            : html`<textarea
+                rows="1"
+                .value=${this.input}
+                autocomplete="on"
+                placeholder=${t("custodian.placeholder")}
+                aria-label=${t("custodian.placeholder")}
+                ?disabled=${!this.activeClient || !this.chatAvailable || this.sending}
+                @input=${(event: Event) =>
+                  (this.input = (event.target as HTMLTextAreaElement).value)}
+                @keydown=${(event: KeyboardEvent) => this.handleComposerKeydown(event)}
+              ></textarea>`}
+          <button
+            class="btn primary"
+            type="button"
+            ?disabled=${!this.input.trim() ||
+            !this.activeClient ||
+            !this.chatAvailable ||
+            this.sending}
+            @click=${() => this.send()}
+          >
+            ${t("custodian.send")}
+          </button>
+        </div>
+      </section>
+    `;
+  }
+}
+
+if (!customElements.get("openclaw-custodian-page")) {
+  customElements.define("openclaw-custodian-page", CustodianPage);
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-custodian-page": CustodianPage;
+  }
+}
