@@ -2,8 +2,11 @@
 
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQuestionCard } from "./chat-question-card.ts";
 import "./chat-question-card.ts";
+
+type ChatQuestionCardElement = HTMLElement & {
+  updateComplete: Promise<unknown>;
+};
 
 describe("native Codex question card", () => {
   let container: HTMLDivElement;
@@ -41,7 +44,7 @@ describe("native Codex question card", () => {
       ></openclaw-chat-question>`,
       container,
     );
-    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCardElement;
     await card.updateComplete;
     const options = container.querySelectorAll<HTMLInputElement>('input[type="radio"]');
     options[1]!.click();
@@ -77,7 +80,7 @@ describe("native Codex question card", () => {
       ></openclaw-chat-question>`,
       container,
     );
-    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCardElement;
     await card.updateComplete;
     expect(container.querySelector<HTMLInputElement>(".chat-question__other")?.type).toBe("text");
   });
@@ -108,7 +111,7 @@ describe("native Codex question card", () => {
       ></openclaw-chat-question>`,
       container,
     );
-    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCardElement;
     await card.updateComplete;
     container.querySelector<HTMLInputElement>('input[type="radio"]')!.click();
     await card.updateComplete;
@@ -139,7 +142,7 @@ describe("native Codex question card", () => {
       html`<openclaw-chat-question .props=${props("first-token")}></openclaw-chat-question>`,
       container,
     );
-    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCardElement;
     await card.updateComplete;
     const input = container.querySelector<HTMLInputElement>(".chat-question__other")!;
     input.value = "stale answer";
@@ -178,7 +181,7 @@ describe("native Codex question card", () => {
       ></openclaw-chat-question>`,
       container,
     );
-    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCard;
+    const card = container.querySelector("openclaw-chat-question") as ChatQuestionCardElement;
     await card.updateComplete;
     const input = container.querySelector<HTMLInputElement>(".chat-question__other")!;
     input.value = "No";

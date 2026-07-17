@@ -256,7 +256,7 @@ export type CodexThreadResumeResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadGoalStatus =
+type CodexThreadGoalStatus =
   | "active"
   | "paused"
   | "blocked"
@@ -264,7 +264,7 @@ export type CodexThreadGoalStatus =
   | "budgetLimited"
   | "complete";
 
-export type CodexThreadGoal = {
+type CodexThreadGoal = {
   threadId: string;
   objective: string;
   status: CodexThreadGoalStatus;

@@ -127,5 +127,3 @@ class ChatQuestionCard extends LitElement {
 if (!customElements.get("openclaw-chat-question")) {
   customElements.define("openclaw-chat-question", ChatQuestionCard);
 }
-
-export type { ChatQuestionCard, QuestionCardProps };
