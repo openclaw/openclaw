@@ -143,6 +143,7 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  let mergedRuntime: PluginRuntime | undefined;
   const runtimeContexts = createChannelRuntimeContextRegistry();
   const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
     payloads: [],
@@ -255,18 +256,22 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   ) as unknown as PluginRuntime["channel"]["inbound"]["runPreparedReply"];
   const dispatchChannelTurnPlanMock = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) =>
-      await dispatchAssembledChannelTurnMock({
+    async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0]) => {
+      if (!mergedRuntime) {
+        throw new Error("plugin runtime mock dispatch used before initialization");
+      }
+      return await dispatchAssembledChannelTurnMock({
         ...params,
         agentId: params.route.agentId,
         routeSessionKey: params.route.sessionKey,
-        storePath: sessionRuntime.resolveStorePath(params.cfg.session?.store, {
+        storePath: mergedRuntime.channel.session.resolveStorePath(params.cfg.session?.store, {
           agentId: params.route.agentId,
         }),
-        recordInboundSession: sessionRuntime.recordInboundSession,
+        recordInboundSession: mergedRuntime.channel.session.recordInboundSession,
         dispatchReplyWithBufferedBlockDispatcher:
-          base.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-      }),
+          mergedRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      });
+    },
   ) as unknown as PluginRuntime["channel"]["inbound"]["dispatch"];
   const runChannelTurnMock = vi.fn(
     async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
@@ -894,6 +899,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  return mergeDeep(base, overrides);
+  mergedRuntime = mergeDeep(base, overrides);
+  return mergedRuntime;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
