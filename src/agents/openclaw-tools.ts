@@ -61,6 +61,10 @@ import {
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import {
+  createImmichSearchByFaceTool,
+  createImmichSearchSmartTool,
+} from "./tools/immich-search.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -78,6 +82,10 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
+import {
+  createTelegramSendDocumentTool,
+  createTelegramSendPhotoTool,
+} from "./tools/telegram-send-file.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -374,6 +382,22 @@ export function createOpenClawTools(
     lateBindRuntimeConfig: true,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
+  const telegramSendPhotoTool = createTelegramSendPhotoTool({
+    config: options?.config,
+    currentChannelId: options?.currentChannelId,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+  });
+  const telegramSendDocumentTool = createTelegramSendDocumentTool({
+    config: options?.config,
+    currentChannelId: options?.currentChannelId,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+  });
+  options?.recordToolPrepStage?.("openclaw-tools:telegram-send-file-tools");
+  const immichSearchByFaceTool = createImmichSearchByFaceTool({ config: options?.config });
+  const immichSearchSmartTool = createImmichSearchSmartTool({ config: options?.config });
+  options?.recordToolPrepStage?.("openclaw-tools:immich-search-tools");
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -660,6 +684,8 @@ export function createOpenClawTools(
       },
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
+    ...collectPresentOpenClawTools([telegramSendPhotoTool, telegramSendDocumentTool]),
+    ...collectPresentOpenClawTools([immichSearchByFaceTool, immichSearchSmartTool]),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;

@@ -1120,6 +1120,33 @@ export const ToolsSchema = z
       .optional(),
     exec: ToolExecSchema,
     fs: ToolFsSchema,
+    telegram: z
+      .object({
+        sendFile: z
+          .object({
+            enabled: z.boolean().optional(),
+            allowedPaths: z.array(z.string()).optional(),
+            photoMaxBytes: z.number().optional(),
+            documentMaxBytes: z.number().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    immich: z
+      .object({
+        search: z
+          .object({
+            enabled: z.boolean().optional(),
+            secretsFile: z.string().optional(),
+            timeoutMs: z.number().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     subagents: z
       .object({
         tools: ToolPolicySchema,

@@ -719,6 +719,41 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Telegram channel-specific tool config. */
+  telegram?: {
+    /**
+     * Owner-only tools for sending photos / documents from server-local paths
+     * to the current Telegram conversation.
+     */
+    sendFile?: {
+      /** Enable telegram_send_photo + telegram_send_document tools (default: false). */
+      enabled?: boolean;
+      /**
+       * Absolute path prefixes the tools are allowed to read from
+       * (e.g. ["/mnt/synology/", "/mnt/qnap/"]). Required if enabled.
+       */
+      allowedPaths?: string[];
+      /** Max bytes for sendPhoto (default: 10 MB; Telegram Bot API photo limit). */
+      photoMaxBytes?: number;
+      /** Max bytes for sendDocument (default: 50 MB; Telegram Bot API document limit). */
+      documentMaxBytes?: number;
+    };
+  };
+  /** Immich photo-management integration. */
+  immich?: {
+    search?: {
+      /** Enable immich_search_by_face + immich_search_smart tools (default: false). */
+      enabled?: boolean;
+      /**
+       * Path to an env file containing IMMICH_API_KEY (required) and
+       * IMMICH_BASE_URL (optional, default http://127.0.0.1:2283). chmod 600.
+       * Default: ~/.openclaw/secrets/immich.env
+       */
+      secretsFile?: string;
+      /** Per-request HTTP timeout in ms (default: 10000). */
+      timeoutMs?: number;
+    };
+  };
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
