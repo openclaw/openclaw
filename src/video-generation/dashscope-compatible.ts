@@ -377,10 +377,21 @@ export async function downloadDashscopeGeneratedVideos(params: {
       provider: params.providerLabel,
       stage: "download",
       operation: async () => {
+        const downloadTimeoutMs = resolveDashscopeVideoDownloadTimeoutMs(
+          params.timeoutMs,
+          params.defaultTimeoutMs,
+        );
+        // Reject a non-positive remaining budget before starting fetch so an
+        // already-exhausted operation does not initiate network I/O.
+        if (downloadTimeoutMs <= 0) {
+          throw new Error(
+            `${params.providerLabel} generated video download stalled: remaining budget exhausted`,
+          );
+        }
         const guarded = await fetchWithTimeoutGuarded(
           url,
           { method: "GET" },
-          resolveDashscopeVideoDownloadTimeoutMs(params.timeoutMs, params.defaultTimeoutMs),
+          downloadTimeoutMs,
           params.fetchFn,
           {
             ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
@@ -407,13 +418,6 @@ export async function downloadDashscopeGeneratedVideos(params: {
     let buffer: Buffer;
     let mimeType: string;
     try {
-      if (downloadTimeoutMs <= 0) {
-        // Exhausted remaining budget: fail closed instead of reading with no chunk timeout
-        // (readResponseWithLimit skips chunkTimeoutMs when it is 0/falsy).
-        throw new Error(
-          `${params.providerLabel} generated video download stalled: remaining budget exhausted`,
-        );
-      }
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>

@@ -77,7 +77,7 @@ describe("downloadDashscopeGeneratedVideos", () => {
     expect(video?.mimeType).toBe("video/mp4");
   });
 
-  it("fails closed when a function-valued remaining budget is exhausted", async () => {
+  it("fails closed before fetch when a function-valued remaining budget is exhausted", async () => {
     const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
     const startedAt = Date.now();
 
@@ -86,7 +86,8 @@ describe("downloadDashscopeGeneratedVideos", () => {
         providerLabel: "Alibaba Wan",
         urls: ["https://example.com/out.mp4"],
         // Function-valued timeout returns 0: header fetch consumed the entire
-        // deadline. Must fail closed, not reset to the full default timeout.
+        // deadline. Must fail closed before any network I/O, not reset to the
+        // full default timeout.
         timeoutMs: () => 0,
         fetchFn: fetchFn as unknown as typeof fetch,
         maxBytes: 10 * 1024 * 1024,
@@ -96,7 +97,8 @@ describe("downloadDashscopeGeneratedVideos", () => {
     const elapsedMs = Date.now() - startedAt;
     // Should reject quickly (0ms budget), not wait for the 60s default.
     expect(elapsedMs).toBeLessThan(2_000);
-    expect(fetchFn).toHaveBeenCalledTimes(1);
+    // Exhausted deadline is checked before fetch — no network I/O is initiated.
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });
 
