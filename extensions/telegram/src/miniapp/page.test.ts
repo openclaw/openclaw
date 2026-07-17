@@ -15,4 +15,11 @@ describe("renderTelegramMiniAppPage", () => {
 
     expect(html).toContain('nonce="&amp;&lt;&gt;&quot;&#39;"');
   });
+
+  it("cancels the response body on auth failure before throwing", () => {
+    const html = renderTelegramMiniAppPage({ accountId: "ops", scriptNonce: "nonce" });
+
+    expect(html).toContain("await response.body?.cancel()");
+    expect(html).toContain(".catch(() => undefined)");
+  });
 });

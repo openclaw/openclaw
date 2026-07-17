@@ -59,6 +59,7 @@ export function renderTelegramMiniAppPage(params: {
         signal: authController.signal
       }).then(async (response) => {
         if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
           throw new Error("auth failed");
         }
         return await response.json();
