@@ -19,6 +19,8 @@ import {
   isChromeReachable,
   launchOpenClawChrome,
   ManagedChromeCleanupError,
+  readCurrentHostSingletonPid,
+  resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -465,6 +467,14 @@ export function createProfileAvailability({
           (await isReachable(PROFILE_ATTACH_RETRY_TIMEOUT_MS, { signal }))
         ) {
           resetManagedLaunchFailure(runtime);
+          // The port is reachable but we have no tracked process handle.
+          // Discover the Chrome PID so `browser stop` can terminate it.
+          // See issue #109678.
+          const userDataDir = resolveOpenClawUserDataDir(profile.name);
+          const pid = readCurrentHostSingletonPid(userDataDir);
+          if (pid) {
+            runtime.untrackedPid = pid;
+          }
           return;
         }
       }
@@ -508,6 +518,16 @@ export function createProfileAvailability({
     // Port is reachable - check if we own it.
     if (await isReachable(undefined, { signal })) {
       resetManagedLaunchFailure(runtime);
+      // The port is reachable but we may not have a tracked process handle.
+      // Discover the Chrome PID so `browser stop` can terminate it.
+      // See issue #109678.
+      if (!attachOnly && !remoteCdp && profile.cdpIsLoopback && !runtime.running) {
+        const userDataDir = resolveOpenClawUserDataDir(profile.name);
+        const pid = readCurrentHostSingletonPid(userDataDir);
+        if (pid) {
+          runtime.untrackedPid = pid;
+        }
+      }
       return;
     }
 

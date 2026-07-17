@@ -166,7 +166,7 @@ function createChromeLaunchStderrDiagnostics(maxBytes: number) {
   };
 }
 
-function processExists(pid: number): boolean {
+export function processExists(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
   }
@@ -474,7 +474,10 @@ function isPortInUseError(err: unknown): boolean {
   );
 }
 
-function readCurrentHostSingletonPid(userDataDir: string, hostname = os.hostname()): number | null {
+export function readCurrentHostSingletonPid(
+  userDataDir: string,
+  hostname = os.hostname(),
+): number | null {
   const lock = readSingletonLockTarget(userDataDir);
   if (!lock || lock.hostname !== hostname || !processExists(lock.pid)) {
     return null;
@@ -569,7 +572,7 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
   return true;
 }
 
-async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+export async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!processExists(pid)) {

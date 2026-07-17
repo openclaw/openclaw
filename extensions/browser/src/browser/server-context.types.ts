@@ -20,6 +20,14 @@ export type BrowserTabTargetOptions = BrowserOperationOptions & {
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /**
+   * PID of a managed Chrome that was discovered already running on the
+   * profile's CDP port but was not launched by the current gateway session.
+   * Set when `ensureBrowserAvailableOnce` finds the port reachable without
+   * a tracked process handle. Cleared by `cleanupProfileResources` so
+   * `browser stop` can terminate the orphaned Chrome.
+   */
+  untrackedPid?: number | null;
   /** @deprecated Lifecycle starts are owned by the profile actor. */
   ensureBrowserAvailable?: { key: string; promise: Promise<void> } | null;
   managedLaunchFailure?: {

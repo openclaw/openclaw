@@ -6,9 +6,10 @@
  * transition can still abort and drain all previously admitted work.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { CHROME_STOP_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+import { processExists, stopOpenClawChrome, waitForPidExit } from "./chrome.js";
 import type { RunningChrome } from "./chrome.js";
-import { stopOpenClawChrome } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
@@ -407,6 +408,26 @@ async function cleanupProfileResources(params: {
       stopped = true;
     } catch (err) {
       firstError ??= toLifecycleError(err, "Managed browser cleanup failed.");
+    }
+  }
+
+  // Clean up an untracked Chrome PID discovered by `ensureBrowserAvailableOnce`
+  // when the browser was already running on the CDP port but not launched by
+  // the current gateway session. See issue #109678.
+  if (runtime.untrackedPid) {
+    const pid = runtime.untrackedPid;
+    runtime.untrackedPid = null;
+    try {
+      if (processExists(pid)) {
+        process.kill(pid, "SIGTERM");
+        const exited = await waitForPidExit(pid, CHROME_STOP_TIMEOUT_MS);
+        if (!exited) {
+          process.kill(pid, "SIGKILL");
+        }
+        stopped = true;
+      }
+    } catch (err) {
+      firstError ??= toLifecycleError(err, "Untracked browser cleanup failed.");
     }
   }
 
