@@ -272,7 +272,13 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     const boundedStream = createBoundedElevenLabsAudioStream(response.body);
     let releasePromise: Promise<void> | undefined;
     const releaseAll = () => {
-      releasePromise ??= boundedStream.release().finally(release);
+      releasePromise ??= (async () => {
+        try {
+          await boundedStream.release();
+        } finally {
+          await release();
+        }
+      })();
       return releasePromise;
     };
     handedOff = true;
