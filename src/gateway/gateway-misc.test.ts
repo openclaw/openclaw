@@ -6,6 +6,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   onDiagnosticEvent,
@@ -24,6 +28,10 @@ import {
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import {
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { handleNodeInvokeResult } from "./server-methods/nodes.handlers.invoke-result.js";
@@ -410,6 +418,41 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("tick", { ts: 1 }, new Set([worker.connId]));
 
     expect(workerSocket.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers scoped client events only for gateway-owned session subscriptions", () => {
+    const legacySocket = makeRecordingSocket();
+    const firstSocket = makeRecordingSocket();
+    const secondSocket = makeRecordingSocket();
+    const legacy = makeOperatorWsClient("legacy", legacySocket, ["operator.read"]);
+    const first = makeOperatorWsClient("first", firstSocket, ["operator.read"]);
+    const second = makeOperatorWsClient("second", secondSocket, ["operator.read"]);
+    first.connect.caps = ["session-scoped-events"];
+    second.connect.caps = [];
+    second.connect.client = {
+      id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+      version: "test",
+      platform: "chrome",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const clients = new Set([legacy, first, second]);
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe(first.connId, "session-a");
+    sessionMessageSubscribers.subscribe(second.connId, "session-b");
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers,
+    });
+
+    broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a"] });
+    broadcast("agent", { stream: "lifecycle" });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([second.connId]), {
+      sessionKeys: ["session-a"],
+    });
+
+    expect(sentEvents(legacySocket)).toEqual(["chat", "agent"]);
+    expect(sentEvents(firstSocket)).toEqual(["chat"]);
+    expect(sentEvents(secondSocket)).toEqual([]);
   });
 
   it("filters approval and pairing events by scope", () => {
@@ -827,7 +870,11 @@ describe("node subscription manager", () => {
     };
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      const runtime = createGatewayNodeSessionRuntime({ broadcast: vi.fn() });
+      const runtime = createGatewayNodeSessionRuntime({
+        broadcast: vi.fn(),
+        sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+      });
       runtime.nodeRegistry.register(
         makeGatewayWsClient("conn-node-a", socket, {
           role: "node",

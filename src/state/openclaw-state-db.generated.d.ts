@@ -455,6 +455,7 @@ export interface DevicePairingPaired {
   approved_at_ms: number;
   approved_scopes_json: string | null;
   approved_via: string | null;
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   created_at_ms: number;
@@ -476,6 +477,7 @@ export interface DevicePairingPaired {
 }
 
 export interface DevicePairingPending {
+  browser_origin: string | null;
   client_id: string | null;
   client_mode: string | null;
   device_family: string | null;
