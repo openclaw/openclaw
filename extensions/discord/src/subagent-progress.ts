@@ -18,20 +18,23 @@ import {
   listProgressStateForKey,
   logFailure,
   lookupProgressRun,
+  markRunTerminal,
   markProgressRunForCleanup,
   persistedProgressRunFromTracker,
+  persistedTerminalOutcome,
   persistProgressRun,
   resetDiscordSubagentProgressStateForTest,
   runQueued,
+  terminalOutcome,
   type PersistedProgressRun,
   type PersistProgressResult,
   type ProgressApi,
   type ProgressTracker,
+  type SubagentProgressOutcome,
 } from "./subagent-progress-state.js";
 
 const TYPING_INTERVAL_MS = 8_500;
 const TYPING_TTL_MS = 60 * 60_000;
-const TERMINAL_TOMBSTONE_TTL_MS = 60 * 60_000;
 const TERMINAL_LOOKUP_RETRY_MS = 1_000;
 const TERMINAL_RETRY_MAX_DELAY_MS = 60 * 60_000;
 const TERMINAL_RETRY_MAX_ATTEMPTS = 12;
@@ -46,7 +49,7 @@ type SubagentProgressEvent =
   | {
       phase: "ended";
       runId: string;
-      outcome: "ok" | "error" | "timeout" | "killed" | "unknown";
+      outcome: SubagentProgressOutcome;
       requester?: Extract<SubagentProgressEvent, { phase: "started" }>["requester"];
     };
 
@@ -62,7 +65,6 @@ type PersistedReconciliationResult =
 
 const trackers = new Map<string, ProgressTracker>();
 const trackerKeyByRunId = new Map<string, string>();
-const terminalRunIds = new Map<string, number>();
 const terminalRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const terminalRetryExpiresAt = new Map<string, number>();
 const terminalRetryAttempts = new Map<string, number>();
@@ -70,34 +72,6 @@ const startupRecoveryRetries = new Map<
   ProgressApi,
   { attempts: number; timer?: ReturnType<typeof setTimeout> }
 >();
-
-function markRunTerminal(runId: string) {
-  const now = Date.now();
-  for (const [trackedRunId, expiresAt] of terminalRunIds) {
-    if (expiresAt <= now) {
-      terminalRunIds.delete(trackedRunId);
-    }
-  }
-  terminalRunIds.set(runId, now + TERMINAL_TOMBSTONE_TTL_MS);
-  if (terminalRunIds.size > MAX_TRACKED_RUNS) {
-    const oldest = terminalRunIds.keys().next().value;
-    if (oldest) {
-      terminalRunIds.delete(oldest);
-    }
-  }
-}
-
-function isRunTerminal(runId: string): boolean {
-  const expiresAt = terminalRunIds.get(runId);
-  if (expiresAt === undefined) {
-    return false;
-  }
-  if (expiresAt <= Date.now()) {
-    terminalRunIds.delete(runId);
-    return false;
-  }
-  return true;
-}
 
 function clearTerminalRetry(runId: string) {
   const timer = terminalRetryTimers.get(runId);
@@ -163,7 +137,7 @@ async function persistTrackerRunningEmoji(api: ProgressApi, tracker: ProgressTra
   try {
     await Promise.all(
       Array.from(tracker.persistedRunIds, (runId) =>
-        store.register(runId, persistedProgressRunFromTracker(tracker, "active")),
+        store.register(runId, persistedProgressRunFromTracker(tracker)),
       ),
     );
     return true;
@@ -273,7 +247,7 @@ async function handleStarted(
 ) {
   const runId = event.runId.trim();
   const target = resolveDiscordProgressTarget(event.requester);
-  if (!runId || !target || isRunTerminal(runId)) {
+  if (!runId || !target || terminalOutcome(runId)) {
     return;
   }
   const account = resolveDiscordAccount({ cfg: api.config, accountId: event.requester?.accountId });
@@ -310,7 +284,9 @@ async function handleStarted(
       if (!restored.ok) {
         return;
       }
-      restoredCurrentRunWasTerminal = restored.cleanupRunIds.includes(runId);
+      restoredCurrentRunWasTerminal = restored.cleanupRuns.some(
+        (cleanup) => cleanup.runId === runId,
+      );
       tracker = {
         accountId: account.accountId,
         channelId: target.channelId,
@@ -324,18 +300,37 @@ async function handleStarted(
       // The process can stop between durable registration and either Discord
       // reaction call. Rebuild from bot-owned glyphs instead of guessing which
       // count made it to Discord.
-      if (restored.activeRunIds.length > 0 || restored.cleanupRunIds.length > 0) {
+      if (restored.activeRunIds.length > 0 || restored.cleanupRuns.length > 0) {
         const reserved = reservedReactionEmojis(api.config, account.config.ackReaction);
         const cleanupEmojis = restored.ownedEmojis.filter((emoji) => !reserved.has(emoji));
-        if (await clearRunningReactions(api, tracker, cleanupEmojis)) {
-          for (const cleanupRunId of restored.cleanupRunIds) {
-            markRunTerminal(cleanupRunId);
+        const countsCleared = await clearRunningReactions(api, tracker, cleanupEmojis);
+        const failedCleanupRuns = restored.cleanupRuns.filter(
+          (cleanup) => cleanup.value.outcome !== "ok",
+        );
+        const failurePresented =
+          failedCleanupRuns.length === 0 ||
+          !reactionsEnabled ||
+          (countsCleared && (await setReaction(api, tracker, FAILURE_EMOJI)));
+        if (countsCleared && failurePresented) {
+          for (const cleanup of restored.cleanupRuns) {
+            markRunTerminal(cleanup.runId, cleanup.value.outcome);
           }
           await Promise.all(
-            restored.cleanupRunIds.map((cleanupRunId) => consumeProgressRun(api, cleanupRunId)),
+            restored.cleanupRuns.map((cleanup) => consumeProgressRun(api, cleanup.runId)),
           );
         } else {
           tracker.reactionsEnabled = false;
+          for (const cleanup of restored.cleanupRuns) {
+            scheduleTerminalLookupRetry(
+              api,
+              {
+                phase: "ended",
+                runId: cleanup.runId,
+                outcome: cleanup.value.outcome,
+              },
+              cleanup.value,
+            );
+          }
         }
       }
       trackers.set(key, tracker);
@@ -362,7 +357,7 @@ async function handleStarted(
     if (tracker.reactionsEnabled) {
       persistResult = await persistProgressRun(api, runId, tracker);
       if (persistResult === "terminal") {
-        markRunTerminal(runId);
+        markRunTerminal(runId, "unknown");
         return;
       }
       if (persistResult === "conflict") {
@@ -383,10 +378,23 @@ async function handleStarted(
     }
     // A fast child can end between hook dispatch and durable presentation setup.
     // The tombstone makes that ordering explicit and prevents a late start from sticking.
-    if (isRunTerminal(runId)) {
-      const owned = persistedProgressRunFromTracker(tracker, "active");
-      await markProgressRunForCleanup(api, runId, owned);
-      await consumeProgressRun(api, runId);
+    const endedOutcome = terminalOutcome(runId);
+    if (endedOutcome) {
+      const owned = persistedProgressRunFromTracker(tracker);
+      await markProgressRunForCleanup(api, runId, owned, endedOutcome);
+      const failurePresented =
+        endedOutcome === "ok" ||
+        !tracker.reactionsEnabled ||
+        (await setReaction(api, tracker, FAILURE_EMOJI));
+      if (failurePresented) {
+        await consumeProgressRun(api, runId);
+      } else {
+        scheduleTerminalLookupRetry(
+          api,
+          { phase: "ended", runId, outcome: endedOutcome, requester: event.requester },
+          { ...owned, status: "cleanup", outcome: endedOutcome },
+        );
+      }
       tracker.activeRunIds.delete(runId);
       tracker.persistedRunIds.delete(runId);
       trackerKeyByRunId.delete(runId);
@@ -456,10 +464,11 @@ async function reconcilePersistedTracker(
       (await setReaction(api, tracker, nextEmoji));
     tracker.runningEmojiConfirmed = countPresented;
   }
-  if (reactionsEnabled && reactionsCleared && countPresented && outcome !== "ok") {
-    await setReaction(api, tracker, FAILURE_EMOJI);
-  }
-  if (!reactionsCleared || !countPresented) {
+  const outcomePresented =
+    outcome === "ok" ||
+    !reactionsEnabled ||
+    (reactionsCleared && countPresented && (await setReaction(api, tracker, FAILURE_EMOJI)));
+  if (!reactionsCleared || !countPresented || !outcomePresented) {
     return { ok: false };
   }
   return {
@@ -522,7 +531,7 @@ async function handleEnded(
   if (!runId) {
     return;
   }
-  markRunTerminal(runId);
+  markRunTerminal(runId, event.outcome);
   const lookup = await lookupProgressRun(api, runId);
   const persisted = lookup.status === "found" ? lookup.value : persistedHint;
   const key = trackerKeyByRunId.get(runId) ?? persisted?.key;
@@ -544,13 +553,18 @@ async function handleEnded(
         : currentLookup.status === "error"
           ? (persistedHint ?? persisted)
           : (persistedHint ?? (tracker ? undefined : persisted));
+    const outcome =
+      persistedTerminalOutcome(currentPersisted) ??
+      persistedTerminalOutcome(persisted) ??
+      event.outcome;
+    const retryEvent = outcome === event.outcome ? event : { ...event, outcome };
     trackerKeyByRunId.delete(runId);
     const owned =
       tracker?.persistedRunIds.has(runId) && currentPersisted?.status !== "cleanup"
-        ? persistedProgressRunFromTracker(tracker, "active")
+        ? persistedProgressRunFromTracker(tracker)
         : currentPersisted;
     const cleanupMarked = owned
-      ? owned.status === "cleanup" || (await markProgressRunForCleanup(api, runId, owned))
+      ? owned.status === "cleanup" || (await markProgressRunForCleanup(api, runId, owned, outcome))
       : true;
     if (tracker) {
       const currentAccount = resolveDiscordAccount({
@@ -566,12 +580,12 @@ async function handleEnded(
     }
     if (!tracker) {
       const reconciliation = owned
-        ? await reconcilePersistedTracker(api, owned, event.outcome, runId)
+        ? await reconcilePersistedTracker(api, owned, outcome, runId)
         : { ok: false as const };
       if (reconciliation.ok && owned) {
         const consumed = await consumeProgressRun(api, runId);
         if (!consumed) {
-          scheduleTerminalLookupRetry(api, event, owned);
+          scheduleTerminalLookupRetry(api, retryEvent, owned);
         } else {
           clearTerminalRetry(runId);
         }
@@ -594,32 +608,34 @@ async function handleEnded(
           startTyping(api, restoredTracker);
         }
       } else if (owned) {
-        scheduleTerminalLookupRetry(api, event, owned);
+        scheduleTerminalLookupRetry(api, retryEvent, owned);
       }
       return;
     }
     tracker.activeRunIds.delete(runId);
     tracker.persistedRunIds.delete(runId);
-    const reconciled = tracker.reactionsEnabled
+    const countReconciled = tracker.reactionsEnabled
       ? await updateRunningReaction(api, tracker)
       : owned
-        ? (await reconcilePersistedTracker(api, owned, event.outcome, runId)).ok
+        ? (await reconcilePersistedTracker(api, owned, outcome, runId)).ok
         : true;
+    const outcomePresented =
+      outcome === "ok" ||
+      !tracker.reactionsEnabled ||
+      (countReconciled && (await setReaction(api, tracker, FAILURE_EMOJI)));
+    const reconciled = countReconciled && outcomePresented;
     if (reconciled && owned) {
       const consumed = await consumeProgressRun(api, runId);
       if (!consumed) {
-        scheduleTerminalLookupRetry(api, event, owned);
+        scheduleTerminalLookupRetry(api, retryEvent, owned);
       } else {
         clearTerminalRetry(runId);
       }
       if (!consumed && !cleanupMarked) {
-        await markProgressRunForCleanup(api, runId, owned);
+        await markProgressRunForCleanup(api, runId, owned, outcome);
       }
     } else if (owned) {
-      scheduleTerminalLookupRetry(api, event, owned);
-    }
-    if (reconciled && event.outcome !== "ok" && tracker.reactionsEnabled) {
-      await setReaction(api, tracker, FAILURE_EMOJI);
+      scheduleTerminalLookupRetry(api, retryEvent, owned);
     }
     if (tracker.activeRunIds.size === 0) {
       stopTyping(tracker);
@@ -685,7 +701,15 @@ export async function recoverDiscordSubagentProgress(api: ProgressApi) {
   // Subagents share the gateway process, so no active run survives a cold
   // start. Replaying every row repairs both interrupted and pending cleanup.
   for (const entry of persistedRuns) {
-    await handleEnded(api, { phase: "ended", runId: entry.key, outcome: "ok" }, entry.value);
+    await handleEnded(
+      api,
+      {
+        phase: "ended",
+        runId: entry.key,
+        outcome: persistedTerminalOutcome(entry.value) ?? "unknown",
+      },
+      entry.value,
+    );
   }
 }
 
@@ -695,7 +719,6 @@ export function resetDiscordSubagentProgressForTest() {
   }
   trackers.clear();
   trackerKeyByRunId.clear();
-  terminalRunIds.clear();
   for (const timer of terminalRetryTimers.values()) {
     clearTimeout(timer);
   }

@@ -26,14 +26,19 @@ vi.mock("./send.reactions.js", () => ({
 }));
 vi.mock("./send.typing.js", () => ({ sendTypingDiscord: sendMocks.typing }));
 
-type StoredProgressRun = {
+type StoredProgressRunBase = {
   key: string;
   accountId: string;
   channelId: string;
   messageId: string;
-  status: "active" | "cleanup";
   runningEmoji?: string;
 };
+
+type StoredProgressRun = StoredProgressRunBase &
+  (
+    | { status: "active" }
+    | { status: "cleanup"; outcome: "ok" | "error" | "timeout" | "killed" | "unknown" }
+  );
 
 function createProgressStore() {
   const values = new Map<string, StoredProgressRun>();
@@ -363,6 +368,26 @@ describe("Discord subagent progress", () => {
     expect(progressStore.values.has("run-false-cleanup")).toBe(false);
   });
 
+  it("retries a failed terminal outcome marker before consuming ownership", async () => {
+    await handleDiscordSubagentProgress(api, started("run-failure-marker"));
+    sendMocks.react.mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true });
+
+    await handleDiscordSubagentProgress(api, {
+      phase: "ended",
+      runId: "run-failure-marker",
+      outcome: "error",
+    });
+    expect(progressStore.values.get("run-failure-marker")).toMatchObject({
+      status: "cleanup",
+      outcome: "error",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(progressStore.values.has("run-failure-marker")).toBe(false);
+    expect(sendMocks.react.mock.calls.filter((call) => call[2] === "🔴")).toHaveLength(2);
+  });
+
   it("preserves cleanup ownership when a retry refresh lookup fails", async () => {
     await handleDiscordSubagentProgress(api, started("run-refresh-error"));
     sendMocks.remove.mockResolvedValueOnce({ ok: false });
@@ -402,6 +427,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
 
@@ -409,6 +435,24 @@ describe("Discord subagent progress", () => {
 
     expect(sendMocks.remove).toHaveBeenCalledTimes(1);
     expect(progressStore.values.has("run-restart-cleanup")).toBe(false);
+  });
+
+  it("restores a persisted terminal outcome marker on gateway startup", async () => {
+    progressStore.values.set("run-restart-timeout", {
+      key: "default:123:456",
+      accountId: "default",
+      channelId: "123",
+      messageId: "456",
+      status: "cleanup",
+      outcome: "timeout",
+      runningEmoji: "1️⃣",
+    });
+
+    await recoverDiscordSubagentProgress(api);
+
+    expect(sendMocks.remove).toHaveBeenCalledWith("123", "456", "1️⃣", expect.any(Object));
+    expect(sendMocks.react).toHaveBeenCalledWith("123", "456", "🔴", expect.any(Object));
+    expect(progressStore.values.has("run-restart-timeout")).toBe(false);
   });
 
   it("cleans interrupted active rows on gateway startup", async () => {
@@ -438,6 +482,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
 
@@ -456,6 +501,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
 
@@ -511,6 +557,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
 
@@ -527,6 +574,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
     progressStore.store.entries.mockRejectedValueOnce(new Error("state store unavailable"));
@@ -545,6 +593,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
       runningEmoji: "1️⃣",
     });
     progressStore.store.lookup.mockRejectedValueOnce(new Error("state store unavailable"));
@@ -611,6 +660,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
     });
 
     await handleDiscordSubagentProgress(api, started("run-terminal"));
@@ -634,6 +684,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
     });
 
     await handleDiscordSubagentProgress(api, started("run-terminal"));
@@ -809,6 +860,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
     });
 
     await handleDiscordSubagentProgress(api, started("run-other"));
@@ -827,6 +879,7 @@ describe("Discord subagent progress", () => {
       channelId: "123",
       messageId: "456",
       status: "cleanup",
+      outcome: "ok",
     });
     sendMocks.react.mockClear();
 
