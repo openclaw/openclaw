@@ -79,6 +79,7 @@ import {
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
+import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -523,7 +524,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // replay aggressively without the old catchup cursor/retry bookkeeping.
   const inboundReplayGuard = createIMessageInboundReplayGuard();
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = new Set<string>();
+  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
   // Downtime recovery. We pass the persisted recovery cursor (the last
   // dispatched rowid) to watch.subscribe as since_rowid so imsg replays the rows
@@ -1048,10 +1049,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         const shouldThrottleDiagnostic = shouldThrottleIMessageInboundDropDiagnostic(
           decision.reason,
         );
-        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.has(throttleKey)) {
-          if (shouldThrottleDiagnostic) {
-            loggedThrottledDropDiagnostics.add(throttleKey);
-          }
+        if (!shouldThrottleDiagnostic || !loggedThrottledDropDiagnostics.check(throttleKey)) {
           runtime.log?.(warn(diagnostic));
         }
       }
