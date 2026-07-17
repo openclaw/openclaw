@@ -48,7 +48,7 @@ export function buildHistoryContext(params: {
 }
 
 /** Appends one history entry, enforces per-session limit, and refreshes LRU key order. */
-export function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
+function recordChannelHistoryEntry<T extends HistoryEntry>(params: {
   historyMap: Map<string, T[]>;
   historyKey: string;
   entry: T;
@@ -334,7 +334,7 @@ export function buildHistoryContextFromMap(params: {
   });
 }
 
-export function clearChannelHistory(params: {
+function clearChannelHistory(params: {
   historyMap: Map<string, HistoryEntry[]>;
   historyKey: string;
 }): void {

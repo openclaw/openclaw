@@ -306,7 +306,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   messageId?: string;
 };
 
-export type ChannelTurnRoute = {
+type ChannelTurnRoute = {
   agentId: string;
   sessionKey: string;
 };
@@ -319,7 +319,7 @@ export type ChannelTurnPlan = RoutedChannelTurn<
   Omit<AssembledChannelTurn, "agentId" | "dispatchReplyWithBufferedBlockDispatcher">
 >;
 
-export type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
+type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
   PreparedChannelTurn<TDispatchResult>
 > & {
   cfg: OpenClawConfig;
