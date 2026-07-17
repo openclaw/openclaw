@@ -3626,6 +3626,7 @@ export const en: TranslationMap = {
       updateGateway: "Update Gateway",
       allSessions: "All sessions",
       chats: "Chats",
+      groupCatalogSessionsByProject: "Group by project",
       openSessionMenu: "Open session menu",
       sortBy: "Sort by",
       sortCreated: "Created",
