@@ -18,6 +18,7 @@ import {
   calculateCost,
   clampThinkingLevel,
 } from "../model-utils.js";
+import { serializeStreamError } from "../utils/stream-error-serialize.js";
 import type {
   AssistantMessage,
   CacheRetention,

@@ -14,6 +14,7 @@ import {
   ThinkingLevel,
 } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { serializeStreamError } from "../utils/stream-error-serialize.js";
 import type {
   Api,
   AssistantMessage,
@@ -466,16 +467,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage =
-      error instanceof Error
-        ? error.message
-        : (() => {
-            try {
-              return JSON.stringify(error);
-            } catch {
-              return String(error);
-            }
-          })();
+    output.errorMessage = serializeStreamError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
   }
