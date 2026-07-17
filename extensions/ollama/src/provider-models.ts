@@ -77,6 +77,11 @@ export type OllamaModelShowInfo = {
   capabilities?: string[];
 };
 
+// Failed /api/show must not leave capabilities undefined: buildOllamaModelDefinition
+// treats undefined as optimistic supportsTools=true. Empty array matches setup
+// inspect (HTTP/throw → capabilities: []) so broken models do not advertise tools.
+const OLLAMA_FAILED_SHOW_CAPABILITIES: string[] = [];
+
 function buildOllamaModelShowCacheKey(
   apiBase: string,
   model: Pick<OllamaTagModel, "name" | "digest" | "modified_at">,
@@ -151,7 +156,7 @@ export async function queryOllamaModelShowInfo(
     });
     try {
       if (!response.ok) {
-        return {};
+        return { capabilities: OLLAMA_FAILED_SHOW_CAPABILITIES };
       }
       const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
@@ -190,7 +195,7 @@ export async function queryOllamaModelShowInfo(
       await release();
     }
   } catch {
-    return {};
+    return { capabilities: OLLAMA_FAILED_SHOW_CAPABILITIES };
   }
 }
 
