@@ -1,4 +1,3 @@
-// Doctor-only import for the retired Web Push JSON stores.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -51,14 +50,10 @@ type ParsedLegacyState = {
   snapshots: LegacySourceSnapshot[];
 };
 
-function resolveLegacyWebPushPaths(stateDir: string): {
-  subscriptionsPath: string;
-  vapidKeysPath: string;
-} {
-  const pushDir = path.join(stateDir, "push");
+function resolveLegacyWebPushPaths(stateDir: string) {
   return {
-    subscriptionsPath: path.join(pushDir, "web-push-subscriptions.json"),
-    vapidKeysPath: path.join(pushDir, "vapid-keys.json"),
+    subscriptionsPath: path.join(stateDir, "push", "web-push-subscriptions.json"),
+    vapidKeysPath: path.join(stateDir, "push", "vapid-keys.json"),
   };
 }
 
@@ -84,13 +79,9 @@ function relativeLegacyPath(stateDir: string, filePath: string): string {
   return relativePath;
 }
 
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return (
-    legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`)
-  );
-}
+const sourceOrClaimMayExist = (sourcePath: string) =>
+  legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
 
-/** Detect retired Web Push state only when an explicit doctor flow opts in. */
 export function detectLegacyWebPush(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
@@ -573,7 +564,6 @@ async function migrateLegacyWebPushWithExclusiveStateOwnership(params: {
   return { changes, warnings, notices };
 }
 
-/** Import both retired stores while excluding old Gateways that can recreate them. */
 export async function migrateLegacyWebPush(params: {
   detected: LegacyStateDetection["webPush"];
   stateDir: string;

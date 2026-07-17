@@ -1,51 +1,50 @@
+import { convertPcmToMulaw8k, mulawToPcm, resamplePcm } from "../talk/audio-codec.js";
 import {
-  convertPcmToMulaw8k,
-  mulawToPcm,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-  resamplePcm,
-} from "openclaw/plugin-sdk/realtime-voice";
-import type { GoogleMeetConfig } from "./config.js";
+} from "../talk/provider-types.js";
 
-export function resolveGoogleMeetRealtimeAudioFormat(config: GoogleMeetConfig) {
-  return config.chrome.audioFormat === "g711-ulaw-8khz"
+export type MeetingRealtimeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
+
+export function resolveMeetingRealtimeAudioFormat(audioFormat: MeetingRealtimeAudioFormat) {
+  return audioFormat === "g711-ulaw-8khz"
     ? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ
     : REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ;
 }
 
-export function convertGoogleMeetBridgeAudioForStt(
+export function convertMeetingBridgeAudioForStt(
   audio: Buffer,
-  config: GoogleMeetConfig,
+  audioFormat: MeetingRealtimeAudioFormat,
 ): Buffer {
-  if (config.chrome.audioFormat === "g711-ulaw-8khz") {
+  if (audioFormat === "g711-ulaw-8khz") {
     return audio;
   }
   return convertPcmToMulaw8k(audio, 24_000);
 }
 
-export function convertGoogleMeetTtsAudioForBridge(
+export function convertMeetingTtsAudioForBridge(
   audio: Buffer,
   sampleRate: number,
-  config: GoogleMeetConfig,
+  audioFormat: MeetingRealtimeAudioFormat,
   outputFormat?: string,
+  platformName = "meeting platform",
 ): Buffer {
-  const sourceFormat = sourceTelephonyTtsFormat(outputFormat);
-  if (
-    config.chrome.audioFormat === "g711-ulaw-8khz" &&
-    sourceFormat === "mulaw" &&
-    sampleRate === 8_000
-  ) {
+  const sourceFormat = sourceTelephonyTtsFormat(outputFormat, platformName);
+  if (audioFormat === "g711-ulaw-8khz" && sourceFormat === "mulaw" && sampleRate === 8_000) {
     return audio;
   }
-  const pcm = decodeGoogleMeetTelephonyTtsAudio(audio, sourceFormat);
-  return config.chrome.audioFormat === "g711-ulaw-8khz"
+  const pcm = decodeMeetingTelephonyTtsAudio(audio, sourceFormat);
+  return audioFormat === "g711-ulaw-8khz"
     ? convertPcmToMulaw8k(pcm, sampleRate)
     : resamplePcm(pcm, sampleRate, 24_000);
 }
 
-type GoogleMeetTelephonyTtsFormat = "pcm" | "mulaw" | "alaw";
+type MeetingTelephonyTtsFormat = "pcm" | "mulaw" | "alaw";
 
-function sourceTelephonyTtsFormat(outputFormat: string | undefined): GoogleMeetTelephonyTtsFormat {
+function sourceTelephonyTtsFormat(
+  outputFormat: string | undefined,
+  platformName: string,
+): MeetingTelephonyTtsFormat {
   const normalized = outputFormat?.trim().toLowerCase().replaceAll("_", "-") ?? "";
   if (
     !normalized ||
@@ -68,12 +67,12 @@ function sourceTelephonyTtsFormat(outputFormat: string | undefined): GoogleMeetT
   if (normalized === "alaw" || normalized.includes("a-law") || normalized.includes("alaw")) {
     return "alaw";
   }
-  throw new Error(`Unsupported telephony TTS output format for Google Meet: ${outputFormat}`);
+  throw new Error(`Unsupported telephony TTS output format for ${platformName}: ${outputFormat}`);
 }
 
-function decodeGoogleMeetTelephonyTtsAudio(
+function decodeMeetingTelephonyTtsAudio(
   audio: Buffer,
-  sourceFormat: GoogleMeetTelephonyTtsFormat,
+  sourceFormat: MeetingTelephonyTtsFormat,
 ): Buffer {
   switch (sourceFormat) {
     case "pcm":
@@ -83,11 +82,11 @@ function decodeGoogleMeetTelephonyTtsAudio(
     case "alaw":
       return alawToPcm(audio);
   }
-  return unsupportedGoogleMeetTelephonyTtsFormat(sourceFormat);
+  return unsupportedMeetingTelephonyTtsFormat(sourceFormat);
 }
 
-function unsupportedGoogleMeetTelephonyTtsFormat(_format: never): never {
-  throw new Error("Unsupported telephony TTS output format for Google Meet");
+function unsupportedMeetingTelephonyTtsFormat(_format: never): never {
+  throw new Error("Unsupported telephony TTS output format for meeting platform");
 }
 
 function alawToPcm(alaw: Buffer): Buffer {

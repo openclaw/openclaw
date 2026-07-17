@@ -213,7 +213,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
       // Registry sweep: 77 packages, zero fetch failures; retired dead channel-ingress facade.
       // +1: speech-settings keeps agent prompt imports off the synthesis/runtime graph.
-      329,
+      // +1: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      330,
       env,
     ),
     // ScopeTree adds six channel-policy exports, mirrored by compat, including three functions.
@@ -260,7 +261,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +10: supplemental sender helpers plus host-owned SQLite lease contracts.
       // Harvest: retired dual-field plan payload builder -1.
       // +23: core channel, envelope, direct-DM, feedback, legacy-payload, and memory contracts.
-      8068,
+      // +81: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      8149,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -293,7 +295,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: supplemental sender helpers plus the PluginStateLeaseRunner callback.
       // Harvest: retired dual-field plan payload builder -1.
       // +13: core channel, envelope, direct-DM, feedback, legacy-payload, and memory operations.
-      4501,
+      // +32: meeting-runtime barrel: browser meeting-bot core behind MeetingPlatformAdapter.
+      4533,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
