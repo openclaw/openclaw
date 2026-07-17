@@ -1,4 +1,5 @@
 // Elevenlabs plugin module implements tts behavior.
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
@@ -46,6 +47,29 @@ function normalizeElevenLabsLatencyTier(latencyTier: number | undefined): number
   }
   requireInRange(latencyTier, 0, 4, "latencyTier");
   return latencyTier;
+}
+
+// The buffered path rejects provider audio above MAX_AUDIO_BYTES. Enforce the same cap
+// without buffering and stop upstream before any byte beyond the cap reaches playback.
+function limitElevenLabsAudioStream(
+  stream: ReadableStream<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  let totalBytes = 0;
+  return stream.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        const remainingBytes = MAX_AUDIO_BYTES - totalBytes;
+        if (chunk.byteLength > remainingBytes) {
+          if (remainingBytes > 0) {
+            controller.enqueue(chunk.subarray(0, remainingBytes));
+          }
+          throw new Error(`ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`);
+        }
+        totalBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    }),
+  );
 }
 
 type ElevenLabsTtsRequestParams = {
@@ -193,7 +217,7 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     }
     handedOff = true;
     return {
-      audioStream: response.body,
+      audioStream: limitElevenLabsAudioStream(response.body),
       release,
     };
   } finally {
