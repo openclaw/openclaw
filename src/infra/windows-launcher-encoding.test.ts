@@ -1,18 +1,20 @@
 // Covers Windows launcher script encoding for wscript/cmd code page contracts (#107416, #108774).
 import iconv from "iconv-lite";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decodeWindowsLauncherScript,
   encodeWindowsLauncherScript,
 } from "./windows-launcher-encoding.js";
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
+const resolveWindowsOemCodePageMock = vi.hoisted(() => vi.fn((): number | null => null));
 
 vi.mock("./windows-encoding.js", async () => {
   const actual =
     await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
   return {
     ...actual,
+    resolveWindowsOemCodePage: () => resolveWindowsOemCodePageMock(),
     resolveWindowsOemEncoding: () => resolveWindowsOemEncodingMock(),
   };
 });
@@ -30,6 +32,12 @@ const UTF8_MARKER = marker(65001, "utf-8");
 beforeEach(() => {
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
+  resolveWindowsOemCodePageMock.mockReset();
+  resolveWindowsOemCodePageMock.mockReturnValue(437);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("encodeWindowsLauncherScript", () => {
@@ -55,6 +63,16 @@ describe("encodeWindowsLauncherScript", () => {
 
     expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
     expect(resolveWindowsOemEncodingMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for ASCII cmd syntax on OEMCP 864", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    resolveWindowsOemCodePageMock.mockReturnValue(864);
+    const content = "@echo off\r\necho %PATH%\r\n";
+
+    expect(() => encodeWindowsLauncherScript({ format: "cmd", content })).toThrow(
+      /remaps ASCII syntax/,
+    );
   });
 
   it("encodes non-ASCII cmd scripts with a code-page preamble and marker", () => {

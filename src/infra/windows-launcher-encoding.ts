@@ -1,6 +1,7 @@
 /** Encodes and decodes generated Windows launcher scripts (`.cmd` / `.vbs`). */
 import iconv from "iconv-lite";
 import {
+  resolveWindowsOemCodePage,
   resolveWindowsOemCodePageForEncoding,
   resolveWindowsOemEncoding,
 } from "./windows-encoding.js";
@@ -52,8 +53,16 @@ export function encodeWindowsLauncherScript(params: {
     return Buffer.concat([UTF16LE_BOM, Buffer.from(params.content, "utf16le")]);
   }
   if (isAsciiOnly(params.content)) {
+    if (process.platform === "win32") {
+      const codePage = resolveWindowsOemCodePage();
+      if (codePage === null || codePage === 864) {
+        throw new Error(
+          "Windows cmd launcher script cannot be written safely because the Windows OEM code page is unavailable or remaps ASCII syntax.",
+        );
+      }
+    }
     // ASCII bytes are identical in UTF-8 and every Windows code page; keep the
-    // legacy byte-for-byte output so non-CJK installs see no change.
+    // legacy byte-for-byte output on syntax-compatible OEM pages.
     return Buffer.from(params.content, "utf8");
   }
   const encoding = resolveWindowsOemEncoding();

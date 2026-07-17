@@ -65,7 +65,7 @@ const WINDOWS_OEM_ENCODING_CODEPAGE_MAP = new Map(
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
 let cachedWindowsSystemEncoding: string | null | undefined;
-let cachedWindowsOemEncoding: string | null | undefined;
+let cachedWindowsOemCodePage: number | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
@@ -141,17 +141,21 @@ function resolveWindowsSystemEncoding(): string | null {
 
 /** Resolves and caches the boot-time Windows OEM encoding cmd.exe reads batch files with. */
 export function resolveWindowsOemEncoding(): string | null {
+  const codePage = resolveWindowsOemCodePage();
+  return codePage !== null ? (WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+}
+
+/** Resolves and caches the numeric boot-time Windows OEM code page. */
+export function resolveWindowsOemCodePage(): number | null {
   if (process.platform !== "win32") {
     return null;
   }
-  if (cachedWindowsOemEncoding !== undefined) {
-    return cachedWindowsOemEncoding;
+  if (cachedWindowsOemCodePage !== undefined) {
+    return cachedWindowsOemCodePage;
   }
   const raw = queryWindowsRegistryValue(WINDOWS_NLS_CODEPAGE_KEY, "OEMCP");
-  const codePage = raw === null ? null : parseWindowsCodePage(raw);
-  cachedWindowsOemEncoding =
-    codePage !== null ? (WINDOWS_OEM_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
-  return cachedWindowsOemEncoding;
+  cachedWindowsOemCodePage = raw === null ? null : parseWindowsCodePage(raw);
+  return cachedWindowsOemCodePage;
 }
 
 /** Returns the numeric Windows OEM page for one resolver encoding label. */

@@ -69,10 +69,14 @@ describe("windows output encoding", () => {
     for (const [codePage, expectedEncoding] of mappings) {
       queryWindowsRegistryValueMock.mockReturnValueOnce(String(codePage));
       vi.resetModules();
-      const { resolveWindowsOemCodePageForEncoding, resolveWindowsOemEncoding } =
-        await import("./windows-encoding.js");
+      const {
+        resolveWindowsOemCodePage,
+        resolveWindowsOemCodePageForEncoding,
+        resolveWindowsOemEncoding,
+      } = await import("./windows-encoding.js");
 
       expect(resolveWindowsOemEncoding(), `OEMCP ${codePage}`).toBe(expectedEncoding);
+      expect(resolveWindowsOemCodePage()).toBe(codePage);
       expect(resolveWindowsOemCodePageForEncoding(expectedEncoding)).toBe(codePage);
     }
   });
@@ -81,10 +85,14 @@ describe("windows output encoding", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     queryWindowsRegistryValueMock.mockReturnValue("857");
     vi.resetModules();
-    const { resolveWindowsOemCodePageForEncoding, resolveWindowsOemEncoding } =
-      await import("./windows-encoding.js");
+    const {
+      resolveWindowsOemCodePage,
+      resolveWindowsOemCodePageForEncoding,
+      resolveWindowsOemEncoding,
+    } = await import("./windows-encoding.js");
 
     expect(resolveWindowsOemEncoding()).toBe("cp857");
+    expect(resolveWindowsOemCodePage()).toBe(857);
     expect(resolveWindowsOemEncoding()).toBe("cp857");
     expect(resolveWindowsOemCodePageForEncoding("cp857")).toBe(857);
     expect(resolveWindowsOemCodePageForEncoding("bogus")).toBeNull();
@@ -99,9 +107,11 @@ describe("windows output encoding", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     queryWindowsRegistryValueMock.mockReturnValue("864");
     vi.resetModules();
-    const { resolveWindowsOemEncoding } = await import("./windows-encoding.js");
+    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
+      await import("./windows-encoding.js");
 
     expect(resolveWindowsOemEncoding()).toBeNull();
+    expect(resolveWindowsOemCodePage()).toBe(864);
     expect(resolveWindowsOemEncoding()).toBeNull();
     expect(queryWindowsRegistryValueMock).toHaveBeenCalledOnce();
   });
@@ -109,9 +119,11 @@ describe("windows output encoding", () => {
   it("does not query the Windows registry on other platforms", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.resetModules();
-    const { resolveWindowsOemEncoding } = await import("./windows-encoding.js");
+    const { resolveWindowsOemCodePage, resolveWindowsOemEncoding } =
+      await import("./windows-encoding.js");
 
     expect(resolveWindowsOemEncoding()).toBeNull();
+    expect(resolveWindowsOemCodePage()).toBeNull();
     expect(queryWindowsRegistryValueMock).not.toHaveBeenCalled();
   });
 
