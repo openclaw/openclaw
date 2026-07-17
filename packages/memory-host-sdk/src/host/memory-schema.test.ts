@@ -880,7 +880,7 @@ describe("memory index schema", () => {
     }
   });
 
-  it("keeps legacy tables when canonical rows conflict", () => {
+  it("keeps canonical rows and completes migration when legacy rows diverge", () => {
     const db = new DatabaseSync(":memory:");
     try {
       db.exec(`
@@ -906,7 +906,67 @@ describe("memory index schema", () => {
         );
         CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT INTO meta VALUES ('memory_index_meta_v1', 'legacy');
+        INSERT INTO meta VALUES ('legacy-only-key', 'imported');
+        INSERT INTO files VALUES ('doc.md', 'memory', 'hash', 1, 2);
+        INSERT INTO chunks VALUES (
+          'chunk-1', 'doc.md', 'memory', 1, 2, 'chunk-hash', 'model', 'body', '[]', 1
+        );
         INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
+      `);
+
+      ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: false,
+        ftsEnabled: false,
+      });
+
+      expect(db.prepare("SELECT key, value FROM memory_index_meta ORDER BY key").all()).toEqual([
+        { key: "legacy-only-key", value: "imported" },
+        { key: "memory_index_meta_v1", value: "canonical" },
+      ]);
+      expect(db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
+        { path: "doc.md", hash: "hash" },
+      ]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+        { id: "chunk-1", text: "body" },
+      ]);
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks')",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps legacy tables when legacy rows cannot be copied", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO files VALUES ('doc.md', 'memory', NULL, 1, 2);
       `);
 
       expect(() =>
@@ -915,11 +975,18 @@ describe("memory index schema", () => {
           cacheEnabled: false,
           ftsEnabled: false,
         }),
-      ).toThrow("legacy memory meta rows conflict");
-      expect(db.prepare("SELECT value FROM meta").get()).toEqual({ value: "legacy" });
-      expect(db.prepare("SELECT value FROM memory_index_meta").get()).toEqual({
-        value: "canonical",
+      ).toThrow("legacy memory files rows could not be copied");
+      expect(db.prepare("SELECT path FROM files").get()).toEqual({ path: "doc.md" });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
+        count: 0,
       });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "chunks" }, { name: "files" }, { name: "meta" }]);
     } finally {
       db.close();
     }
