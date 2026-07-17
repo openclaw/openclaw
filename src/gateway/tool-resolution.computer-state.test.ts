@@ -212,4 +212,37 @@ describe("gateway computer invocation state", () => {
     await expect(retargetPromise).rejects.toThrow(/left button may still be held on node mac-a/);
     expect(dispatchedComputerActions()).toEqual([{ nodeId: "mac-a", action: "left_mouse_down" }]);
   });
+
+  it("fails closed for a new session when every tracked session is pinned", async () => {
+    let limitError: unknown;
+    for (let index = 0; index < 80; index += 1) {
+      try {
+        await resolveComputerTool(`agent:main:computer-full-${index}`).execute(`full-${index}`, {
+          action: "left_mouse_down",
+          node: "mac-a",
+        });
+      } catch (err) {
+        limitError = err;
+        break;
+      }
+    }
+    expect(String(limitError)).toMatch(/too many sessions with a held button or in-flight input/);
+
+    await expect(
+      resolveComputerTool("agent:main:computer-full-overflow").execute("overflow", {
+        action: "left_mouse_down",
+        node: "mac-a",
+      }),
+    ).rejects.toThrow(/too many sessions with a held button or in-flight input/);
+
+    await resolveComputerTool("agent:main:computer-full-0").execute("release-one", {
+      action: "left_mouse_up",
+    });
+    await expect(
+      resolveComputerTool("agent:main:computer-full-overflow").execute("overflow-after-release", {
+        action: "left_mouse_down",
+        node: "mac-a",
+      }),
+    ).resolves.toBeDefined();
+  });
 });

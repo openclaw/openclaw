@@ -89,21 +89,27 @@ function resolveComputerInvocationState(sessionKey: string): ComputerToolInvocat
     computerInvocationStates.set(sessionKey, existing);
     return existing.state;
   }
+  if (computerInvocationStates.size >= COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+    for (const [key, entry] of computerInvocationStates) {
+      if (isIdleComputerInvocationState(entry.state)) {
+        computerInvocationStates.delete(key);
+        if (computerInvocationStates.size < COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+          break;
+        }
+      }
+    }
+    if (computerInvocationStates.size >= COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
+      throw new Error(
+        "computer: too many sessions with a held button or in-flight input; " +
+          "release held buttons or wait for pending actions before starting a new computer session",
+      );
+    }
+  }
   const created = {
     state: createComputerToolInvocationState(),
     expiresAt: now + COMPUTER_INVOCATION_STATE_TTL_MS,
   };
   computerInvocationStates.set(sessionKey, created);
-  if (computerInvocationStates.size > COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
-    for (const [key, entry] of computerInvocationStates) {
-      if (key !== sessionKey && isIdleComputerInvocationState(entry.state)) {
-        computerInvocationStates.delete(key);
-        if (computerInvocationStates.size <= COMPUTER_INVOCATION_STATE_MAX_SESSIONS) {
-          break;
-        }
-      }
-    }
-  }
   return created.state;
 }
 
