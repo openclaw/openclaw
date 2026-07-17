@@ -495,4 +495,24 @@ describe("attachConfigIssueDiagnostics", () => {
     expect(issues[0]?.message).toBe("Invalid input");
     expect(issues[0]?.line).toBe(1);
   });
+
+  it("omits plugin-owned values when the plugin id contains dots", () => {
+    const pluginConfig = {
+      plugins: { entries: { "vendor.plugin": { config: { sessionValue: "private" } } } },
+    };
+    const issues = attachConfigIssueDiagnostics(
+      [issue(["plugins", "entries", "vendor.plugin", "config", "sessionValue"], "Invalid input")],
+      {
+        raw: '{ plugins: { entries: { "vendor.plugin": { config: { sessionValue: "private" } } } } }',
+        parsed: pluginConfig,
+        effective: pluginConfig,
+        configPath: "/tmp/openclaw.json",
+        formatPathForDisplay: true,
+        includeReceivedValueHint: true,
+      },
+    );
+
+    expect(issues[0]?.message).toBe("Invalid input");
+    expect(issues[0]?.line).toBe(1);
+  });
 });

@@ -261,18 +261,33 @@ function stringifyReceivedValue(value: unknown): string | null {
   }
 }
 
-function isPluginOwnedConfigPath(pathValue: string): boolean {
+function isPluginOwnedConfigPath(
+  pathValue: string,
+  pathSegments?: readonly ConfigIssuePathSegment[],
+): boolean {
+  if (pathSegments) {
+    return (
+      pathSegments[0] === "channels" ||
+      (pathSegments[0] === "plugins" &&
+        pathSegments[1] === "entries" &&
+        pathSegments[3] === "config")
+    );
+  }
   return (
     pathValue.startsWith("channels.") || /^plugins\.entries\.[^.]+\.config(?:\.|$)/.test(pathValue)
   );
 }
 
-function shouldOmitReceivedValue(pathValue: string, value: unknown): boolean {
+function shouldOmitReceivedValue(
+  pathValue: string,
+  value: unknown,
+  pathSegments?: readonly ConfigIssuePathSegment[],
+): boolean {
   return (
     value === undefined ||
     isSecretRef(value) ||
     isSensitiveConfigPath(pathValue) ||
-    isPluginOwnedConfigPath(pathValue) ||
+    isPluginOwnedConfigPath(pathValue, pathSegments) ||
     (typeof value === "object" && value !== null) ||
     stringifyReceivedValue(value) === null
   );
@@ -282,9 +297,10 @@ export function appendReceivedValueHint(
   message: string,
   pathValue: string,
   value: unknown,
+  pathSegments?: readonly ConfigIssuePathSegment[],
 ): string {
   if (
-    shouldOmitReceivedValue(pathValue, value) ||
+    shouldOmitReceivedValue(pathValue, value, pathSegments) ||
     message.toLowerCase().includes("got:") ||
     /\breceived\b/i.test(message)
   ) {
@@ -341,7 +357,7 @@ export function attachConfigIssueDiagnostics(
     const canShowReceivedValue = line !== undefined && Object.is(literalValue, effectiveValue);
     const message =
       params.includeReceivedValueHint && canShowReceivedValue
-        ? appendReceivedValueHint(issue.message, issue.path, effectiveValue)
+        ? appendReceivedValueHint(issue.message, issue.path, effectiveValue, segments)
         : issue.message;
     return {
       ...issue,
