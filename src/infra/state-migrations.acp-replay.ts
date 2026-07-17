@@ -219,10 +219,10 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     !stored ||
     stored.session_key !== session.sessionKey ||
     stored.cwd !== session.cwd ||
-    Number(stored.complete) !== (session.complete ? 1 : 0) ||
-    Number(stored.created_at) !== session.createdAt ||
-    Number(stored.updated_at) !== session.updatedAt ||
-    Number(stored.next_seq) !== session.nextSeq
+    stored.complete !== (session.complete ? 1 : 0) ||
+    stored.created_at !== session.createdAt ||
+    stored.updated_at !== session.updatedAt ||
+    stored.next_seq !== session.nextSeq
   ) {
     return false;
   }
@@ -252,8 +252,8 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
       return false;
     }
     if (
-      Number(storedEvent.seq) !== event.seq ||
-      Number(storedEvent.at) !== event.at ||
+      storedEvent.seq !== event.seq ||
+      storedEvent.at !== event.at ||
       storedEvent.session_key !== event.sessionKey ||
       storedEvent.run_id !== (event.runId ?? null) ||
       !isDeepStrictEqual(storedUpdate, event.update)
@@ -267,7 +267,7 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
     const expectedBytes = expectedEventBytes[index];
     if (
       expectedBytes !== undefined &&
-      Number(storedEvents[index]?.estimated_bytes) !== expectedBytes
+      storedEvents[index]?.estimated_bytes !== expectedBytes
     ) {
       executeSqliteQuerySync(
         db,
@@ -281,7 +281,7 @@ function reconcileCanonicalSession(db: DatabaseSync, session: LegacyAcpReplaySes
   }
   const expectedSessionBytes =
     estimateSessionBytes(session) + expectedEventBytes.reduce((sum, value) => sum + value, 0);
-  if (Number(stored.estimated_bytes) !== expectedSessionBytes) {
+  if (stored.estimated_bytes !== expectedSessionBytes) {
     executeSqliteQuerySync(
       db,
       replayDb
