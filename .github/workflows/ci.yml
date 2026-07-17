@@ -2839,6 +2839,9 @@ jobs:
           fi
           swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
 
+      - name: OpenClawKit tests
+        run: swift test --package-path apps/shared/OpenClawKit --parallel
+
       - name: Swift test
         run: |
           set -euo pipefail
