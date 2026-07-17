@@ -77,7 +77,6 @@ public struct OpenClawChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var scrollerBottomID = UUID()
     @State private var scrollPosition: UUID?
-    @State private var showSessions = false
     @State private var hasPerformedInitialScroll = false
     @State private var lastUserMessageID: UUID?
     @State private var hasNewerContentBelow = false
@@ -190,11 +189,6 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
-        .sheet(isPresented: self.$showSessions) {
-            if self.showsSessionSwitcher {
-                ChatSessionsSheet(viewModel: self.viewModel)
-            }
-        }
     }
 
     @ViewBuilder
