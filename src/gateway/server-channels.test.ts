@@ -1511,6 +1511,115 @@ describe("server-channels auto restart", () => {
     }
   });
 
+  it("shares the stop grace deadline across whole-channel shutdown batches", async () => {
+    const accountIds = ["one", "two", "three", "four", "five", "six"];
+    const releaseTasks = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseTasks.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === accountIds.length,
+      "expected every account runtime to start",
+    );
+
+    let stopped = false;
+    const stop = manager.stopChannel("discord").then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushMicrotasks(20);
+    const stoppedAtFirstDeadline = stopped;
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stop;
+    releaseTasks.resolve();
+    await flushMicrotasks(20);
+
+    expect(stoppedAtFirstDeadline).toBe(true);
+  });
+
+  it("does not let queued teardown overwrite a replacement account runtime", async () => {
+    const accountIds = ["one", "two", "three", "four", "five", "six"];
+    const firstWaveReleases = new Map(accountIds.slice(0, 4).map((id) => [id, createDeferred()]));
+    const replacementRelease = createDeferred();
+    const startCounts = new Map<string, number>();
+    let replacementSignal: AbortSignal | undefined;
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId }: ChannelGatewayContext<TestAccount>) => {
+        const startCount = (startCounts.get(accountId) ?? 0) + 1;
+        startCounts.set(accountId, startCount);
+        if (accountId === "five" && startCount === 2) {
+          replacementSignal = abortSignal;
+          await replacementRelease.promise;
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(async ({ accountId }: ChannelGatewayContext<TestAccount>) => {
+      await firstWaveReleases.get(accountId)?.promise;
+    });
+    installTestRegistry(
+      createTestPlugin({
+        listAccountIds: () => accountIds,
+        startAccount,
+        stopAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === accountIds.length,
+      "expected every account runtime to start",
+    );
+
+    const stop = manager.stopChannel("discord");
+    await waitForMicrotaskCondition(
+      () => stopAccount.mock.calls.length === 4,
+      "expected first account shutdown wave",
+    );
+    await flushMicrotasks(20);
+    await manager.startChannel("discord", "five");
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === accountIds.length + 1,
+      "expected replacement account runtime to start",
+    );
+
+    for (const release of firstWaveReleases.values()) {
+      release.resolve();
+    }
+    await stop;
+
+    const stoppedAccountIds = stopAccount.mock.calls.map(
+      ([ctx]) => (ctx as ChannelGatewayContext<TestAccount>).accountId,
+    );
+    const replacementWasAborted = replacementSignal?.aborted;
+    const replacementRunning =
+      manager.getRuntimeSnapshot().channelAccounts.discord?.five?.running === true;
+    replacementRelease.resolve();
+    await flushMicrotasks();
+
+    expect(stoppedAccountIds).not.toContain("five");
+    expect(replacementWasAborted).toBe(false);
+    expect(replacementRunning).toBe(true);
+  });
+
   it("limits channel plugin startup fanout to four", async () => {
     const channelIds = Array.from({ length: 6 }, (_, index) => `test-${index}` as ChannelId);
     const releases: Array<() => void> = [];

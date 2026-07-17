@@ -913,7 +913,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         manuallyStopped.add(rKey);
       }
       abort?.abort();
+      const gracefulStop = waitForChannelStopGracefully(task, CHANNEL_STOP_ABORT_TIMEOUT_MS);
+      const lifecycleWasReplaced = () => {
+        const currentAbort = store.aborts.get(id);
+        const currentTask = store.tasks.get(id);
+        return (
+          (currentAbort !== undefined && currentAbort !== abort) ||
+          (currentTask !== undefined && currentTask !== task)
+        );
+      };
       stopTasks.push(async () => {
+        if (lifecycleWasReplaced()) {
+          return;
+        }
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
         if (plugin?.gateway?.stopAccount) {
@@ -929,10 +941,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setStatus: (next) => setRuntime(channelId, id, next),
           });
         }
-        const stoppedCleanly = await waitForChannelStopGracefully(
-          task,
-          CHANNEL_STOP_ABORT_TIMEOUT_MS,
-        );
+        const stoppedCleanly = await gracefulStop;
+        if (lifecycleWasReplaced()) {
+          return;
+        }
         if (!stoppedCleanly) {
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
@@ -957,8 +969,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         }
         recoveryStopTimedOut.delete(rKey);
         recoveryStartRequested.delete(rKey);
-        store.aborts.delete(id);
-        store.tasks.delete(id);
+        if (store.aborts.get(id) === abort) {
+          store.aborts.delete(id);
+        }
+        if (store.tasks.get(id) === task) {
+          store.tasks.delete(id);
+        }
         setStoppedRuntime(channelId, id, {
           restartPending: false,
           lastStopAt: Date.now(),
