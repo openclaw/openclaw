@@ -25,6 +25,7 @@ type RenderedPane = HTMLElement & {
   active: boolean;
   paneTitle: string;
   narrow: boolean;
+  mergedChrome: boolean;
   onOpenSplitView?: () => void;
   onClosePane?: (paneId: string) => void;
 };
@@ -103,9 +104,9 @@ function setNavigationContext(page: ChatPage) {
 function stubMatchMedia(matches: boolean) {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({
+    vi.fn((query: string) => ({
       matches,
-      media: "(max-width: 1099px)",
+      media: query,
       onchange: null,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -141,12 +142,26 @@ describe("chat page split layout host", () => {
     expect(itemAt(panes, 0, "rendered pane").paneId).toBe("p1");
     expect(itemAt(panes, 0, "rendered pane").sessionKey).toBe("main");
     expect(itemAt(panes, 0, "rendered pane").active).toBe(true);
+    expect(itemAt(panes, 0, "rendered pane").mergedChrome).toBe(false);
     expect(itemAt(panes, 0, "rendered pane").classList.contains("chat-split-view__pane")).toBe(
       false,
     );
     expect(page.querySelector("resizable-divider")).toBeNull();
     // The always-on pane header owns the classic split-view opener.
     expect(typeof itemAt(panes, 0, "rendered pane").onOpenSplitView).toBe("function");
+  });
+
+  it("passes merged chrome from the shared mobile-nav query", async () => {
+    stubMatchMedia(true);
+    const page = new ChatPage();
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+
+    const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+    expect(pane.mergedChrome).toBe(true);
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 1099px)");
+    expect(matchMedia).toHaveBeenCalledWith("(max-width: 1100px)");
   });
 
   it("retains the classic pane element while split view opens and closes", async () => {

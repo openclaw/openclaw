@@ -284,6 +284,7 @@ class ChatPane extends OpenClawLightDomElement {
   ) => void;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) mergedChrome = false;
   @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
@@ -2136,6 +2137,7 @@ class ChatPane extends OpenClawLightDomElement {
       paneId: this.paneId,
       active: this.active,
       narrow: this.narrow,
+      mergedChrome: this.mergedChrome,
       title: this.paneTitle,
       session: row,
       catalog,
