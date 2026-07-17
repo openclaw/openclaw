@@ -19,13 +19,13 @@ import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
-  resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
+import { resetPluginToolDescriptorCacheForTest } from "./tools.test-fixtures.js";
 
 describe("plugin tool descriptor cache keys", () => {
   afterEach(() => {
     hoisted.resolveRuntimeConfigCacheKey.mockClear();
-    resetPluginToolDescriptorCache();
+    resetPluginToolDescriptorCacheForTest();
   });
 
   it("memoizes config cache keys across plugin descriptor keys in one resolution pass", () => {
@@ -76,6 +76,23 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
+  });
+
+  it("isolates descriptor caches by declared gateway client capabilities", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["show_widget"],
+      ctx: { workspaceDir: "/tmp/workspace" },
+    };
+
+    const caplessKey = buildPluginToolDescriptorCacheKey(base);
+    const inlineKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      clientCaps: ["inline-widgets"],
+    });
+
+    expect(caplessKey).not.toBe(inlineKey);
   });
 
   it("keeps distinct config objects distinct within the memo", () => {

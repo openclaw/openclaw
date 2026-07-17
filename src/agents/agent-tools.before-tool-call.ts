@@ -40,6 +40,7 @@ import {
   describeNativePluginApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
 } from "../infra/exec-approval-surface.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -74,7 +75,10 @@ import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
+  recordToolExecutionTracked,
+  recordToolExecutionStarted,
   recordStructuredReplaySafeToolCall,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
@@ -365,11 +369,21 @@ export function finalizeToolTerminalPresentation(params: {
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
-export class BeforeToolCallBlockedError extends Error {
+class BeforeToolCallBlockedError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "BeforeToolCallBlockedError";
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
+  ] = {
+    create(message: string): Error {
+      return new BeforeToolCallBlockedError(message);
+    },
+  };
 }
 
 class BeforeToolCallFailureError extends Error {
@@ -828,6 +842,24 @@ function emitToolBlockedSecurityEvent(params: {
   });
 }
 
+// Once-per-plugin-per-process deprecation signal; the field is ignored at
+// runtime because unresolved approvals always fail closed on timeout.
+const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
+
+function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
+  if (approval.timeoutBehavior !== "allow") {
+    return;
+  }
+  const pluginId = approval.pluginId ?? "unknown-plugin";
+  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
+    return;
+  }
+  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
+  log.warn(
+    `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
+  );
+}
+
 function notifyPluginApprovalResolution(
   approval: PluginApprovalRequest,
   resolution: PluginApprovalResolution,
@@ -843,6 +875,21 @@ function notifyPluginApprovalResolution(
   } catch (err) {
     log.warn(`plugin onResolution callback failed: ${String(err)}`);
   }
+}
+
+function resolvePermittedPluginApprovalResolution(
+  decision: unknown,
+  allowedDecisions: readonly string[],
+): PluginApprovalResolution {
+  if (
+    (decision === PluginApprovalResolutions.ALLOW_ONCE ||
+      decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+      decision === PluginApprovalResolutions.DENY) &&
+    allowedDecisions.includes(decision)
+  ) {
+    return decision;
+  }
+  return PluginApprovalResolutions.TIMEOUT;
 }
 
 function buildPluginApprovalFailureReason(params: {
@@ -894,6 +941,7 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   try {
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
@@ -918,16 +966,11 @@ async function requestPluginToolApproval(params: {
         signal: params.signal,
       });
       const decision = result.decision;
-      const resolution: PluginApprovalResolution =
-        decision === PluginApprovalResolutions.ALLOW_ONCE ||
-        decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
-        decision === PluginApprovalResolutions.DENY
-          ? decision
-          : PluginApprovalResolutions.TIMEOUT;
+      const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
       notifyPluginApprovalResolution(approval, resolution);
       if (
-        decision === PluginApprovalResolutions.ALLOW_ONCE ||
-        decision === PluginApprovalResolutions.ALLOW_ALWAYS
+        resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+        resolution === PluginApprovalResolutions.ALLOW_ALWAYS
       ) {
         return {
           blocked: false,
@@ -935,7 +978,7 @@ async function requestPluginToolApproval(params: {
           approvalResolution: resolution,
         };
       }
-      if (decision === PluginApprovalResolutions.DENY) {
+      if (resolution === PluginApprovalResolutions.DENY) {
         return {
           blocked: true,
           kind: "failure",
@@ -943,13 +986,6 @@ async function requestPluginToolApproval(params: {
           deniedReason: "plugin-approval",
           reason: "Denied by user",
           params: params.baseParams,
-        };
-      }
-      if (approval.timeoutBehavior === "allow") {
-        return {
-          blocked: false,
-          params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-          approvalResolution: resolution,
         };
       }
       // Veto carries the plugin-supplied reason; plain timeouts record a
@@ -976,7 +1012,7 @@ async function requestPluginToolApproval(params: {
     const requestResult: {
       id?: string;
       status?: string;
-      decision?: string | null;
+      decision?: unknown;
       deliveryRoute?: string;
     } = await callGatewayTool(
       "plugin.approval.request",
@@ -1019,7 +1055,7 @@ async function requestPluginToolApproval(params: {
       };
     }
     const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
-    let decision: string | null | undefined;
+    let decision: unknown;
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
@@ -1042,7 +1078,7 @@ async function requestPluginToolApproval(params: {
       gatewayApprovalPhase = "wait";
       const waitPromise: Promise<{
         id?: string;
-        decision?: string | null;
+        decision?: unknown;
       }> = callGatewayTool(
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
@@ -1050,7 +1086,7 @@ async function requestPluginToolApproval(params: {
         { timeoutMs: gatewayTimeoutMs },
         { id },
       );
-      let waitResult: { id?: string; decision?: string | null } | undefined;
+      let waitResult: { id?: string; decision?: unknown } | undefined;
       if (params.signal) {
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
@@ -1071,18 +1107,15 @@ async function requestPluginToolApproval(params: {
       } else {
         waitResult = await waitPromise;
       }
-      decision = waitResult?.decision;
+      // Bind the verdict to the request that parked this call. A stale or
+      // misrouted reply must never release a different tool gate.
+      decision = waitResult?.id === id ? waitResult.decision : undefined;
     }
-    const resolution: PluginApprovalResolution =
-      decision === PluginApprovalResolutions.ALLOW_ONCE ||
-      decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
-      decision === PluginApprovalResolutions.DENY
-        ? decision
-        : PluginApprovalResolutions.TIMEOUT;
+    const resolution = resolvePermittedPluginApprovalResolution(decision, allowedDecisions);
     notifyPluginApprovalResolution(approval, resolution);
     if (
-      decision === PluginApprovalResolutions.ALLOW_ONCE ||
-      decision === PluginApprovalResolutions.ALLOW_ALWAYS
+      resolution === PluginApprovalResolutions.ALLOW_ONCE ||
+      resolution === PluginApprovalResolutions.ALLOW_ALWAYS
     ) {
       return {
         blocked: false,
@@ -1090,7 +1123,7 @@ async function requestPluginToolApproval(params: {
         approvalResolution: resolution,
       };
     }
-    if (decision === PluginApprovalResolutions.DENY) {
+    if (resolution === PluginApprovalResolutions.DENY) {
       return {
         blocked: true,
         kind: "failure",
@@ -1098,14 +1131,6 @@ async function requestPluginToolApproval(params: {
         deniedReason: "plugin-approval",
         reason: "Denied by user",
         params: params.baseParams,
-      };
-    }
-    const timeoutBehavior = approval.timeoutBehavior ?? "deny";
-    if (timeoutBehavior === "allow") {
-      return {
-        blocked: false,
-        params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
-        approvalResolution: resolution,
       };
     }
     const fallbackTimeoutReason = approval.timeoutReason ?? "Approval timed out";
@@ -1201,6 +1226,7 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
   if (!approval) {
     return undefined;
   }
+  warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
@@ -1709,7 +1735,6 @@ export async function runBeforeToolCallHook(args: {
   }
 }
 
-/** Wrap a tool execute function with before_tool_call hooks and diagnostics. */
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
@@ -1725,14 +1750,10 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  // Resolved once per wrap from the same opt-in config gate the model-content
-  // path uses; controls whether tool input/output rides the trusted private channel.
   const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      // Allocate before any async preparation so parallel completions retain
-      // the assistant message's tool-call order.
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolName(toolName || "tool");
@@ -1872,6 +1893,8 @@ export function wrapToolWithBeforeToolCallHook(
       }
       let executeParams: unknown;
       try {
+        // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
+        signal?.throwIfAborted();
         executeParams = reconcileCodeModeExecBeforeHookParams({
           tool,
           originalParams: preparedParams,
@@ -1889,6 +1912,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      recordToolExecutionStarted(toolCallId, ctx?.runId);
       if (hookOptions.emitDiagnostics) {
         emitTrustedDiagnosticEvent({
           type: "tool.execution.started",
@@ -1975,6 +1999,18 @@ export function wrapToolWithBeforeToolCallHook(
       }
     },
   };
+  const executeWithHooks = wrappedTool.execute;
+  wrappedTool.execute = async (toolCallId, params, signal, onUpdate) => {
+    recordToolExecutionTracked(toolCallId, ctx?.runId);
+    try {
+      return await executeWithHooks(toolCallId, params, signal, onUpdate);
+    } finally {
+      // Timeout observers may consume this while the call is still pending. The
+      // wrapper owns final cleanup; every pre-body settle records the separate
+      // blocked fact, so direct callers cannot retain settled ids.
+      clearTrackedToolExecution(toolCallId, ctx?.runId);
+    }
+  };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   copyToolTerminalPresentation(tool, wrappedTool);
@@ -2014,8 +2050,7 @@ export function rewrapToolWithBeforeToolCallHook(
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
-  // Keep schema and metadata replacements applied after the original wrap while
-  // restoring the unwrapped execute function for the new hook context.
+  // Preserve post-wrap schema/metadata while restoring the source execute function.
   const rewrapSource: AnyAgentTool = {
     ...tool,
     execute: sourceTool.execute,
@@ -2041,22 +2076,6 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
   }
 }
 
-/** Test-only access to before_tool_call internals. */
-export const testing = {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
-  buildAdjustedParamsKey,
-  adjustedParamsByToolCallId,
-  preExecutionBlockedToolCallIds,
-  structuredReplaySafeToolCallIds,
-  runBeforeToolCallHook,
-  mergeParamsWithApprovalOverrides,
-  isPlainObject,
-};
-export { testing as __testing };
-
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -2070,3 +2089,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

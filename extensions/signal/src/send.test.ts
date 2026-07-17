@@ -87,6 +87,21 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
+    "sends %s through the canonical username parameter",
+    async (target) => {
+      signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
+
+      await sendMessageSignal(target, "hello", { cfg: SIGNAL_TEST_CFG });
+
+      expect(signalRpcRequestMock).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ username: ["alice.42"] }),
+        expect.any(Object),
+      );
+    },
+  );
+
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
     const maxBytes = 12 * 1024 * 1024;

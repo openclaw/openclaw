@@ -1,4 +1,5 @@
 // Huggingface tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -7,7 +8,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
-import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -43,7 +43,7 @@ afterEach(() => {
 
 describe("huggingface models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {
-    const entry = HUGGINGFACE_MODEL_CATALOG[0];
+    const entry = expectDefined(HUGGINGFACE_MODEL_CATALOG[0], "first Hugging Face catalog model");
     const def = buildHuggingfaceModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
@@ -52,6 +52,12 @@ describe("huggingface models", () => {
     expect(def.cost).toEqual(entry.cost);
     expect(def.contextWindow).toBe(entry.contextWindow);
     expect(def.maxTokens).toBe(entry.maxTokens);
+  });
+
+  it("does not advertise the retired Llama 3.3 Turbo route", () => {
+    expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    );
   });
 
   it("discoverHuggingfaceModels returns static catalog when apiKey is empty", async () => {
@@ -63,7 +69,7 @@ describe("huggingface models", () => {
   it("discoverHuggingfaceModels returns static catalog in test env (VITEST)", async () => {
     const models = await discoverHuggingfaceModels("hf_test_token");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
-    expect(models[0].id).toBe("deepseek-ai/DeepSeek-R1");
+    expect(expectDefined(models[0], "first Hugging Face model").id).toBe("deepseek-ai/DeepSeek-R1");
   });
 
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {
@@ -80,7 +86,7 @@ describe("huggingface models", () => {
 
     await discoverHuggingfaceModels("hf_test_token");
 
-    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("accepts a custom discovery timeout override", async () => {

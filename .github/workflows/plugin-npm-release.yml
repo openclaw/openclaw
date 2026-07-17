@@ -366,11 +366,36 @@ jobs:
           artifact_dir="${RUNNER_TEMP}/${ARTIFACT_NAME}"
           rm -rf "${artifact_dir}"
           mkdir -p "${artifact_dir}"
+          pack_output="${RUNNER_TEMP}/${EXTENSION_ID}-npm-pack-output.txt"
           pack_json="${artifact_dir}/npm-pack.json"
 
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
-            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_json}"
+            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
+
+          node - "${pack_output}" "${pack_json}" <<'NODE'
+          const fs = require("node:fs");
+          const raw = fs.readFileSync(process.argv[2], "utf8").trim();
+          let pack;
+          for (let index = raw.lastIndexOf("["); index >= 0; index = raw.lastIndexOf("[", index - 1)) {
+            try {
+              const candidate = JSON.parse(raw.slice(index));
+              if (Array.isArray(candidate)) {
+                pack = candidate;
+                break;
+              }
+            } catch {
+              // npm can print bundled-dependency summaries before its JSON result.
+            }
+            if (index === 0) {
+              break;
+            }
+          }
+          if (!pack) {
+            throw new Error("npm pack did not emit a JSON array.");
+          }
+          fs.writeFileSync(process.argv[3], `${JSON.stringify(pack, null, 2)}\n`);
+          NODE
 
           tarball_name="$(
             node - "${pack_json}" <<'NODE'
@@ -458,8 +483,8 @@ jobs:
           if (repositoryUrl !== "https://github.com/openclaw/openclaw") {
             fail(`Packed repository route mismatch: ${JSON.stringify(repositoryUrl)}.`);
           }
-          if (pluginManifest.id !== process.env.EXTENSION_ID) {
-            fail(`Packed plugin id mismatch: expected ${process.env.EXTENSION_ID}.`);
+          if (typeof pluginManifest.id !== "string" || pluginManifest.id.length === 0) {
+            fail("Packed plugin id is missing.");
           }
           if (packEntry.integrity !== actualIntegrity || packEntry.shasum !== actualShasum) {
             fail("npm pack integrity metadata does not match the prepared tarball.");
@@ -756,9 +781,10 @@ jobs:
             manifest.package.installNpmSpec !== process.env.INSTALL_NPM_SPEC ||
             manifest.package.publishTag !== process.env.PUBLISH_TAG ||
             repositoryUrl !== "https://github.com/openclaw/openclaw" ||
-            manifest.package.pluginId !== process.env.EXTENSION_ID ||
+            typeof pluginManifest.id !== "string" ||
+            pluginManifest.id.length === 0 ||
+            manifest.package.pluginId !== pluginManifest.id ||
             manifest.package.repositoryUrl !== repositoryUrl ||
-            pluginManifest.id !== process.env.EXTENSION_ID ||
             manifest.package.packageJsonSha256 !== packedPackageJsonSha256 ||
             manifest.package.sourcePackageJsonSha256 !== sourcePackageJsonSha256
           ) {
@@ -1059,13 +1085,22 @@ jobs:
             exit 1
           }
           if [[ "$publish_route" == "npm-token-bootstrap" ]]; then
-            [[ "$WORKFLOW_REF" == "refs/heads/main" ]] || {
-              echo "npm token bootstrap requires the trusted main plugin release workflow." >&2
+            sha_pinned_release_publish=false
+            if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+              workflow_sha_prefix="${BASH_REMATCH[1]}"
+              [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
+                echo "npm token bootstrap release-publish tag does not match the workflow SHA." >&2
+                exit 1
+              }
+              sha_pinned_release_publish=true
+            fi
+            [[ "$WORKFLOW_REF" == "refs/heads/main" || "$sha_pinned_release_publish" == "true" ]] || {
+              echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
               exit 1
             }
             git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-              echo "npm token bootstrap workflow revision is not reachable from main." >&2
+              echo "npm token bootstrap workflow revision is not reachable from current main." >&2
               exit 1
             }
           fi
@@ -1093,6 +1128,7 @@ jobs:
           curl --fail --location --silent --show-error \
             --retry 2 \
             --retry-all-errors \
+            --connect-timeout 10 \
             --max-time 120 \
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -1205,7 +1241,7 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
-      - name: Publish approved Meta bootstrap tarball
+      - name: Publish approved bootstrap tarball
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -1216,19 +1252,15 @@ jobs:
           TARBALL_PATH: ${{ steps.publication_evidence.outputs.tarball_path }}
         run: |
           set -euo pipefail
-          [[ "$PACKAGE_NAME" == "@openclaw/meta-provider" && "$PACKAGE_DIR" == "extensions/meta" ]] || {
-            echo "npm token bootstrap is restricted to the approved Meta provider package." >&2
-            exit 1
-          }
           [[ "$PACKAGE_VERSION" == *"-beta."* && "$PUBLISH_TAG" == "beta" ]] || {
-            echo "Meta npm token bootstrap requires an approved beta package and beta tag." >&2
+            echo "npm token bootstrap requires an approved beta package and beta tag." >&2
             exit 1
           }
           [[ -n "${NPM_TOKEN// }" ]] || {
-            echo "Meta npm token bootstrap requires the protected npm release token." >&2
+            echo "npm token bootstrap requires the protected npm release token." >&2
             exit 1
           }
-          publish_home="$(mktemp -d "${RUNNER_TEMP}/meta-npm-bootstrap.XXXXXX")"
+          publish_home="$(mktemp -d "${RUNNER_TEMP}/plugin-npm-bootstrap.XXXXXX")"
           cleanup() {
             rm -rf "$publish_home"
           }
@@ -1252,7 +1284,7 @@ jobs:
               --provenance \
               --tag "$PUBLISH_TAG"
 
-      - name: Verify Meta bootstrap published runtime
+      - name: Verify bootstrap published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}

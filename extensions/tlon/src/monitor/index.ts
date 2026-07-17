@@ -47,6 +47,7 @@ import {
   isSummarizationRequest,
   resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
+  resolveTlonGroupMentionDecision,
   stripBotMention,
 } from "./utils.js";
 
@@ -819,13 +820,19 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           const mentioned = isBotMentioned(rawText, botShipName, botNickname ?? undefined);
           const inParticipatedThread =
             isThreadReply && parentId && participatedThreads.has(parentId);
+          const mentionDecision = resolveTlonGroupMentionDecision({
+            cfg,
+            accountId: account.accountId,
+            wasMentioned: mentioned,
+            botParticipatedInThread: Boolean(inParticipatedThread),
+          });
 
-          if (!mentioned && !inParticipatedThread) {
+          if (mentionDecision.shouldSkip) {
             return;
           }
 
           // Log why we're responding
-          if (inParticipatedThread && !mentioned) {
+          if (mentionDecision.implicitMention && !mentioned) {
             runtime.log?.(
               `[tlon] Responding to thread we participated in (no mention): ${parentId}`,
             );
@@ -1522,3 +1529,4 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,17 +1,87 @@
 // Covers Windows command-output code page parsing and decoding.
-import { describe, expect, it } from "vitest";
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const spawnSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
+
 import {
   createWindowsOutputDecoder,
   decodeWindowsOutputBuffer,
   decodeWindowsTextFileBuffer,
-  parseWindowsCodePage,
 } from "./windows-encoding.js";
 
 describe("windows output encoding", () => {
-  it("parses code pages from chcp output text", () => {
-    expect(parseWindowsCodePage("Active code page: 936")).toBe(936);
-    expect(parseWindowsCodePage("活动代码页: 65001")).toBe(65001);
-    expect(parseWindowsCodePage("no code page")).toBeNull();
+  afterEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+    spawnSyncMock.mockReset();
+  });
+
+  it("bounds and caches failed Windows encoding probes", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    spawnSyncMock.mockReturnValue({
+      error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
+      output: [null, "", ""],
+      pid: 1,
+      signal: "SIGKILL",
+      status: null,
+      stderr: "",
+      stdout: "",
+    });
+    vi.resetModules();
+    const {
+      decodeWindowsOutputBuffer: decodeOutputWithFreshCache,
+      decodeWindowsTextFileBuffer: decodeTextWithFreshCache,
+    } = await import("./windows-encoding.js");
+    const undecodableByte = Buffer.from([0x80]);
+
+    expect(decodeOutputWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
+      undecodableByte.toString("utf8"),
+    );
+    expect(decodeOutputWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
+      undecodableByte.toString("utf8"),
+    );
+    expect(decodeTextWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
+      undecodableByte.toString("utf8"),
+    );
+    expect(decodeTextWithFreshCache({ buffer: undecodableByte, platform: "win32" })).toBe(
+      undecodableByte.toString("utf8"),
+    );
+
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      ["/d", "/s", "/c", "chcp"],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    );
+    expect(spawnSyncMock).toHaveBeenNthCalledWith(
+      2,
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    );
   });
 
   it("decodes GBK output on Windows when UTF-8 is invalid and code page is known", () => {
@@ -106,7 +176,9 @@ describe("windows output encoding", () => {
   it("keeps split UTF-8 output intact on POSIX", () => {
     const decoder = createWindowsOutputDecoder({ platform: "linux" });
     const raw = Buffer.from(JSON.stringify({ text: "hello 世" }), "utf8");
-    const splitIndex = raw.indexOf(Buffer.from("世", "utf8")[0]);
+    const splitIndex = raw.indexOf(
+      expectDefined(Buffer.from("世", "utf8")[0], 'Buffer.from("世", "utf8")[0] test invariant'),
+    );
 
     expect(decoder.decode(raw.subarray(0, splitIndex + 1))).toBe(
       raw.subarray(0, splitIndex).toString("utf8"),

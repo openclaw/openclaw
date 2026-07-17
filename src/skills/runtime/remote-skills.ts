@@ -40,9 +40,8 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter });
     } catch (error) {
-      log.warn(
-        `dropped node skill with invalid frontmatter: ${nodeId}/${skill.name}: ${String(error)}`,
-      );
+      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
   return prepared;
@@ -246,6 +245,12 @@ export function mergeRemoteNodeSkillEntries(
   );
 }
 
-export function resetRemoteNodeSkillsForTests(): void {
+function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.remoteNodeSkillsTestApi")] = {
+    resetRemoteNodeSkillsForTests,
+  };
 }

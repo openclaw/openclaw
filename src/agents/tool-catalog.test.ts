@@ -37,8 +37,10 @@ describe("tool-catalog", () => {
       "x_search",
       "memory_search",
       "memory_get",
+      "sessions",
       "sessions_list",
       "sessions_history",
+      "sessions_search",
       "sessions_send",
       "sessions_spawn",
       "sessions_yield",
@@ -46,6 +48,8 @@ describe("tool-catalog", () => {
       "session_status",
       "spawn_task",
       "dismiss_task",
+      "screen",
+      "terminal",
       "cron",
       "get_goal",
       "create_goal",
@@ -63,8 +67,10 @@ describe("tool-catalog", () => {
   it("includes bundle MCP tools in coding and messaging profile policies", () => {
     expect(requirePolicyAllow("coding").at(-1)).toBe("bundle-mcp");
     expect(requirePolicyAllow("messaging")).toEqual([
+      "sessions",
       "sessions_list",
       "sessions_history",
+      "sessions_search",
       "sessions_send",
       "session_status",
       "message",

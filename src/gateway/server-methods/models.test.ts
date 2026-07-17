@@ -1,5 +1,7 @@
 // Models method tests cover slow catalog timeouts, configured/all views,
 // validation errors, and protocol response shapes.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -51,16 +53,26 @@ function requestModelsList(params: {
     readOnly?: boolean;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
+  includeProviderCapabilities?: boolean;
 }) {
   const respond = params.respond ?? vi.fn();
-  const request = modelsHandlers["models.list"]({
+  const request = expectDefined(
+    modelsHandlers["models.list"],
+    'modelsHandlers["models.list"] test invariant',
+  )({
     req: {
       type: "req",
       id: params.reqId ?? `req-models-list-${params.view}`,
       method: "models.list",
-      params: { view: params.view },
+      params: {
+        view: params.view,
+        ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
+      },
     },
-    params: { view: params.view },
+    params: {
+      view: params.view,
+      ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
+    },
     respond: respond as RespondFn,
     client: null,
     isWebchatConnect: () => false,
@@ -82,6 +94,40 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("reports API-key capability from provider auth contracts when requested", async () => {
+    const { request, respond } = requestModelsList({
+      view: "all",
+      includeProviderCapabilities: true,
+      loadGatewayModelCatalog: vi.fn(() =>
+        Promise.resolve([
+          { id: "claude-test", name: "Claude Test", provider: "anthropic" },
+          { id: "copilot-test", name: "Copilot Test", provider: "github-copilot" },
+          { id: "byteplus-test", name: "BytePlus Plan Test", provider: "byteplus-plan" },
+          { id: "custom-test", name: "Custom Test", provider: "custom-cloud" },
+        ]),
+      ),
+    });
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        models: expect.arrayContaining([
+          expect.objectContaining({ provider: "anthropic", apiKeySupported: true }),
+          expect.objectContaining({ provider: "github-copilot", apiKeySupported: false }),
+          expect.objectContaining({ provider: "byteplus-plan", apiKeySupported: true }),
+        ]),
+      },
+      undefined,
+    );
+    const payload = respond.mock.calls[0]?.[1] as
+      | { models: Array<{ provider: string; apiKeySupported?: boolean }> }
+      | undefined;
+    const custom = payload?.models.find((model) => model.provider === "custom-cloud");
+    expect(custom).toBeDefined();
+    expect(custom).not.toHaveProperty("apiKeySupported");
+  });
+
   it("keeps source-authored provider inventory when the canonical catalog is missing", async () => {
     const sourceProvider = {
       baseUrl: "https://vllm.example/v1",
@@ -267,6 +313,7 @@ describe("models.list", () => {
                 id: "gpt-test",
                 name: "GPT Test",
                 provider: "openai",
+                agentRuntime: { id: "openclaw", source: "implicit" },
                 available: false,
               },
             ],
@@ -363,7 +410,15 @@ describe("models.list", () => {
         expect(respond).toHaveBeenCalledWith(
           true,
           {
-            models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }],
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                agentRuntime: { id: "codex", source: "implicit" },
+                available: false,
+              },
+            ],
           },
           undefined,
         );
@@ -443,8 +498,20 @@ describe("models.list", () => {
         true,
         {
           models: [
-            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
-            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4 Codex",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
+            {
+              id: "gpt-codex-test",
+              name: "GPT Codex Test",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
             { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
           ],
@@ -471,8 +538,20 @@ describe("models.list", () => {
               provider: "anthropic",
               available: false,
             },
-            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
-            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4 Codex",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
+            {
+              id: "gpt-codex-test",
+              name: "GPT Codex Test",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
             { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
           ],
@@ -599,6 +678,7 @@ describe("models.list", () => {
                   id: "gpt-5.4",
                   name: "GPT-5.4 Codex",
                   provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
                   available: true,
                 },
               ],
@@ -667,6 +747,7 @@ describe("models.list", () => {
                   id: "claude-opus-4-8",
                   name: "Claude Opus 4.8",
                   provider: "anthropic",
+                  agentRuntime: { id: "claude-cli", source: "model" },
                   available: true,
                 },
               ],
@@ -790,12 +871,16 @@ describe("models.list", () => {
         },
       },
     };
+    const sourceProvider = expectDefined(
+      sourceConfig.models?.providers?.vllm,
+      "source vLLM provider",
+    );
     const runtimeConfig: OpenClawConfig = {
       ...sourceConfig,
       models: {
         providers: {
           vllm: {
-            ...sourceConfig.models!.providers!.vllm,
+            ...sourceProvider,
             apiKey: "resolved-runtime-key",
           },
         },
@@ -1297,3 +1382,4 @@ describe("models.list", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -19,7 +19,6 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelDeliveryCapabilities,
   ChannelOutboundAdapter,
-  ChannelOutboundContext,
   ChannelOutboundPayloadContext,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
@@ -41,9 +40,11 @@ import {
   type ReplyPayloadDeliveryPin,
 } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
@@ -68,6 +69,8 @@ import {
   runOutboundDeliveryCommitHooks,
   type OutboundDeliveryCommitHook,
 } from "./delivery-commit-hooks.js";
+import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
+import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -84,6 +87,7 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
+  assertStableMediaFanout,
   planOutboundMediaMessageUnits,
   planOutboundTextMessageUnits,
   type OutboundMessageSendOverrides,
@@ -109,8 +113,7 @@ import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
-export { normalizeOutboundPayloads } from "./payloads.js";
-export { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
+export type { OutboundSendDeps } from "./send-deps.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
@@ -130,7 +133,7 @@ export type DurableFinalDeliveryRequirements = Partial<
   Record<DurableFinalDeliveryRequirement, boolean>
 >;
 
-export type OutboundDurableDeliverySupport =
+type OutboundDurableDeliverySupport =
   | { ok: true }
   | {
       ok: false;
@@ -199,7 +202,6 @@ type ChannelHandler = {
   ) => Promise<OutboundDeliveryResult>;
 };
 
-type ChannelMessageLifecycleContext = ChannelMessageSendAttemptContext;
 type PlatformSendRoute = {
   replyToId?: string | null;
   threadId?: string | number | null;
@@ -221,6 +223,7 @@ type ChannelHandlerParams = {
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
+  conversationReadOrigin?: "delegated" | "direct-operator";
   deliveryQueueId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
@@ -269,7 +272,7 @@ async function runChannelMessageSendWithLifecycle<
   TResult extends ChannelMessageSendResult,
 >(params: {
   lifecycle?: ChannelMessageSendLifecycleAdapter;
-  ctx: ChannelMessageLifecycleContext;
+  ctx: ChannelMessageSendAttemptContext;
   send: () => Promise<TResult>;
 }): Promise<{ result: TResult; afterCommit?: OutboundDeliveryCommitHook }> {
   if (!params.lifecycle) {
@@ -407,13 +410,7 @@ function createPluginHandler(
         await params.onDeliveryResult?.(normalizeChannelMessageSendResult(params.channel, result));
       }
     : undefined;
-  const resolveCtx = (overrides?: {
-    replyToId?: string | null;
-    replyToIdSource?: "explicit" | "implicit";
-    threadId?: string | number | null;
-    audioAsVoice?: boolean;
-    formatting?: OutboundDeliveryFormattingOptions;
-  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+  const resolveCtx = (overrides?: OutboundMessageSendOverrides) => ({
     ...baseCtx,
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
@@ -422,14 +419,13 @@ function createPluginHandler(
         : baseCtx.replyToIdSource,
     threadId: overrides && "threadId" in overrides ? overrides.threadId : baseCtx.threadId,
     audioAsVoice: overrides?.audioAsVoice,
+    deliveryPartIndex: overrides?.deliveryPartIndex,
     formatting:
       overrides && "formatting" in overrides
         ? { ...baseCtx.formatting, ...overrides.formatting }
         : baseCtx.formatting,
   });
-  const buildTargetRef = (overrides?: {
-    threadId?: string | number | null;
-  }): ChannelOutboundTargetRef => ({
+  const buildTargetRef = (overrides?: OutboundMessageSendOverrides): ChannelOutboundTargetRef => ({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId ?? undefined,
@@ -442,7 +438,13 @@ function createPluginHandler(
     textChunkLimit: outbound?.textChunkLimit,
     supportsMedia: Boolean(messageMedia ?? sendMedia),
     sanitizeText: outbound?.sanitizeText
-      ? (payload) => outbound.sanitizeText!({ text: payload.text ?? "", payload })
+      ? (payload) =>
+          outbound.sanitizeText!({
+            text: payload.text ?? "",
+            payload,
+            cfg: params.cfg,
+            accountId: params.accountId,
+          })
       : undefined,
     normalizePayload: outbound?.normalizePayload
       ? (payload) =>
@@ -635,31 +637,29 @@ function normalizeChannelMessageSendResult(
   };
 }
 
-function createChannelOutboundContextBase(
-  params: ChannelHandlerParams,
-): Omit<ChannelOutboundContext, "text" | "mediaUrl"> {
-  return {
-    cfg: params.cfg,
-    to: params.to,
-    accountId: params.accountId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
-    formatting: params.formatting,
-    threadId: params.threadId,
-    identity: params.identity,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    deps: params.deps,
-    silent: params.silent,
-    mediaAccess: params.mediaAccess,
-    mediaLocalRoots: params.mediaAccess?.localRoots,
-    mediaReadFile: params.mediaAccess?.readFile,
-    gatewayClientScopes: params.gatewayClientScopes,
-    deliveryQueueId: params.deliveryQueueId,
-    onPlatformSendDispatch: params.onPlatformSendDispatch,
-    onDeliveryResult: params.onDeliveryResult,
-  };
-}
+const createChannelOutboundContextBase = (params: ChannelHandlerParams) => ({
+  cfg: params.cfg,
+  to: params.to,
+  accountId: params.accountId,
+  replyToId: params.replyToId,
+  replyToIdSource: undefined,
+  replyToMode: params.replyToMode,
+  formatting: params.formatting,
+  threadId: params.threadId,
+  identity: params.identity,
+  gifPlayback: params.gifPlayback,
+  forceDocument: params.forceDocument,
+  deps: params.deps,
+  silent: params.silent,
+  mediaAccess: params.mediaAccess,
+  mediaLocalRoots: params.mediaAccess?.localRoots,
+  mediaReadFile: params.mediaAccess?.readFile,
+  gatewayClientScopes: params.gatewayClientScopes,
+  conversationReadOrigin: params.conversationReadOrigin,
+  deliveryQueueId: params.deliveryQueueId,
+  onPlatformSendDispatch: params.onPlatformSendDispatch,
+  onDeliveryResult: params.onDeliveryResult,
+});
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
 
@@ -677,6 +677,7 @@ async function persistQueuedPreSendState(params: {
   queuePolicy: OutboundDeliveryQueuePolicy;
   stateDir?: string;
   route: PlatformSendRoute;
+  retainSpoolArtifacts?: boolean;
 }): Promise<QueuedPreSendState> {
   try {
     await markDeliveryPlatformSendAttemptStarted(params.queueId, params.stateDir, {
@@ -692,7 +693,11 @@ async function persistQueuedPreSendState(params: {
     );
     // If the pre-send marker is unavailable, remove the intent before crossing
     // the platform boundary. An ack failure aborts the send, leaving safe retry state.
-    await ackDelivery(params.queueId, params.stateDir);
+    if (params.retainSpoolArtifacts) {
+      await ackDelivery(params.queueId, params.stateDir, { retainSpoolArtifacts: true });
+    } else {
+      await ackDelivery(params.queueId, params.stateDir);
+    }
     return "acked";
   }
 }
@@ -761,6 +766,7 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  conversationReadOrigin?: "delegated" | "direct-operator";
 };
 
 /**
@@ -870,7 +876,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }, { extraContent: payload.location != null })) {
       return null;
     }
     if (text) {
@@ -946,6 +952,43 @@ function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
     next[key] = stripped;
   }
   return changed ? next : value;
+}
+
+/** Every media reference a payload set carries, in payload order. */
+function collectPayloadMediaSources(payloads: readonly ReplyPayload[]): string[] {
+  return payloads.flatMap((payload) => [
+    ...(typeof payload.mediaUrl === "string" && payload.mediaUrl.trim() ? [payload.mediaUrl] : []),
+    ...(payload.mediaUrls ?? []).filter((url) => typeof url === "string" && url.trim()),
+  ]);
+}
+
+/**
+ * Resolves the media read capability for one send. Queue staging and the live
+ * send must resolve it identically: staging copies exactly the bytes the send is
+ * already allowed to read, so a narrower gate here would reject media the send
+ * would have delivered, and a wider one would widen read authority.
+ */
+function resolveOutboundMediaAccessForSend(
+  params: DeliverOutboundPayloadsCoreParams,
+  channel: string,
+  mediaSources: readonly string[],
+): OutboundMediaAccess {
+  if (mediaSources.length === 0) {
+    return params.mediaAccess ?? {};
+  }
+  return resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources,
+    mediaAccess: params.mediaAccess,
+    sessionKey: params.session?.policyKey ?? params.session?.key,
+    messageProvider: params.session?.key ? undefined : channel,
+    accountId: params.session?.requesterAccountId ?? params.accountId,
+    requesterSenderId: params.session?.requesterSenderId,
+    requesterSenderName: params.session?.requesterSenderName,
+    requesterSenderUsername: params.session?.requesterSenderUsername,
+    requesterSenderE164: params.session?.requesterSenderE164,
+  });
 }
 
 function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
@@ -1384,24 +1427,59 @@ export async function deliverOutboundPayloadsInternal(
     }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
-  const queuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
-  const queuePayloadsChanged = queuePayloads.some((payload, index) => payload !== payloads[index]);
+  const strippedQueuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
+  const queuePayloadsChanged = strippedQueuePayloads.some(
+    (payload, index) => payload !== payloads[index],
+  );
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
+  // Media staging only rewrites source URLs one-for-one, and the plan is read for
+  // its per-payload counts (see resolveMessagePlanMediaCount), so it stays keyed
+  // to the payload shape rather than to which copy the row happens to reference.
   const queueRenderedBatchPlan = queuePayloadsChanged
-    ? createRenderedMessageBatchPlan(queuePayloads)
+    ? createRenderedMessageBatchPlan(strippedQueuePayloads)
     : renderedBatchPlan;
 
-  // Write-ahead delivery queue: persist before sending, remove after success.
-  const queueId = params.skipQueue
-    ? null
-    : await enqueueDelivery({
+  const stageAndEnqueueDelivery = async (): Promise<string | null> => {
+    // A durable row must not outlive its media. Producer-owned local sources
+    // (TTS temps above all) are deleted when this process exits, so the queue
+    // takes its own copy first and the row references that; the live send below
+    // keeps the original path and stays copy-free.
+    const staged = await stageQueuePayloadMedia({
+      payloads: strippedQueuePayloads,
+      // Resolved exactly as the live send resolves it: staging must neither
+      // reject media the send would deliver (agent workspace sources are only
+      // reachable through the agent-scoped roots) nor read more than the send may.
+      mediaAccess: resolveOutboundMediaAccessForSend(
+        params,
+        channel,
+        collectPayloadMediaSources(strippedQueuePayloads),
+      ),
+      maxBytes: resolveOutboundMediaMaxBytes({
+        cfg: params.cfg,
+        channel,
+        accountId: params.accountId,
+      }),
+    });
+    if (staged.status !== "staged") {
+      // Sensitive media must reach neither the spool nor the row, so there is no
+      // replayable copy to promise. Required sends fail closed instead of
+      // persisting an unreplayable row; best-effort degrades to a live-only send.
+      if (queuePolicy === "required") {
+        throw new Error(
+          `Required durable message send is unsupported for ${channel}: ${staged.reason} cannot be persisted`,
+        );
+      }
+      return null;
+    }
+    try {
+      const delivery = {
         channel,
         to,
         accountId: params.accountId,
         queuePolicy,
         requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
-        payloads: queuePayloads,
+        payloads: staged.payloads,
         renderedBatchPlan: queueRenderedBatchPlan,
         threadId: params.threadId,
         replyToId: params.replyToId,
@@ -1416,13 +1494,28 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-      }).catch((err: unknown) => {
+      };
+      return staged.mediaStageId
+        ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
+        : await enqueueDelivery(delivery);
+    } catch (err) {
+      cancelDeliveryQueueMediaStage(staged.mediaStageId);
+      await releaseSpoolArtifacts(staged.artifacts);
+      throw err;
+    }
+  };
+
+  // Invocation authority is not queued; recovery must re-enter delegated after restart.
+  // Write-ahead delivery queue: persist before sending, remove after success.
+  const queueId = params.skipQueue
+    ? null
+    : await stageAndEnqueueDelivery().catch((err: unknown) => {
         if (queuePolicy === "required") {
           emitPreQueueFailure();
           throw err;
         }
         return null;
-      }); // Best-effort delivery falls back to direct send if the queue write fails.
+      }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
   if (queueId) {
     params.onDeliveryIntent?.({
@@ -1518,6 +1611,9 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           queuePolicy: platformQueuePolicy,
           stateDir: platformQueueStateDir,
           route,
+          // Recovery sends read queue-owned media. Removing the row prevents a
+          // duplicate replay, but the active adapter still needs the files.
+          retainSpoolArtifacts: queueId === null && params.deliveryQueueId !== undefined,
         });
         if (queueId && queuedPreSendState === "acked") {
           queuedPostSendState = "acked";
@@ -1955,21 +2051,7 @@ async function deliverOutboundPayloadsCore(
       })
     )[0] ?? false;
   const resolveMediaAccess = (mediaSources: readonly string[]): OutboundMediaAccess =>
-    mediaSources.length > 0
-      ? resolveAgentScopedOutboundMediaAccess({
-          cfg,
-          agentId: params.session?.agentId ?? params.mirror?.agentId,
-          mediaSources,
-          mediaAccess: params.mediaAccess,
-          sessionKey: params.session?.policyKey ?? params.session?.key,
-          messageProvider: params.session?.key ? undefined : channel,
-          accountId: params.session?.requesterAccountId ?? accountId,
-          requesterSenderId: params.session?.requesterSenderId,
-          requesterSenderName: params.session?.requesterSenderName,
-          requesterSenderUsername: params.session?.requesterSenderUsername,
-          requesterSenderE164: params.session?.requesterSenderE164,
-        })
-      : (params.mediaAccess ?? {});
+    resolveOutboundMediaAccessForSend(params, channel, mediaSources);
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
       cfg,
@@ -1987,6 +2069,7 @@ async function deliverOutboundPayloadsCore(
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
+      conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
       requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: params.onPlatformSendStart,
@@ -2000,13 +2083,7 @@ async function deliverOutboundPayloadsCore(
       return Promise.resolve(baseHandler);
     }
     const key = JSON.stringify(mediaSources);
-    const cached = handlerByMediaSources.get(key);
-    if (cached) {
-      return cached;
-    }
-    const created = createHandler(mediaSources);
-    handlerByMediaSources.set(key, created);
-    return created;
+    return getOrCreatePromise(handlerByMediaSources, key, () => createHandler(mediaSources));
   };
   const handler = baseHandler;
   const configuredTextLimit = handler.chunker
@@ -2123,6 +2200,7 @@ async function deliverOutboundPayloadsCore(
   for (const { index: payloadIndex, payload } of normalizedPayloads) {
     const payloadResultStartIndex = results.length;
     let payloadSummary = buildPayloadSummary(payload);
+    const originalMediaCount = payloadSummary.mediaUrls.length;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -2244,7 +2322,9 @@ async function deliverOutboundPayloadsCore(
         );
         continue;
       }
-      payloadSummary = buildPayloadSummary(effectivePayload);
+      const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
+      assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
+      payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
       effectiveDeliveryKinds.set(payloadIndex, effectiveDeliveryKind);
@@ -2270,12 +2350,19 @@ async function deliverOutboundPayloadsCore(
         deliveryHandler.sendPayload &&
         ((effectivePayload.isError === true &&
           deliveryHandler.sendTextOnlyErrorPayloads === true) ||
-          hasReplyPayloadContent({
-            presentation: effectivePayload.presentation,
-            interactive: effectivePayload.interactive,
-            channelData: effectivePayload.channelData,
-          }) ||
-          effectivePayload.audioAsVoice === true)
+          hasReplyPayloadContent(
+            {
+              presentation: effectivePayload.presentation,
+              interactive: effectivePayload.interactive,
+              channelData: effectivePayload.channelData,
+              location: effectivePayload.location,
+            },
+            {
+              extraContent: effectivePayload.location != null,
+            },
+          ) ||
+          effectivePayload.audioAsVoice === true ||
+          effectivePayload.videoAsNote === true)
       ) {
         const beforeCount = results.length;
         const delivery = await deliveryHandler.sendPayload(
@@ -2563,3 +2650,4 @@ async function deliverOutboundPayloadsCore(
 
   return results;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

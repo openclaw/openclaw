@@ -1,33 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { ContextProvider } from "@lit/context";
-import { LitElement } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGateway,
-  type ApplicationGatewaySnapshot,
+import type {
+  ApplicationContext,
+  ApplicationGateway,
+  ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../test-helpers/application-context.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
 import "./plugins-page.ts";
-
-const PROVIDER_TAG = "test-plugins-page-context-provider";
-
-class PluginsPageContextProvider extends LitElement {
-  private readonly provider = new ContextProvider(this, { context: applicationContext });
-
-  setContext(context: ApplicationContext) {
-    this.provider.setValue(context);
-  }
-}
-
-if (!customElements.get(PROVIDER_TAG)) {
-  customElements.define(PROVIDER_TAG, PluginsPageContextProvider);
-}
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
 
@@ -190,11 +178,10 @@ function createContext(
 async function mountPage(
   context: ApplicationContext,
   routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: PluginsPageContextProvider }> {
-  const provider = document.createElement(PROVIDER_TAG) as PluginsPageContextProvider;
+): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
   page.routeData = routeData;
-  provider.setContext(context);
   provider.append(page);
   document.body.append(provider);
   await page.updateComplete;
@@ -209,13 +196,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function clickMenuItem(page: TestPluginsPage, pluginSelector: string, label: string) {
-  page.querySelector<HTMLButtonElement>(`${pluginSelector} .plugins-kebab`)?.click();
-  await page.updateComplete;
-  const item = [
-    ...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} .plugins-menu__item`),
-  ].find((element) => element.textContent?.includes(label));
-  item?.click();
+async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
+  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
+    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
+  );
+  button?.click();
   await page.updateComplete;
 }
 
@@ -275,7 +260,13 @@ describe("PluginsPage", () => {
     );
 
     expect(page.activeTab).toBe("discover");
-    expect(page.querySelector("#plugins-tab-discover")?.getAttribute("aria-selected")).toBe("true");
+    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
+    ).toBe(true);
   });
 
   it("routes the skills and workshop hub tabs through navigation", async () => {
@@ -418,7 +409,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
     await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
     await vi.waitFor(() => expect(refreshConfig).toHaveBeenCalledOnce());
@@ -451,12 +442,12 @@ describe("PluginsPage", () => {
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
@@ -542,7 +533,7 @@ describe("PluginsPage", () => {
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
     await page.updateComplete;
     expect(page.loading).toBe(true);
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
     await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
     expect(page.loading).toBe(false);
@@ -584,7 +575,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     await vi.waitFor(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
         "Could not refresh Control UI configuration: config.get failed",
@@ -633,13 +624,13 @@ describe("PluginsPage", () => {
       error: null,
     });
 
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
     await vi.waitFor(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
-    await clickMenuItem(page, '[data-plugin-id="workboard"]', "Enable");
+    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     staleMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
@@ -689,7 +680,7 @@ describe("PluginsPage", () => {
       },
     );
 
-    await clickMenuItem(page, '[data-plugin-id="community-thing"]', "Remove");
+    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
     page
       .querySelector<HTMLButtonElement>(
         '[data-plugin-id="community-thing"] .plugins-remove-confirm .btn.danger',
@@ -741,7 +732,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
@@ -753,7 +744,10 @@ describe("PluginsPage", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
     await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
+      "MCP add patch payload",
+    ) as {
       raw: Record<string, unknown>;
       note: string;
     };
@@ -810,10 +804,13 @@ describe("PluginsPage", () => {
     );
 
     expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
-    await clickMenuItem(page, '[data-mcp-name="github"]', "Remove");
+    await clickRowAction(page, '[data-mcp-name="github"]', "Remove");
 
     await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
+      "MCP remove patch payload",
+    ) as {
       raw: Record<string, unknown>;
     };
     // RFC 7396 merge semantics: deletion must be an explicit null, not omission.
@@ -851,7 +848,7 @@ describe("PluginsPage", () => {
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
-        '[data-connector-id="context7"] .plugins-card__footer button',
+        '[data-connector-id="context7"] .settings-row__control button',
       )
       ?.click();
 
@@ -861,7 +858,7 @@ describe("PluginsPage", () => {
       ).toContain("rate limit exceeded"),
     );
     // The MCP-section message stays clear; the failure belongs to the card.
-    expect(page.querySelector("#plugins-group-mcp")).toBeNull();
+    expect(page.querySelector(".plugins-group-message")).toBeNull();
   });
 
   it("rejects invalid MCP server names before touching config", async () => {
@@ -888,7 +885,7 @@ describe("PluginsPage", () => {
     );
 
     const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".plugins-group__actions .btn"),
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;

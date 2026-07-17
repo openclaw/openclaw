@@ -171,9 +171,13 @@ vi.mock("../infra/is-main.js", () => ({
   isMainModule: () => false,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: () => mockState.routeLogsToStderr(),
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: () => mockState.routeLogsToStderr(),
+  };
+});
 
 vi.mock("../state/openclaw-state-db.js", () => ({
   closeOpenClawStateDatabase: () => mockState.closeOpenClawStateDatabase(),
@@ -341,6 +345,14 @@ describe("serveAcpGateway startup", () => {
     });
   });
 
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/acp-startup").isEnabled("info", "console"),
+    ).not.toThrow();
+  });
+
   it("waits for gateway hello before creating AgentSideConnection", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
@@ -356,14 +368,14 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
-  it("subscribes the Gateway client to run-scoped tool events", async () => {
+  it("advertises approval handling and subscribes to run-scoped tool events", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
     try {
       const servePromise = serveAcpGateway({});
       await emitHelloAndWaitForAgentSideConnection();
 
-      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["exec-approvals", "tool-events"]);
 
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {

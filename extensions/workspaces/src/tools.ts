@@ -61,7 +61,7 @@ const WIDGET_KIND_DESCRIPTION = [
   "builtin:iframe-embed (props {url}),",
   "builtin:sessions, builtin:usage, builtin:cron, builtin:instances, builtin:activity",
   "(each reads its own rpc binding; see workspace_get for a worked example).",
-  "Charts are not builtins — author one with workspace_widget_scaffold and use custom:<name>.",
+  "builtin:chart (binding id `value`; props {type?: line|bar|area|sparkline|gauge, min?: number, max?: number}; value is number[] or {points: Array<number|{y|value}>}).",
 ].join(" ");
 
 const JsonSchema = Type.Unknown({
@@ -903,3 +903,4 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
     },
   ];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

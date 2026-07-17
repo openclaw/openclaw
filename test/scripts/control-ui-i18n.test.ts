@@ -1,16 +1,30 @@
 // Control Ui I18N tests cover control ui i18n script behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  isControlUiGeneratedI18nConflictPath,
+  isControlUiGeneratedI18nPath,
+  mergeControlUiTranslationMemory,
+  resolveControlUiGeneratedConflict,
+} from "../../scripts/control-ui-i18n-resolve-conflicts.ts";
+import {
+  analyzeControlUiCatalogs,
+  assertScopedCatalogFallbackUpdate,
+  flattenControlUiCatalog,
+} from "../../scripts/control-ui-i18n-verify.ts";
+import {
   appendBoundedProcessOutput,
+  buildBatchPrompt,
   parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
+import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 function processIsAlive(pid: number): boolean {
@@ -51,6 +65,231 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("recognizes only generated conflict paths", () => {
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/catalog-fallbacks.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/raw-copy-baseline.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.meta.json")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/de.tm.jsonl")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/de.ts")).toBe(true);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/.i18n/glossary.de.json")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/en-agents.ts")).toBe(false);
+    expect(isControlUiGeneratedI18nPath("ui/src/i18n/locales/unknown.ts")).toBe(false);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/removed.ts", [
+        "// Generated locale bundle for Control UI translations.\nexport const removed = {};\n",
+        null,
+      ]),
+    ).toBe(true);
+    expect(
+      isControlUiGeneratedI18nConflictPath("ui/src/i18n/locales/en-agents.ts", [
+        "// Agent-specific English strings stay split from the oversized source locale.\n",
+      ]),
+    ).toBe(false);
+  });
+
+  it("uses the replayed entry when both sides change the same cache key", () => {
+    const base = [{ cache_key: "shared", translated: "base" }];
+    const ours = [
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "shared", translated: "branch" },
+    ];
+    const merged = mergeControlUiTranslationMemory(
+      `${base.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      `${ours.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      `${theirs.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "a", translated: "branch-only" },
+      { cache_key: "b", translated: "upstream-only" },
+      { cache_key: "shared", translated: "branch" },
+    ]);
+  });
+
+  it("preserves one-sided translation-memory changes and deletions", () => {
+    const base = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const ours = [
+      { cache_key: "branch-change", translated: "base" },
+      { cache_key: "branch-delete", translated: "base" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ];
+    const theirs = [
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-change", translated: "base" },
+      { cache_key: "upstream-delete", translated: "base" },
+    ];
+    const encode = (entries: Array<{ cache_key: string; translated: string }>) =>
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+    const merged = mergeControlUiTranslationMemory(encode(base), encode(ours), encode(theirs))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { cache_key: string; translated: string });
+
+    expect(merged).toEqual([
+      { cache_key: "branch-add", translated: "branch" },
+      { cache_key: "branch-change", translated: "branch" },
+      { cache_key: "upstream-add", translated: "upstream" },
+      { cache_key: "upstream-change", translated: "upstream" },
+    ]);
+  });
+
+  it("preserves replayed-side generated-file deletion before regeneration", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"stale"}\n',
+        '{"cache_key":"stale"}\n',
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it("preserves stage-2 translation-memory deletion when no records survive", () => {
+    expect(
+      resolveControlUiGeneratedConflict(
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+        '{"cache_key":"a"}\n{"cache_key":"b"}\n',
+        null,
+        '{"cache_key":"a"}\n',
+      ),
+    ).toBeNull();
+  });
+
+  it("builds a deterministic fallback list without accepting catalog drift", () => {
+    const source = flattenControlUiCatalog(
+      { group: { first: "First {count}", second: "Second" } },
+      "en",
+    );
+    const missingAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        ["de", new Map([["group.first", "Erste {count}"]])],
+        ["fr", new Map([["group.first", "Premiere {count}"]])],
+      ]),
+    );
+
+    expect(missingAnalysis).toEqual({
+      errors: [],
+      fallbacks: { "group.second": ["de", "fr"] },
+    });
+
+    const driftAnalysis = analyzeControlUiCatalogs(
+      source,
+      new Map([
+        [
+          "fr",
+          new Map([
+            ["group.second", "Deuxieme"],
+            ["group.first", "Premiere"],
+            ["group.orphan", "Orpheline"],
+          ]),
+        ],
+      ]),
+    );
+    expect(driftAnalysis.errors).toEqual([
+      "fr: orphan keys: group.orphan",
+      "fr: keys are not in English catalog order",
+      "fr:group.first expected {count} got {}",
+    ]);
+    expect(driftAnalysis.fallbacks).toEqual({});
+  });
+
+  it("rejects invalid catalog leaf values", () => {
+    expect(() => flattenControlUiCatalog({ group: { title: 42 } }, "fr")).toThrow(
+      "fr:group.title must be a string or object",
+    );
+  });
+
+  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
+    const current = {
+      fallbacks: { "group.second": ["de", "fr"] },
+      sourceHash: "source",
+      version: 1,
+    };
+
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["fr"] } },
+        "de",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+    expect(() =>
+      assertScopedCatalogFallbackUpdate(
+        current,
+        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
+        "de",
+      ),
+    ).toThrow("unrelated catalog fallback drift");
+  });
+
+  it("finds raw text and attributes split by template interpolation", () => {
+    const source =
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+    const sourceFile = ts.createSourceFile(
+      "ui/src/pages/example.ts",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+
+    expect(
+      collectControlUiRawCopyFromSource({
+        filePath: path.resolve("ui/src/pages/example.ts"),
+        source,
+        sourceFile,
+      }).map(({ kind, text }) => ({ kind, text })),
+    ).toEqual([
+      { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Delete" },
+      { kind: "html-text", text: "Delete" },
+    ]);
+  });
+
+  it("keeps verification keyless even when provider credentials exist", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "redacted",
+          OPENAI_API_KEY: "redacted",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).not.toContain("provider=openai");
+    expect(result.stdout).not.toContain("provider=anthropic");
+  });
+
   it("rejects placeholder-corrupt batch replies before they leave the retry loop", () => {
     const items = [
       {
@@ -75,6 +314,22 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("feeds the exact validation failure back into a retry prompt", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "configView.viewPendingChange",
+        text: "View pending change ({count})",
+        textHash: "text-hash",
+      },
+    ];
+    const validationError = "ar:configView.viewPendingChange expected {count} got {}";
+
+    expect(buildBatchPrompt(items, validationError)).toContain(
+      `failed validation. Correct that exact failure in the new response:\n${validationError}`,
+    );
   });
 
   it("ships no recorded English fallbacks", () => {
@@ -245,9 +500,9 @@ describe("control-ui-i18n process runner", () => {
         });
 
         try {
-          const deadline = Date.now() + 5_000;
+          const deadline = Date.now() + 30_000;
+          let fastReady = false;
           while (Date.now() < deadline) {
-            let fastReady = false;
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
             } catch {}
@@ -261,7 +516,7 @@ describe("control-ui-i18n process runner", () => {
               setTimeout(resolve, 10);
             });
           }
-          expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+          expect(fastReady).toBe(true);
           expect(grandchildPid).toBeGreaterThan(0);
           expect(processIsAlive(grandchildPid)).toBe(true);
 

@@ -31,12 +31,14 @@ const CANVAS_NODE_COMMANDS = [
 function createLazyCanvasTool(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentSessionKey?: string;
 }): AnyAgentTool {
   const loadTool = createLazyRuntimeModule(() =>
     import("./src/tool.js").then(({ createCanvasTool }) =>
       createCanvasTool({
         config: params.config,
         workspaceDir: params.workspaceDir,
+        agentSessionKey: params.agentSessionKey,
       }),
     ),
   );
@@ -63,7 +65,7 @@ function createLazyShowWidgetTool(params: {
     label: "Show Widget",
     name: "show_widget",
     description:
-      "Render self-contained SVG or HTML inline in web chat. Use for visual or interactive results; external resources are blocked, so inline all required code and data.",
+      "Show an interactive, self-contained HTML or SVG widget to the user on their current surface. Inline all required code and data. A global sendPrompt(text) function submits text to the chat as if the user typed it — wire it to buttons or controls to build interactive widgets. It only works after the user clicks inside the widget (plain conversational text only; slash commands are rejected), so never call it automatically.",
     parameters: ShowWidgetToolSchema,
     requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
@@ -143,7 +145,7 @@ export default definePluginEntry({
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,
-      defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
+      defaultPlatforms: ["ios", "android", "macos", "windows", "linux", "unknown"],
       foregroundRestrictedOnIos: true,
       handle: async (ctx) => {
         const params =
@@ -176,11 +178,14 @@ export default definePluginEntry({
       createLazyCanvasTool({
         config: ctx.runtimeConfig ?? ctx.config,
         workspaceDir: ctx.workspaceDir,
+        agentSessionKey: ctx.sessionKey,
       }),
     );
     api.registerTool(
       (ctx) =>
-        isCanvasHostEnabled(ctx.runtimeConfig ?? ctx.config)
+        // Discord owns show_widget for Discord sessions; keep the two factories
+        // mutually exclusive before plugin tool names are de-duplicated.
+        ctx.messageChannel !== "discord" && isCanvasHostEnabled(ctx.runtimeConfig ?? ctx.config)
           ? createLazyShowWidgetTool({
               config: ctx.runtimeConfig ?? ctx.config,
               sessionId: ctx.sessionId,

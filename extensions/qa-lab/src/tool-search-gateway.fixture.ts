@@ -483,14 +483,14 @@ export function assertToolSearchLaneResults(params: {
     normal.providerPlannedTools.includes(targetTool) &&
       normal.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       normal.gatewayOutputText.includes(targetTool) &&
-      normal.sessionLogToolMentions[targetTool] > 0,
+      (normal.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `normal lane did not call ${targetTool}: ${laneDebug()}`,
   );
   assert(
     code.providerPlannedTools.includes("tool_search_code") &&
       code.gatewayOutputText.includes("FAKE_PLUGIN_OK") &&
       code.gatewayOutputText.includes(targetTool) &&
-      code.sessionLogToolMentions[targetTool] > 0,
+      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
     `code lane did not bridge-call ${targetTool}: ${laneDebug()}`,
   );
   assert(
@@ -506,7 +506,8 @@ export function assertToolSearchLaneResults(params: {
     `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
   );
   assert(
-    code.sessionLogToolMentions.tool_search_code > 0 && code.sessionLogToolMentions[targetTool] > 0,
+    (code.sessionLogToolMentions.tool_search_code ?? 0) > 0 &&
+      (code.sessionLogToolMentions[targetTool] ?? 0) > 0,
     "code lane session log did not record bridge and target tool mentions",
   );
   assert(

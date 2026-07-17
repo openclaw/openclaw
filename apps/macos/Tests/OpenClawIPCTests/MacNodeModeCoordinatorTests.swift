@@ -99,6 +99,27 @@ private actor CoordinatorDrainSnapshotProbe {
     }
 }
 
+private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
+    private var stopCount = 0
+
+    func start(command _: [String]) async throws -> MacNodeHostManifest {
+        MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
+    }
+
+    func supports(_: String) async -> Bool { false }
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async { self.stopCount += 1 }
+    func stops() -> Int { self.stopCount }
+}
+
 struct MacNodeModeCoordinatorTests {
     private func waitUntil(
         _ description: String,
@@ -111,7 +132,9 @@ struct MacNodeModeCoordinatorTests {
             if await condition() {
                 return
             }
-            await Task.yield()
+            // Some callers run on MainActor; a real suspension lets the
+            // notification task make progress instead of polling it out.
+            try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(description)")
     }
@@ -123,6 +146,33 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let notificationCenter = NotificationCenter()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
+            observeNotifications: true)
+        // The full parallel suite can keep MainActor busy for several seconds.
+        let restartTimeout: Duration = .seconds(15)
+        defer { withExtendedLifetime(coordinator) {} }
+
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
+
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
+            await worker.stops() == 1
+        }
+
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
+
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
+            await worker.stops() == 2
+        }
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -420,7 +470,7 @@ struct MacNodeModeCoordinatorTests {
             isExistingInstallation: false) == .primary)
     }
 
-    @Test func `remote mode does not advertise browser proxy`() {
+    @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -433,9 +483,11 @@ struct MacNodeModeCoordinatorTests {
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
         #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+        #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
+        #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
     }
 
-    @Test func `local mode advertises browser proxy when enabled`() {
+    @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -444,8 +496,8 @@ struct MacNodeModeCoordinatorTests {
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
-        #expect(caps.contains(OpenClawCapability.browser.rawValue))
-        #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+        #expect(!caps.contains(OpenClawCapability.browser.rawValue))
+        #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
     @Test func `local mode omits native session catalogs`() {

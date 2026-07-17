@@ -4,13 +4,11 @@
  * Manages chrome-devtools-mcp processes and sessions, maps Browser actions to
  * MCP tools, and exposes tab/snapshot/action helpers for logged-in browsers.
  */
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleepTimeout } from "node:timers/promises";
-import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
@@ -19,6 +17,7 @@ import {
   addTimerTimeoutGraceMs,
   resolveNonNegativeIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -77,6 +76,25 @@ type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   userDataDir?: string;
   targetId: string;
 };
+
+export class ChromeMcpDocumentUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ChromeMcpDocumentUnavailableError";
+  }
+}
+
+function rethrowChromeMcpDocumentError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
+      message,
+    )
+  ) {
+    throw new ChromeMcpDocumentUnavailableError(message, { cause: error });
+  }
+  throw error;
+}
 
 type ChromeMcpCallOptions = ChromeMcpOperationOptions & {
   ephemeral?: boolean;
@@ -198,7 +216,6 @@ const CHROME_MCP_SNAPSHOT_REF_PREFIX = "mcp-ref:";
 class ChromeMcpReconnectRequiredError extends Error {}
 class ChromeMcpProcessSnapshotError extends Error {}
 
-const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, PendingChromeMcpSession>();
 const retainedCleanupSessions = new Map<string, Set<ChromeMcpSession>>();
@@ -781,7 +798,7 @@ async function listChromeMcpPlatformProcesses(
       return await listChromeMcpLinuxProcesses();
     }
     const windows = platform === "win32";
-    const { stdout } = await execFileAsync(
+    const { stdout } = await runExec(
       windows ? "powershell.exe" : "ps",
       windows
         ? [
@@ -793,9 +810,9 @@ async function listChromeMcpPlatformProcesses(
         : ["-axww", "-o", "pid=,ppid=,lstart=,command="],
       {
         env: windows ? undefined : { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        logOutput: false,
         maxBuffer: 4 * 1024 * 1024,
-        timeout: 2_000,
-        windowsHide: windows,
+        timeoutMs: 2_000,
       },
     );
     if (windows) {
@@ -915,10 +932,10 @@ async function taskkillChromeMcpProcessTree(
     await deps.taskkillProcessTree(rootPid);
     return;
   }
-  await execFileAsync("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+  await runExec("taskkill", ["/pid", String(rootPid), "/t", "/f"], {
+    logOutput: false,
     maxBuffer: 64 * 1024,
-    timeout: 2_000,
-    windowsHide: true,
+    timeoutMs: 2_000,
   });
 }
 
@@ -2212,6 +2229,52 @@ export async function takeChromeMcpSnapshot(
   });
 }
 
+/** Run document-bound evaluations without releasing the target/session lock. */
+export async function withChromeMcpDocument<T>(
+  params: ChromeMcpTargetOperation,
+  task: (document: { evaluate: (fn: string) => Promise<unknown> }) => Promise<T>,
+): Promise<T> {
+  return await withChromeMcpTarget(params, async (target) => {
+    let snapshot: ChromeMcpSnapshotNode;
+    try {
+      snapshot = extractSnapshot(
+        await callTool(
+          params.profileName,
+          target.profileOptions,
+          "take_snapshot",
+          { pageId: target.pageId, verbose: true },
+          params,
+          target.lease,
+        ),
+      );
+    } catch (error) {
+      rethrowChromeMcpDocumentError(error);
+    }
+    const uid = normalizeOptionalString(snapshot.id);
+    if (!uid || snapshot.role?.trim().toLowerCase() !== "rootwebarea") {
+      throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
+    }
+    return await task({
+      evaluate: async (fn) => {
+        try {
+          return extractJsonMessage(
+            await callTool(
+              params.profileName,
+              target.profileOptions,
+              "evaluate_script",
+              { pageId: target.pageId, function: fn, args: [uid] },
+              params,
+              target.lease,
+            ),
+          );
+        } catch (error) {
+          return rethrowChromeMcpDocumentError(error);
+        }
+      },
+    });
+  });
+}
+
 /** Take a screenshot via Chrome MCP and return the image bytes. */
 export async function takeChromeMcpScreenshot(
   params: ChromeMcpTargetOperation & {
@@ -2432,3 +2495,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

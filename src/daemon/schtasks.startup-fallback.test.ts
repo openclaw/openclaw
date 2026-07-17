@@ -2,11 +2,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
+import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
@@ -82,7 +84,7 @@ const {
 function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
-    env.APPDATA,
+    expectDefined(env.APPDATA, "env.APPDATA test invariant"),
     "Microsoft",
     "Windows",
     "Start Menu",
@@ -374,7 +376,9 @@ describe("Windows startup fallback", () => {
       const result = await installGatewayScheduledTask(env, stdout);
 
       const startupEntryPath = resolveStartupEntryPath(env);
-      const startupScript = await fs.readFile(startupEntryPath, "utf8");
+      const startupScript = decodeWindowsLauncherScript({
+        buffer: await fs.readFile(startupEntryPath),
+      });
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
       expect(startupScript).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
       expect(startupScript).toContain("gateway.cmd");
@@ -396,8 +400,11 @@ describe("Windows startup fallback", () => {
       });
 
       const startupEntryPath = resolveStartupEntryPath(env, "vbs");
-      const startupScript = await fs.readFile(startupEntryPath, "utf8");
+      const rawStartupScript = await fs.readFile(startupEntryPath);
+      const startupScript = decodeWindowsLauncherScript({ buffer: rawStartupScript });
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
+      // wscript only accepts UTF-16 LE with BOM or ANSI; UTF-16 keeps CJK paths intact.
+      expect(rawStartupScript.subarray(0, 2)).toEqual(Buffer.from([0xff, 0xfe]));
       expect(startupScript).toContain("WScript.Shell");
       expect(startupScript).toContain("gateway.cmd");
       expect(startupScript).toContain(`Run """${result.scriptPath}""", 0, False`);
@@ -859,7 +866,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env, 18789);
       const scriptPath = resolveTaskScriptPath(env);
-      const scriptBefore = await fs.readFile(scriptPath, "utf8");
+      const scriptBefore = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
       env.OPENCLAW_GATEWAY_PORT = "19433";
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       spawnSync.mockImplementation((command, args) => {
@@ -922,7 +929,9 @@ describe("Windows startup fallback", () => {
       );
       expect(oldPidKills).toHaveLength(0);
       expect(schtasksResponses).toHaveLength(pendingSchtasksResponses);
-      await expect(fs.readFile(scriptPath, "utf8")).resolves.toBe(scriptBefore);
+      expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toBe(
+        scriptBefore,
+      );
       await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
@@ -932,7 +941,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env, 18789);
       const scriptPath = resolveTaskScriptPath(env);
-      const scriptBefore = await fs.readFile(scriptPath, "utf8");
+      const scriptBefore = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
       env.OPENCLAW_GATEWAY_PORT = "19433";
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       spawnSync.mockImplementation((command, args) =>
@@ -973,7 +982,9 @@ describe("Windows startup fallback", () => {
         "replacement gateway port 19433 is occupied by an unverified process",
       );
 
-      await expect(fs.readFile(scriptPath, "utf8")).resolves.toBe(scriptBefore);
+      expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toBe(
+        scriptBefore,
+      );
       await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
@@ -983,7 +994,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = await writeStartupFallbackEntry(env);
       await writeGatewayScript(env, 18789);
       const scriptPath = resolveTaskScriptPath(env);
-      const scriptBefore = await fs.readFile(scriptPath, "utf8");
+      const scriptBefore = decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) });
       env.OPENCLAW_GATEWAY_PORT = "19433";
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       spawnSync.mockImplementation((command, args) =>
@@ -1013,7 +1024,9 @@ describe("Windows startup fallback", () => {
         "Could not verify replacement gateway port 19433",
       );
 
-      await expect(fs.readFile(scriptPath, "utf8")).resolves.toBe(scriptBefore);
+      expect(decodeWindowsLauncherScript({ buffer: await fs.readFile(scriptPath) })).toBe(
+        scriptBefore,
+      );
       await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
@@ -1985,3 +1998,4 @@ describe("Windows startup fallback", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

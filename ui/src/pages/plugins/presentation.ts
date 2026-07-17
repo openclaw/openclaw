@@ -129,12 +129,12 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "portfolio-pulse",
   "qa-channel",
   "qa-lab",
-  "qa-matrix",
   "qianfan",
   "qqbot",
   "qwen",
   "raft",
   "reddit",
+  "reef",
   "runway",
   "searxng",
   "senseaudio",
@@ -206,6 +206,27 @@ const FALLBACK_GRADIENTS: ReadonlyArray<readonly [string, string]> = [
   ["#fb7185", "#9f1239"],
 ];
 
+const graphemeSegmenter =
+  typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+function takeGraphemes(input: string, limit: number): string {
+  if (!graphemeSegmenter) {
+    return Array.from(input).slice(0, limit).join("");
+  }
+  let result = "";
+  let count = 0;
+  for (const { segment } of graphemeSegmenter.segment(input)) {
+    result += segment;
+    count += 1;
+    if (count >= limit) {
+      break;
+    }
+  }
+  return result;
+}
+
 export function pluginFallbackGradient(id: string): readonly [string, string] {
   let hash = 0;
   for (const char of id) {
@@ -224,7 +245,9 @@ export function pluginMonogram(name: string): string {
   }
   const first = expectDefined(words[0], "plugin monogram first word");
   const second = words[1];
-  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : first.slice(0, 2);
+  const initials = second
+    ? `${takeGraphemes(first, 1)}${takeGraphemes(second, 1)}`
+    : takeGraphemes(first, 2);
   return initials.toLocaleUpperCase();
 }
 
@@ -255,7 +278,7 @@ export function pluginCategoryLabel(category: string): string {
   }
 }
 
-export type ConnectorMcpTemplate = {
+type ConnectorMcpTemplate = {
   serverName: string;
   config: {
     url?: string;
