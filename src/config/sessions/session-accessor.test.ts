@@ -2973,29 +2973,6 @@ describe("session accessor seam", () => {
     expect(writeTarget.sessionFile).toBe(marker);
   });
 
-  it("resolves relocated SQLite markers through the explicit current store", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "session-relocated",
-      sessionKey: "agent:main:relocated",
-      storePath,
-    };
-    const staleMarker = `sqlite:main:${scope.sessionId}:${path.join(tempDir, "old-store.json")}`;
-    const currentMarker = `sqlite:main:${scope.sessionId}:${storePath}`;
-
-    await upsertSessionEntry(scope, {
-      sessionId: scope.sessionId,
-      sessionFile: staleMarker,
-      updatedAt: 10,
-    });
-
-    const readTarget = await resolveSessionTranscriptRuntimeReadTarget(scope);
-    const writeTarget = await resolveSessionTranscriptRuntimeTarget(scope);
-
-    expect(readTarget.sessionFile).toBe(currentMarker);
-    expect(writeTarget.sessionFile).toBe(currentMarker);
-  });
-
   it("normalizes imported legacy session transcript paths to SQLite markers", async () => {
     const sessionKey = "agent:main:main";
     await importSqliteSessionRows({

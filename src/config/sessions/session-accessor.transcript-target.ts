@@ -83,18 +83,18 @@ function resolveRuntimeSessionFile(
     sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
       ? sessionEntry
       : undefined;
+  if (
+    sqliteSessionFileMarkerMatchesSession(matchingSessionEntry?.sessionFile, scope.sessionId) &&
+    matchingSessionEntry?.sessionFile
+  ) {
+    return matchingSessionEntry.sessionFile;
+  }
   if (scope.storePath) {
     return formatSqliteSessionFileMarker({
       agentId,
       sessionId: scope.sessionId,
       storePath: scope.storePath,
     });
-  }
-  if (
-    sqliteSessionFileMarkerMatchesSession(matchingSessionEntry?.sessionFile, scope.sessionId) &&
-    matchingSessionEntry?.sessionFile
-  ) {
-    return matchingSessionEntry.sessionFile;
   }
   return resolveSessionFilePath(
     scope.sessionId,

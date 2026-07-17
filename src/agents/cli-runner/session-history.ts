@@ -69,7 +69,7 @@ type HistoryEntry = {
   tokensAfter?: unknown;
 };
 
-export type CliSessionTranscriptParams = {
+type CliSessionTranscriptParams = {
   sessionId: string;
   sessionFile: string;
   sessionKey?: string;
