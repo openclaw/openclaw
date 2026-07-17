@@ -720,6 +720,35 @@ describe("verifyGoogleChatRequest", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("cancels a rejected Chat cert response before releasing the guard", async () => {
+    expireGoogleChatCertCache();
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const release = vi.fn().mockResolvedValue(undefined);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        ok: false,
+        status: 503,
+        body: { cancel },
+      } as unknown as Response,
+      release,
+    });
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: "Failed to fetch Chat certs (503)",
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(cancel.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
+  });
+
   it("reports malformed Chat cert JSON with a stable auth error", async () => {
     expireGoogleChatCertCache();
     const release = vi.fn(async () => {});
