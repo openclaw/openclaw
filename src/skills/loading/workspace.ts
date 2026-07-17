@@ -1628,7 +1628,7 @@ export function resolveSkillsPromptForRun(params: {
   if (snapshotPrompt && !snapshotHasUnavailableSkill) {
     return snapshotPrompt;
   }
-  const entries =
+  const loadedEntries =
     params.entries && params.entries.length > 0
       ? params.entries
       : snapshotHasUnavailableSkill
@@ -1639,6 +1639,23 @@ export function resolveSkillsPromptForRun(params: {
             skillFilter: params.skillsSnapshot?.skillFilter,
           })
         : undefined;
+  const snapshotSkillKeys = new Set(
+    params.skillsSnapshot?.skills.flatMap((skill) => (skill.skillKey ? [skill.skillKey] : [])) ??
+      [],
+  );
+  const legacySnapshotSkillNames = new Set(
+    params.skillsSnapshot?.skills.filter((skill) => !skill.skillKey).map((skill) => skill.name) ??
+      [],
+  );
+  // Rebuild only the catalog captured for this session. A degraded owner must
+  // not make newly installed or newly eligible skills appear mid-session.
+  const entries = params.skillsSnapshot
+    ? loadedEntries?.filter(
+        (entry) =>
+          snapshotSkillKeys.has(resolveSkillKey(entry.skill, entry)) ||
+          legacySnapshotSkillNames.has(entry.skill.name),
+      )
+    : loadedEntries;
   if (entries && entries.length > 0) {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries,
