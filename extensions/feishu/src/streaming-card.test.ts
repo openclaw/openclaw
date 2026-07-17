@@ -1140,6 +1140,61 @@ describe("FeishuStreamingSession", () => {
     expect(authTokens).toEqual(["token-1", "token-2"]);
     dateNow.mockRestore();
   });
+
+  it("cancels a non-OK tenant-token response body before throwing", async () => {
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/")) return response;
+      return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card" } });
+    });
+
+    const session = new FeishuStreamingSession(
+      {
+        im: {
+          message: {
+            create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om" } })),
+          },
+        },
+      } as never,
+      { appId: "app", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+      "Token request failed with HTTP 503",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a non-OK card-create response body before throwing", async () => {
+    const response = new Response("unavailable", { status: 503 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const deps = createMemoryFetch((url) => {
+      if (url.pathname.includes("/auth/"))
+        return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      return response;
+    });
+
+    const session = new FeishuStreamingSession(
+      {
+        im: {
+          message: {
+            create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om" } })),
+          },
+        },
+      } as never,
+      { appId: "app", appSecret: "secret" },
+      undefined,
+      deps,
+    );
+
+    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
+      "Create card request failed with HTTP 503",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
 
 describe("mergeStreamingText", () => {
