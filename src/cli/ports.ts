@@ -299,6 +299,7 @@ function killPids(
       beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ESRCH") continue;
       throw new Error(
         `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
         { cause: err },
