@@ -2450,12 +2450,13 @@ export const en: TranslationMap = {
         idle: "Idle",
         progress: "{percent}% complete",
       },
-      approvals: {
+      customWidgetApprovals: {
         empty: "No custom widgets are awaiting approval.",
-        kind: { widget: "Widget" },
+        kind: "Custom widget",
         requestedBy: "Requested by {agent}",
         approve: "Approve",
         reject: "Reject",
+        permissionRequired: "Approval permission required",
       },
       usage: {
         cost: "Cost",

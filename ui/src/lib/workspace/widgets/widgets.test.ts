@@ -1,15 +1,16 @@
-// Data-shape mapping tests for the L4 builtin widgets: each `map*` turns an RPC
-// payload fixture into the rendered view model. The render fns are exercised
-// separately (empty/populated) to lock the empty/loading/error affordances.
+// Focused renderer tests for builtin data shapes and empty/error affordances.
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
 import { renderAgentStatus } from "./agent-status.ts";
-import { buildWidgetApprovalsSource, renderApprovals } from "./approvals.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
+import {
+  buildCustomWidgetApprovalsSource,
+  renderCustomWidgetApprovals,
+} from "./custom-widget-approvals.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -77,10 +78,10 @@ describe("agent-status mapping", () => {
   });
 });
 
-describe("approvals mapping", () => {
+describe("custom-widget-approvals mapping", () => {
   it("exposes only pending custom-widget registry entries", () => {
     const decisions: Array<[string, "approved" | "rejected"]> = [];
-    const source = buildWidgetApprovalsSource(
+    const source = buildCustomWidgetApprovalsSource(
       {
         schemaVersion: 1,
         workspaceVersion: 3,
@@ -91,33 +92,46 @@ describe("approvals mapping", () => {
           approved: { status: "approved", createdBy: "agent:builder" },
         },
       },
+      new Set(),
       (name, decision) => decisions.push([name, decision]),
     );
     expect(source.pending).toEqual([
-      { id: "pending", kind: "widget", title: "pending", requestedBy: "builder" },
+      { id: "pending", title: "pending", requestedBy: "builder", deciding: false },
     ]);
-    source.onDecide(source.pending[0]!, "reject");
+    source.onDecide?.(source.pending[0]!, "reject");
     expect(decisions).toEqual([["pending", "rejected"]]);
   });
 
-  it("limits rows and renders explicit approval controls", () => {
+  it("limits rows and renders permission-aware decision controls", () => {
     const source = {
       pending: [
-        { id: "one", kind: "widget" as const, title: "one", requestedBy: null },
-        { id: "two", kind: "widget" as const, title: "two", requestedBy: "builder" },
+        { id: "one", title: "one", requestedBy: null, deciding: false },
+        { id: "two", title: "two", requestedBy: "builder", deciding: false },
       ],
       onDecide: () => undefined,
     };
     const container = renderToContainer(
-      renderApprovals(widget({ props: { limit: 1 } }), undefined, {
+      renderCustomWidgetApprovals(widget({ props: { limit: 1 } }), undefined, {
         ...STRICT_EMBED,
-        approvals: source,
+        customWidgetApprovals: source,
       }),
     );
     expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(1);
     expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.querySelector("button")?.disabled).toBe(false);
     expect(container.textContent).toContain("Approve");
     expect(container.textContent).toContain("Reject");
+
+    const restricted = renderToContainer(
+      renderCustomWidgetApprovals(widget(), undefined, {
+        ...STRICT_EMBED,
+        customWidgetApprovals: { pending: source.pending },
+      }),
+    );
+    expect(
+      Array.from(restricted.querySelectorAll("button")).every((button) => button.disabled),
+    ).toBe(true);
+    expect(restricted.textContent).toContain("Approval permission required");
   });
 });
 

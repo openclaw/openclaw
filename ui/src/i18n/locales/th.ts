@@ -2454,6 +2454,20 @@ export const th: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "ยังไม่มีเอเจนต์หรือเซสชัน",
+        busy: "ไม่ว่าง",
+        idle: "ไม่ได้ใช้งาน",
+        progress: "เสร็จสมบูรณ์ {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "ไม่มีวิดเจ็ตแบบกำหนดเองที่รอการอนุมัติ",
+        kind: "วิดเจ็ตแบบกำหนดเอง",
+        requestedBy: "ร้องขอโดย {agent}",
+        approve: "อนุมัติ",
+        reject: "ปฏิเสธ",
+        permissionRequired: "ต้องมีสิทธิ์อนุมัติ",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

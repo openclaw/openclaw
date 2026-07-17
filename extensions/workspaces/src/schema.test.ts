@@ -18,7 +18,7 @@ describe("Workspaces document schema", () => {
     expect(validateWorkspaceDoc(validDoc())).toEqual(validDoc());
   });
 
-  it.each(["builtin:agent-status", "builtin:approvals"])("accepts %s", (kind) => {
+  it.each(["builtin:agent-status", "builtin:custom-widget-approvals"])("accepts %s", (kind) => {
     const doc = validDoc();
     doc.tabs[0]!.widgets[0]!.kind = kind;
     expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe(kind);

@@ -2500,6 +2500,20 @@ export const ja_JP: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "エージェントまたはセッションはまだありません。",
+        busy: "処理中",
+        idle: "アイドル",
+        progress: "{percent}% 完了",
+      },
+      customWidgetApprovals: {
+        empty: "承認待ちのカスタムウィジェットはありません。",
+        kind: "カスタムウィジェット",
+        requestedBy: "{agent} がリクエスト",
+        approve: "承認",
+        reject: "拒否",
+        permissionRequired: "承認権限が必要です",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

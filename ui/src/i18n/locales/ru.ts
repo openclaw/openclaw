@@ -2507,6 +2507,20 @@ export const ru: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Агентов и сеансов пока нет.",
+        busy: "Занят",
+        idle: "Бездействует",
+        progress: "Выполнено на {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "Нет пользовательских виджетов, ожидающих одобрения.",
+        kind: "Пользовательский виджет",
+        requestedBy: "Запрошено агентом {agent}",
+        approve: "Одобрить",
+        reject: "Отклонить",
+        permissionRequired: "Требуется разрешение на одобрение",
+      },
       usage: {
         cost: "Стоимость",
         tokens: "Токены",

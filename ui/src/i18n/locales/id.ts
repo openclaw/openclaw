@@ -2490,6 +2490,20 @@ export const id: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Belum ada agen atau sesi.",
+        busy: "Sibuk",
+        idle: "Siaga",
+        progress: "{percent}% selesai",
+      },
+      customWidgetApprovals: {
+        empty: "Tidak ada widget kustom yang menunggu persetujuan.",
+        kind: "Widget kustom",
+        requestedBy: "Diminta oleh {agent}",
+        approve: "Setujui",
+        reject: "Tolak",
+        permissionRequired: "Izin persetujuan diperlukan",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

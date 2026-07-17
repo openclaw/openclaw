@@ -47,6 +47,8 @@ export type WorkspaceUiState = {
   hiddenMenuOpen: boolean;
   /** Widgets with an in-flight mutation, for optimistic-state affordances. */
   pendingWidgetIds: Set<string>;
+  /** Custom-widget names with an in-flight approval decision. */
+  pendingApprovalNames: Set<string>;
   /** Transient error surfaced after a failed mutation (reverted state + toast). */
   actionError: string | null;
   requestUpdate: (() => void) | null;
@@ -112,6 +114,7 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
       activeSlugRevision: 0,
       hiddenMenuOpen: false,
       pendingWidgetIds: new Set(),
+      pendingApprovalNames: new Set(),
       actionError: null,
       requestUpdate: null,
     };
@@ -272,6 +275,17 @@ function normalizeWorkspace(payload: unknown): WorkspaceDocument {
   };
 }
 
+function reconcilePendingApprovalNames(
+  state: WorkspaceUiState,
+  workspace: WorkspaceDocument,
+): void {
+  for (const name of state.pendingApprovalNames) {
+    if (workspace.widgetsRegistry[name]?.status !== "pending") {
+      state.pendingApprovalNames.delete(name);
+    }
+  }
+}
+
 function applyActiveWorkspaceSlug(
   state: WorkspaceUiState,
   workspace: WorkspaceDocument,
@@ -366,6 +380,7 @@ export async function loadWorkspace(
         const retainedIntentIsCurrent =
           retainedIntent?.activeSlugRevision === state.activeSlugRevision;
         state.workspace = workspace;
+        reconcilePendingApprovalNames(state, workspace);
         state.activeSlug = resolveActiveSlug(
           workspace,
           retainedIntentIsCurrent ? retainedIntent.slug : state.activeSlug,
@@ -397,6 +412,7 @@ export async function loadWorkspace(
         ? intent.slug
         : state.activeSlug;
     state.workspace = workspace;
+    reconcilePendingApprovalNames(state, workspace);
     applyActiveWorkspaceSlug(state, workspace, requestedSlug);
     if (workspaceLoadIntents.get(state) === intent) {
       workspaceLoadIntents.delete(state);
@@ -726,8 +742,8 @@ export function moveWidgetToTab(
 }
 
 /**
- * Approve or reject a pending custom widget (operator-only) → `workspaces.widget.approve`
- * (WRITE). The registry is not part of the optimistic widget model, so this fires
+ * Approve or reject a pending custom widget → `workspaces.widget.approve`
+ * (`operator.approvals`). The registry is not part of the optimistic widget model, so this fires
  * the RPC and lets the resulting `plugin.workspaces.changed` broadcast refetch the
  * new status; a failure surfaces `actionError` for the toast.
  */
@@ -739,6 +755,10 @@ export async function approveWidget(
   if (!client) {
     return;
   }
+  if (state.pendingApprovalNames.has(params.name)) {
+    return;
+  }
+  state.pendingApprovalNames.add(params.name);
   state.actionError = null;
   notify(state);
   try {
@@ -748,6 +768,8 @@ export async function approveWidget(
     });
   } catch (err) {
     state.actionError = formatError(err);
+    state.pendingApprovalNames.delete(params.name);
+  } finally {
     notify(state);
   }
 }

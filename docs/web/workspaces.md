@@ -38,10 +38,11 @@ collapse it, hide it, or delete it.
 
 ## Built-in widgets
 
-Eleven trusted widgets ship with the plugin and render as first-party UI:
+Thirteen trusted widgets ship with the plugin and render as first-party UI:
 
 `stat-card`, `markdown`, `table`, `iframe-embed`, `sessions`, `usage`, `cron`,
-`instances`, `activity`, `chart`, `preview`.
+`instances`, `activity`, `chart`, `preview`, `agent-status`,
+`custom-widget-approvals`.
 
 The `chart` widget renders dependency-free inline SVG as `line`, `bar`, `area`,
 `sparkline`, or `gauge`. Bind `value` to a numeric array or to an object shaped like
@@ -56,6 +57,13 @@ data-driven; a binding takes precedence over the prop. Relative and same-origin 
 URLs are allowed. External HTTP(S) URLs follow the gateway's external-embed policy, and
 other schemes are blocked. Preview frames share the `iframe-embed` sandbox ceiling and
 never receive same-origin access.
+
+The `agent-status` widget presents the current Busy or Idle state from a
+`sessions.list` RPC binding. Session-list events refresh it immediately, while the normal
+visibility-gated binding poll remains a fallback. The `custom-widget-approvals` widget
+lists only pending entries from the Workspaces custom-widget registry. Its Approve and
+Reject controls are disabled unless the current connection holds `operator.approvals`;
+it does not expose exec, plugin, or system-agent approvals.
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
@@ -106,8 +114,8 @@ openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
 openclaw workspaces widget-approve revenue-chart
 ```
 
-`widget-approve` needs a device paired with the `operator.approvals` scope; approving from
-the Control UI does not, because the browser already holds it.
+`widget-approve` and the Control UI decision controls both need a device paired with the
+`operator.approvals` scope.
 
 ## Storage
 

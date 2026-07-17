@@ -2493,6 +2493,20 @@ export const vi: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Chưa có tác nhân hoặc phiên nào.",
+        busy: "Đang bận",
+        idle: "Đang chờ",
+        progress: "Đã hoàn thành {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "Không có tiện ích tùy chỉnh nào đang chờ phê duyệt.",
+        kind: "Tiện ích tùy chỉnh",
+        requestedBy: "Do {agent} yêu cầu",
+        approve: "Chấp thuận",
+        reject: "Từ chối",
+        permissionRequired: "Cần có quyền phê duyệt",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

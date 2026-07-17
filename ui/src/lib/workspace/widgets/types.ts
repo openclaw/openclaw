@@ -13,16 +13,16 @@ import type { TemplateResult } from "lit";
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import type { WorkspaceWidget } from "../types.ts";
 
-export type ApprovalDecision = "approve" | "reject";
-export type PendingApprovalItem = {
+export type CustomWidgetApprovalDecision = "approve" | "reject";
+export type PendingCustomWidgetApproval = {
   id: string;
-  kind: "widget";
   title: string;
   requestedBy: string | null;
+  deciding: boolean;
 };
-export type ApprovalsWidgetSource = {
-  pending: PendingApprovalItem[];
-  onDecide: (item: PendingApprovalItem, decision: ApprovalDecision) => void;
+export type CustomWidgetApprovalsSource = {
+  pending: PendingCustomWidgetApproval[];
+  onDecide?: (item: PendingCustomWidgetApproval, decision: CustomWidgetApprovalDecision) => void;
 };
 
 /** Ambient context a builtin may need beyond its own binding value. */
@@ -39,8 +39,8 @@ export type BuiltinWidgetContext = {
     getViewport: (widgetId: string, fallback: PreviewViewport) => PreviewViewport;
     setViewport: (widgetId: string, viewport: PreviewViewport) => void;
   };
-  /** Pending custom-widget approvals; no exec or plugin approval queues are exposed. */
-  approvals?: ApprovalsWidgetSource;
+  /** Pending custom-widget decisions; no exec or plugin approval queues are exposed. */
+  customWidgetApprovals?: CustomWidgetApprovalsSource;
 };
 
 export type PreviewViewport = "desktop" | "tablet" | "mobile";

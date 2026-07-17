@@ -2500,6 +2500,20 @@ export const uk: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Агентів або сеансів ще немає.",
+        busy: "Зайнятий",
+        idle: "Неактивний",
+        progress: "Виконано на {percent}%",
+      },
+      customWidgetApprovals: {
+        empty: "Немає користувацьких віджетів, які очікують схвалення.",
+        kind: "Користувацький віджет",
+        requestedBy: "Запит від {agent}",
+        approve: "Схвалити",
+        reject: "Відхилити",
+        permissionRequired: "Потрібен дозвіл на схвалення",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

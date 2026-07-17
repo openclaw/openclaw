@@ -2502,6 +2502,20 @@ export const nl: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Nog geen agents of sessies.",
+        busy: "Bezig",
+        idle: "Inactief",
+        progress: "{percent}% voltooid",
+      },
+      customWidgetApprovals: {
+        empty: "Er wachten geen aangepaste widgets op goedkeuring.",
+        kind: "Aangepaste widget",
+        requestedBy: "Aangevraagd door {agent}",
+        approve: "Goedkeuren",
+        reject: "Weigeren",
+        permissionRequired: "Toestemming voor goedkeuring vereist",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",

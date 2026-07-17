@@ -2509,6 +2509,20 @@ export const tr: TranslationMap = {
       sessions: {
         empty: "No sessions yet.",
       },
+      agentStatus: {
+        empty: "Henüz temsilci veya oturum yok.",
+        busy: "Meşgul",
+        idle: "Boşta",
+        progress: "%{percent} tamamlandı",
+      },
+      customWidgetApprovals: {
+        empty: "Onay bekleyen özel widget yok.",
+        kind: "Özel widget",
+        requestedBy: "Talep eden: {agent}",
+        approve: "Onayla",
+        reject: "Reddet",
+        permissionRequired: "Onay izni gerekli",
+      },
       usage: {
         cost: "Cost",
         tokens: "Tokens",
