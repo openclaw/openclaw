@@ -5,9 +5,9 @@ const MEBIBYTE_BYTES = 1024 * 1024;
 const GATEWAY_HEAP_FLOOR_MIB = 2048;
 const GATEWAY_HEAP_CAP_MIB = 8192;
 
-export type GatewayHeapMemorySource = "constrained" | "physical";
+type GatewayHeapMemorySource = "constrained" | "physical";
 
-export type GatewayHeapLimit = {
+type GatewayHeapLimit = {
   maxOldSpaceSizeMiB: number;
   availableMemoryMiB: number;
   memorySource: GatewayHeapMemorySource;
@@ -44,7 +44,7 @@ function readAvailableMemory(params: GatewayHeapMemoryInputs): {
   };
 }
 
-export function resolveGatewayHeapLimit(params: GatewayHeapMemoryInputs = {}): GatewayHeapLimit {
+function resolveGatewayHeapLimit(params: GatewayHeapMemoryInputs = {}): GatewayHeapLimit {
   const memory = readAvailableMemory(params);
   const availableMemoryMiB = Math.floor(memory.bytes / MEBIBYTE_BYTES);
   const halfMemoryMiB = Math.floor(availableMemoryMiB / 2);
@@ -104,7 +104,7 @@ function parseNodeOptionsTokens(nodeOptions: string): string[] | null {
   return tokens;
 }
 
-export function parseMaxOldSpaceSizeMiB(nodeOptions: string | undefined): number | null {
+function parseMaxOldSpaceSizeMiB(nodeOptions: string | undefined): number | null {
   if (!nodeOptions) {
     return null;
   }

@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   formatGatewayHeapLimitReport,
   inspectGatewayHeapLimit,
-  parseMaxOldSpaceSizeMiB,
-  resolveGatewayHeapLimit,
   resolveGatewayHeapNodeOptions,
 } from "./gateway-heap.js";
 
@@ -13,7 +11,7 @@ const MIB = 1024 * 1024;
 describe("resolveGatewayHeapLimit", () => {
   it("prefers constrained memory", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 12_288 * MIB,
         physicalMemoryBytes: 64_000 * MIB,
       }),
@@ -26,7 +24,7 @@ describe("resolveGatewayHeapLimit", () => {
 
   it("falls back to physical memory when no constraint is reported", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 0,
         physicalMemoryBytes: 8192 * MIB,
       }),
@@ -39,7 +37,7 @@ describe("resolveGatewayHeapLimit", () => {
 
   it("applies the floor when the host has enough headroom", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 3072 * MIB,
         physicalMemoryBytes: 8192 * MIB,
       }).maxOldSpaceSizeMiB,
@@ -48,7 +46,7 @@ describe("resolveGatewayHeapLimit", () => {
 
   it("bounds the floor to leave native headroom on smaller hosts", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 2048 * MIB,
         physicalMemoryBytes: 8192 * MIB,
       }).maxOldSpaceSizeMiB,
@@ -57,7 +55,7 @@ describe("resolveGatewayHeapLimit", () => {
 
   it("caps the default on large hosts", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 64_000 * MIB,
         physicalMemoryBytes: 128_000 * MIB,
       }).maxOldSpaceSizeMiB,
@@ -66,7 +64,7 @@ describe("resolveGatewayHeapLimit", () => {
 
   it("bounds an oversized constraint by physical memory", () => {
     expect(
-      resolveGatewayHeapLimit({
+      inspectGatewayHeapLimit(undefined, {
         constrainedMemoryBytes: 64_000 * MIB,
         physicalMemoryBytes: 8192 * MIB,
       }),
@@ -80,21 +78,21 @@ describe("resolveGatewayHeapLimit", () => {
 
 describe("Gateway service NODE_OPTIONS", () => {
   it("recognizes canonical, underscore, separated, and quoted heap flags", () => {
-    expect(parseMaxOldSpaceSizeMiB("--max-old-space-size=4096")).toBe(4096);
-    expect(parseMaxOldSpaceSizeMiB("--max_old_space_size=5120")).toBe(5120);
-    expect(parseMaxOldSpaceSizeMiB("--max-old-space-size 6144")).toBe(6144);
-    expect(parseMaxOldSpaceSizeMiB('--max-old-space-size="7168"')).toBe(7168);
-    expect(parseMaxOldSpaceSizeMiB('"--max-old-space-size=7680"')).toBe(7680);
+    expect(inspectGatewayHeapLimit("--max-old-space-size=4096").appliedMiB).toBe(4096);
+    expect(inspectGatewayHeapLimit("--max_old_space_size=5120").appliedMiB).toBe(5120);
+    expect(inspectGatewayHeapLimit("--max-old-space-size 6144").appliedMiB).toBe(6144);
+    expect(inspectGatewayHeapLimit('--max-old-space-size="7168"').appliedMiB).toBe(7168);
+    expect(inspectGatewayHeapLimit('"--max-old-space-size=7680"').appliedMiB).toBe(7680);
   });
 
   it("rejects malformed quoted NODE_OPTIONS", () => {
-    expect(parseMaxOldSpaceSizeMiB('--max-old-space-size="6144')).toBeNull();
+    expect(inspectGatewayHeapLimit('--max-old-space-size="6144').appliedMiB).toBeNull();
   });
 
   it("uses the last explicit heap flag", () => {
-    expect(parseMaxOldSpaceSizeMiB("--max-old-space-size=4096 --max_old_space_size=7168")).toBe(
-      7168,
-    );
+    expect(
+      inspectGatewayHeapLimit("--max-old-space-size=4096 --max_old_space_size=7168").appliedMiB,
+    ).toBe(7168);
   });
 
   it("preserves only an explicit service heap limit", () => {
