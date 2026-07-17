@@ -208,7 +208,8 @@ function resolveSessionActivity(params: {
     return activity;
   }
 
-  if (!params.create) {
+  // Unidentified activity cannot be resolved by terminal events and would be retained forever.
+  if (!params.create || (!params.runId?.trim() && diagnosticSessionRefs(params).length === 0)) {
     return undefined;
   }
 

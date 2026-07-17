@@ -107,6 +107,41 @@ describe("resolveRunStaleThresholdMs", () => {
 });
 
 describe("diagnostic run activity retention", () => {
+  it("does not retain identifier-free tool lifecycles", async () => {
+    for (let index = 0; index <= 2_000; index += 1) {
+      const toolCallId = `identifier-free-tool-${index}`;
+      emitInternalDiagnosticEvent({
+        type: "tool.execution.started",
+        toolName: "proof-tool",
+        toolCallId,
+      });
+      emitInternalDiagnosticEvent({
+        type: "tool.execution.completed",
+        toolName: "proof-tool",
+        toolCallId,
+        durationMs: 1,
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    const completed = {
+      runId: "post-identifier-free-run",
+      sessionId: "post-identifier-free-session",
+      sessionKey: "agent:main:post-identifier-free",
+    };
+    markDiagnosticRunProgress({ ...completed, reason: "proof:active" });
+    emitInternalDiagnosticEvent({
+      type: "run.completed",
+      ...completed,
+      durationMs: 1,
+      outcome: "completed",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot(completed).lastProgressReason).toBe(
+      "run:completed",
+    );
+  });
+
   it("evicts run ownership retired by stuck-session recovery", () => {
     startDiagnosticRunActivityTracking();
     const recovered = {
