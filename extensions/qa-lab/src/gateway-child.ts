@@ -338,6 +338,25 @@ function appendQaGatewayTempRoot(details: string, tempRoot: string) {
     : `${details}\nQA gateway temp root preserved at ${tempRoot}`;
 }
 
+function throwQaGatewayStartupError(params: {
+  error: unknown;
+  message: string;
+  cleanupErrors: unknown[];
+}): never {
+  const primaryError =
+    params.error instanceof QaSuiteInfraError
+      ? new QaSuiteInfraError(params.error.code, params.message, { cause: params.error })
+      : new Error(params.message, { cause: params.error });
+  if (params.cleanupErrors.length === 0) {
+    throw primaryError;
+  }
+  throw new AggregateError(
+    [primaryError, ...params.cleanupErrors],
+    "qa gateway startup and cleanup failed",
+    { cause: primaryError },
+  );
+}
+
 export function resolveQaGatewayChildProviderMode(providerMode?: QaProviderMode): QaProviderMode {
   return providerMode ?? DEFAULT_QA_PROVIDER_MODE;
 }
@@ -1735,18 +1754,7 @@ export async function startQaGatewayChild(params: {
       keepTemp || !processStopped
         ? appendQaGatewayTempRoot(formatErrorMessage(error), tempRoot)
         : formatErrorMessage(error);
-    const primaryError =
-      error instanceof QaSuiteInfraError
-        ? new QaSuiteInfraError(error.code, message, { cause: error })
-        : new Error(message, { cause: error });
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [primaryError, ...cleanupErrors],
-        "qa gateway startup and cleanup failed",
-        { cause: primaryError },
-      );
-    }
-    throw primaryError;
+    throwQaGatewayStartupError({ error, message, cleanupErrors });
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
