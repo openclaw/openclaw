@@ -252,7 +252,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +4: shared audio-energy stats and speech-threshold gate through realtime-voice.
       // +2: supplemental sender decision and outbound text chunk sequencer.
-      8012,
+      // +2: shared realtime voice session harness through realtime-voice.
+      8014,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -279,7 +280,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: selectPreferredLocalModelId shares app-guided local model ranking across providers.
       // +3: PCM16/mu-law energy readers and speech-threshold gate factory.
       // +2: supplemental sender decision and outbound text chunk sequencer.
-      4478,
+      // +1: shared realtime voice session harness through realtime-voice.
+      4479,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
