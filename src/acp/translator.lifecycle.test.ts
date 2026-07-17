@@ -350,6 +350,9 @@ describe("acp translator stable lifecycle handlers", () => {
     });
 
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
+    // Deferred notifications fire after the response is returned; flush the
+    // timer queue so the test can assert their side effects.
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
     if (!result.configOptions) {

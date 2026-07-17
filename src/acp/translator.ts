@@ -392,13 +392,14 @@ export class AcpGatewayAgent implements Agent {
     this.log(`newSession: ${session.sessionId} -> ${session.sessionKey}`);
     const sessionSnapshot = await this.getSessionSnapshot(session.sessionKey);
     const { configOptions, modes } = sessionSnapshot;
-    void this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: true,
-    }).then(
-      () => this.sessionUpdates.sendAvailableCommands(session, { record: true }),
-      (err: unknown) => this.log(`newSession notification failed: ${err}`),
-    );
+    setTimeout(() => {
+      this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
+        includeControls: false,
+        record: true,
+      })
+        .then(() => this.sessionUpdates.sendAvailableCommands(session, { record: true }))
+        .catch((err: unknown) => this.log(`newSession notification failed: ${String(err)}`));
+    }, 0);
     return {
       sessionId: session.sessionId,
       configOptions,
@@ -554,13 +555,14 @@ export class AcpGatewayAgent implements Agent {
     await this.sessionUpdates.startLedgerSession(session, { complete: false });
     this.log(`resumeSession: ${session.sessionId} -> ${session.sessionKey}`);
     const { configOptions, modes } = sessionSnapshot;
-    void this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
-      includeControls: false,
-      record: false,
-    }).then(
-      () => this.sessionUpdates.sendAvailableCommands(session, { record: false }),
-      (err: unknown) => this.log(`resumeSession notification failed: ${err}`),
-    );
+    setTimeout(() => {
+      this.sendSessionSnapshotUpdate(session, sessionSnapshot, {
+        includeControls: false,
+        record: false,
+      })
+        .then(() => this.sessionUpdates.sendAvailableCommands(session, { record: false }))
+        .catch((err: unknown) => this.log(`resumeSession notification failed: ${String(err)}`));
+    }, 0);
     return { configOptions, modes };
   }
 
