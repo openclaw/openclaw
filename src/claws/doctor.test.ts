@@ -1,4 +1,14 @@
-import { access, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -117,9 +127,14 @@ describe("collectClawStateHealthFindings", () => {
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     await mkdir(dirname(databasePath), { recursive: true });
     const database = new DatabaseSync(databasePath);
-    database.exec("CREATE TABLE unrelated_state (id TEXT PRIMARY KEY)");
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE unrelated_state (id TEXT PRIMARY KEY); PRAGMA wal_checkpoint(TRUNCATE)",
+    );
     database.close();
+    await rm(`${databasePath}-wal`, { force: true });
+    await rm(`${databasePath}-shm`, { force: true });
     const before = await readFile(databasePath);
+    const beforeEntries = await readdir(dirname(databasePath));
 
     await expect(
       collectClawStateHealthFindings({
@@ -129,6 +144,7 @@ describe("collectClawStateHealthFindings", () => {
       }),
     ).resolves.toEqual([]);
     await expect(readFile(databasePath)).resolves.toEqual(before);
+    await expect(readdir(dirname(databasePath))).resolves.toEqual(beforeEntries);
   });
 
   it("reports an unreadable state database as a structured finding", async () => {
@@ -224,6 +240,26 @@ describe("collectClawStateHealthFindings", () => {
         env: current.env,
         cfg: current.getConfig(),
         sourceMcpServers: snapshotMcpServers(current.getConfig()),
+        cronGateway: {
+          list: async () => [
+            {
+              id: "scheduler-daily",
+              agentId: "worker",
+              owner: { agentId: "worker" },
+              declarationKey: "claw:worker:daily-report",
+              name: "daily-report",
+              enabled: true,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "Prepare report" },
+              delivery: { mode: "none" },
+              state: {},
+            },
+          ],
+        },
       }),
     ).resolves.toEqual([]);
   });
@@ -352,6 +388,103 @@ describe("collectClawStateHealthFindings", () => {
           path: "claws.worker.cronJobs.daily-report",
         }),
       ]),
+    );
+  });
+
+  it("reports complete cron ownership as unknown without live Gateway inventory", async () => {
+    const current = await installFixture({ withCron: true });
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: current.getConfig(),
+      sourceMcpServers: snapshotMcpServers(current.getConfig()),
+    });
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("live Gateway state is unknown"),
+        path: "claws.worker.cronJobs.daily-report",
+      }),
+    );
+  });
+
+  it("accepts complete cron ownership only when live Gateway inventory matches", async () => {
+    const current = await installFixture({ withCron: true });
+
+    await expect(
+      collectClawStateHealthFindings({
+        env: current.env,
+        cfg: current.getConfig(),
+        sourceMcpServers: snapshotMcpServers(current.getConfig()),
+        cronGateway: {
+          list: async () => [
+            {
+              id: "scheduler-daily",
+              agentId: "worker",
+              owner: { agentId: "worker" },
+              declarationKey: "claw:worker:daily-report",
+              name: "daily-report",
+              enabled: true,
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              payload: { kind: "agentTurn", message: "Prepare report" },
+              delivery: { mode: "none" },
+              state: {},
+            },
+          ],
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("reports disabled or missing live Gateway cron jobs", async () => {
+    const current = await installFixture({ withCron: true });
+
+    const disabled = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: current.getConfig(),
+      sourceMcpServers: snapshotMcpServers(current.getConfig()),
+      cronGateway: {
+        list: async () => [
+          {
+            id: "scheduler-daily",
+            agentId: "worker",
+            owner: { agentId: "worker" },
+            declarationKey: "claw:worker:daily-report",
+            name: "daily-report",
+            enabled: false,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Prepare report" },
+            delivery: { mode: "none" },
+            state: {},
+          },
+        ],
+      },
+    });
+    expect(disabled).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("differs from live Gateway job"),
+        path: "claws.worker.cronJobs.daily-report",
+      }),
+    );
+
+    const missing = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: current.getConfig(),
+      sourceMcpServers: snapshotMcpServers(current.getConfig()),
+      cronGateway: { list: async () => [] },
+    });
+    expect(missing).toContainEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("missing from live Gateway inventory"),
+        path: "claws.worker.cronJobs.daily-report",
+      }),
     );
   });
 

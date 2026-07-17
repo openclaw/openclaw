@@ -310,7 +310,7 @@ export function readClawCronRefs(
   const database = openOpenClawStateDatabase(options);
   if (
     options.readOnly &&
-    !database.db
+    !database.db /* sqlite-allow-raw: read-only Claw cron table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_cron_refs'")
       .get()
   ) {

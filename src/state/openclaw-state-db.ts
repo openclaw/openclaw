@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
@@ -770,7 +771,8 @@ export function detectOpenClawStateDatabaseSchemaMigrations(
     return [];
   }
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const uri = `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
+  const db = new sqlite.DatabaseSync(uri, { readOnly: true });
   try {
     const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
     if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
@@ -1652,7 +1654,9 @@ export function openExistingOpenClawStateDatabaseReadOnly(
     return undefined;
   }
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  const hasWalSidecars = existsSync(`${pathname}-wal`) || existsSync(`${pathname}-shm`);
+  const uri = `${pathToFileURL(pathname).href}?mode=ro&immutable=1`;
+  const db = new sqlite.DatabaseSync(hasWalSidecars ? pathname : uri, { readOnly: true });
   try {
     assertSupportedSchemaVersion(db, pathname);
   } catch (error) {

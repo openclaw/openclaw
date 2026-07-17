@@ -261,7 +261,7 @@ export function readClawMcpServerRefs(
   const database = openOpenClawStateDatabase(options);
   if (
     options.readOnly &&
-    !database.db
+    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
       .get()
   ) {
@@ -286,7 +286,7 @@ function readClawMcpServerRefsByName(
   const database = openOpenClawStateDatabase(options);
   if (
     options.readOnly &&
-    !database.db
+    !database.db /* sqlite-allow-raw: read-only Claw MCP table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_mcp_server_refs'")
       .get()
   ) {

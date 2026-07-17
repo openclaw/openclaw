@@ -1554,7 +1554,7 @@ async function runClawStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/claws-state");
 }
 
-export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
+function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",

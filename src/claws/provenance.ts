@@ -445,7 +445,7 @@ export function readClawPackageRefs(
   const database = openOpenClawStateDatabase(options);
   if (
     options.readOnly &&
-    !database.db
+    !database.db /* sqlite-allow-raw: read-only Claw package-ref table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_package_refs'")
       .get()
   ) {
