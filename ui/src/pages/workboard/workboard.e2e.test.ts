@@ -277,6 +277,22 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   }
 }
 
+async function newScreenshotPage(): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport,
+  });
+  try {
+    const page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    return { context, page };
+  } catch (error) {
+    await context.close().catch(() => {});
+    throw error;
+  }
+}
+
 async function captureScreenshot(
   page: Page,
   artifacts: ProofArtifacts,
@@ -326,6 +342,49 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
   afterAll(async () => {
     await browser?.close().catch(() => {});
     await server?.close();
+  });
+
+  it("renders cards while task enrichment is still pending", async () => {
+    await rm(artifactDir, { force: true, recursive: true });
+    const artifacts: ProofArtifacts = { screenshots: [], videos: [] };
+    const delayedCard = card({
+      id: "delayed-card",
+      labels: ["ui", "proof"],
+      notes: "Acceptance: card is visible before tasks.list resolves",
+      status: "todo",
+      title: "Visible before task enrichment",
+      updatedAt: baseTime + 10,
+    });
+
+    const proof = await newScreenshotPage();
+    try {
+      const gateway = await installMockGateway(proof.page, {
+        deferredMethods: ["tasks.list"],
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([delayedCard]),
+        },
+      });
+
+      const response = await proof.page.goto(`${server.baseUrl}workboard`);
+      expect(response?.status()).toBe(200);
+      await cardInColumn(proof.page, "Todo", delayedCard.title).waitFor({ state: "visible" });
+      await proof.page.getByRole("button", { name: "Refreshing" }).waitFor({ state: "visible" });
+      await captureScreenshot(proof.page, artifacts, "delayed-task-enrichment-card-visible");
+
+      await gateway.resolveDeferred("tasks.list", { nextCursor: null, tasks: [] });
+      await proof.page.getByRole("button", { name: "Refresh" }).waitFor({ state: "visible" });
+      await cardInColumn(proof.page, "Todo", delayedCard.title).waitFor({ state: "visible" });
+      await captureScreenshot(proof.page, artifacts, "delayed-task-enrichment-settled");
+
+      expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(1);
+      expect(await gateway.getRequests("tasks.list")).toHaveLength(1);
+      expect(artifacts.screenshots).toHaveLength(2);
+    } finally {
+      await proof.context.close();
+    }
   });
 
   it("persists Workboard create, edit, running move, lifecycle sync, reload, and read-only state", async () => {
