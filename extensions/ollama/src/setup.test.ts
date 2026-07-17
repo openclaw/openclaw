@@ -617,7 +617,7 @@ describe("ollama setup", () => {
     });
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       if (requestUrl(input).endsWith("/api/show")) {
-        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
         if (body.name === "broken:20b") {
           return new Response("boom", { status: 500 });
         }
