@@ -9,7 +9,7 @@ import {
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -177,7 +177,7 @@ async function admitReplyTurnWithWaitSignal(
     try {
       const storePath = params.storePath;
       let operation: ReplyOperation | undefined;
-      let admittedSessionEntry: SessionEntry | undefined;
+      let admittedSessionEntry: InternalSessionEntry | undefined;
       let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
@@ -196,7 +196,7 @@ async function admitReplyTurnWithWaitSignal(
                 sessionKey: params.sessionKey,
                 readConsistency: "latest",
               });
-              admittedSessionEntry = currentEntry;
+              admittedSessionEntry = currentEntry as InternalSessionEntry | undefined;
               if (expectedSessionId && !currentEntry) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,

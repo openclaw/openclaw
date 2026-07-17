@@ -1383,6 +1383,53 @@ describe("main-session-restart-recovery", () => {
     expect(settled?.mainRestartRecovery).toBeUndefined();
   });
 
+  it("does not settle a cached terminal response after a foreground owner wins admission", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    let foregroundClaimed = false;
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "agent") {
+        return { runId: "recovery-run", status: "accepted" };
+      }
+      if (!foregroundClaimed) {
+        const owner = await claimMainSessionRecoveryOwner({
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId: "main-session",
+          target: { sessionKey: "agent:main:main", storePath },
+        });
+        expect(owner.kind).toBe("claimed");
+        foregroundClaimed = true;
+      }
+      return { runId: "recovery-run", status: "ok", endedAt: Date.now() };
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir })).resolves.toEqual(
+      { recovered: 0, failed: 1, skipped: 0 },
+    );
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      abortedLastRun: true,
+      status: "running",
+      mainRestartRecovery: {
+        foregroundClaims: { tokens: [expect.any(String)] },
+      },
+    });
+  });
+
   it("settles a reused recovery RPC after its dispatch wait times out", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");

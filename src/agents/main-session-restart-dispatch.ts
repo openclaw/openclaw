@@ -244,6 +244,30 @@ async function settleRestartRecoveryDispatch(params: {
   });
 }
 
+function isExactRestartRecoveryDispatchAdmission(params: {
+  admission: Awaited<ReturnType<typeof commitMainSessionRecovery>>;
+  lifecycleGeneration: string;
+  recoveryRunId: string;
+  sessionId: string;
+  terminalStatus?: RestartRecoveryTerminalStatus;
+}): boolean {
+  const entry = params.admission.entry;
+  return (
+    entry?.sessionId === params.sessionId &&
+    ((entry.abortedLastRun === false &&
+      normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.recoveryRunId &&
+      entry.restartRecoveryRuns?.some(
+        (run) =>
+          run.runId === params.recoveryRunId &&
+          run.lifecycleGeneration === params.lifecycleGeneration,
+      ) === true) ||
+      (hasRestartRecoveryTerminalRun(entry, params.recoveryRunId) &&
+        ((params.terminalStatus === "ok" && entry.status === "done") ||
+          (params.terminalStatus === "error" && entry.status === "failed") ||
+          (params.terminalStatus === "timeout" && entry.status === "timeout"))))
+  );
+}
+
 type MainSessionResumeResult = "resumed" | "skipped" | "failed";
 
 async function rollbackRestartRecoveryReservation(params: {
@@ -427,22 +451,35 @@ export async function resumeMainSession(params: {
     // Real Gateway admission consumes the reservation before returning accepted.
     // Recovery-runtime fakes may return directly, so keep this idempotent fallback
     // to make the durable acceptance boundary explicit in focused tests too.
-    await commitMainSessionRecovery({
-      command: {
-        kind: "admit_recovery",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        now: Date.now(),
-        runId: recoveryRunId,
-        sessionId: params.entry.sessionId,
-      },
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
-    });
     let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
     if (!terminalStatus && reusingRecoveryRunId && dispatchResult.status === "accepted") {
       terminalStatus = await probeRestartRecoveryTerminalStatus(
         recoveryRunId,
         params.gatewayRuntime,
       );
+    }
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const admission = await commitMainSessionRecovery({
+      command: {
+        kind: "admit_recovery",
+        lifecycleGeneration,
+        now: Date.now(),
+        runId: recoveryRunId,
+        sessionId: params.entry.sessionId,
+      },
+      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    });
+    if (
+      admission.transition.kind !== "admitted_recovery" &&
+      !isExactRestartRecoveryDispatchAdmission({
+        admission,
+        lifecycleGeneration,
+        recoveryRunId,
+        sessionId: params.entry.sessionId,
+        terminalStatus,
+      })
+    ) {
+      throw new Error(`restart recovery admission changed before settlement: ${params.sessionKey}`);
     }
     await settleRestartRecoveryDispatch({
       expectedRecoveryRunId: recoveryRunId,
@@ -477,19 +514,13 @@ export async function resumeMainSession(params: {
           },
           target: { sessionKey: params.sessionKey, storePath: params.storePath },
         });
-        const exactRunAlreadyAdmitted =
-          admission.entry?.sessionId === params.entry.sessionId &&
-          ((admission.entry.abortedLastRun === false &&
-            normalizeOptionalString(admission.entry.restartRecoveryDeliveryRunId) ===
-              recoveryRunId &&
-            admission.entry.restartRecoveryRuns?.some(
-              (run) =>
-                run.runId === recoveryRunId && run.lifecycleGeneration === lifecycleGeneration,
-            ) === true) ||
-            (hasRestartRecoveryTerminalRun(admission.entry, recoveryRunId) &&
-              ((terminalStatus === "ok" && admission.entry.status === "done") ||
-                (terminalStatus === "error" && admission.entry.status === "failed") ||
-                (terminalStatus === "timeout" && admission.entry.status === "timeout"))));
+        const exactRunAlreadyAdmitted = isExactRestartRecoveryDispatchAdmission({
+          admission,
+          lifecycleGeneration,
+          recoveryRunId,
+          sessionId: params.entry.sessionId,
+          terminalStatus,
+        });
         if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
           log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
         } else {
