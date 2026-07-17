@@ -75,6 +75,12 @@ type PluginToolPolicyDecision =
 export type PluginTrustedToolPolicyRegistration = {
   id: string;
   description: string;
+  /**
+   * Exact tool names this policy targets; omitted means every tool. Scoped
+   * policies are skipped for non-matching tools and let harness adapters avoid
+   * native hook fan-out for uncovered tools.
+   */
+  matcher?: readonly string[];
   evaluate: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,

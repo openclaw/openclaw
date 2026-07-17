@@ -1,7 +1,7 @@
 /** Tests before-tool-call hook ordering, mutation, and cancellation behavior. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-fixtures.js";
+import { addStaticTestHooks, createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookToolContext } from "./types.js";
 import type { PluginHookBeforeToolCallResult } from "./types.js";
@@ -252,5 +252,114 @@ describe("before_tool_call hook merger — requireApproval", () => {
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
     expectRequireApprovalResult(result, expected);
+  });
+});
+
+describe("before_tool_call hook tool matchers", () => {
+  it("skips hooks whose matcher excludes the tool and runs matching hooks", async () => {
+    const calls: string[] = [];
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "before_tool_call",
+        matcher: ["message"],
+        handler: () => {
+          calls.push("message-only");
+          return { block: true, blockReason: "scoped" };
+        },
+      },
+      {
+        hookName: "before_tool_call",
+        handler: () => {
+          calls.push("match-all");
+        },
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    const execResult = await runner.runBeforeToolCall({ toolName: "exec", params: {} }, stubCtx);
+    expect(calls).toEqual(["match-all"]);
+    expect(execResult?.block).toBeUndefined();
+
+    calls.length = 0;
+    const messageResult = await runner.runBeforeToolCall(
+      { toolName: "message", params: {} },
+      stubCtx,
+    );
+    // The scoped hook's block short-circuits the remaining handlers.
+    expect(calls).toEqual(["message-only"]);
+    expect(messageResult?.block).toBe(true);
+  });
+
+  it("matches scoped hooks through tool-name aliases", async () => {
+    const calls: string[] = [];
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "before_tool_call",
+        matcher: ["Bash"],
+        handler: () => {
+          calls.push("bash-scoped");
+        },
+      },
+    ]);
+    const runner = createHookRunner(registry);
+    await runner.runBeforeToolCall({ toolName: "exec", params: {} }, stubCtx);
+    expect(calls).toEqual(["bash-scoped"]);
+  });
+});
+
+describe("after_tool_call hook tool matchers", () => {
+  it("skips scoped hooks for non-matching tools", async () => {
+    const calls: string[] = [];
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "after_tool_call",
+        matcher: ["message"],
+        handler: () => {
+          calls.push("message-only");
+        },
+      },
+      {
+        hookName: "after_tool_call",
+        handler: () => {
+          calls.push("match-all");
+        },
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    await runner.runAfterToolCall({ toolName: "exec", params: {} }, stubCtx);
+    expect(calls).toEqual(["match-all"]);
+
+    calls.length = 0;
+    await runner.runAfterToolCall({ toolName: "message", params: {} }, stubCtx);
+    expect(calls).toEqual(["message-only", "match-all"]);
+  });
+});
+
+describe("getToolHookMatcherScope", () => {
+  it("returns the union of scoped matchers with normalized spellings", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", matcher: ["Bash"], handler: () => undefined },
+      { hookName: "before_tool_call", matcher: ["message"], handler: () => undefined },
+      { hookName: "after_tool_call", matcher: ["browser"], handler: () => undefined },
+    ]);
+    const runner = createHookRunner(registry);
+    expect(runner.getToolHookMatcherScope("before_tool_call")).toEqual({
+      matchAll: false,
+      toolNames: ["Bash", "exec", "message"],
+    });
+    expect(runner.getToolHookMatcherScope("after_tool_call")).toEqual({
+      matchAll: false,
+      toolNames: ["browser"],
+    });
+  });
+
+  it("forces match-all when any hook is unscoped", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", matcher: ["message"], handler: () => undefined },
+      { hookName: "before_tool_call", handler: () => undefined },
+    ]);
+    const runner = createHookRunner(registry);
+    expect(runner.getToolHookMatcherScope("before_tool_call")).toEqual({ matchAll: true });
   });
 });

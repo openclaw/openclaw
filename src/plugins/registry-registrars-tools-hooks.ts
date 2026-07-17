@@ -25,6 +25,7 @@ import {
   normalizePluginToolContractNames,
   normalizePluginToolNames,
 } from "./tool-contracts.js";
+import { normalizePluginToolMatcher, pluginToolMatcherCoversTool } from "./tool-hook-matcher.js";
 import {
   DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
@@ -207,7 +208,13 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
+    const matcher = normalizePluginToolMatcher(options?.matcher);
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+      // Runners receive bare handler functions, so this wrapper is the only
+      // dispatch-time gate for matcher-scoped middleware.
+      if (matcher && !pluginToolMatcherCoversTool(matcher, event.toolName)) {
+        return undefined;
+      }
       try {
         // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
         return await withTimeout(
@@ -228,6 +235,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       rawHandler: handler,
       handler: safeHandler,
       runtimes,
+      ...(matcher ? { matcher } : {}),
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -391,7 +399,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: { priority?: number; timeoutMs?: number; matcher?: readonly string[] },
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -456,6 +464,17 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       }
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const isToolMatcherHook =
+      effectiveHookName === "before_tool_call" || effectiveHookName === "after_tool_call";
+    const matcher = isToolMatcherHook ? normalizePluginToolMatcher(opts?.matcher) : undefined;
+    if (opts?.matcher && !isToolMatcherHook) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${effectiveHookName}" ignores matcher; only before_tool_call/after_tool_call support tool matchers`,
+      });
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -463,6 +482,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(matcher ? { matcher } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };

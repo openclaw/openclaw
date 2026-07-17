@@ -57,10 +57,11 @@ observation side effects.
 
 `api.on(name, handler, opts?)` accepts:
 
-| Option      | Effect                                                                                                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `priority`  | Ordering; higher runs first.                                                                                                                                                                      |
-| `timeoutMs` | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout. |
+| Option      | Effect                                                                                                                                                                                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `priority`  | Ordering; higher runs first.                                                                                                                                                                                                                                                            |
+| `timeoutMs` | Per-hook await budget. When it expires, OpenClaw stops awaiting that handler and moves on. It does not cancel the handler or its side effects. Omit to use the runner's default per-hook timeout.                                                                                       |
+| `matcher`   | `before_tool_call` / `after_tool_call` only: exact tool names the hook targets (e.g. `["message"]`). Omitted means every tool. Scoped hooks are skipped for non-matching tools, and harness adapters (such as the Codex native hook relay) only spawn hook processes for covered tools. |
 
 Operators can set hook budgets without patching plugin code:
 
@@ -421,6 +422,12 @@ are rejected before registration. Policy ids are scoped to the registering
 plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
+
+Trusted tool policies accept the same optional `matcher` (exact tool names) as
+`api.on(...)`. A scoped policy is skipped for non-matching tools, and the Codex
+native hook relay narrows its `PreToolUse` install to the union of registered
+matchers, so tools nothing targets never spawn a relay process. Any unscoped
+hook or policy keeps the install match-all.
 
 ### Exec environment hook
 

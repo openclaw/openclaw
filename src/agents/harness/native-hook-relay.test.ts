@@ -3584,3 +3584,108 @@ describe("native hook relay command builder", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("native hook relay tool scopes", () => {
+  it("keeps pre-tool scope match-all while loop detection may run", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: vi.fn(), matcher: ["message"] },
+      ]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+    expect(relay.toolScopeForEvent("pre_tool_use")).toEqual({ matchAll: true });
+  });
+
+  it("unions scoped before-tool hooks and trusted policies when loop detection is off", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), matcher: ["message"] },
+    ]);
+    registry.trustedToolPolicies.push({
+      pluginId: "policy-plugin",
+      source: "test",
+      policy: {
+        id: "scoped-policy",
+        description: "scoped",
+        matcher: ["Bash"],
+        evaluate: () => undefined,
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    setActivePluginRegistry(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      preToolUseLoopDetection: false,
+    });
+    expect(relay.toolScopeForEvent("pre_tool_use")).toEqual({
+      matchAll: false,
+      toolNames: ["Bash", "exec", "message"],
+    });
+  });
+
+  it("forces pre-tool match-all when any trusted policy is unscoped", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: vi.fn(), matcher: ["message"] },
+    ]);
+    registry.trustedToolPolicies.push({
+      pluginId: "policy-plugin",
+      source: "test",
+      policy: {
+        id: "unscoped-policy",
+        description: "unscoped",
+        evaluate: () => undefined,
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    setActivePluginRegistry(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      preToolUseLoopDetection: false,
+    });
+    expect(relay.toolScopeForEvent("pre_tool_use")).toEqual({ matchAll: true });
+  });
+
+  it("unions scoped after-tool hooks and codex middleware for post-tool scope", () => {
+    const registry = createMockPluginRegistry([
+      { hookName: "after_tool_call", handler: vi.fn(), matcher: ["message"] },
+    ]);
+    const middlewareHandler = () => undefined;
+    registry.agentToolResultMiddlewares.push(
+      {
+        pluginId: "middleware-plugin",
+        rawHandler: middlewareHandler,
+        handler: middlewareHandler,
+        runtimes: ["codex"],
+        matcher: ["browser"],
+        source: "test",
+      },
+      {
+        pluginId: "openclaw-only-plugin",
+        rawHandler: middlewareHandler,
+        handler: middlewareHandler,
+        runtimes: ["openclaw"],
+        source: "test",
+      },
+    );
+    initializeGlobalHookRunner(registry);
+    setActivePluginRegistry(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    expect(relay.toolScopeForEvent("post_tool_use")).toEqual({
+      matchAll: false,
+      toolNames: ["browser", "message"],
+    });
+    expect(relay.toolScopeForEvent("permission_request")).toEqual({ matchAll: true });
+  });
+});
