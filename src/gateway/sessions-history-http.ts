@@ -68,17 +68,20 @@ function getRequestUrl(req: IncomingMessage): URL {
   return new URL(req.url ?? "/", "http://localhost");
 }
 
-function resolveLimit(req: IncomingMessage): number | undefined {
+function resolveLimit(req: IncomingMessage): { limit?: number; error?: string } {
   const raw = getRequestUrl(req).searchParams.get("limit");
   if (raw == null || raw.trim() === "") {
-    return undefined;
+    return {};
   }
   const trimmed = raw.trim();
-  const value = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (Number.isNaN(value) || value < 1) {
-    return 1;
+  if (!/^\d+$/.test(trimmed)) {
+    return { error: "limit must be a non-negative integer" };
   }
-  return Math.min(MAX_SESSION_HISTORY_LIMIT, value);
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 1) {
+    return { error: "limit must be greater than or equal to 1" };
+  }
+  return { limit: Math.min(MAX_SESSION_HISTORY_LIMIT, value) };
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
@@ -141,7 +144,11 @@ export async function handleSessionHistoryHttpRequest(
     });
     return true;
   }
-  const limit = resolveLimit(req);
+  const { limit, error: limitError } = resolveLimit(req);
+  if (limitError) {
+    sendInvalidRequest(res, limitError);
+    return true;
+  }
   const cursor = normalizeOptionalString(getRequestUrl(req).searchParams.get("cursor"));
   const effectiveMaxChars = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   let boundedSnapshot:

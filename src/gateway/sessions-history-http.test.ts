@@ -737,6 +737,29 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("rejects non-numeric limit with 400 instead of silently coercing to 1", async () => {
+    await seedSession({ text: "first message" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=abc",
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error?.type).toBe("invalid_request_error");
+      expect(body.error?.message).toMatch(/limit/i);
+    });
+  });
+
+  test("rejects limit of 0 with 400 instead of silently coercing to 1", async () => {
+    await seedSession({ text: "first message" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=0",
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 
