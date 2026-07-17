@@ -777,7 +777,7 @@ export class DefaultPackageManager implements PackageManager {
     baseDir: string,
   ): void {
     const resolved = this.resolvePathFromBase(source.path, baseDir);
-    if (!existsSync(resolved) || !isRealPathWithinRoot(baseDir, resolved)) {
+    if (!existsSync(resolved)) {
       return;
     }
 
@@ -1195,9 +1195,7 @@ export class DefaultPackageManager implements PackageManager {
 
     // Collect all files from plain entries (non-pattern entries)
     const { plain, patterns } = splitPatterns(entries);
-    const resolvedPlain = plain
-      .map((p) => this.resolvePathFromBase(p, baseDir))
-      .filter((p) => isRealPathWithinRoot(baseDir, p));
+    const resolvedPlain = plain.map((p) => this.resolvePathFromBase(p, baseDir));
     const allFiles = this.collectFilesFromPaths(resolvedPlain, resourceType);
 
     // Determine which files are enabled based on patterns
