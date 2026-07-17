@@ -1,7 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTask, type RunnerTestFile, type RunnerTestSuite, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestFile, vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -251,15 +251,24 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onBeforeTryTask(test);
   }
 
-  override async onAfterRunSuite(suite: RunnerTestSuite) {
-    await super.onAfterRunSuite(suite);
-    if (this.config.isolate || !("filepath" in suite) || typeof suite.filepath !== "string") {
+  // Cross-file cleanup lives in onAfterRunFiles, not onAfterRunSuite: vitest
+  // early-returns runSuite for files that failed during collection (and for
+  // skipped file suites) without firing onAfterRunSuite, which used to leave
+  // the crashed file's evaluated real modules cached in the shared worker so
+  // the next file's vi.mock factories silently never applied. The worker loop
+  // calls startTests per file, so this hook runs after every file regardless
+  // of its collect/run outcome.
+  override onAfterRunFiles(files?: RunnerTestFile[]) {
+    super.onAfterRunFiles();
+    if (this.config.isolate) {
       return;
     }
 
     const orderLogPath = process.env.OPENCLAW_VITEST_FILE_ORDER_LOG?.trim();
     if (orderLogPath) {
-      fs.appendFileSync(orderLogPath, `END ${suite.filepath}\n`);
+      for (const file of files ?? []) {
+        fs.appendFileSync(orderLogPath, `END ${file.filepath}\n`);
+      }
     }
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
