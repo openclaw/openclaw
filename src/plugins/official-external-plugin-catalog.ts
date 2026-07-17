@@ -718,7 +718,7 @@ async function loadHostedCatalogSnapshotResult(params: {
   };
 }
 
-export function isHostedCatalogSignedFeedRollback(params: {
+function isHostedCatalogSignedFeedRollback(params: {
   candidate: OfficialExternalPluginCatalogFeed;
   current: OfficialExternalPluginCatalogFeed;
 }): boolean {

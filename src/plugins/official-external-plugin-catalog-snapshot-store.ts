@@ -132,7 +132,7 @@ function readMonotonicStateFromBody(
   }
 }
 
-export function isMonotonicRollback(params: {
+function isMonotonicRollback(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
   current: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
 }): boolean {

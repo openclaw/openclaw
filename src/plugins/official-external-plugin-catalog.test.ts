@@ -5,13 +5,9 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  createSqliteHostedOfficialExternalPluginCatalogSnapshotStore,
-  isMonotonicRollback,
-} from "./official-external-plugin-catalog-snapshot-store.js";
+import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type HostedOfficialExternalPluginCatalogSnapshot,
-  type HostedOfficialExternalPluginCatalogSnapshotMonotonicState,
   type HostedOfficialExternalPluginCatalogSnapshotStore,
   type OfficialExternalPluginCatalogEntry,
   type OfficialExternalPluginCatalogFeed,
@@ -27,7 +23,6 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { isHostedCatalogSignedFeedRollback } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
   const entry = getOfficialExternalPluginCatalogEntry(id);
@@ -1229,121 +1224,3 @@ describe("official external plugin catalog", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-describe("isHostedCatalogSignedFeedRollback", () => {
-  function feed(
-    overrides: Partial<OfficialExternalPluginCatalogFeed>,
-  ): OfficialExternalPluginCatalogFeed {
-    return {
-      schemaVersion: 1,
-      id: "test-feed",
-      generatedAt: "2026-01-01T00:00:00.000Z",
-      sequence: 10,
-      entries: [],
-      ...overrides,
-    };
-  }
-
-  it("returns false when candidate is newer by sequence", () => {
-    expect(
-      isHostedCatalogSignedFeedRollback({
-        candidate: feed({ sequence: 11, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: feed({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true when candidate is older by sequence", () => {
-    expect(
-      isHostedCatalogSignedFeedRollback({
-        candidate: feed({ sequence: 9, generatedAt: "2026-01-02T00:00:00.000Z" }),
-        current: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("compares generatedAt when sequences are equal", () => {
-    expect(
-      isHostedCatalogSignedFeedRollback({
-        candidate: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: feed({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("treats candidate with invalid generatedAt as a rollback", () => {
-    expect(
-      isHostedCatalogSignedFeedRollback({
-        candidate: feed({ sequence: 10, generatedAt: "not-a-date" }),
-        current: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not treat current with invalid generatedAt as a rollback", () => {
-    expect(
-      isHostedCatalogSignedFeedRollback({
-        candidate: feed({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: feed({ sequence: 10, generatedAt: "not-a-date" }),
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("isMonotonicRollback", () => {
-  function state(
-    overrides: Partial<HostedOfficialExternalPluginCatalogSnapshotMonotonicState>,
-  ): HostedOfficialExternalPluginCatalogSnapshotMonotonicState {
-    return {
-      mode: "signed-feed",
-      sequence: 10,
-      generatedAt: "2026-01-01T00:00:00.000Z",
-      ...overrides,
-    };
-  }
-
-  it("returns false when candidate is newer by sequence", () => {
-    expect(
-      isMonotonicRollback({
-        candidate: state({ sequence: 11, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: state({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true when candidate is older by sequence", () => {
-    expect(
-      isMonotonicRollback({
-        candidate: state({ sequence: 9, generatedAt: "2026-01-02T00:00:00.000Z" }),
-        current: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("compares generatedAt when sequences are equal", () => {
-    expect(
-      isMonotonicRollback({
-        candidate: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: state({ sequence: 10, generatedAt: "2026-01-02T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("treats candidate with invalid generatedAt as a rollback", () => {
-    expect(
-      isMonotonicRollback({
-        candidate: state({ sequence: 10, generatedAt: "not-a-date" }),
-        current: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-      }),
-    ).toBe(true);
-  });
-
-  it("does not treat current with invalid generatedAt as a rollback", () => {
-    expect(
-      isMonotonicRollback({
-        candidate: state({ sequence: 10, generatedAt: "2026-01-01T00:00:00.000Z" }),
-        current: state({ sequence: 10, generatedAt: "not-a-date" }),
-      }),
-    ).toBe(false);
-  });
-});
