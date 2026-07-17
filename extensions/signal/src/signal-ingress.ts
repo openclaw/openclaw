@@ -152,14 +152,6 @@ function inspectSignalIngressEvent(event: SignalSseEvent): SignalIngressEventFac
   };
 }
 
-function resolveSignalIngressEventId(event: SignalSseEvent): string | null {
-  return inspectSignalIngressEvent(event)?.eventId ?? null;
-}
-
-function resolveSignalIngressLaneKey(event: SignalSseEvent): string | null {
-  return inspectSignalIngressEvent(event)?.laneKey ?? null;
-}
-
 type SignalIngressEnqueueResult =
   | Awaited<ReturnType<ChannelIngressQueue<SignalIngressPayload>["enqueue"]>>
   | { kind: "ignored" };

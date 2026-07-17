@@ -10,9 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
-type SignalIngressQueue = NonNullable<
-  Parameters<typeof startSignalIngressMonitor>[0]["queue"]
->;
+type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 type SignalIngressDispatch = Parameters<typeof startSignalIngressMonitor>[0]["dispatch"];
 
@@ -20,26 +18,26 @@ function createTrackedTaskRunner() {
   const pending = new Set<Promise<void>>();
   const failures: unknown[] = [];
 
-  return {
-    runTrackedTask(task: () => Promise<void>) {
-      const promise = task()
-        .catch((error: unknown) => {
-          failures.push(error);
-        })
-        .finally(() => {
-          pending.delete(promise);
-        });
-      pending.add(promise);
-    },
-    async waitForIdle() {
-      while (pending.size > 0) {
-        await Promise.all(pending);
-      }
-      if (failures.length > 0) {
-        throw failures[0];
-      }
-    },
+  const runTrackedTask = (task: () => Promise<void>) => {
+    const promise = task()
+      .catch((error: unknown) => {
+        failures.push(error);
+      })
+      .finally(() => {
+        pending.delete(promise);
+      });
+    pending.add(promise);
   };
+  const waitForIdle = async () => {
+    while (pending.size > 0) {
+      await Promise.all(pending);
+    }
+    if (failures.length > 0) {
+      throw failures[0];
+    }
+  };
+
+  return { runTrackedTask, waitForIdle };
 }
 
 async function startMonitor(queue: SignalIngressQueue, dispatch: SignalIngressDispatch) {
