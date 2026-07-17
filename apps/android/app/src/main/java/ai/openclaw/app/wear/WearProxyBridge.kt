@@ -97,7 +97,7 @@ internal class WearProxyBridge(
   // marker occupies the exact queue position where dropped sequences become visible.
   private val operations = Channel<WearBridgeOperation>(capacity = Channel.UNLIMITED)
 
-  private val actorJob =
+  init {
     scope.launch {
       var lastDeliveredSequence = 0L
       for (operation in operations) {
@@ -110,6 +110,7 @@ internal class WearProxyBridge(
         }
       }
     }
+  }
 
   private suspend fun processOperation(
     operation: WearBridgeOperation,
@@ -209,13 +210,6 @@ internal class WearProxyBridge(
     operations.send(WearBridgeOperation.Barrier(completion))
     completion.await()
   }
-
-  /** Test-only lifecycle boundary; production owns the bridge through its process scope. */
-  internal fun stopForTests() {
-    actorJob.cancel()
-  }
-
-  internal fun isStoppedForTests(): Boolean = actorJob.isCompleted
 
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */
   private fun publishEventLocked(

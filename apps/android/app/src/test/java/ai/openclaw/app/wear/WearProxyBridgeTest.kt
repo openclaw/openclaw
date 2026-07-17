@@ -12,11 +12,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -28,19 +32,21 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearProxyBridgeTest {
-  private suspend fun TestScope.withActorScope(
-    block: suspend TestScope.(CoroutineScope, (WearProxyBridge) -> Unit) -> Unit,
-  ) {
-    var bridge: WearProxyBridge? = null
-    try {
-      block(backgroundScope) { bridge = it }
-    } finally {
-      bridge?.let {
-        it.stopForTests()
-        runCurrent()
-        check(it.isStoppedForTests())
+  private fun withActorScope(block: suspend CoroutineScope.(CoroutineScope) -> Unit) =
+    runBlocking {
+      withTimeout(ACTOR_TEST_TIMEOUT_MILLIS) {
+        val actorJob = Job(coroutineContext[Job])
+        val actorScope = CoroutineScope(actorJob + Dispatchers.Default)
+        try {
+          block(actorScope)
+        } finally {
+          actorJob.cancelAndJoin()
+        }
       }
     }
+
+  private companion object {
+    const val ACTOR_TEST_TIMEOUT_MILLIS = 30_000L
   }
 
   @Test
@@ -118,62 +124,56 @@ class WearProxyBridgeTest {
 
   @Test
   fun eventSendCancellationDoesNotTerminateRequestActor() =
-    runTest {
-      withActorScope { actorScope, registerBridge ->
-        var cancelFirstEvent = true
-        val sent = mutableListOf<SentWearMessage>()
-        val bridge =
-          WearProxyBridge(
-            scope = actorScope,
-            sender =
-              WearMessageSender { nodeId, path, data ->
-                if (path == WearProtocol.EVENT_PATH && cancelFirstEvent) {
-                  cancelFirstEvent = false
-                  throw CancellationException("event canceled")
-                }
-                sent += SentWearMessage(nodeId, path, data)
-              },
-            peerResolver = WearPeerResolver { setOf("watch-1") },
-            handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
-          )
-        registerBridge(bridge)
+    withActorScope { actorScope ->
+      var cancelFirstEvent = true
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              if (path == WearProtocol.EVENT_PATH && cancelFirstEvent) {
+                cancelFirstEvent = false
+                throw CancellationException("event canceled")
+              }
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          peerResolver = WearPeerResolver { setOf("watch-1") },
+          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
 
-        bridge.publishConnection(connected = true, status = "Connected")
-        bridge.awaitIdleForTests()
-        bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+      bridge.publishConnection(connected = true, status = "Connected")
+      bridge.awaitIdleForTests()
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
 
-        assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.RESPONSE_PATH), sent.map { it.path })
-      }
+      assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.RESPONSE_PATH), sent.map { it.path })
     }
 
   @Test
   fun discoveryTaskCancellationDoesNotTerminateEventActor() =
-    runTest {
-      withActorScope { actorScope, registerBridge ->
-        var cancelFirstDiscovery = true
-        val sent = mutableListOf<SentWearMessage>()
-        val bridge =
-          WearProxyBridge(
-            scope = actorScope,
-            sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-            peerResolver =
-              WearPeerResolver {
-                if (cancelFirstDiscovery) {
-                  cancelFirstDiscovery = false
-                  throw CancellationException("discovery canceled")
-                }
-                setOf("watch-1")
-              },
-            handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
-          )
-        registerBridge(bridge)
+    withActorScope { actorScope ->
+      var cancelFirstDiscovery = true
+      val sent = mutableListOf<SentWearMessage>()
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
+          peerResolver =
+            WearPeerResolver {
+              if (cancelFirstDiscovery) {
+                cancelFirstDiscovery = false
+                throw CancellationException("discovery canceled")
+              }
+              setOf("watch-1")
+            },
+          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
 
-        bridge.publishConnection(connected = true, status = "first")
-        bridge.publishConnection(connected = true, status = "second")
-        bridge.awaitIdleForTests()
+      bridge.publishConnection(connected = true, status = "first")
+      bridge.publishConnection(connected = true, status = "second")
+      bridge.awaitIdleForTests()
 
-        assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.EVENT_PATH), sent.map { it.path })
-      }
+      assertEquals(listOf(WearProtocol.EVENT_PATH, WearProtocol.EVENT_PATH), sent.map { it.path })
     }
 
   @Test
@@ -590,70 +590,66 @@ class WearProxyBridgeTest {
 
   @Test
   fun queueOverflowRetainsTerminalEventAndEmitsResync() =
-    runTest {
-      withActorScope { actorScope, registerBridge ->
-        val sent = mutableListOf<SentWearMessage>()
-        val requestStarted = CompletableDeferred<Unit>()
-        val finishRequest = CompletableDeferred<Unit>()
-        val bridge =
-          WearProxyBridge(
-            scope = actorScope,
-            sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
-            handleRequest = { request ->
-              requestStarted.complete(Unit)
-              finishRequest.await()
-              WearMessage.Response(requestId = request.requestId, ok = true)
-            },
-          )
-        registerBridge(bridge)
-        val requestJob = async { bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1"))) }
-        runCurrent()
-        requestStarted.await()
+    withActorScope { actorScope ->
+      val sent = mutableListOf<SentWearMessage>()
+      val requestStarted = CompletableDeferred<Unit>()
+      val finishRequest = CompletableDeferred<Unit>()
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
+          handleRequest = { request ->
+            requestStarted.complete(Unit)
+            finishRequest.await()
+            WearMessage.Response(requestId = request.requestId, ok = true)
+          },
+        )
+      val requestJob = async { bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1"))) }
+      requestStarted.await()
 
-        repeat(40) { index ->
-          bridge.publishChat(
-            buildJsonObject {
-              put("sessionKey", "main")
-              put("state", "delta")
-              put("deltaText", "$index")
-            },
-          )
-        }
+      repeat(40) { index ->
         bridge.publishChat(
           buildJsonObject {
             put("sessionKey", "main")
-            put("state", "final")
-            put(
-              "message",
-              buildJsonObject {
-                put("role", "assistant")
-                put("content", "done")
-              },
-            )
+            put("state", "delta")
+            put("deltaText", "$index")
           },
         )
-        finishRequest.complete(Unit)
-        requestJob.await()
-        bridge.awaitIdleForTests()
-
-        val events =
-          sent
-            .filter { it.path == WearProtocol.EVENT_PATH }
-            .map { (WearProtocolCodec.decode(it.data) as WearDecodeResult.Success).message as WearMessage.Event }
-        assertTrue(events.any { it.event == WearEventType.Resync })
-        assertTrue(
-          events.any { event ->
-            event.event == WearEventType.Chat &&
-              event.payload
-                ?.jsonObject
-                ?.get("state")
-                ?.jsonPrimitive
-                ?.content == "final"
-          },
-        )
-        assertEquals(events.map { it.sequence }.sorted(), events.map { it.sequence })
-        assertEquals(WearEventType.Resync, events.last().event)
       }
+      bridge.publishChat(
+        buildJsonObject {
+          put("sessionKey", "main")
+          put("state", "final")
+          put(
+            "message",
+            buildJsonObject {
+              put("role", "assistant")
+              put("content", "done")
+            },
+          )
+        },
+      )
+      finishRequest.complete(Unit)
+      requestJob.await()
+      bridge.awaitIdleForTests()
+
+      val events =
+        sent
+          .filter { it.path == WearProtocol.EVENT_PATH }
+          .map { (WearProtocolCodec.decode(it.data) as WearDecodeResult.Success).message as WearMessage.Event }
+      assertTrue(events.any { it.event == WearEventType.Resync })
+      assertTrue(
+        events.any { event ->
+          event.event == WearEventType.Chat &&
+            event.payload
+              ?.jsonObject
+              ?.get("state")
+              ?.jsonPrimitive
+              ?.content == "final"
+        },
+      )
+      assertEquals(events.map { it.sequence }.sorted(), events.map { it.sequence })
+      assertEquals(WearEventType.Resync, events.last().event)
     }
 
   @Test
@@ -725,47 +721,44 @@ class WearProxyBridgeTest {
 
   @Test
   fun staleEventFailureDoesNotRemoveRefreshedPeer() =
-    runTest {
-      withActorScope { actorScope, registerBridge ->
-        val eventStarted = CompletableDeferred<Unit>()
-        val releaseEvent = CompletableDeferred<Unit>()
-        val sent = mutableListOf<SentWearMessage>()
-        var failFirstEvent = true
-        val bridge =
-          WearProxyBridge(
-            scope = actorScope,
-            sender =
-              WearMessageSender { nodeId, path, data ->
-                if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
-                  failFirstEvent = false
-                  eventStarted.complete(Unit)
-                  releaseEvent.await()
-                  error("stale send failed")
-                }
-                sent += SentWearMessage(nodeId, path, data)
-              },
-            handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
-          )
-        registerBridge(bridge)
-        bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
+    withActorScope { actorScope ->
+      val eventStarted = CompletableDeferred<Unit>()
+      val releaseEvent = CompletableDeferred<Unit>()
+      val sent = mutableListOf<SentWearMessage>()
+      var failFirstEvent = true
+      val bridge =
+        WearProxyBridge(
+          scope = actorScope,
+          sender =
+            WearMessageSender { nodeId, path, data ->
+              if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
+                failFirstEvent = false
+                eventStarted.complete(Unit)
+                releaseEvent.await()
+                error("stale send failed")
+              }
+              sent += SentWearMessage(nodeId, path, data)
+            },
+          handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
+        )
+      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
 
-        bridge.publishConnection(connected = true, status = "Connected")
-        eventStarted.await()
-        val refreshed =
-          async(start = CoroutineStart.UNDISPATCHED) {
-            bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
-          }
-        releaseEvent.complete(Unit)
-        assertTrue(refreshed.await())
-        bridge.awaitIdleForTests()
+      bridge.publishConnection(connected = true, status = "Connected")
+      eventStarted.await()
+      val refreshed =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
+        }
+      releaseEvent.complete(Unit)
+      assertTrue(refreshed.await())
+      bridge.awaitIdleForTests()
 
-        bridge.publishConnection(connected = false, status = "Offline")
-        bridge.awaitIdleForTests()
+      bridge.publishConnection(connected = false, status = "Offline")
+      bridge.awaitIdleForTests()
 
-        assertEquals(1, bridge.peerCountForTests())
-        // The stale send is retried after discovery, then the later offline event also delivers.
-        assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
-      }
+      assertEquals(1, bridge.peerCountForTests())
+      // The stale send is retried after discovery, then the later offline event also delivers.
+      assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)
