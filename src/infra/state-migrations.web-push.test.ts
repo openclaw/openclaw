@@ -38,7 +38,7 @@ describe("legacy Web Push Doctor migration", () => {
 
   function useStateDir(): string {
     const stateDir = tempDirs.make("openclaw-web-push-migration-");
-    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot ??= captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_VAPID_SUBJECT"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     return stateDir;
   }
@@ -198,10 +198,15 @@ describe("legacy Web Push Doctor migration", () => {
   });
 
   it.each([
-    ["missing", undefined],
-    ["empty", ""],
-  ])("normalizes a %s legacy VAPID subject", async (_label, subject) => {
+    ["missing", undefined, undefined],
+    ["empty", "", undefined],
+    ["whitespace-only", "   ", undefined],
+    ["missing with a whitespace-only environment fallback", undefined, "   "],
+  ])("normalizes a %s legacy VAPID subject", async (_label, subject, environmentSubject) => {
     const stateDir = useStateDir();
+    if (environmentSubject !== undefined) {
+      setTestEnvValue("OPENCLAW_VAPID_SUBJECT", environmentSubject);
+    }
     const legacyKeys = vapidKeys({ subject: subject ?? "" });
     if (subject === undefined) {
       delete (legacyKeys as Partial<VapidKeyPair>).subject;

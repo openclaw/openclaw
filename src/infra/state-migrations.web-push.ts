@@ -253,10 +253,10 @@ function parseLegacyVapidKeys(raw: string): VapidKeyPair {
     throw new Error("legacy Web Push VAPID keys must be an object");
   }
   assertOnlyKeys(parsed, VAPID_KEYS, "legacy Web Push VAPID keys");
-  const subject =
-    parsed.subject === undefined || parsed.subject === ""
-      ? process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_WEB_PUSH_VAPID_SUBJECT
-      : parsed.subject;
+  let subject = typeof parsed.subject === "string" ? parsed.subject.trim() : parsed.subject;
+  if (subject === undefined || subject === "") {
+    subject = process.env.OPENCLAW_VAPID_SUBJECT?.trim() || DEFAULT_WEB_PUSH_VAPID_SUBJECT;
+  }
   if (
     !isValidWebPushKey(parsed.publicKey) ||
     !isValidWebPushKey(parsed.privateKey) ||
