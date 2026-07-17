@@ -324,12 +324,14 @@ function resolveRuntimeAuthProfile(params: {
         runtimeProfile.type === params.profile.type &&
         runtimeProfile.provider === params.profile.provider)),
   );
-  const profile =
-    published && runtimeProfile?.type === "api_key" && params.profile.type === "api_key"
-      ? { ...params.profile, ["key"]: runtimeProfile.key }
-      : published && runtimeProfile?.type === "token" && params.profile.type === "token"
-        ? { ...params.profile, ["token"]: runtimeProfile.token }
-        : params.profile;
+  let profile = params.profile;
+  if (published && runtimeProfile?.type === "api_key" && params.profile.type === "api_key") {
+    const value = runtimeProfile.key;
+    profile = { ...params.profile, key: value };
+  } else if (published && runtimeProfile?.type === "token" && params.profile.type === "token") {
+    const value = runtimeProfile.token;
+    profile = { ...params.profile, token: value };
+  }
   return {
     profile,
     published,
