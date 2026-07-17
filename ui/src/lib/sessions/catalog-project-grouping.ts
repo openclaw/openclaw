@@ -6,7 +6,7 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" ? "none" : "project";
 }
 
-export type CatalogProjectGroup = {
+type CatalogProjectGroup = {
   key: string;
   label: string;
   title: string;
