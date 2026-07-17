@@ -417,7 +417,7 @@ describe("Tool Search", () => {
     const catalogRef = createToolSearchCatalogRef();
     const target = pluginTool("orchard_empty_details", "Return an empty orchard result");
     target.execute = vi.fn(async () => ({
-      content: [{ type: "text", text: "No orchard result" }],
+      content: [{ type: "text" as const, text: "No orchard result" }],
       details: undefined,
     }));
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
