@@ -431,7 +431,9 @@ const sessionCatalogs =
 const reusableCatalogSnapshots = new Map<string, ReusableCatalogSnapshot>();
 const catalogFingerprints = new WeakMap<ToolSearchCatalogSession, string>();
 const catalogToolIdentities = new WeakMap<object, number>();
+const untrustedSchemaIdentities = new WeakMap<object, number>();
 let nextCatalogToolIdentity = 1;
+let nextUntrustedSchemaIdentity = 1;
 
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
@@ -567,6 +569,20 @@ function catalogToolIdentity(tool: CatalogTool): number {
   return next;
 }
 
+function untrustedSchemaFingerprint(schema: unknown): string {
+  if (schema === null || typeof schema !== "object") {
+    return stableJsonFingerprint(schema);
+  }
+  const existing = untrustedSchemaIdentities.get(schema);
+  if (existing !== undefined) {
+    return `object:${existing}`;
+  }
+  const next = nextUntrustedSchemaIdentity;
+  nextUntrustedSchemaIdentity += 1;
+  untrustedSchemaIdentities.set(schema, next);
+  return `object:${next}`;
+}
+
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
   // Fingerprints include object identity for executable tools because function
   // bodies are not JSON-stable but catalog reuse must not bind stale executors.
@@ -580,8 +596,14 @@ function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): 
         entry.name,
         entry.label ?? "",
         entry.description,
-        stableJsonFingerprint(entry.parameters),
-        stableJsonFingerprint(entry.outputSchema),
+        // Remote/client schemas may be attacker-sized. Object identity still
+        // invalidates reuse when a schema object is replaced without walking it.
+        entry.source === "openclaw"
+          ? stableJsonFingerprint(entry.parameters)
+          : untrustedSchemaFingerprint(entry.parameters),
+        entry.source === "openclaw"
+          ? stableJsonFingerprint(entry.outputSchema)
+          : untrustedSchemaFingerprint(entry.outputSchema),
         String(catalogToolIdentity(entry.tool)),
       ]
         .map((part) => JSON.stringify(part))
@@ -1166,9 +1188,9 @@ export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    // MCP schemas are server-provided, untrusted metadata. Keep them deferred
-    // until the model explicitly describes or calls the selected tool.
-    ...(entry.source === "mcp" ? {} : { input: compactToolInputHint(entry.parameters) }),
+    // Remote MCP and client schemas are untrusted metadata. Keep them deferred
+    // rather than repeatedly traversing attacker-sized property maps on search.
+    ...(entry.source === "openclaw" ? { input: compactToolInputHint(entry.parameters) } : {}),
     ...(output ? { output } : {}),
   };
 }

@@ -17,6 +17,7 @@ import {
   applyToolSchemaDirectoryCatalog,
   buildToolSchemaDirectoryPrompt,
   clearToolSearchCatalog,
+  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools,
   estimateToolSchemaDirectoryToolNames,
@@ -1187,6 +1188,73 @@ describe("Tool Search", () => {
     });
   });
 
+  it("defers untrusted client schemas without traversing their properties", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    applyToolSearchCatalog({
+      tools: [codeTool],
+      config,
+      sessionId: "session-client-schema",
+    });
+
+    const clientTool = fakeTool("client_pick_file", "Ask the client to pick a file");
+    clientTool.parameters = {
+      type: "object",
+      properties: new Proxy(
+        {},
+        {
+          ownKeys: () => {
+            throw new Error("client properties must remain deferred");
+          },
+        },
+      ),
+    };
+    const untrustedOutputSchema = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("client output schema must remain deferred");
+        },
+        ownKeys: () => {
+          throw new Error("client output schema must remain deferred");
+        },
+      },
+    );
+    clientTool.outputSchema = untrustedOutputSchema;
+    expect(
+      compactToolSearchCatalogEntry({
+        id: "client:client:client_pick_file",
+        source: "client",
+        sourceName: "client",
+        name: clientTool.name,
+        description: clientTool.description,
+        parameters: clientTool.parameters,
+        outputSchema: untrustedOutputSchema as never,
+        tool: clientTool,
+      }),
+    ).not.toHaveProperty("output");
+    addClientToolsToToolSearchCatalog({
+      tools: [clientTool],
+      config,
+      sessionId: "session-client-schema",
+    });
+
+    const search = expectDefined(
+      createToolSearchTools({ config, sessionId: "session-client-schema" }).find(
+        (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+      ),
+      "search tool",
+    );
+    const result = resultDetails(
+      await search.execute("call-search-client", { query: "pick file" }),
+    );
+
+    expect(result).toContainEqual(
+      expect.objectContaining({ name: "client_pick_file", source: "client" }),
+    );
+    expect(result).not.toContainEqual(expect.objectContaining({ input: expect.anything() }));
+  });
+
   it("keeps client tools visible in directory mode", () => {
     const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
@@ -2098,6 +2166,26 @@ describe("Tool Search", () => {
       config,
       sessionId,
     });
+    expect(second.catalogReused).toBe(false);
+  });
+
+  it("does not traverse remote schemas but detects a replacement schema object", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const tool = mcpPluginTool("remote_schema_swap", "Stable remote description");
+    const config = { tools: { toolSearch: true } } as never;
+    const sessionId = "session-remote-schema-change";
+
+    applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
+    tool.parameters = new Proxy(
+      { type: "object", properties: {} },
+      {
+        ownKeys: () => {
+          throw new Error("remote schema must not be traversed");
+        },
+      },
+    );
+
+    const second = applyToolSearchCatalog({ tools: [codeTool, tool], config, sessionId });
     expect(second.catalogReused).toBe(false);
   });
 
