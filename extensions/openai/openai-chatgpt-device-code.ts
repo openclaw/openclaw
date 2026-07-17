@@ -1,5 +1,9 @@
 // Openai plugin module implements openai chatgpt device code behavior.
 import {
+  shouldUseEnvHttpProxyForUrl,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "openclaw/plugin-sdk/fetch-runtime";
+import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -161,7 +165,7 @@ async function runOpenAICodexDeviceRequest(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): Promise<DeviceCodeHttpResult> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const guardedOptions = {
     url: params.url,
     fetchImpl: params.fetchFn,
     init: params.init,
@@ -169,7 +173,12 @@ async function runOpenAICodexDeviceRequest(params: {
     ...(params.signal ? { signal: params.signal } : {}),
     requireHttps: true,
     auditContext: "openai-chatgpt-device-code",
-  });
+  };
+  const { response, release } = await fetchWithSsrFGuard(
+    shouldUseEnvHttpProxyForUrl(params.url)
+      ? withTrustedEnvProxyGuardedFetchMode(guardedOptions)
+      : guardedOptions,
+  );
   try {
     return {
       ok: response.ok,

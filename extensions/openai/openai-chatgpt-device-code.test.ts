@@ -3,6 +3,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
+const guardedFetchOptionsSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: async (options: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+      guardedFetchOptionsSpy(options);
+      return await actual.fetchWithSsrFGuard(options);
+    },
+  };
+});
+
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -48,6 +61,14 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: num
   return call;
 }
 
+function lastGuardedFetchOptions(): { mode?: string } {
+  const options = guardedFetchOptionsSpy.mock.calls.at(-1)?.[0];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected guarded fetch options");
+  }
+  return options as { mode?: string };
+}
+
 function waitForFetchAbort(init?: RequestInit): Promise<Response> {
   const signal = init?.signal;
   if (!signal) {
@@ -86,6 +107,7 @@ function createBodyThatStallsUntilAbort(init?: RequestInit): Response {
 
 describe("loginOpenAICodexDeviceCode", () => {
   afterEach(() => {
+    guardedFetchOptionsSpy.mockClear();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -143,6 +165,44 @@ describe("loginOpenAICodexDeviceCode", () => {
 
     callerController.abort(new Error("cancelled by caller"));
     await expect(login).rejects.toThrow("cancelled by caller");
+  });
+
+  it("routes device-code auth through a configured HTTPS proxy", async () => {
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
+    vi.stubEnv("no_proxy", "");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
+
+    const requestInit = fetchCall(fetchMock, 0)[1] as
+      | (RequestInit & { dispatcher?: { constructor?: { name?: string } } })
+      | undefined;
+    expect(lastGuardedFetchOptions().mode).toBe("trusted_env_proxy");
+    expect(requestInit?.dispatcher?.constructor?.name).toContain("EnvHttpProxyAgent");
+  });
+
+  it("keeps strict guarded fetch when NO_PROXY bypasses OpenAI auth", async () => {
+    vi.stubEnv("https_proxy", "http://127.0.0.1:7897");
+    vi.stubEnv("no_proxy", "auth.openai.com");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 503 }));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("OpenAI device code request failed: HTTP 503");
+
+    const requestInit = fetchCall(fetchMock, 0)[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(lastGuardedFetchOptions().mode).toBeUndefined();
+    expect(requestInit?.dispatcher).toBeUndefined();
   });
 
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
