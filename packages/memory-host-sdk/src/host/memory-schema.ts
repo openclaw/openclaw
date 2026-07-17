@@ -367,51 +367,73 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   preservedEmbeddingCacheTable?: string,
 ): void {
+  // A (path, source) already tracked canonically keeps both its row and its
+  // whole chunk set: importing legacy chunk ids under a canonical-owned source
+  // would mix stale text into a file sync considers current and never
+  // re-indexes. Legacy chunks migrate only with sources the canonical index
+  // does not track yet.
   db.exec(`
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
-    SELECT key, value FROM ${schema}.meta;
-
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-    SELECT path, source, hash, mtime, size
-    FROM ${schema}.files;
-
-    INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
-      id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-    )
-    SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-    FROM ${schema}.chunks;
+    DROP TABLE IF EXISTS temp.legacy_import_canonical_sources;
+    CREATE TEMP TABLE legacy_import_canonical_sources AS
+    SELECT path, source FROM main.${MEMORY_INDEX_SOURCES_TABLE};
   `);
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.meta AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
-       WHERE canonical.key = legacy.key
-     )`,
-    "meta",
-  );
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.files AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-       WHERE canonical.path = legacy.path
-         AND canonical.source IS legacy.source
-     )`,
-    "files",
-  );
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.chunks AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-       WHERE canonical.id = legacy.id
-     )`,
-    "chunks",
-  );
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
+      SELECT key, value FROM ${schema}.meta;
+
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+      SELECT path, source, hash, mtime, size
+      FROM ${schema}.files;
+
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
+        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      )
+      SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      FROM ${schema}.chunks AS legacy
+      WHERE NOT EXISTS (
+        SELECT 1 FROM temp.legacy_import_canonical_sources AS owned
+        WHERE owned.path = legacy.path AND owned.source IS legacy.source
+      );
+    `);
+    assertLegacyRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.meta AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
+         WHERE canonical.key = legacy.key
+       )`,
+      "meta",
+    );
+    assertLegacyRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.files AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+         WHERE canonical.path = legacy.path
+           AND canonical.source IS legacy.source
+       )`,
+      "files",
+    );
+    assertLegacyRowsCopied(
+      db,
+      `SELECT COUNT(*) AS missing
+       FROM ${schema}.chunks AS legacy
+       WHERE NOT EXISTS (
+         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+         WHERE canonical.id = legacy.id
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM temp.legacy_import_canonical_sources AS owned
+         WHERE owned.path = legacy.path AND owned.source IS legacy.source
+       )`,
+      "chunks",
+    );
+  } finally {
+    db.exec("DROP TABLE IF EXISTS temp.legacy_import_canonical_sources");
+  }
   if (
     preservedEmbeddingCacheTable !== "embedding_cache" &&
     hasLegacyEmbeddingCacheTable(db, schema)

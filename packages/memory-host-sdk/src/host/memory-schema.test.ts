@@ -880,9 +880,19 @@ describe("memory index schema", () => {
     }
   });
 
-  it("keeps canonical rows and completes migration when legacy rows diverge", () => {
+  it("keeps one coherent canonical index when legacy rows diverge", () => {
     const db = new DatabaseSync(":memory:");
     try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      db.exec(`
+        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
+        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('doc.md', 'memory', 'new-hash', 200.0, 42);
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-new-1', 'doc.md', 'memory', 1, 10, 'new-chunk-hash', 'model',
+          'current canonical body', '[]', 200
+        );
+      `);
       db.exec(`
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -904,14 +914,18 @@ describe("memory index schema", () => {
           embedding TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT INTO meta VALUES ('memory_index_meta_v1', 'legacy');
         INSERT INTO meta VALUES ('legacy-only-key', 'imported');
-        INSERT INTO files VALUES ('doc.md', 'memory', 'hash', 1, 2);
+        INSERT INTO files VALUES ('doc.md', 'memory', 'old-hash', 100, 40);
+        INSERT INTO files VALUES ('old-note.md', 'memory', 'old-note-hash', 90, 10);
         INSERT INTO chunks VALUES (
-          'chunk-1', 'doc.md', 'memory', 1, 2, 'chunk-hash', 'model', 'body', '[]', 1
+          'chunk-old-7', 'doc.md', 'memory', 1, 8, 'old-chunk-hash', 'model',
+          'stale legacy body', '[]', 100
         );
-        INSERT INTO memory_index_meta VALUES ('memory_index_meta_v1', 'canonical');
+        INSERT INTO chunks VALUES (
+          'chunk-old-2', 'old-note.md', 'memory', 1, 5, 'note-hash', 'model',
+          'note body', '[]', 90
+        );
       `);
 
       ensureMemoryIndexSchema({
@@ -924,11 +938,18 @@ describe("memory index schema", () => {
         { key: "legacy-only-key", value: "imported" },
         { key: "memory_index_meta_v1", value: "canonical" },
       ]);
-      expect(db.prepare("SELECT path, hash FROM memory_index_sources").all()).toEqual([
-        { path: "doc.md", hash: "hash" },
+      expect(
+        db.prepare("SELECT path, hash, size FROM memory_index_sources ORDER BY path").all(),
+      ).toEqual([
+        { path: "doc.md", hash: "new-hash", size: 42 },
+        { path: "old-note.md", hash: "old-note-hash", size: 10 },
       ]);
-      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
-        { id: "chunk-1", text: "body" },
+      // The canonical-owned doc.md keeps only its canonical chunk set: the
+      // stale legacy chunk id must not ride along, while the legacy-only
+      // old-note.md imports together with its chunk.
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all()).toEqual([
+        { id: "chunk-new-1", text: "current canonical body" },
+        { id: "chunk-old-2", text: "note body" },
       ]);
       expect(
         db
