@@ -32,7 +32,7 @@ const view = {
   toolName: "show",
   uiResourceUri: "ui://demo/app",
   html: "<html>demo</html>",
-  allowedAppToolNames: undefined as ReadonlySet<string> | undefined,
+  allowedAppToolNames: new Set(["shared", "app-only"]) as ReadonlySet<string> | undefined,
   toolInput: { city: "Paris" },
   toolResult: { content: [{ type: "text", text: "ok" }] },
   expiresAtMs: Date.now() + 60_000,
@@ -104,7 +104,7 @@ describe("MCP App gateway bridge", () => {
     view.requestCount = 0;
     view.toolCallCount = 0;
     view.activeRequests = 0;
-    view.allowedAppToolNames = undefined;
+    view.allowedAppToolNames = new Set(["shared", "app-only"]);
     mocks.getMcpAppViewLease.mockReset().mockReturnValue(view);
     mocks.completeDeferredSessionMcpRuntimeRetirement.mockReset().mockResolvedValue(false);
     mocks.peekSessionMcpRuntime.mockReset().mockReturnValue(runtime());
@@ -124,6 +124,7 @@ describe("MCP App gateway bridge", () => {
         sandboxOrigin: "https://apps.example.com",
         html: "<html>demo</html>",
         toolInput: { city: "Paris" },
+        messageSupported: true,
       }),
     );
     expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
@@ -147,6 +148,16 @@ describe("MCP App gateway bridge", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       content: [{ type: "text", text: "shared" }],
     });
+  });
+
+  it("keeps message support disabled without fresh run authority", async () => {
+    view.allowedAppToolNames = undefined;
+    const respond = await invoke("mcp.app.view", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+    });
+
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ messageSupported: false });
   });
 
   it("filters model-only tools from app discovery and execution", async () => {
@@ -217,6 +228,9 @@ describe("MCP App gateway bridge", () => {
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      html: "<html>demo</html>",
+      messageSupported: false,
+    });
   });
 });
