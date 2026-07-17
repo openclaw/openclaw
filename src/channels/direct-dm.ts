@@ -5,14 +5,16 @@
  */
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "../plugin-sdk/inbound-envelope.js";
 import {
   normalizeOutboundReplyPayload,
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
-import { resolveChannelInboundRouteEnvelope } from "./inbound-event/envelope.js";
+import {
+  resolveChannelInboundRouteEnvelope,
+  resolveInboundRouteEnvelopeBuilderWithRuntime,
+} from "./inbound-event/envelope.js";
 import { createChannelReplyPipeline } from "./message/reply-pipeline.js";
 import { dispatchChannelInboundTurn, runPreparedInboundReply } from "./turn/kernel.js";
 export {
