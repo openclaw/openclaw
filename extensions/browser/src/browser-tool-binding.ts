@@ -1,4 +1,4 @@
-export type BrowserTabToolBinding = {
+type BrowserTabToolBinding = {
   kind: "tab";
   tabId: number;
   target: "host" | "node";

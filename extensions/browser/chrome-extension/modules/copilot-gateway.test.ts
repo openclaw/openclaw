@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CopilotGatewayClient,
   createCopilotTokenStore,
-  isDefinitiveGatewayRejection,
   loadOrCreateCopilotIdentity,
   resolveCopilotClose,
-} from "./copilot-gateway.js";
+} from "./copilot-gateway-lifecycle.js";
+import { CopilotGatewayClient, isDefinitiveGatewayRejection } from "./copilot-gateway.js";
 import { GatewayProtocolRequestError } from "./copilot-runtime.js";
 
 function storageArea() {

@@ -44,11 +44,6 @@ function parseOrigin(
   }
 }
 
-/** Return whether an Origin is a canonical Chrome extension origin. */
-export function isChromeExtensionOrigin(originRaw?: string): boolean {
-  return normalizeChromeExtensionOrigin(originRaw) !== undefined;
-}
-
 /** Return a canonical Chrome extension origin for pairing-bound authorization. */
 export function normalizeChromeExtensionOrigin(originRaw?: string): string | undefined {
   const parsed = parseOrigin(originRaw);

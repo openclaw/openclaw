@@ -8,6 +8,7 @@ import type { Command } from "commander";
 import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { resolveGatewayPort } from "../sdk-config.js";
+import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension-pairing.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -42,20 +43,6 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
 
 /** Gateway route path for the remote extension relay (see gateway-relay-route.ts). */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
-
-export function resolveLocalPairingGatewayUrl(params: {
-  configuredRemote?: string;
-  gatewayPort: number;
-  tlsEnabled: boolean;
-}): string {
-  if (params.configuredRemote) {
-    return params.configuredRemote;
-  }
-  if (params.tlsEnabled) {
-    throw new Error("Gateway TLS pairing requires --gateway-url wss://<certificate-host>[:port]");
-  }
-  return `ws://127.0.0.1:${params.gatewayPort}`;
-}
 
 /** Resolve a safe direct-Gateway relay URL, preserving an optional proxy base path. */
 function buildRemoteGatewayRelayUrl(raw: string): string {

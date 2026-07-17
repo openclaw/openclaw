@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension.js";
+import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension-pairing.js";
 
 describe("browser extension pairing Gateway URL", () => {
   it("uses loopback only for a plaintext local Gateway", () => {
