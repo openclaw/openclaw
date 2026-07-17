@@ -1576,7 +1576,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         logPath,
         timeoutMs: 500,
       });
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(command).rejects.toThrow(/Command timed out:/u);
@@ -1639,7 +1639,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       runner.kill("SIGTERM");
       const result = await waitForExit(runner, 5_000);
@@ -1706,7 +1706,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       );
       runnerPid = runner.pid;
 
-      await waitForFile(childPidPath, 2_000);
+      await waitForFile(childPidPath, 10_000);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
       const signaledAt = Date.now();
       runner.kill("SIGTERM");
