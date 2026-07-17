@@ -10,8 +10,11 @@ import com.google.android.gms.tasks.TaskCompletionSource
 import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -25,6 +28,8 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearProxyBridgeTest {
+  private fun TestScope.actorScope(): CoroutineScope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler))
+
   @Test
   fun validRequestRegistersPeerAndReturnsCorrelatedResponse() =
     runTest {
@@ -105,7 +110,7 @@ class WearProxyBridgeTest {
       val sent = mutableListOf<SentWearMessage>()
       val bridge =
         WearProxyBridge(
-          scope = backgroundScope,
+          scope = actorScope(),
           sender =
             WearMessageSender { nodeId, path, data ->
               if (path == WearProtocol.EVENT_PATH && cancelFirstEvent) {
@@ -132,7 +137,7 @@ class WearProxyBridgeTest {
       val sent = mutableListOf<SentWearMessage>()
       val bridge =
         WearProxyBridge(
-          scope = backgroundScope,
+          scope = actorScope(),
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
           peerResolver =
             WearPeerResolver {
@@ -572,7 +577,7 @@ class WearProxyBridgeTest {
       val finishRequest = CompletableDeferred<Unit>()
       val bridge =
         WearProxyBridge(
-          scope = backgroundScope,
+          scope = actorScope(),
           sender = WearMessageSender { nodeId, path, data -> sent += SentWearMessage(nodeId, path, data) },
           handleRequest = { request ->
             requestStarted.complete(Unit)
@@ -705,7 +710,7 @@ class WearProxyBridgeTest {
       var failFirstEvent = true
       val bridge =
         WearProxyBridge(
-          scope = backgroundScope,
+          scope = actorScope(),
           sender =
             WearMessageSender { nodeId, path, data ->
               if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
@@ -732,7 +737,8 @@ class WearProxyBridgeTest {
       bridge.awaitIdleForTests()
 
       assertEquals(1, bridge.peerCountForTests())
-      assertEquals(1, sent.count { it.path == WearProtocol.EVENT_PATH })
+      // The stale send is retried after discovery, then the later offline event also delivers.
+      assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
 
   private fun request(requestId: String): WearMessage.Request = WearMessage.Request(requestId = requestId, method = WearRpcMethod.ProxyStatus)
