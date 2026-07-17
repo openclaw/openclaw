@@ -1,6 +1,6 @@
 // Builds transcript summaries and normalized transcript metadata.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
 /**
@@ -43,9 +43,15 @@ function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): str
 }
 
 function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
-  const sanitized: TranscriptUtterance = { ...utterance, text: sanitizeForLog(utterance.text) };
+  const sanitized: TranscriptUtterance = {
+    ...utterance,
+    text: sanitizeTerminalText(utterance.text),
+  };
   if (utterance.speaker) {
-    sanitized.speaker = { ...utterance.speaker, label: sanitizeForLog(utterance.speaker.label) };
+    sanitized.speaker = {
+      ...utterance.speaker,
+      label: sanitizeTerminalText(utterance.speaker.label),
+    };
   }
   return sanitized;
 }
@@ -68,11 +74,11 @@ export function summarizeTranscripts(params: {
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
 }): TranscriptsSummary {
-  const title = sanitizeForLog(params.session.title ?? "").trim() || "Transcripts";
+  const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
   const utterances = params.utterances.map(sanitizeUtterance);
   const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
   return {
-    sessionId: params.session.sessionId,
+    sessionId: sanitizeTerminalText(params.session.sessionId),
     title,
     generatedAt: new Date().toISOString(),
     overview,

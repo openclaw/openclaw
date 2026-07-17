@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
@@ -211,10 +212,15 @@ async function listStoredSessions(): Promise<StoredTranscriptsSession[]> {
 }
 
 function formatSessionLine(entry: StoredTranscriptsSession): string {
-  const title = entry.session.title?.trim() || "Transcripts";
-  const started = entry.session.startedAt || "unknown";
-  const summary = entry.hasSummary ? entry.summaryPath : "no summary.md";
-  return `${formatSelector(entry)}\t${started}\t${title}\t${summary}`;
+  const title = sanitizeTerminalText(entry.session.title?.trim() || "Transcripts");
+  const started = sanitizeTerminalText(entry.session.startedAt || "unknown");
+  const summary = sanitizeTerminalText(entry.hasSummary ? entry.summaryPath : "no summary.md");
+  return `${sanitizeTerminalText(formatSelector(entry))}\t${started}\t${title}\t${summary}`;
+}
+
+function sanitizeMarkdownForTerminal(markdown: string): string {
+  // Preserve the artifact's document structure while making every rendered line terminal-safe.
+  return markdown.split("\n").map(sanitizeTerminalText).join("\n");
 }
 
 async function listCommand(options: TranscriptsCliOptions): Promise<void> {
@@ -261,7 +267,7 @@ async function showCommand(sessionId: string, options: TranscriptsCliOptions): P
   if (!session.hasSummary) {
     throw new Error(`summary.md not found for transcripts session: ${sessionId}`);
   }
-  process.stdout.write(await fs.readFile(session.summaryPath, "utf8"));
+  process.stdout.write(sanitizeMarkdownForTerminal(await fs.readFile(session.summaryPath, "utf8")));
 }
 
 async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {

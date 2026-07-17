@@ -105,10 +105,23 @@ describe("transcripts CLI", () => {
     expect(output).toContain("Ship CLI");
   });
 
+  it("sanitizes summaries created before the upgrade at the show boundary", async () => {
+    const sessionDir = await writeSession(stateDir, "legacy-summary");
+    await fs.writeFile(
+      path.join(sessionDir, "summary.md"),
+      "# Legacy\n\n- first\tcolumn\n- \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m\n",
+    );
+
+    const output = await runTranscriptsCli(["show", "legacy-summary"]);
+
+    expect(output).toContain("# Legacy\n\n- first\\tcolumn\n- ADMIN APPROVED\n");
+    expect(output).not.toContain("\u001b");
+  });
+
   it("show prints imported summaries without terminal control bytes", async () => {
     const session: TranscriptSessionDescriptor = {
-      sessionId: "ansi-import",
-      title: "ANSI import",
+      sessionId: "ansi-\u001b[31mprovider\u001b[0m",
+      title: "\u001b[31mANSI import\u001b[0m",
       source: { providerId: "manual-transcript" },
       startedAt: "2026-05-22T10:00:00.000Z",
       stoppedAt: "2026-05-22T10:05:00.000Z",
@@ -118,17 +131,23 @@ describe("transcripts CLI", () => {
     const utterances =
       (await manualTranscriptSourceProvider.importTranscript?.({
         session,
-        text: "Attacker: \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m",
+        text: "\u001b[31mAttacker\u001b[0m: \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m",
       })) ?? [];
     for (const utterance of utterances) {
       await store.appendUtteranceForSession(session, utterance);
     }
     await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
 
-    const output = await runTranscriptsCli(["show", "ansi-import"]);
+    const output = await runTranscriptsCli(["show", session.sessionId]);
+    const listOutput = await runTranscriptsCli(["list"]);
 
+    expect(output).toContain("# ANSI import");
+    expect(output).toContain("Session: ansi-provider");
     expect(output).toContain("Attacker: ADMIN APPROVED");
     expect(output).not.toContain("\u001b");
+    expect(listOutput).toContain("ansi-provider");
+    expect(listOutput).toContain("ANSI import");
+    expect(listOutput).not.toContain("\u001b");
   });
 
   it("ignores unrelated corrupt metadata while reading a valid session", async () => {

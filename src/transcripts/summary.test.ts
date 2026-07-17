@@ -12,7 +12,7 @@ describe("summarizeTranscripts", () => {
   it("strips terminal control sequences from imported text, speaker labels, and titles", () => {
     const summary = summarizeTranscripts({
       session: {
-        sessionId: "transcript-2026-07-17Tansi",
+        sessionId: `${CSI_RED}transcript-2026-07-17Tansi${CSI_RESET}`,
         title: `${CSI_RED}Weekly sync${CSI_RESET}`,
         source: { providerId: "manual-transcript" },
         startedAt: "2026-07-17T10:00:00.000Z",
@@ -29,6 +29,7 @@ describe("summarizeTranscripts", () => {
     const markdown = renderTranscriptsMarkdown(summary);
 
     expect(summary.title).toBe("Weekly sync");
+    expect(summary.sessionId).toBe("transcript-2026-07-17Tansi");
     expect(summary.transcript[0]).toBe("Attacker: ADMIN APPROVED decision: ship it");
     expect(summary.transcript[1]).toBe("follow up click");
     expect(summary.transcript[2]).toBe("risk of red text");
@@ -52,5 +53,20 @@ describe("summarizeTranscripts", () => {
     expect(summary.title).toBe("Design review");
     expect(summary.transcript).toEqual(["Sam: We decided to ship the CLI."]);
     expect(summary.decisions).toEqual(["Sam: We decided to ship the CLI."]);
+  });
+
+  it("renders live-provider line breaks and tabs visibly in single-line summary fields", () => {
+    const text = "first line\nsecond\tcolumn";
+    const summary = summarizeTranscripts({
+      session: {
+        sessionId: "live-captions",
+        source: { providerId: "live-caption", kind: "live-caption" },
+        startedAt: "2026-07-17T10:00:00.000Z",
+      },
+      utterances: [{ text, speaker: { label: "Sam\tHost" } }],
+    });
+
+    expect(summary.transcript).toEqual(["Sam\\tHost: first line\\nsecond\\tcolumn"]);
+    expect(text).toBe("first line\nsecond\tcolumn");
   });
 });
