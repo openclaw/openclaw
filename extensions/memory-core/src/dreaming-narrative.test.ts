@@ -625,7 +625,11 @@ describe("generateAndAppendDreamNarrative", () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
     subagent.run.mockRejectedValue(
-      new Error("provider/model override is not authorized for this plugin subagent run."),
+      new Error(
+        'plugin "memory-core" is not trusted for provider/model override requests. ' +
+          "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
+          "plugins.entries.<id>.subagent.allowModelOverride",
+      ),
     );
     const logger = createMockLogger();
 
