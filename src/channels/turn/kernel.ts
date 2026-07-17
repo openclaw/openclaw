@@ -80,21 +80,25 @@ function assembleResolvedChannelTurn<TDispatchResult>(
   if (!("route" in value)) {
     return value;
   }
+  if ("runDispatch" in value) {
+    const { cfg, route, ...turn } = value;
+    return {
+      ...turn,
+      routeSessionKey: route.sessionKey,
+      storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
+      recordInboundSession,
+    };
+  }
   const { cfg, route, ...turn } = value;
-  const assembled = {
+  return {
     ...turn,
+    cfg,
+    agentId: route.agentId,
     routeSessionKey: route.sessionKey,
     storePath: resolveStorePath(cfg.session?.store, { agentId: route.agentId }),
     recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher,
   };
-  return "runDispatch" in value
-    ? assembled
-    : {
-        ...assembled,
-        cfg,
-        agentId: route.agentId,
-        dispatchReplyWithBufferedBlockDispatcher,
-      };
 }
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
