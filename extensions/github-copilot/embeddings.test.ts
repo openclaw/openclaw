@@ -15,7 +15,7 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 }));
 
 vi.mock("./token.js", () => ({
-  DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
+  DEFAULT_COPILOT_API_BASE_URL: "https://example.test",
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
@@ -33,7 +33,7 @@ afterAll(() => {
   vi.resetModules();
 });
 
-const TEST_BASE_URL = "https://api.githubcopilot.test";
+const TEST_BASE_URL = "https://example.test";
 
 function shouldContinueAutoSelection(error: Error): boolean {
   const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
