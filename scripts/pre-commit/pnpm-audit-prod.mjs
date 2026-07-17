@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+// This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
 
