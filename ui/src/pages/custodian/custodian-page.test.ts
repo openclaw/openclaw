@@ -21,6 +21,7 @@ type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayUrl: (gatewayUrl: string) => void;
+  setGatewayToken: (token: string) => void;
 };
 
 function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
@@ -72,6 +73,9 @@ function createContext(request: ReturnType<typeof vi.fn>): ContextHarness {
     },
     setGatewayUrl: (gatewayUrl) => {
       connection.gatewayUrl = gatewayUrl;
+    },
+    setGatewayToken: (token: string) => {
+      connection.token = token;
     },
   };
 }
@@ -243,6 +247,37 @@ describe("custodian page", () => {
     await vi.waitFor(() => expect(page.textContent).not.toContain("Gateway A conversation."));
 
     expect(page.querySelector('[role="alert"] button')).toBeNull();
+  });
+
+  it("starts a fresh session when credentials change on the same gateway", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Operator A conversation.",
+        action: "none",
+      })
+      .mockResolvedValueOnce({
+        sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+        reply: "Operator B welcome.",
+        action: "none",
+      });
+    const { context, setGatewaySnapshot, setGatewayToken } = createContext(request);
+    const { page } = await mountPage(context);
+    await vi.waitFor(() => expect(page.textContent).toContain("Operator A conversation."));
+
+    setGatewayToken("operator-b-token");
+    setGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+    });
+
+    await vi.waitFor(() => expect(page.textContent).toContain("Operator B welcome."));
+    expect(page.textContent).not.toContain("Operator A conversation.");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
   });
 
   it("sends skip as a reply and dismisses the question", async () => {

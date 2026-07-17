@@ -57,7 +57,7 @@ export class CustodianPage extends OpenClawLightDomElement {
   private requestEpoch = 0;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
-  private sessionGatewayUrl: string | null = null;
+  private sessionScopeKey: string | null = null;
   private sessionStarted = false;
   private readonly subscriptions = new SubscriptionsController(this).watch(
     () => this.context?.gateway,
@@ -80,12 +80,23 @@ export class CustodianPage extends OpenClawLightDomElement {
     }
   }
 
+  /**
+   * Session ownership boundary: URL plus presented credentials. A client swap
+   * with different auth on the same URL is a different operator; keeping the
+   * transcript (or pending sensitive retryParams) would leak across logins.
+   * Transport reconnects reuse the same client object and never hit this.
+   */
+  private connectionScopeKey(): string {
+    const { gatewayUrl, token, password } = this.context.gateway.connection;
+    return JSON.stringify([gatewayUrl, token, password]);
+  }
+
   private synchronizeClient(): void {
     const snapshot = this.context.gateway.snapshot;
     const client = snapshot.connected ? snapshot.client : null;
-    const gatewayUrl = this.context.gateway.connection.gatewayUrl;
-    const gatewayChanged = this.sessionGatewayUrl !== null && this.sessionGatewayUrl !== gatewayUrl;
-    if (client === this.activeClient && !gatewayChanged) {
+    const scopeKey = this.connectionScopeKey();
+    const scopeChanged = this.sessionScopeKey !== null && this.sessionScopeKey !== scopeKey;
+    if (client === this.activeClient && !scopeChanged) {
       return;
     }
     const requestWasPending = this.sending && this.retryParams !== null;
@@ -93,8 +104,8 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.requestEpoch += 1;
     this.sending = false;
     this.chatAvailable = false;
-    if (gatewayChanged) {
-      this.sessionGatewayUrl = gatewayUrl;
+    if (scopeChanged) {
+      this.sessionScopeKey = scopeKey;
       this.sessionStarted = false;
       this.clearConversation();
     } else if (requestWasPending) {
@@ -108,14 +119,14 @@ export class CustodianPage extends OpenClawLightDomElement {
       return;
     }
     this.chatAvailable = true;
-    if (this.sessionStarted && this.sessionGatewayUrl === gatewayUrl) {
+    if (this.sessionStarted && this.sessionScopeKey === scopeKey) {
       if (!this.retryParams) {
         this.error = null;
       }
       return;
     }
     this.sessionId = createSessionId();
-    this.sessionGatewayUrl = gatewayUrl;
+    this.sessionScopeKey = scopeKey;
     this.sessionStarted = true;
     this.clearConversation();
     void this.requestReply(client, { sessionId: this.sessionId, welcomeVariant: "onboarding" });
