@@ -49,8 +49,8 @@ let createMockTypingController: typeof import("./test-helpers.js").createMockTyp
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let abortActiveReplyRunsForTest: typeof import("./reply-run-registry.js").abortActiveReplyRuns;
 let replyRunRegistryForTest: typeof import("./reply-run-registry.js").replyRunRegistry;
-let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
-let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
+let replyRunTestingForTest: typeof import("./reply-run-registry.test-support.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.test-support.js").testing;
 let setReplyPayloadMetadataForTest: typeof import("../reply-payload.js").setReplyPayloadMetadata;
 let getReplyPayloadMetadataForTest: typeof import("../reply-payload.js").getReplyPayloadMetadata;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
@@ -402,7 +402,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
     compactEmbeddedAgentSession: (params: unknown) => compactEmbeddedAgentSessionMock(params),
     isEmbeddedAgentRunActive: vi.fn(() => false),
     isEmbeddedAgentRunStreaming: vi.fn(() => false),
-    queueEmbeddedAgentMessage: vi.fn(async () => undefined),
     resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
     runEmbeddedAgent: (params: unknown) => runEmbeddedAgentMock(params),
     waitForEmbeddedAgentRunEnd: vi.fn(async () => undefined),
@@ -514,7 +513,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
-  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  ({ testing: cliBackendsTestingForTest } =
+    await import("../../agents/cli-backends.test-support.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
@@ -530,8 +530,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     abortActiveReplyRuns: abortActiveReplyRunsForTest,
     createReplyOperation: createReplyOperationForTest,
     replyRunRegistry: replyRunRegistryForTest,
-    testing: replyRunTestingForTest,
   } = await import("./reply-run-registry.js"));
+  ({ testing: replyRunTestingForTest } = await import("./reply-run-registry.test-support.js"));
   ({
     getReplyPayloadMetadata: getReplyPayloadMetadataForTest,
     setReplyPayloadMetadata: setReplyPayloadMetadataForTest,

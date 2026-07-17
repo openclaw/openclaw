@@ -6,15 +6,13 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  testing as replyRunTesting,
   createReplyOperation,
   isReplyRunActiveForSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
-import {
-  markDiagnosticToolStartedForTest,
-  resetDiagnosticRunActivityForTest,
-} from "../../logging/diagnostic-run-activity.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
@@ -24,7 +22,6 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
-  testing,
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -47,6 +44,7 @@ import {
   waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
+import { testing } from "./runs.test-support.js";
 
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
@@ -62,6 +60,7 @@ function createRunHandle(
       text: string,
       options?: Parameters<RunHandle["queueMessage"]>[1],
     ) => Promise<void>;
+    supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
@@ -77,6 +76,7 @@ function createRunHandle(
       ? { isAbortable: () => overrides.isAbortable !== false }
       : {}),
     isCompacting: () => overrides.isCompacting ?? false,
+    supportsQueueMessageImages: overrides.supportsQueueMessageImages,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
   };
@@ -462,6 +462,40 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("continue", {
       steeringMode: "all",
       sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("rejects images when the active run cannot preserve them", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-images", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
+      images: [{ type: "image", data: "png", mimeType: "image/png" }],
+    });
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-images",
+      reason: "image_input_unsupported",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+
+    setActiveEmbeddedRun(
+      "session-images",
+      createRunHandle({ queueMessage, supportsQueueMessageImages: true }),
+    );
+
+    expect(
+      queueEmbeddedAgentMessageWithOutcome("session-images", "inspect", {
+        images: [{ type: "image", data: "png", mimeType: "image/png" }],
+      }).queued,
+    ).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("inspect", {
+      images: [{ type: "image", data: "png", mimeType: "image/png" }],
     });
   });
 
@@ -922,8 +956,7 @@ describe("embedded-agent runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.testing.resetActiveEmbeddedRuns();
-    runsB.testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -932,8 +965,7 @@ describe("embedded-agent runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedAgentRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.testing.resetActiveEmbeddedRuns();
-      runsB.testing.resetActiveEmbeddedRuns();
+      testing.resetActiveEmbeddedRuns();
     }
   });
 

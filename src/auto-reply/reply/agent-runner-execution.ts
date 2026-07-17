@@ -5,10 +5,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import {
-  clearAutoFallbackPrimaryProbeSelection,
-  entryMatchesAutoFallbackPrimaryProbe,
-} from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import {
   formatRateLimitOrOverloadedErrorCopy,
@@ -19,21 +15,28 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
+  withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import { handleAgentExecutionError } from "./agent-runner-error-handler.js";
+import {
+  clearRecoveredAutoFallbackPrimaryProbeSelection,
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
+} from "./agent-runner-auto-fallback.js";
+import {
+  cancelOverloadRetryNotice,
+  handleAgentExecutionError,
+  markOverloadRetryUnsafeToReplay,
+  type OverloadRetryState,
+} from "./agent-runner-error-handler.js";
 import type {
   AgentRunLoopResult,
   AgentTurnParams,
@@ -58,9 +61,10 @@ import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 
-async function runAgentTurnWithFallbackInternal(
+async function runAgentTurnWithFallbackInternalWithRetryState(
   params: AgentTurnParams,
   commitTerminalOutcome: () => void,
+  overloadRetryState: OverloadRetryState,
 ): Promise<AgentRunLoopResult> {
   const heartbeatState = { didLogStrip: false };
   let autoCompactionCount = 0;
@@ -83,9 +87,6 @@ async function runAgentTurnWithFallbackInternal(
           ...runnableRun,
           config: runtimeConfig,
         };
-  const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
-    effectiveRun.inputProvenance,
-  );
   let liveModelSwitchRuntimeEntry:
     | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
     | undefined;
@@ -182,6 +183,9 @@ async function runAgentTurnWithFallbackInternal(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    if (info.phase === "tool_execution_started" || info.phase === "assistant_output_started") {
+      markOverloadRetryUnsafeToReplay(overloadRetryState);
+    }
     const isUserVisibleExecutionActivity =
       info.phase === "turn_accepted" ||
       info.phase === "process_spawned" ||
@@ -228,65 +232,15 @@ async function runAgentTurnWithFallbackInternal(
   const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
     provider: string;
     model: string;
-  }): Promise<void> => {
-    if (preserveUserFacingSessionState) {
-      return;
-    }
-    const probe = effectiveRun.autoFallbackPrimaryProbe;
-    if (!probe) {
-      return;
-    }
-    if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
-      return;
-    }
-    if (!params.sessionKey || !params.activeSessionStore) {
-      return;
-    }
-    const activeSessionEntry =
-      params.activeSessionStore[params.sessionKey] ?? params.getActiveSessionEntry();
-    if (!activeSessionEntry) {
-      return;
-    }
-    if (!entryMatchesAutoFallbackPrimaryProbe(activeSessionEntry, probe)) {
-      return;
-    }
-    clearAutoFallbackPrimaryProbeSelection(activeSessionEntry);
-    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
-    if (!params.storePath) {
-      return;
-    }
-    await updateSessionEntry(
-      { storePath: params.storePath, sessionKey: params.sessionKey },
-      (persistedEntry) => {
-        if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
-          return null;
-        }
-        const shouldClearAuthProfile =
-          persistedEntry.authProfileOverrideSource === "auto" ||
-          (persistedEntry.authProfileOverrideSource === undefined &&
-            persistedEntry.authProfileOverrideCompactionCount !== undefined);
-        clearAutoFallbackPrimaryProbeSelection(persistedEntry);
-        return {
-          providerOverride: undefined,
-          modelOverride: undefined,
-          modelOverrideSource: undefined,
-          modelOverrideFallbackOriginProvider: undefined,
-          modelOverrideFallbackOriginModel: undefined,
-          ...(shouldClearAuthProfile
-            ? {
-                authProfileOverride: undefined,
-                authProfileOverrideSource: undefined,
-                authProfileOverrideCompactionCount: undefined,
-              }
-            : {}),
-          fallbackNoticeSelectedModel: undefined,
-          fallbackNoticeActiveModel: undefined,
-          fallbackNoticeReason: undefined,
-          updatedAt: persistedEntry.updatedAt,
-        };
-      },
-    );
-  };
+  }): Promise<void> =>
+    clearRecoveredAutoFallbackPrimaryProbeSelection({
+      run: effectiveRun,
+      ...paramsForClear,
+      sessionKey: params.sessionKey,
+      activeSessionStore: params.activeSessionStore,
+      getActiveSessionEntry: params.getActiveSessionEntry,
+      storePath: params.storePath,
+    });
 
   while (true) {
     try {
@@ -342,6 +296,7 @@ async function runAgentTurnWithFallbackInternal(
         liveModelSwitchRetries,
         shouldSurfaceToControlUi,
         timing: agentTurnTiming,
+        overloadRetryState,
         consumeTransientHttpRetry,
         modelPatch,
       });
@@ -455,6 +410,28 @@ async function runAgentTurnWithFallbackInternal(
   };
 }
 
+async function runAgentTurnWithFallbackInternal(
+  params: AgentTurnParams,
+  commitTerminalOutcome: () => void,
+): Promise<AgentRunLoopResult> {
+  const overloadRetryState: OverloadRetryState = {
+    retryCount: 0,
+    turnStartedAtMs: Date.now(),
+    unsafeToReplay: false,
+    noticeSent: false,
+    completed: false,
+  };
+  try {
+    return await runAgentTurnWithFallbackInternalWithRetryState(
+      params,
+      commitTerminalOutcome,
+      overloadRetryState,
+    );
+  } finally {
+    await cancelOverloadRetryNotice(overloadRetryState);
+  }
+}
+
 /** Runs the agent turn with provider/model fallback, retry, and failure mapping. */
 export async function runAgentTurnWithFallback(
   params: AgentTurnParams,
@@ -467,9 +444,12 @@ export async function runAgentTurnWithFallback(
     terminalOutcomeCommitted = true;
     params.replyOperation?.freezeAbort();
   };
-  try {
-    return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
-  } finally {
-    commitTerminalOutcome();
-  }
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.opts?.runId ?? "");
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    try {
+      return await runAgentTurnWithFallbackInternal(params, commitTerminalOutcome);
+    } finally {
+      commitTerminalOutcome();
+    }
+  });
 }

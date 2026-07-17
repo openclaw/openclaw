@@ -872,6 +872,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             disableMessageTool: options?.disableMessageTool,
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+            clientCaps: options?.clientCaps,
             authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,

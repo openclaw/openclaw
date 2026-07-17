@@ -6,6 +6,8 @@ import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
 import {
@@ -204,6 +206,15 @@ function createLifecycleController({
       (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     runSubagentAnnounceFlow: vi.fn(async () => true),
+    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(
+      async (wakeParams: {
+        settledEntry: { runId: string };
+        completeBatch(runIds: readonly string[]): void;
+      }) => {
+        wakeParams.completeBatch([wakeParams.settledEntry.runId]);
+        return false;
+      },
+    ),
     warn: vi.fn(),
   };
   Object.assign(params, overrides);
@@ -2243,7 +2254,7 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
-    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
     const warn = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
@@ -2256,7 +2267,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     const controller = createLifecycleController({
       entry,
-      persist,
+      persistOrThrow,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
       warn,
     });
@@ -2279,7 +2290,7 @@ describe("subagent registry lifecycle hardening", () => {
       deliveryStatus: "failed",
     });
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
-    expect(persist).toHaveBeenCalled();
+    expect(persistOrThrow).toHaveBeenCalled();
   });
 
   it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
@@ -2899,7 +2910,7 @@ describe("subagent registry lifecycle hardening", () => {
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
-    const persist = vi.fn();
+    const persistOrThrow = vi.fn();
     const entry = createRunEntry({
       endedAt: 4_000,
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -2912,7 +2923,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     const controller = createLifecycleController({
       entry,
-      persist,
+      persistOrThrow,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
     });
 
@@ -2950,7 +2961,7 @@ describe("subagent registry lifecycle hardening", () => {
       terminalSummary:
         "Required completion delivery failed before reaching the requester: gateway request timeout for agent.",
     });
-    expect(persist).toHaveBeenCalled();
+    expect(persistOrThrow).toHaveBeenCalled();
   });
 
   it.each([
@@ -2972,7 +2983,7 @@ describe("subagent registry lifecycle hardening", () => {
   ])(
     "keeps $name completion cleanup terminal on retry exhaustion",
     async ({ endedReason, outcome }) => {
-      const persist = vi.fn();
+      const persistOrThrow = vi.fn();
       const entry = createRunEntry({
         endedAt: 4_000,
         endedReason,
@@ -2986,7 +2997,7 @@ describe("subagent registry lifecycle hardening", () => {
       const controller = createLifecycleController({
         entry,
         runs,
-        persist,
+        persistOrThrow,
         captureSubagentCompletionReply: vi.fn(async () => undefined),
       });
 
@@ -3004,7 +3015,7 @@ describe("subagent registry lifecycle hardening", () => {
       } else {
         expect(entry.cleanupCompletedAt).toBeTypeOf("number");
       }
-      expect(persist).toHaveBeenCalled();
+      expect(persistOrThrow).toHaveBeenCalled();
     },
   );
 
@@ -3404,6 +3415,453 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow.mock.calls[0]?.[0]).toMatchObject({
       outcome: { status: "timeout" },
     });
+  });
+});
+
+describe("requester settle wake trigger", () => {
+  beforeEach(() => {
+    helperMocks.safeRemoveAttachmentsDir.mockClear();
+    helperMocks.logAnnounceGiveUp.mockClear();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockClear();
+  });
+
+  it("fires the settle wake from keep-cleanup bookkeeping", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: undefined,
+      settledEntry: entry,
+      transitionBatch: expect.any(Function),
+      completeBatch: expect.any(Function),
+    });
+    expect(entry.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+  });
+
+  it("retains delete-cleanup rows until the settle wake resolves", () => {
+    const entry = createRunEntry({ endedAt: 4_000, cleanup: "delete" });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "delete",
+      completedAt: 5_000,
+    });
+
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(entry.requesterSettleWake).toEqual({
+      status: "pending",
+      attemptCount: 0,
+      retireAfterSettle: true,
+    });
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:main",
+        settledEntry: entry,
+      }),
+    );
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("schedules every remaining requester wave after one batch resolves", async () => {
+    const first = createRunEntry({ runId: "run-first", endedAt: 4_000 });
+    const later = createRunEntry({ runId: "run-later", endedAt: 8_000 });
+    later.requesterSettleWake = { status: "pending", attemptCount: 0 };
+    const runs = new Map([
+      [first.runId, first],
+      [later.runId, later],
+    ]);
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        if (params.settledEntry.runId === first.runId) {
+          params.completeBatch([first.runId]);
+        }
+        return false;
+      },
+    );
+    const controller = createLifecycleController({
+      entry: first,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: first.runId,
+      entry: first,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    await vi.waitFor(() => expect(settleWake).toHaveBeenCalledTimes(2));
+    expect(settleWake.mock.calls.map(([params]) => params.settledEntry.runId)).toEqual([
+      "run-first",
+      "run-later",
+    ]);
+    expect(later.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+  });
+
+  it("preserves delete-mode child results for the settle wake after delivered cleanup clears them", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "delete-mode findings" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      runSubagentAnnounceFlow,
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    });
+    await vi.waitFor(() => expect(settleWake).toHaveBeenCalledTimes(1));
+
+    // Delete-mode keeps the canonical row and result until the durable wake
+    // outbox reaches success or a terminal/no-wake disposition.
+    expect(entry.completion?.resultText).toBe("delete-mode findings");
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settledEntry: expect.objectContaining({
+          runId: entry.runId,
+          completion: expect.objectContaining({ resultText: "delete-mode findings" }),
+        }),
+      }),
+    );
+  });
+
+  it("retains a reconciled killed row until the settle wake resolves", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: "subagent-killed",
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    expect(runs.has(entry.runId)).toBe(true);
+    expect(entry.requesterSettleWake?.retireAfterSettle).toBe(true);
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    const completeBatch = firstCallArg(settleWake).completeBatch as (
+      runIds: readonly string[],
+    ) => void;
+    completeBatch([entry.runId]);
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("skips the settle wake when the caller opts out (suspended-delivery discard)", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+      skipRequesterSettleWake: true,
+    });
+
+    expect(settleWake).not.toHaveBeenCalled();
+  });
+
+  it("does not settle or schedule a provisional kill", () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      killReconciliation: { killedAt: 4_000 },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+      provisionalKill: true,
+    });
+
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.requesterSettleWake).toBeUndefined();
+    expect(settleWake).not.toHaveBeenCalled();
+  });
+
+  it("re-arms a deferred frozen batch at its persisted retry deadline", async () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    let invocation = 0;
+    const settleWake = vi.fn(
+      async (
+        params: Parameters<
+          LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+        >[0],
+      ) => {
+        invocation += 1;
+        if (invocation === 1) {
+          params.transitionBatch([entry.runId], {
+            status: "pending",
+            attemptCount: 0,
+            nextAttemptAt: 30_000,
+            batchRunIds: [entry.runId],
+          });
+        } else {
+          params.completeBatch([entry.runId]);
+        }
+        return false;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settleWake).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settleWake).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settleWake).toHaveBeenCalledTimes(2);
+      expect(entry.requesterSettleWake).toBeUndefined();
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not re-arm coalesced batch rows whose retry deadline already passed", async () => {
+    const state = {
+      status: "pending" as const,
+      attemptCount: 1,
+      nextAttemptAt: 5_000,
+      batchRunIds: ["run-a", "run-b"],
+    };
+    const first = createRunEntry({
+      runId: "run-a",
+      endedAt: 4_000,
+      requesterSettleWake: { ...state },
+    });
+    const second = createRunEntry({
+      runId: "run-b",
+      endedAt: 4_000,
+      requesterSettleWake: { ...state },
+    });
+    const runs = new Map([
+      [first.runId, first],
+      [second.runId, second],
+    ]);
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry: first,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    try {
+      controller.resumeRequesterSettleWake(first.runId, first);
+      controller.resumeRequesterSettleWake(second.runId, second);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settleWake).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fires the settle wake when an announce give-up suspends the delivery", async () => {
+    // Suspension leaves cleanup incomplete and nothing retries it, so it is
+    // the child's terminal settle for requester-drain purposes.
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok" },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(entry.requesterSettleWake).toEqual({ status: "pending", attemptCount: 0 });
+    expect(settleWake).toHaveBeenCalledTimes(1);
+    expect(settleWake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:main",
+        settledEntry: entry,
+      }),
+    );
+  });
+
+  it("fires the settle wake exactly once for a non-suspending announce give-up", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" },
+    });
+    const settleWake = vi.fn(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("failed");
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(settleWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps settle bookkeeping resilient to a rejecting wake", () => {
+    const entry = createRunEntry({ endedAt: 4_000 });
+    const warn = vi.fn();
+    const settleWake = vi.fn(async () => {
+      throw new Error("wake exploded");
+    });
+    const controller = createLifecycleController({
+      entry,
+      warn,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    expect(() =>
+      controller.completeCleanupBookkeeping({
+        runId: entry.runId,
+        entry,
+        cleanup: "keep",
+        completedAt: 5_000,
+      }),
+    ).not.toThrow();
+
+    return vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.anything());
+    });
+  });
+
+  it("holds the settle wake as tracked root work so restart drain waits for its turn", async () => {
+    resetGatewayWorkAdmission();
+    try {
+      const entry = createRunEntry({ endedAt: 4_000 });
+      let releaseWake: (() => void) | undefined;
+      const settleWake = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseWake = () => resolve(false);
+          }),
+      );
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      });
+
+      // Schedule from inside an admitted cleanup parent that finishes before
+      // the wake settles — the quiescence window: the wake must reserve its
+      // own root before the parent releases.
+      await runWithGatewayIndependentRootWorkAdmission(async () => {
+        controller.completeCleanupBookkeeping({
+          runId: entry.runId,
+          entry,
+          cleanup: "keep",
+          completedAt: 5_000,
+        });
+      });
+      expect(settleWake).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+
+      // A restart drain arriving between scheduling and the wake's gateway
+      // turn must wait for the wake instead of reporting quiescence.
+      markGatewayRestartDraining();
+      expect((await waitForActiveGatewayRootWork(25)).drained).toBe(false);
+
+      releaseWake?.();
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect((await waitForActiveGatewayRootWork(1_000)).drained).toBe(true);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -27,7 +27,10 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
+import {
+  isSessionTranscriptProjectionUnavailableError,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -567,19 +570,36 @@ async function handleChatHistoryRequest({
   const max = Math.min(1000, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-  const historyPage = await readChatHistoryPage({
-    entry: historyEntry,
-    provider: resolvedSessionModel.provider,
-    sessionId,
-    storePath,
-    sessionAgentId,
-    canonicalKey,
-    max,
-    maxHistoryBytes,
-    effectiveMaxChars,
-    offset,
-    messageId,
-  });
+  let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+  try {
+    historyPage = await readChatHistoryPage({
+      entry: historyEntry,
+      provider: resolvedSessionModel.provider,
+      sessionId,
+      storePath,
+      sessionAgentId,
+      canonicalKey,
+      max,
+      maxHistoryBytes,
+      effectiveMaxChars,
+      offset,
+      messageId,
+    });
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "session history is rebuilding; retry shortly", {
+        details: { method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
+    );
+    return;
+  }
   const normalized = enrichChatHistoryCompactionMarkers(historyPage.messages, historyEntry);
   const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = replaceOversizedChatHistoryMessages({

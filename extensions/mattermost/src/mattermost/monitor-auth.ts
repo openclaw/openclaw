@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
-import type { OpenClawConfig } from "./runtime-api.js";
+import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
 
 const MATTERMOST_USER_NAME_KIND =
@@ -93,8 +93,11 @@ export function isMattermostSenderAllowed(params: {
   return match.allowed;
 }
 
-function mapMattermostChannelKind(channelType?: string | null): "direct" | "group" | "channel" {
+export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const normalized = channelType?.trim().toUpperCase();
+  if (!normalized) {
+    return "direct";
+  }
   if (normalized === "D") {
     return "direct";
   }
@@ -102,6 +105,16 @@ function mapMattermostChannelKind(channelType?: string | null): "direct" | "grou
     return "group";
   }
   return "channel";
+}
+
+export function resolveMattermostTrustedChatKind(params: {
+  channelType?: string | null;
+  fallback?: ChatType;
+}): ChatType {
+  const channelType = params.channelType?.trim();
+  return channelType
+    ? mapMattermostChannelTypeToChatType(channelType)
+    : (params.fallback ?? "direct");
 }
 
 type MattermostCommandAuthDecision =
@@ -278,7 +291,7 @@ export async function authorizeMattermostCommandInvocation(params: {
     };
   }
 
-  const kind = mapMattermostChannelKind(channelInfo.type);
+  const kind = mapMattermostChannelTypeToChatType(channelInfo.type);
   const chatType = kind;
   const channelName = channelInfo.name ?? "";
   const channelDisplay = channelInfo.display_name ?? channelName;

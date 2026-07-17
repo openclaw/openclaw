@@ -5,7 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildTtsSystemPromptHint } from "../tts/tts.js";
+import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { buildModelAliasLines } from "./model-alias-lines.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
@@ -32,7 +32,7 @@ type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
 };
 
 /** Resolves all config-derived system prompt fields for an agent. */
-export function resolveAgentSystemPromptConfig(params: {
+function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
 }): ResolvedAgentSystemPromptConfig {

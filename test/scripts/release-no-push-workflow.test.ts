@@ -337,6 +337,9 @@ describe("release validation no-push transport", () => {
     expect(verify.run).toContain('"openclaw-release-checks.yml"');
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+    expect(dispatch.run).toContain("--connect-timeout 10");
+    expect(dispatch.run).toContain("--max-time 30");
+    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
@@ -493,6 +496,19 @@ describe("release validation no-push transport", () => {
 
     const dockerProducer = job(workflow, "prepare_docker_e2e_image");
     const liveProducer = job(workflow, "prepare_live_test_image");
+    const liveProducerSteps = liveProducer.steps ?? [];
+    const liveBuildIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Build shared live-test image",
+    );
+    const trustedHarnessIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Checkout trusted release harness",
+    );
+    const livePackIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Pack live-test image artifact",
+    );
+    expect(liveBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(trustedHarnessIndex).toBeGreaterThan(liveBuildIndex);
+    expect(livePackIndex).toBeGreaterThan(trustedHarnessIndex);
     expect(permissionAt(workflow.permissions, "actions", "none")).toBe("read");
     expect(permissionAt(workflow.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(dockerProducer);
