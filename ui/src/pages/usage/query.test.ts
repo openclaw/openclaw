@@ -39,6 +39,35 @@ describe("usage query CSV export", () => {
     expect(csv).toContain(prefix);
   });
 
+  it.each([
+    ["\tnotes", "\tnotes"],
+    ["  plain text", "  plain text"],
+  ])("preserves whitespace-prefixed plain label %j byte-for-byte", (label, expected) => {
+    const csv = buildSessionsCsv([
+      {
+        key: "session-1",
+        label,
+        updatedAt: 0,
+        usage: null,
+      } satisfies UsageSessionEntry,
+    ]);
+
+    expect(csv.split("\n")[1]).toContain(`,${expected},`);
+  });
+
+  it("quotes but does not neutralize a CR-prefixed plain label", () => {
+    const csv = buildSessionsCsv([
+      {
+        key: "session-1",
+        label: "\rnotes",
+        updatedAt: 0,
+        usage: null,
+      } satisfies UsageSessionEntry,
+    ]);
+
+    expect(csv.split("\n")[1]).toContain(',"\rnotes",');
+  });
+
   it("quotes carriage returns so a bare CR cannot split a row", () => {
     const csv = buildSessionsCsv([
       {
