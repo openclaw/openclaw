@@ -633,6 +633,9 @@ describe("ollama setup", () => {
     expect(
       result.config.models?.providers?.ollama?.models?.find((model) => model.id === "gemma4:e4b"),
     ).toMatchObject({ compat: { supportsTools: true } });
+    expect(
+      result.config.models?.providers?.ollama?.models?.find((model) => model.id === "broken:20b"),
+    ).toMatchObject({ compat: { supportsTools: false } });
   });
 
   it("checks all installed Ollama models before offering a recommended pull", async () => {

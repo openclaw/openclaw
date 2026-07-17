@@ -278,7 +278,6 @@ extensions/slack/src/approval-native.test.ts
 extensions/slack/src/channel.test.ts
 extensions/slack/src/channel.ts
 extensions/slack/src/message-action-dispatch.test.ts
-extensions/slack/src/monitor/context.ts
 extensions/slack/src/monitor/events/interactions.block-actions.ts
 extensions/slack/src/monitor/events/interactions.test.ts
 extensions/slack/src/monitor/media.test.ts

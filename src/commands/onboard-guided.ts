@@ -36,10 +36,25 @@ export type GuidedOnboardingDeps = {
   ) => Promise<void>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   persistRiskAcknowledgement?: (config: OpenClawConfig) => Promise<void>;
+  persistAccessMode?: (mode: GuidedAccessMode) => Promise<void>;
+  listManualOptions?: typeof import("../system-agent/setup-inference.js").listManualSetupInferenceOptions;
+  /**
+   * "hatch" (default) runs the local custodian flow: question zero, quiet
+   * failure collection, deterministic setup apply, then the agent TUI.
+   * "chat" preserves the legacy handoff into the OpenClaw system-agent chat —
+   * remote-gateway onboarding requires it because setup must apply remotely.
+   */
+  handoffMode?: "hatch" | "chat";
+  applySetup?: typeof import("../system-agent/setup-apply.js").applySystemAgentSetup;
+  launchHatchTui?: (workspace: string) => Promise<void>;
   runSetupMemoryImportStep?: typeof import("../wizard/setup.memory-import.js").runSetupMemoryImportStep;
 };
 
-type GuidedOnboardingHandoff = { workspace: string };
+export type GuidedAccessMode = "full" | "guarded";
+
+type GuidedOnboardingHandoff = { workspace: string; next: "hatch" | "chat" };
+
+type LadderFailure = { label: string; status: SetupInferenceFailureStatus };
 
 type CandidateAttempt =
   | { kind: "success"; result: Extract<ActivateSetupInferenceResult, { ok: true }> }
@@ -101,6 +116,8 @@ async function tryCandidate(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
+  /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
+  collectFailure?: (failure: LadderFailure) => void;
 }): Promise<CandidateAttempt> {
   const progress = params.prompter.progress(
     t("wizard.guided.testingCandidate", {
@@ -121,11 +138,15 @@ async function tryCandidate(params: {
   if (result.ok) {
     return { kind: "success", result };
   }
-  await noteActivationFailure({
-    prompter: params.prompter,
-    label: params.candidate.label,
-    result,
-  });
+  if (params.collectFailure) {
+    params.collectFailure({ label: params.candidate.label, status: result.status });
+  } else {
+    await noteActivationFailure({
+      prompter: params.prompter,
+      label: params.candidate.label,
+      result,
+    });
+  }
   return { kind: "failure" };
 }
 
@@ -137,6 +158,8 @@ async function runManualStage(params: {
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   activate: ActivateSetupInference;
+  /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
+  hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
@@ -188,6 +211,13 @@ async function runManualStage(params: {
     });
 
     if (choice === "skip") {
+      if (params.hasActiveRoute) {
+        await params.prompter.note(
+          t("wizard.guided.keepingCurrent"),
+          t("wizard.guided.aiAccessTitle"),
+        );
+        return null;
+      }
       await params.prompter.note(
         t("wizard.guided.nextStepsWithoutAi", { workspace: params.workspace }),
         t("wizard.guided.nextStepsTitle"),
@@ -298,7 +328,7 @@ async function runGuidedOnboardingFlow(
   const prompter = await (deps.createPrompter?.() ??
     import("../wizard/clack-prompter.js").then(({ createClackPrompter }) => createClackPrompter()));
   await onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro(t("wizard.guided.intro"));
+  await prompter.intro(t("wizard.guided.custodianIntro"));
   await prompter.note(t("wizard.guided.escapeHatches"), t("wizard.guided.welcomeTitle"));
 
   const { readConfigFileSnapshot } = await import("../config/config.js");
@@ -335,6 +365,38 @@ async function runGuidedOnboardingFlow(
     await (deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement)(acknowledgedConfig);
   }
 
+  const custodianMode = (deps.handoffMode ?? "hatch") === "hatch";
+
+  // Question zero: consent to automatic discovery is front-loaded into one
+  // choice so the rest of the flow can be silent (full) or ask-first (guarded).
+  // Remote-gateway onboarding (chat handoff) discovers on the gateway host and
+  // keeps its legacy flow; the local-consent question would be misleading there.
+  let accessMode: GuidedAccessMode = "full";
+  if (custodianMode) {
+    const accessChoice = await prompter.select<string>({
+      message: t("wizard.guided.accessQuestion"),
+      options: [
+        {
+          value: "full",
+          label: t("wizard.guided.accessFullLabel"),
+          hint: t("wizard.guided.accessFullHint"),
+        },
+        {
+          value: "guarded",
+          label: t("wizard.guided.accessGuardedLabel"),
+          hint: t("wizard.guided.accessGuardedHint"),
+        },
+      ],
+      // Reruns default to the saved preference; accepting the default must
+      // never silently downgrade a guarded choice to full discovery.
+      initialValue: existingConfig.wizard?.accessMode === "guarded" ? "guarded" : "full",
+    });
+    accessMode = accessChoice === "guarded" ? "guarded" : "full";
+    if (existingConfig.wizard?.accessMode !== accessMode) {
+      await (deps.persistAccessMode ?? persistAccessMode)(accessMode);
+    }
+  }
+
   // Inference is the only prerequisite for OpenClaw. Use the caller's or
   // current default workspace as isolated probe context; OpenClaw owns any
   // workspace choice and persistence after the live completion succeeds.
@@ -344,69 +406,186 @@ async function runGuidedOnboardingFlow(
       onboardHelpers.DEFAULT_WORKSPACE,
   );
 
+  const activate =
+    deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
   const detect =
     deps.detect ?? (await import("../system-agent/setup-inference.js")).detectSetupInference;
-  const detectionProgress = prompter.progress(t("wizard.guided.detecting"));
-  const detection = await detect();
-  detectionProgress.stop(t("wizard.guided.detected"));
-  if (detection.candidates.length === 0) {
-    await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
-    if (detection.recommendedInstalls.length > 0) {
-      const recommendedInstalls = detection.recommendedInstalls.map((install) =>
-        t("wizard.guided.recommendedInstall", {
-          label: install.label,
-          hint: install.hint,
-          website: install.website,
+  const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
+  const ladderFailures: LadderFailure[] = [];
+  let detection: SetupInferenceDetection | undefined;
+  let resultLines: string[] | undefined;
+  let successLabel: string | undefined;
+
+  // Guarded mode turns automatic discovery into an explicit ask; declining it
+  // routes straight to the manual provider picker without any scanning.
+  const wantsDiscovery =
+    accessMode === "full" ||
+    (await prompter.select<string>({
+      message: t("wizard.guided.lookAroundQuestion"),
+      options: [
+        { value: "look", label: t("wizard.guided.lookAroundYes") },
+        { value: "manual", label: t("wizard.guided.lookAroundManual") },
+      ],
+      initialValue: "look",
+    })) !== "manual";
+
+  if (wantsDiscovery) {
+    const detectionProgress = prompter.progress(t("wizard.guided.detecting"));
+    detection = await detect();
+    detectionProgress.stop(t("wizard.guided.detected"));
+    if (detection.candidates.length === 0) {
+      await prompter.note(t("wizard.guided.foundNothing"), t("wizard.guided.detectedTitle"));
+      if (detection.recommendedInstalls.length > 0) {
+        const recommendedInstalls = detection.recommendedInstalls.map((install) =>
+          t("wizard.guided.recommendedInstall", {
+            label: install.label,
+            hint: install.hint,
+            website: install.website,
+          }),
+        );
+        await prompter.note(
+          recommendedInstalls.join("\n"),
+          t("wizard.guided.recommendedInstallsTitle"),
+        );
+      }
+    } else {
+      const candidates = detection.candidates.map((candidate) =>
+        t("wizard.guided.detectedCandidate", {
+          label: candidate.label,
+          detail: candidate.detail,
+        }),
+      );
+      await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
+      // The quip claims "this machine"; remote detection runs gateway-side.
+      const codingAgents = !custodianMode
+        ? []
+        : detection.candidates
+            .filter(
+              (candidate) => candidate.kind === "claude-cli" || candidate.kind === "codex-cli",
+            )
+            .map((candidate) => candidate.label);
+      if (codingAgents.length > 0) {
+        await prompter.note(
+          t("wizard.guided.codingAgentQuip", { labels: codingAgents.join(", ") }),
+          t("wizard.guided.detectedTitle"),
+        );
+      }
+    }
+    if (detection.unavailableCandidates.length > 0) {
+      const unavailable = detection.unavailableCandidates.map((candidate) =>
+        t("wizard.guided.unavailableCandidate", {
+          label: candidate.label,
+          detail: candidate.detail,
+          reason: candidate.reason,
+        }),
+      );
+      await prompter.note(unavailable.join("\n"), t("wizard.guided.unavailableTitle"));
+    }
+
+    // Logged-out CLIs stay visible as manual choices, but auto-testing them would
+    // only produce predictable auth failures and slow the fallback ladder.
+    for (const candidate of detection.candidates.filter((item) => item.credentials !== false)) {
+      autoAttemptedKinds.add(candidate.kind);
+      const attempt = await tryCandidate({
+        candidate,
+        workspace,
+        runtime,
+        prompter,
+        activate,
+        // Legacy chat handoff keeps loud per-candidate failures.
+        ...(custodianMode
+          ? { collectFailure: (failure: LadderFailure) => ladderFailures.push(failure) }
+          : {}),
+      });
+      if (attempt.kind === "success") {
+        resultLines = activationLines(attempt.result);
+        successLabel = candidate.label;
+        break;
+      }
+      // The verification probe runs outside the configured workspace (setup never
+      // executes workspace plugins), so a failing current model can be a false
+      // negative. Never let the ladder silently replace a configured default —
+      // stop and let the user decide in the manual stage.
+      if (candidate.kind === "existing-model") {
+        await prompter.note(t("wizard.guided.existingModelKept"), t("wizard.guided.aiAccessTitle"));
+        break;
+      }
+    }
+  } else {
+    // Declined discovery: build the manual picker from config/manifests only.
+    const listManualOptions =
+      deps.listManualOptions ??
+      (await import("../system-agent/setup-inference.js")).listManualSetupInferenceOptions;
+    detection = {
+      candidates: [],
+      unavailableCandidates: [],
+      // Install suggestions come from scanning; a declined scan offers none.
+      recommendedInstalls: [],
+      ...(await listManualOptions()),
+    };
+  }
+
+  if (resultLines && successLabel && custodianMode) {
+    // Announced default with an easy undo: the working route is already
+    // persisted; "see other options" reopens the full picker on top of it.
+    if (ladderFailures.length > 0) {
+      await prompter.note(
+        t("wizard.guided.silentFailures", { count: String(ladderFailures.length) }),
+        t("wizard.guided.aiAccessTitle"),
+      );
+    }
+    const routeChoice = await prompter.select<string>({
+      message: t("wizard.guided.routeConfirm", { label: successLabel }),
+      options: [
+        { value: "use", label: t("wizard.guided.routeUse", { label: successLabel }) },
+        { value: "other", label: t("wizard.guided.routeOther") },
+      ],
+      initialValue: "use",
+    });
+    if (routeChoice === "other") {
+      // The quiet summary promised the details here; show them before the picker.
+      if (ladderFailures.length > 0) {
+        await prompter.note(
+          [
+            t("wizard.guided.failedOptionsIntro"),
+            ...ladderFailures.map((failure) =>
+              t("wizard.guided.failedOptionLine", {
+                label: failure.label,
+                reason: setupFailureReason(failure.status),
+              }),
+            ),
+          ].join("\n"),
+          t("wizard.guided.aiAccessTitle"),
+        );
+      }
+      const manualResult = await runManualStage({
+        detection,
+        autoAttemptedKinds,
+        config: existingConfig,
+        workspace,
+        runtime,
+        prompter,
+        activate,
+        hasActiveRoute: true,
+      });
+      // Skip keeps the already-persisted working route instead of aborting.
+      if (manualResult) {
+        resultLines = manualResult;
+      }
+    }
+  } else if (!resultLines) {
+    if (ladderFailures.length > 0) {
+      const failureLines = ladderFailures.map((failure) =>
+        t("wizard.guided.failedOptionLine", {
+          label: failure.label,
+          reason: setupFailureReason(failure.status),
         }),
       );
       await prompter.note(
-        recommendedInstalls.join("\n"),
-        t("wizard.guided.recommendedInstallsTitle"),
+        [t("wizard.guided.failedOptionsIntro"), ...failureLines].join("\n"),
+        t("wizard.guided.aiAccessTitle"),
       );
     }
-  } else {
-    const candidates = detection.candidates.map((candidate) =>
-      t("wizard.guided.detectedCandidate", {
-        label: candidate.label,
-        detail: candidate.detail,
-      }),
-    );
-    await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));
-  }
-  if (detection.unavailableCandidates.length > 0) {
-    const unavailable = detection.unavailableCandidates.map((candidate) =>
-      t("wizard.guided.unavailableCandidate", {
-        label: candidate.label,
-        detail: candidate.detail,
-        reason: candidate.reason,
-      }),
-    );
-    await prompter.note(unavailable.join("\n"), t("wizard.guided.unavailableTitle"));
-  }
-
-  const activate =
-    deps.activate ?? (await import("../system-agent/setup-inference.js")).activateSetupInference;
-  const autoAttemptedKinds = new Set<SetupInferenceCandidate["kind"]>();
-  let resultLines: string[] | undefined;
-  // Logged-out CLIs stay visible as manual choices, but auto-testing them would
-  // only produce predictable auth failures and slow the fallback ladder.
-  for (const candidate of detection.candidates.filter((item) => item.credentials !== false)) {
-    autoAttemptedKinds.add(candidate.kind);
-    const attempt = await tryCandidate({ candidate, workspace, runtime, prompter, activate });
-    if (attempt.kind === "success") {
-      resultLines = activationLines(attempt.result);
-      break;
-    }
-    // The verification probe runs outside the configured workspace (setup never
-    // executes workspace plugins), so a failing current model can be a false
-    // negative. Never let the ladder silently replace a configured default —
-    // stop and let the user decide in the manual stage.
-    if (candidate.kind === "existing-model") {
-      await prompter.note(t("wizard.guided.existingModelKept"), t("wizard.guided.aiAccessTitle"));
-      break;
-    }
-  }
-  if (!resultLines) {
     const manualResult = await runManualStage({
       detection,
       autoAttemptedKinds,
@@ -427,11 +606,104 @@ async function runGuidedOnboardingFlow(
   const persistedConfig = persistedSnapshot.valid
     ? (persistedSnapshot.sourceConfig ?? persistedSnapshot.config)
     : acknowledgedConfig;
-  const runMemoryImport =
-    deps.runSetupMemoryImportStep ??
-    (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
-  await runMemoryImport({ config: persistedConfig, prompter, runtime });
-  return { workspace };
+  // Memory import scans local Claude/Codex/Hermes data; a declined look-around
+  // consent covers that discovery too.
+  if (wantsDiscovery) {
+    const runMemoryImport =
+      deps.runSetupMemoryImportStep ??
+      (await import("../wizard/setup.memory-import.js")).runSetupMemoryImportStep;
+    await runMemoryImport({ config: persistedConfig, prompter, runtime });
+  }
+  if (!custodianMode) {
+    return { workspace, next: "chat" };
+  }
+
+  // Setup apply installs and restarts the machine-level Gateway service.
+  // A configured install re-running onboarding is a verification pass — it
+  // must never bounce a live gateway as a side effect of accepting defaults.
+  // Two signals only: a model configured before this run (detection runs
+  // pre-activation, covering manually authored model-only configs) or
+  // persisted gateway config (quickstart writes it when setup applies).
+  // Wizard timestamps are shared with configure/doctor and prove nothing here.
+  const alreadyConfigured = Boolean(detection?.setupComplete || existingConfig.gateway);
+  if (alreadyConfigured) {
+    await prompter.note(t("wizard.guided.alreadySetUp"), t("wizard.guided.welcomeTitle"));
+  } else {
+    // Announced default: apply the same setup plan the conversational "yes"
+    // would, then hand off to the hatch instead of parking in the OpenClaw chat.
+    const applySetup =
+      deps.applySetup ?? (await import("../system-agent/setup-apply.js")).applySystemAgentSetup;
+    const applyProgress = prompter.progress(t("wizard.guided.settingUp"));
+    try {
+      const applied = await withConsoleSubsystemsSuppressed(() =>
+        applySetup({ workspace, surface: "cli", runtime }),
+      );
+      applyProgress.stop(t("wizard.guided.setupDone"));
+      if (applied.lines.length > 0) {
+        await prompter.note(applied.lines.join("\n"), t("wizard.guided.appliedTitle"));
+      }
+    } catch (error) {
+      applyProgress.stop(t("wizard.guided.testFailed"));
+      await prompter.note(
+        t("wizard.guided.applyFailedFallback", {
+          detail: error instanceof Error ? error.message : String(error),
+        }),
+        t("wizard.guided.aiAccessTitle"),
+      );
+      return { workspace, next: "chat" };
+    }
+  }
+  await prompter.note(t("wizard.guided.findMeLater"), t("wizard.guided.welcomeTitle"));
+  await prompter.outro(t("wizard.guided.hatchingNow"));
+  // The TUI opens the configured default agent/workspace; on a configured
+  // rerun that is the persisted default, not the --workspace probe context.
+  const hatchWorkspace = alreadyConfigured
+    ? resolveUserPath(
+        existingConfig.agents?.defaults?.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
+      )
+    : workspace;
+  return { workspace: hatchWorkspace, next: "hatch" };
+}
+
+async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
+  const { mutateConfigFileWithRetry } = await import("../config/config.js");
+  await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      if (draft.wizard?.accessMode === mode) {
+        return;
+      }
+      draft.wizard = { ...draft.wizard, accessMode: mode };
+    },
+  });
+}
+
+async function launchHatchTui(workspace: string): Promise<void> {
+  const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs, path] =
+    await Promise.all([
+      import("../tui/tui-launch.js"),
+      import("../agents/workspace.js"),
+      import("../../packages/terminal-core/src/restore.js"),
+      import("node:fs"),
+      import("node:path"),
+    ]);
+  const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
+  restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
+  try {
+    // No timeoutMs: the run-level TUI timeout overrides the configured agent
+    // timeout for every turn in the session, not just the hatch message.
+    await launchTuiCli(
+      {
+        local: true,
+        deliver: false,
+        // Seed the first-run hatch only when the workspace bootstrap exists;
+        // re-runs against an established agent open a plain chat instead.
+        ...(hasBootstrap ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
+      },
+      {},
+    );
+  } finally {
+    restoreTerminalState("post guided hatch tui", { resumeStdinIfPaused: false });
+  }
 }
 
 export async function runGuidedOnboarding(
@@ -449,9 +721,16 @@ export async function runGuidedOnboarding(
     state.handoff = await runGuidedOnboardingFlow(opts, runtime, deps);
   }, runtime);
   const handoff = state.handoff;
-  if (handoff) {
-    // The live completion makes conversational setup safe. Start only after
-    // the wizard lifecycle restores stdin so OpenClaw receives a clean TTY.
-    await openSystemAgentChat(deps, handoff.workspace, runtime, true);
+  if (!handoff) {
+    return;
   }
+  // Interactive surfaces start only after the wizard lifecycle restores stdin
+  // so the TUI (or recovery chat) receives a clean TTY.
+  if (handoff.next === "hatch") {
+    await (deps.launchHatchTui ?? launchHatchTui)(handoff.workspace);
+    return;
+  }
+  // Chat handoff: legacy remote-gateway flow, or local recovery after a
+  // failed setup apply — the conversational chat can finish interactively.
+  await openSystemAgentChat(deps, handoff.workspace, runtime, true);
 }
