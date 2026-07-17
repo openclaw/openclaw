@@ -57,10 +57,11 @@ function createSkill(): SkillStatusEntry {
 function createContext(
   client: GatewayBrowserClient,
   agentsList: AgentsListResult,
+  connected = true,
 ): ApplicationContext {
   const snapshot = {
     client,
-    connected: true,
+    connected,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,
@@ -97,88 +98,94 @@ afterEach(() => {
 });
 
 describe("openclaw-skills-page route hydration", () => {
-  it("hydrates linked skill verdicts without reloading the route status report", async () => {
-    const verdictResponse = deferred<{
-      schema: "openclaw.skills.security-verdicts.v1";
-      items: Array<{
-        registry: string;
-        ok: boolean;
-        decision: string;
-        reasons: string[];
-        requestedSlug: string;
-        requestedVersion: string;
-        securityStatus: string;
-        securityPassed: boolean;
-      }>;
-    }>();
-    const request = vi.fn((method: string) => {
-      if (method === "skills.securityVerdicts") {
-        return verdictResponse.promise;
-      }
-      return Promise.reject(new Error(`Unexpected Gateway request: ${method}`));
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const agentsList: AgentsListResult = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "project",
-      agents: [{ id: "main", name: "Main" }],
-    };
-    const context = createContext(client, agentsList);
-    const report: SkillStatusReport = {
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/skills",
-      skills: [createSkill()],
-    };
-    const page = document.createElement("openclaw-skills-page") as TestSkillsPage;
-    page.routeData = {
-      gateway: context.gateway,
-      gatewaySnapshot: context.gateway.snapshot,
-      agents: context.agents,
-      agentsList,
-      selectedAgentId: null,
-      report,
-      error: null,
-    };
-    const provider = createApplicationContextProvider(context);
-    provider.append(page);
-    document.body.append(provider);
+  it.each([
+    { connected: true, routeState: "connected" },
+    { connected: false, routeState: "request-capable but transiently disconnected" },
+  ])(
+    "hydrates linked skill verdicts without reloading the $routeState route report",
+    async ({ connected }) => {
+      const verdictResponse = deferred<{
+        schema: "openclaw.skills.security-verdicts.v1";
+        items: Array<{
+          registry: string;
+          ok: boolean;
+          decision: string;
+          reasons: string[];
+          requestedSlug: string;
+          requestedVersion: string;
+          securityStatus: string;
+          securityPassed: boolean;
+        }>;
+      }>();
+      const request = vi.fn((method: string) => {
+        if (method === "skills.securityVerdicts") {
+          return verdictResponse.promise;
+        }
+        return Promise.reject(new Error(`Unexpected Gateway request: ${method}`));
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const agentsList: AgentsListResult = {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "project",
+        agents: [{ id: "main", name: "Main" }],
+      };
+      const context = createContext(client, agentsList, connected);
+      const report: SkillStatusReport = {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        skills: [createSkill()],
+      };
+      const page = document.createElement("openclaw-skills-page") as TestSkillsPage;
+      page.routeData = {
+        gateway: context.gateway,
+        gatewaySnapshot: context.gateway.snapshot,
+        agents: context.agents,
+        agentsList,
+        selectedAgentId: null,
+        report,
+        error: null,
+      };
+      const provider = createApplicationContextProvider(context);
+      provider.append(page);
+      document.body.append(provider);
 
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("skills.securityVerdicts", {});
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["skills.securityVerdicts"]);
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("skills.securityVerdicts", {});
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["skills.securityVerdicts"]);
 
-    page.skillsDetailKey = "agentreceipt";
-    await page.updateComplete;
-    expect(normalizedText(page)).toContain("Refreshing");
-    expect(normalizedText(page)).not.toContain("Unavailable");
+      page.skillsDetailKey = "agentreceipt";
+      await page.updateComplete;
+      expect(normalizedText(page)).toContain("Refreshing");
+      expect(normalizedText(page)).not.toContain("Unavailable");
 
-    verdictResponse.resolve({
-      schema: "openclaw.skills.security-verdicts.v1",
-      items: [
-        {
-          registry: "https://clawhub.ai",
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          requestedSlug: "agentreceipt",
-          requestedVersion: "1.2.3",
-          securityStatus: "clean",
-          securityPassed: true,
-        },
-      ],
-    });
+      verdictResponse.resolve({
+        schema: "openclaw.skills.security-verdicts.v1",
+        items: [
+          {
+            registry: "https://clawhub.ai",
+            ok: true,
+            decision: "pass",
+            reasons: [],
+            requestedSlug: "agentreceipt",
+            requestedVersion: "1.2.3",
+            securityStatus: "clean",
+            securityPassed: true,
+          },
+        ],
+      });
 
-    const key = clawhubVerdictKey({
-      registry: "https://clawhub.ai",
-      slug: "agentreceipt",
-      version: "1.2.3",
-    });
-    await vi.waitFor(() => {
-      expect(page.clawhubVerdicts[key]?.securityStatus).toBe("clean");
-      expect(normalizedText(page)).toContain("Clean");
-    });
-    expect(normalizedText(page)).not.toContain("Unavailable");
-  });
+      const key = clawhubVerdictKey({
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        version: "1.2.3",
+      });
+      await vi.waitFor(() => {
+        expect(page.clawhubVerdicts[key]?.securityStatus).toBe("clean");
+        expect(normalizedText(page)).toContain("Clean");
+      });
+      expect(normalizedText(page)).not.toContain("Unavailable");
+    },
+  );
 });
