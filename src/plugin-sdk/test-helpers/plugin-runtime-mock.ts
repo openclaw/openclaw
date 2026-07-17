@@ -143,7 +143,6 @@ export function createPluginRuntimeMediaMock(
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
-  let mergedRuntime: PluginRuntime | undefined;
   const runtimeContexts = createChannelRuntimeContextRegistry();
   const runEmbeddedAgentMock = vi.fn().mockResolvedValue({
     payloads: [],
@@ -899,7 +898,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  mergedRuntime = mergeDeep(base, overrides);
+  const mergedRuntime = mergeDeep(base, overrides);
   return mergedRuntime;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
