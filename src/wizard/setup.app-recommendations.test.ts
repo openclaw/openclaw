@@ -115,6 +115,86 @@ describe("setupAppRecommendations", () => {
     expect(writeOffer).not.toHaveBeenCalled();
   });
 
+  it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const writeOffer = vi.fn();
+    const acknowledgeStored = vi.fn();
+    const prompter = createPrompter(["recommendation:0"]);
+    const pending: OnboardingRecommendationsRecord = {
+      inventoryHash: "hash",
+      matches: recommendationResult().matches,
+      offeredAt: 1,
+      acceptedAt: null,
+      updatedAt: 1,
+    };
+    const ensurePlugin = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+      cfg,
+      installed: true as const,
+      status: "installed" as const,
+    }));
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        writeOffer,
+        acknowledgeStored,
+        readStored: () => pending,
+        deferOfferToBootstrap: () => false,
+        ensurePlugin: ensurePlugin as never,
+        resolveOfficialEntry: () => ({
+          pluginId: "chat-plugin",
+          label: "Chat plugin",
+          install: { kind: "npm", package: "chat-plugin" } as never,
+          trustedSourceLinkedOfficialInstall: true,
+        }),
+      },
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(prompter.progress).not.toHaveBeenCalled();
+    expect(prompter.multiselect).toHaveBeenCalledOnce();
+    expect(acknowledgeStored).toHaveBeenCalledOnce();
+    expect(writeOffer).not.toHaveBeenCalled();
+    expect(ensurePlugin).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a pending stored offer to the bootstrap without rescanning", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const writeOffer = vi.fn();
+    const prompter = createPrompter();
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        writeOffer,
+        readStored: () => ({
+          inventoryHash: "hash",
+          matches: recommendationResult().matches,
+          offeredAt: 1,
+          acceptedAt: null,
+          updatedAt: 1,
+        }),
+        deferOfferToBootstrap: () => true,
+      },
+    });
+
+    expect(recommend).not.toHaveBeenCalled();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(writeOffer).not.toHaveBeenCalled();
+  });
+
   it("never preselects third-party ClawHub skills even when model-recommended", async () => {
     const result = recommendationResult();
     result.matches[1] = {
