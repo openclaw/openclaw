@@ -187,4 +187,4 @@ agent picks up exactly where it left off, on the same channel and thread.
   dying process.
 - Standalone embedded turns cannot take over a main session with pending
   restart recovery because they do not share the gateway's lifecycle owner.
-  Run the turn through the gateway or choose a fresh session ID.
+  Run the turn through the gateway or reset it there with `/new` or `/reset`.

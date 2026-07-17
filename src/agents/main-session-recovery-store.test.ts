@@ -385,7 +385,7 @@ describe("main session recovery store", () => {
     expect(readStore()[subagentKey]?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
   });
 
-  it("lets an explicit fresh session replace a tombstoned predecessor", async () => {
+  it("does not let a replacement bypass a tombstoned predecessor", async () => {
     await write(
       interruptedEntry({
         status: "failed",
@@ -406,7 +406,7 @@ describe("main session recovery store", () => {
         sessionId: "session-1",
         target: { sessionKey, storePath },
       }),
-    ).resolves.toEqual({ kind: "not_required" });
+    ).resolves.toEqual({ kind: "invalidated", reason: "state_changed" });
   });
 
   it("validates a transferred owner against the latest durable row", async () => {

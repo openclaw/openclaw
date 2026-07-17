@@ -152,6 +152,10 @@ function inspectMainSessionRecovery(params: {
   sessionKey: string;
 }): MainSessionRecoveryView {
   const { entry } = params;
+  const state = entry.mainRestartRecovery;
+  if (state?.tombstone) {
+    return { status: "tombstoned" };
+  }
   if (
     entry.status !== "running" ||
     entry.abortedLastRun !== true ||
@@ -159,13 +163,9 @@ function inspectMainSessionRecovery(params: {
   ) {
     return { status: "inactive" };
   }
-  const state = entry.mainRestartRecovery;
   const observation = observationFor(entry);
   if (!state || !observation) {
     return { status: "inactive" };
-  }
-  if (state.tombstone) {
-    return { status: "tombstoned" };
   }
   if (hasCurrentForegroundClaim(state, params.lifecycleGeneration)) {
     return { status: "blocked" };

@@ -430,6 +430,7 @@ describe("main session recovery state", () => {
       reason: view.reason,
       repair: null,
     });
+    expect(observe(entry, "generation-1")).toEqual({ status: "tombstoned" });
 
     entry.abortedLastRun = true;
     expect(inspectMainSessionRecoveryHealth(entry)).toMatchObject({

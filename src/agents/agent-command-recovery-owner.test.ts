@@ -174,7 +174,7 @@ describe("agent command restart recovery ownership", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it("holds the interrupted predecessor while an explicit replacement runs", async () => {
+  it("rejects a synthetic explicit replacement from a standalone process", async () => {
     const base = createTarget();
     const target = {
       ...base,
@@ -198,8 +198,36 @@ describe("agent command restart recovery ownership", () => {
         prepare: async () => target,
         run,
       }),
-    ).resolves.toBe("fresh");
-    expect(run).toHaveBeenCalledOnce();
+    ).rejects.toThrow("interrupted work pending restart recovery");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("rejects standalone reuse of a tombstoned session", async () => {
+    const target = createTarget();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "failed",
+      abortedLastRun: false,
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      },
+    });
+    const run = vi.fn(async () => "reused");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "reject_uncoordinated",
+        opts: { sessionId: target.sessionId } as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).rejects.toThrow("interrupted work pending restart recovery");
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("revalidates a fresh key when interruption appears during preparation", async () => {

@@ -52,11 +52,7 @@ async function claimAgentCommandRecoveryOwner(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const isExplicitReplacement =
-    params.prepared.isNewSession &&
-    params.prepared.previousSessionId !== undefined &&
-    params.opts.sessionId?.trim() === params.prepared.sessionId;
-  if (params.mode === "reject_uncoordinated" && !isExplicitReplacement) {
+  if (params.mode === "reject_uncoordinated") {
     const recoveryInspection = await inspectMainSessionRecoveryRequired({
       lifecycleGeneration: params.lifecycleGeneration,
       target: { sessionKey, storePath: params.prepared.storePath },
@@ -66,7 +62,7 @@ async function claimAgentCommandRecoveryOwner(params: {
     }
     if (recoveryInspection.kind === "required") {
       throw new Error(
-        `Session "${sessionKey}" has interrupted work pending restart recovery; retry through a healthy Gateway or choose a fresh --session-id.`,
+        `Session "${sessionKey}" has interrupted work pending restart recovery; retry through a healthy Gateway or reset it there with /new or /reset.`,
       );
     }
     return undefined;

@@ -1219,6 +1219,7 @@ describe("main-session-restart-recovery", () => {
     const settled = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(settled?.mainRestartRecovery).toBeUndefined();
   });
 
   it("settles a reused recovery RPC after its dispatch wait times out", async () => {
@@ -1262,13 +1263,11 @@ describe("main-session-restart-recovery", () => {
     });
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       abortedLastRun: false,
-      mainRestartRecovery: { chargedAttempts: 1 },
       restartRecoveryTerminalRunIds: ["control-ui-run", "recovery-run"],
       status: "done",
     });
     expect(
-      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
-        ?.reservation,
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery,
     ).toBeUndefined();
   });
 

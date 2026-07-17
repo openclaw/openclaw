@@ -234,17 +234,6 @@ export async function claimMainSessionRecoveryOwner(params: {
   }
   if (
     params.replacementSessionId &&
-    claim.entry?.sessionId === params.sessionId &&
-    (claim.entry.status !== "running" ||
-      claim.entry.abortedLastRun !== true ||
-      claim.entry.mainRestartRecovery?.tombstone !== undefined)
-  ) {
-    // An explicit fresh session may replace a terminal predecessor. No
-    // automatic recovery can admit against an inactive or tombstoned row.
-    return { kind: "not_required" };
-  }
-  if (
-    params.replacementSessionId &&
     claim.entry?.sessionId === params.replacementSessionId &&
     claim.entry.abortedLastRun !== true &&
     claim.entry.restartRecoveryRuns === undefined &&

@@ -26,6 +26,7 @@ import {
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import type {
   MainSessionRecoveryObservation,
   MainSessionRecoveryReservation,
@@ -226,6 +227,7 @@ async function settleRestartRecoveryDispatch(params: {
             terminalRunId: params.expectedRecoveryRunId,
             terminalSourceRunId: params.expectedRecoverySourceRunId,
           }),
+          buildMainSessionRecoveryClearPatch(entry),
         );
       } else {
         entry.abortedLastRun = false;
