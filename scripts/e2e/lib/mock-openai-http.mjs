@@ -1,5 +1,6 @@
 // Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
+// Raw launchers meet the repo's Node 22.22.3 minimum, where native TS stripping is enabled.
 import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
