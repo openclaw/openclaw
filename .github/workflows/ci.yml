@@ -1301,10 +1301,6 @@ jobs:
     name: control-ui-i18n
     needs: [preflight]
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-    # Source PR drift stays advisory because the post-merge bot owns repair,
-    # including when prepare dispatches the PR-targeted release gate.
-    # Generated locale changes and full release CI remain strict via preflight.
-    continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
@@ -1321,6 +1317,9 @@ jobs:
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check Control UI locale parity
+        # Source-only drift stays advisory because the post-merge bot owns
+        # repair. Generated locale changes and full release CI remain strict.
+        continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
         run: pnpm ui:i18n:check
 
   checks-fast-core:
