@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawProtocol
 import OSLog
 
 extension GatewayNodeSession {
