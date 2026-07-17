@@ -6,7 +6,11 @@ import net from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
-import { appendApnsResponseBodyCapture, createApnsResponseBodyCapture } from "./push-apns-http2.js";
+import {
+  appendApnsResponseBodyCapture,
+  createApnsResponseBodyCapture,
+  getApnsResponseBodyCaptureText,
+} from "./push-apns-http2.js";
 import {
   sendApnsAlert,
   sendApnsBackgroundWake,
@@ -292,11 +296,27 @@ describe("push APNs send semantics", () => {
     appendApnsResponseBodyCapture(capture, "abc", 5);
     appendApnsResponseBodyCapture(capture, "def", 5);
 
-    expect(capture).toEqual({
-      text: "abcde",
-      bytes: 6,
-      truncated: true,
-    });
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
+    expect(capture.bytes).toBe(6);
+    expect(capture.truncated).toBe(true);
+  });
+
+  it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {
+    const splitCapture = createApnsResponseBodyCapture();
+    const emoji = Buffer.from("🚀");
+
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from("before "));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(0, 2));
+    appendApnsResponseBodyCapture(splitCapture, emoji.subarray(2));
+    appendApnsResponseBodyCapture(splitCapture, Buffer.from(" after"));
+
+    expect(getApnsResponseBodyCaptureText(splitCapture)).toBe("before 🚀 after");
+
+    const cappedCapture = createApnsResponseBodyCapture();
+    appendApnsResponseBodyCapture(cappedCapture, Buffer.from("abc🚀"), 5);
+
+    expect(getApnsResponseBodyCaptureText(cappedCapture)).toBe("abc");
+    expect(cappedCapture).toMatchObject({ bytes: 7, truncated: true });
   });
 
   it("sends alert pushes with alert headers and payload", async () => {
