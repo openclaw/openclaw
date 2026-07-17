@@ -73,4 +73,44 @@ describe("outbound session persistence", () => {
       target: "reef:peer-agent",
     });
   });
+
+  it("creates the session row when a discovered peer has no local entry", async () => {
+    const sessionKey = "agent:main:reef:direct:peer-agent";
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "reef:peer-agent",
+      deliveryTarget: "reef:peer-agent",
+      nativeDirectUserId: "peer-agent",
+    });
+    expect(identity).toBeDefined();
+    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 200);
+    expect(
+      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+    ).not.toMatchObject({ sessionId: expect.any(String) });
+
+    await bindOutboundSessionEntry({
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      channel: "reef",
+      accountId: "default",
+      route: {
+        sessionKey,
+        baseSessionKey: sessionKey,
+        peer: { kind: "direct", id: "peer-agent" },
+        chatType: "direct",
+        from: "reef:peer-agent",
+        to: "reef:peer-agent",
+      },
+    });
+
+    expect(
+      resolveConversation({ agentId: "main", storePath }, identity!.conversationRef),
+    ).toMatchObject({
+      sessionId: expect.any(String),
+      sessionKey,
+      role: "primary",
+      target: "reef:peer-agent",
+    });
+  });
 });

@@ -257,6 +257,9 @@ async function persistOutboundSessionEntry(
   return await updateSessionLastRoute({
     storePath,
     sessionKey: params.route.sessionKey,
+    // Creation is part of this helper's contract: directory-discovered peers
+    // may not have a local session row until their first outbound turn.
+    createIfMissing: true,
     channel: params.channel,
     to: params.route.to,
     accountId: params.accountId ?? undefined,
