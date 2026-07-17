@@ -2389,6 +2389,31 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("rejects oversized config patch files before parse or write", async () => {
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-oversized-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}.json5`,
+      );
+      fs.writeFileSync(pathname, `${" ".repeat(1024 * 1024 + 1)}{bad`, "utf8");
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
+        ).rejects.toThrow("__exit__:1");
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("config patch mode error: --file input exceeds 1048576 bytes");
+      expectErrorIncludes("split the patch into smaller changes");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "Failed to parse --file as JSON5",
+      );
+    });
+
     it("emits the resolved config path in config patch JSON", async () => {
       const home = path.join(os.tmpdir(), "openclaw-home-token-config-patch");
       const configPath = path.join(home, ".openclaw", "openclaw.json");

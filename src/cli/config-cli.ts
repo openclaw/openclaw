@@ -332,6 +332,7 @@ const CONFIG_PATCH_DESCRIPTION = [
 ].join("\n");
 const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
+const CONFIG_PATCH_FILE_MAX_BYTES = CONFIG_PATCH_STDIN_MAX_BYTES;
 
 class ConfigSetDryRunValidationError extends Error {
   constructor(readonly result: ConfigSetDryRunResult) {
@@ -1495,6 +1496,30 @@ async function readStdinText(): Promise<string> {
   return bytes.toString("utf8");
 }
 
+function readConfigPatchFileText(file: string): string {
+  const fd = fs.openSync(file, "r");
+  try {
+    const chunks: Buffer[] = [];
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let bytes = 0;
+    for (;;) {
+      const read = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (read === 0) {
+        return Buffer.concat(chunks, bytes).toString("utf8");
+      }
+      bytes += read;
+      if (bytes > CONFIG_PATCH_FILE_MAX_BYTES) {
+        throw configPatchModeError(
+          `--file input exceeds ${CONFIG_PATCH_FILE_MAX_BYTES} bytes; split the patch into smaller changes.`,
+        );
+      }
+      chunks.push(Buffer.from(buffer.subarray(0, read)));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
   const file = normalizeOptionalString(opts.file);
   const stdin = Boolean(opts.stdin);
@@ -1502,19 +1527,7 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
-  let raw: string;
-  if (stdin) {
-    raw = await readStdinText();
-  } else {
-    try {
-      raw = fs.readFileSync(file as string, "utf8");
-    } catch (err) {
-      if (hasErrnoCode(err, "ENOENT")) {
-        throw new Error(`--file not found: ${file}`, { cause: err });
-      }
-      throw err;
-    }
-  }
+  const raw = stdin ? await readStdinText() : readConfigPatchFileText(file as string);
   try {
     return JSON5.parse(raw);
   } catch (err) {
