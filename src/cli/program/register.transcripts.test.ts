@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
+import { TranscriptsStore } from "../../transcripts/store.js";
+import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { registerTranscriptsCli } from "./register.transcripts.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -99,6 +103,32 @@ describe("transcripts CLI", () => {
 
     expect(output).toContain("# Design review");
     expect(output).toContain("Ship CLI");
+  });
+
+  it("show prints imported summaries without terminal control bytes", async () => {
+    const session: TranscriptSessionDescriptor = {
+      sessionId: "ansi-import",
+      title: "ANSI import",
+      source: { providerId: "manual-transcript" },
+      startedAt: "2026-05-22T10:00:00.000Z",
+      stoppedAt: "2026-05-22T10:05:00.000Z",
+    };
+    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    await store.writeSession(session);
+    const utterances =
+      (await manualTranscriptSourceProvider.importTranscript?.({
+        session,
+        text: "Attacker: \u001b[2J\u001b[31mADMIN APPROVED\u001b[0m",
+      })) ?? [];
+    for (const utterance of utterances) {
+      await store.appendUtteranceForSession(session, utterance);
+    }
+    await store.writeSummary(summarizeTranscripts({ session, utterances }), session);
+
+    const output = await runTranscriptsCli(["show", "ansi-import"]);
+
+    expect(output).toContain("Attacker: ADMIN APPROVED");
+    expect(output).not.toContain("\u001b");
   });
 
   it("ignores unrelated corrupt metadata while reading a valid session", async () => {
