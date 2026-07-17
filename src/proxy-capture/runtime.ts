@@ -566,11 +566,7 @@ export function captureHttpExchange(
       metaJson: redactedCaptureJson({ ...params.meta, bodyCapture }, runtime.safeJsonString),
     });
   };
-  const cloneable =
-    params.response &&
-    typeof params.response.clone === "function" &&
-    typeof params.response.arrayBuffer === "function";
-  if (!cloneable) {
+  if (typeof params.response.clone !== "function") {
     // Some Response-like objects cannot be cloned. Still record status/headers
     // rather than forcing capture to consume or mutate the original response.
     recordResponseMetadataOnly("unavailable");
