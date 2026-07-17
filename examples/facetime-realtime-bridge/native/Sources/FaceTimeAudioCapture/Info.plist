@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>ai.openclaw.facetime-audio-capture</string>
+  <key>CFBundleName</key>
+  <string>OpenClaw FaceTime Audio Capture</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>OpenClaw captures the remote participant's FaceTime audio for the AI voice bridge.</string>
+</dict>
+</plist>

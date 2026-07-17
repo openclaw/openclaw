@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/example-facetime-realtime-bridge",
+  "version": "0.0.0-private",
+  "private": true,
+  "description": "FaceTime to OpenAI Realtime audio bridge for macOS",
+  "type": "module",
+  "scripts": {
+    "build:capture": "./build-capture.sh",
+    "build:driver": "./build-driver.sh",
+    "doctor": "node bridge.mjs --doctor",
+    "doctor:openclaw": "node --import tsx openclaw-bridge.ts --doctor",
+    "preflight:openclaw": "node --import tsx openclaw-bridge.ts --preflight",
+    "install:driver": "./install-driver.sh",
+    "start": "node bridge.mjs",
+    "start:openclaw": "node --import tsx openclaw-bridge.ts",
+    "test": "node --test bridge.test.mjs"
+  },
+  "dependencies": {
+    "ws": "8.21.0"
+  }
+}

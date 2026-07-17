@@ -355,6 +355,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ai
 
+  examples/facetime-realtime-bridge:
+    dependencies:
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
+
   extensions/acpx:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':
