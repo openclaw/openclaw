@@ -372,6 +372,16 @@ describe("value predicates — numeric operators (v1.1)", () => {
     expect(ids).toEqual(["claude-sonnet-4-7"]);
   });
 
+  it("accepts finite decimal predicate values", () => {
+    const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow>199999.5]/id`));
+    const ids = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
+    expect(ids.toSorted()).toEqual([
+      "claude-opus-4-7",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-7",
+    ]);
+  });
+
   it("numeric operator rejects non-numeric leaves silently", () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[id>5]/id`));
     expect(out).toHaveLength(0);
@@ -380,6 +390,27 @@ describe("value predicates — numeric operators (v1.1)", () => {
   it("rejects numeric predicate value that is not a number", () => {
     const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[maxTokens>foo]/id`));
     expect(out).toHaveLength(0);
+  });
+
+  it("rejects non-decimal numeric predicate values", () => {
+    for (const value of ["0x10", "1e5"]) {
+      const out = findOcPaths(jsonc, parseOcPath(`${PREFIX}/[contextWindow>${value}]/id`));
+      expect(out).toHaveLength(0);
+    }
+  });
+
+  it("rejects non-decimal numeric-looking actual values", () => {
+    const looseJsonc = parseJsonc(
+      '{"models":[' +
+        '{"id":"hex","contextWindow":"0x20"},' +
+        '{"id":"exponent","contextWindow":"1e6"},' +
+        '{"id":"blank","contextWindow":""},' +
+        '{"id":"decimal","contextWindow":"20"}' +
+        "]}",
+    ).ast;
+    const out = findOcPaths(looseJsonc, parseOcPath("oc://config/models/[contextWindow>10]/id"));
+    const ids = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
+    expect(ids).toEqual(["decimal"]);
   });
 });
 

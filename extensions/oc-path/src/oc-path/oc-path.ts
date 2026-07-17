@@ -495,7 +495,17 @@ export function parsePredicateSeg(seg: string): PredicateSpec | null {
   return null;
 }
 
-// Numeric ops require both sides to coerce to finite numbers.
+const STRICT_DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+function parseStrictDecimalNumber(value: string): number | null {
+  if (!STRICT_DECIMAL_NUMBER_RE.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Numeric ops require both sides to be explicit finite decimal numbers.
 export function evaluatePredicate(actual: string | null, pred: PredicateSpec): boolean {
   if (actual === null) {
     return false;
@@ -509,9 +519,9 @@ export function evaluatePredicate(actual: string | null, pred: PredicateSpec): b
     case "<=":
     case ">":
     case ">=": {
-      const a = Number(actual);
-      const b = Number(pred.value);
-      if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      const a = parseStrictDecimalNumber(actual);
+      const b = parseStrictDecimalNumber(pred.value);
+      if (a === null || b === null) {
         return false;
       }
       if (pred.op === "<") {
