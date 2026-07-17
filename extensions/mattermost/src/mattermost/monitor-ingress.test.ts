@@ -1,0 +1,312 @@
+// Mattermost durable ingress tests cover append, recovery, tombstones, and merged adoption.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildMattermostFlushIngressLifecycle,
+  createMattermostIngressMonitor,
+  type MattermostIngressLifecycle,
+} from "./monitor-ingress.js";
+
+type MattermostIngressQueue = NonNullable<
+  Parameters<typeof createMattermostIngressMonitor>[0]["queue"]
+>;
+type MattermostIngressPayload = Parameters<MattermostIngressQueue["enqueue"]>[1];
+type MattermostIngressDispatch = Parameters<typeof createMattermostIngressMonitor>[0]["dispatch"];
+
+function postedEvent(params?: {
+  postId?: string;
+  channelId?: string;
+  message?: string;
+  event?: "posted" | "post_edited";
+}): string {
+  return JSON.stringify({
+    event: params?.event ?? "posted",
+    data: {
+      post: JSON.stringify({
+        id: params?.postId ?? "post-1",
+        channel_id: params?.channelId ?? "channel-1",
+        user_id: "user-1",
+        message: params?.message ?? "hello",
+      }),
+    },
+  });
+}
+
+function startMonitor(queue: MattermostIngressQueue, dispatch: MattermostIngressDispatch) {
+  return createMattermostIngressMonitor({
+    accountId: "default",
+    queue,
+    dispatch,
+    runtime: { error: vi.fn(), log: vi.fn() },
+    pollIntervalMs: 60_000,
+    adoptionStallTimeoutMs: 5_000,
+  });
+}
+
+async function withQueue<T>(fn: (queue: MattermostIngressQueue) => Promise<T>): Promise<T> {
+  const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-ingress-"));
+  const stateDir = await fs.realpath(created);
+  const queue = createChannelIngressQueueForTests<MattermostIngressPayload>({
+    channelId: "mattermost",
+    accountId: "default",
+    stateDir,
+  });
+  try {
+    return await fn(queue);
+  } finally {
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+function testLifecycle() {
+  const calls = {
+    adopted: vi.fn(async () => {}),
+    deferred: vi.fn(),
+    finalizing: vi.fn(),
+    abandoned: vi.fn(async () => {}),
+  };
+  const lifecycle: MattermostIngressLifecycle = {
+    abortSignal: new AbortController().signal,
+    onAdopted: calls.adopted,
+    onDeferred: calls.deferred,
+    onAdoptionFinalizing: calls.finalizing,
+    onAbandoned: calls.abandoned,
+  };
+  return { calls, lifecycle };
+}
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
+});
+
+describe("Mattermost durable ingress", () => {
+  it("propagates durable append failure before handler scheduling", async () => {
+    await withQueue(async (queue) => {
+      const appendError = new Error("sqlite unavailable");
+      const failingQueue = {
+        ...queue,
+        enqueue: vi.fn().mockRejectedValue(appendError),
+      } satisfies MattermostIngressQueue;
+      const dispatch = vi.fn();
+      const monitor = startMonitor(failingQueue, dispatch);
+      try {
+        await expect(monitor.receive(postedEvent())).rejects.toBe(appendError);
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("recovers an uncompleted post with a fresh drain and dispatches exactly once", async () => {
+    await withQueue(async (queue) => {
+      const interruptedDispatch = vi.fn((_post, _payload, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const interrupted = startMonitor(queue, interruptedDispatch);
+      await interrupted.receive(postedEvent({ postId: "post-restart" }));
+      await interrupted.waitForIdle();
+      expect(await queue.listClaims()).toHaveLength(1);
+      await interrupted.stop();
+
+      const recoveredDispatch = vi.fn(async (_post, _payload, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const recovered = startMonitor(queue, recoveredDispatch);
+      try {
+        await recovered.waitForIdle();
+        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await recovered.stop();
+      }
+    });
+  });
+
+  it("retains completion so a duplicate post id cannot dispatch twice", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async (_post, _payload, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        const event = postedEvent({ postId: "post-completed" });
+        await monitor.receive(event);
+        await monitor.waitForIdle();
+        await monitor.receive(event);
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("preserves every id from the retired merged-message guard key space", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async (_post, _payload, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive(postedEvent({ postId: "post-batch-first", message: "first" }));
+        await monitor.receive(postedEvent({ postId: "post-batch-second", message: "second" }));
+        await monitor.waitForIdle();
+
+        await monitor.receive(postedEvent({ postId: "post-batch-first", message: "first" }));
+        await monitor.waitForIdle();
+
+        expect(dispatch).toHaveBeenCalledTimes(2);
+        expect(dispatch.mock.calls.map(([post]) => post.id)).toEqual([
+          "post-batch-first",
+          "post-batch-second",
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("stores the exact raw envelope in a per-channel lane", async () => {
+    await withQueue(async (queue) => {
+      const rawEvent = postedEvent({ postId: "post-raw", channelId: "channel-raw" });
+      const dispatch = vi.fn((_post, _payload, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive(rawEvent);
+        await monitor.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "post-raw",
+            laneKey: "channel:channel-raw",
+            payload: expect.objectContaining({ rawEvent }),
+          }),
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("does not let ignored post_edited events tombstone a later posted event", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async (_post, _payload, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive(postedEvent({ postId: "post-edit", event: "post_edited" }));
+        await monitor.waitForIdle();
+        await monitor.receive(postedEvent({ postId: "post-edit", event: "posted" }));
+        await monitor.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dead-letters malformed persisted payloads without retry", async () => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        "post-malformed",
+        { version: 1, receivedAt: 1, rawEvent: "{" },
+        { receivedAt: 1, laneKey: "channel:channel-1" },
+      );
+      const dispatch = vi.fn();
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.waitForIdle();
+        expect((await queue.enqueue("post-malformed", {} as MattermostIngressPayload)).kind).toBe(
+          "failed",
+        );
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dead-letters permanent Mattermost auth failures", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async () => {
+        throw new Error("Mattermost API 401 Unauthorized: invalid token");
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive(postedEvent({ postId: "post-auth" }));
+        await monitor.waitForIdle();
+        expect((await queue.enqueue("post-auth", {} as MattermostIngressPayload)).kind).toBe(
+          "failed",
+        );
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("leaves transient Mattermost failures retryable", async () => {
+    await withQueue(async (queue) => {
+      const dispatch = vi.fn(async () => {
+        throw new Error("Mattermost API 503 Service Unavailable");
+      });
+      const monitor = startMonitor(queue, dispatch);
+      try {
+        await monitor.receive(postedEvent({ postId: "post-transient" }));
+        await monitor.waitForIdle();
+        expect(await queue.listPending({ limit: "all" })).toEqual([
+          expect.objectContaining({ id: "post-transient" }),
+        ]);
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+});
+
+describe("Mattermost merged ingress lifecycle", () => {
+  it("fans adoption out to every constituent claim", async () => {
+    const first = testLifecycle();
+    const second = testLifecycle();
+    const merged = buildMattermostFlushIngressLifecycle([
+      { turnAdoptionLifecycle: first.lifecycle },
+      { turnAdoptionLifecycle: second.lifecycle },
+    ]);
+
+    merged.lifecycle?.onDeferred();
+    await merged.lifecycle?.onAdopted();
+    await merged.settle();
+
+    expect(first.calls.deferred).toHaveBeenCalledTimes(1);
+    expect(second.calls.deferred).toHaveBeenCalledTimes(1);
+    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes all claims when a gated flush never dispatches", async () => {
+    const first = testLifecycle();
+    const second = testLifecycle();
+    const merged = buildMattermostFlushIngressLifecycle([
+      { turnAdoptionLifecycle: first.lifecycle },
+      { turnAdoptionLifecycle: second.lifecycle },
+    ]);
+
+    await merged.settle();
+
+    expect(first.calls.adopted).toHaveBeenCalledTimes(1);
+    expect(second.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+});
