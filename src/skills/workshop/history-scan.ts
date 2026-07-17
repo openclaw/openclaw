@@ -303,10 +303,14 @@ async function runSkillHistoryScanCore(
       progress,
       sessionCursors:
         resumedPending?.sessionCursors ??
-        batch.sessions.map((session) => ({
-          instanceId: session.instanceId,
-          updatedAtMs: Date.parse(session.updatedAt),
-        })),
+        batch.sessions
+          .map((session) => ({
+            instanceId: session.instanceId,
+            updatedAtMs: Date.parse(session.updatedAt),
+          }))
+          .filter((cursor): cursor is { instanceId: string; updatedAtMs: number } =>
+            Number.isFinite(cursor.updatedAtMs),
+          ),
     },
   });
   let reviewError: unknown;
