@@ -435,6 +435,7 @@ describe("redactSensitiveText", () => {
     const responseValue = ["later", "response", "value", "1234567890"].join("-");
     const negotiateValue = ["cHJvb2", "YxMjM0", "NTY3ODkw"].join("");
     const foldedValue = ["Zm9sZG", "VkOnNl", "Y3JldA=="].join("");
+    const rawValue = ["raw", "header", "value", "1234567890"].join("-");
     const input = [
       `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
       `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
@@ -444,10 +445,14 @@ describe("redactSensitiveText", () => {
       `Authorization: Digest response='${responseValue}'; status=410`,
       `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
       `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
+      `Authorization: Digest username=sample,\\r\\n\\tresponse=${responseValue}; status=414`,
       `(Authorization: Negotiate ${negotiateValue})`,
       `Authorization:\r\n Basic ${foldedValue}`,
       `Authorization:\nBasic ${foldedValue}`,
       `Authorization:\\nBasic ${foldedValue}`,
+      `Authorization:\\tBearer ${foldedValue}`,
+      `Authorization: Bearer\\t${foldedValue}`,
+      `Authorization: ${rawValue}   `,
     ].join("\n");
     const output = redactSensitiveText(input, { mode: "tools" });
 
@@ -461,10 +466,14 @@ describe("redactSensitiveText", () => {
         "Authorization: Digest ***; status=410",
         "Authorization: Digest ***; status=412",
         "Authorization: Digest ***; status=413",
+        "Authorization: Digest ***; status=414",
         "(Authorization: Negotiate cHJvb2…ODkw)",
         "Authorization:\r\n Basic Zm9sZG…dA==",
         "Authorization:\nBasic Zm9sZG…dA==",
         "Authorization:\\nBasic Zm9sZG…dA==",
+        "Authorization:\\tBearer Zm9sZG…dA==",
+        "Authorization: Bearer\\tZm9sZG…dA==",
+        "Authorization: raw-he…7890   ",
       ].join("\n"),
     );
     expect(output).not.toContain(responseValue);

@@ -1,8 +1,10 @@
 export const HTTP_AUTH_SCHEME_PATTERN = "[A-Za-z0-9!#$%&'*+.^_`|~-]+";
 export const HTTP_AUTH_OPAQUE_CREDENTIAL_PATTERN = String.raw`(?:\[REDACTED\]|[^\s\\"',;&#?<>)}\]]+)`;
-export const HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t]*\r?\n[ \t]+|[ \t]*\\{1,64}r\\{1,64}n[ \t]+|[ \t]*\\{1,64}n[ \t]+|[ \t]*)`;
-export const HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t]*\r?\n[ \t]+|[ \t]*\\{1,64}r\\{1,64}n[ \t]+|[ \t]*\\{1,64}n[ \t]+|[ \t]+)`;
-export const HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n[ \t]*|[ \t]*\\{1,64}n[ \t]*)`;
+const HTTP_AUTH_SERIALIZED_TAB_PATTERN = String.raw`\\{1,64}t`;
+const HTTP_AUTH_SERIALIZED_INDENT_PATTERN = String.raw`(?:[ \t]+|${HTTP_AUTH_SERIALIZED_TAB_PATTERN})`;
+export const HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t]*\r?\n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*\\{1,64}r\\{1,64}n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*\\{1,64}n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*${HTTP_AUTH_SERIALIZED_TAB_PATTERN}[ \t]*|[ \t]*)`;
+export const HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t]*\r?\n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*\\{1,64}r\\{1,64}n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*\\{1,64}n${HTTP_AUTH_SERIALIZED_INDENT_PATTERN}|[ \t]*${HTTP_AUTH_SERIALIZED_TAB_PATTERN}[ \t]*|[ \t]+)`;
+export const HTTP_AUTH_LEGACY_VALUE_WHITESPACE_PATTERN = String.raw`(?:[ \t\r\n]*|[ \t]*\\{1,64}r\\{1,64}n(?:[ \t]*|${HTTP_AUTH_SERIALIZED_TAB_PATTERN})|[ \t]*\\{1,64}n(?:[ \t]*|${HTTP_AUTH_SERIALIZED_TAB_PATTERN})|[ \t]*${HTTP_AUTH_SERIALIZED_TAB_PATTERN}[ \t]*)`;
 export const HTTP_AUTH_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_-]|\\{1,64}[rn])`;
 // Each JSON encoding doubles delimiter slashes and adds one. The cap covers six nested
 // encodings while keeping credential redaction regex work bounded on hostile diagnostics.
@@ -51,17 +53,37 @@ function readSerializedLineEnd(value: string, start: number): number | null {
   return slashCount > 0 && value[cursor] === "n" ? cursor + 1 : null;
 }
 
+function readSerializedTabEnd(value: string, start: number): number | null {
+  let cursor = start;
+  let slashCount = 0;
+  while (slashCount < 64 && value[cursor] === "\\") {
+    slashCount += 1;
+    cursor += 1;
+  }
+  return slashCount > 0 && value[cursor] === "t" ? cursor + 1 : null;
+}
+
 function skipAuthWhitespace(value: string, start: number): number {
   let cursor = start;
   for (;;) {
     cursor = skipHorizontalWhitespace(value, cursor);
+    const tabEnd = readSerializedTabEnd(value, cursor);
+    if (tabEnd !== null) {
+      cursor = tabEnd;
+      continue;
+    }
     const lineEnd =
       value[cursor] === "\r" && value[cursor + 1] === "\n"
         ? cursor + 2
         : value[cursor] === "\n"
           ? cursor + 1
           : readSerializedLineEnd(value, cursor);
-    if (lineEnd === null || (value[lineEnd] !== " " && value[lineEnd] !== "\t")) {
+    if (
+      lineEnd === null ||
+      (value[lineEnd] !== " " &&
+        value[lineEnd] !== "\t" &&
+        readSerializedTabEnd(value, lineEnd) === null)
+    ) {
       return cursor;
     }
     cursor = lineEnd;

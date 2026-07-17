@@ -114,6 +114,7 @@ describe("redactSensitiveText", () => {
     const responseValue = ["later", "response", "value", "1234567890"].join("-");
     const negotiateValue = ["cHJvb2", "YxMjM0", "NTY3ODkw"].join("");
     const foldedValue = ["Zm9sZG", "VkOnNl", "Y3JldA=="].join("");
+    const rawValue = ["raw", "header", "value", "1234567890"].join("-");
     const input = [
       `Authorization: Digest username="sample",,response="${responseValue}"; status=401`,
       `Authorization: Digest damaged,,response="${responseValue}"; status=403`,
@@ -123,10 +124,14 @@ describe("redactSensitiveText", () => {
       `Authorization: Digest response='${responseValue}'; status=410`,
       `Authorization: Digest realm=sample, authorization-param=${responseValue}; status=412`,
       `Authorization: Digest username=sample,\\r\\n response=${responseValue}; status=413`,
+      `Authorization: Digest username=sample,\\r\\n\\tresponse=${responseValue}; status=414`,
       `(Authorization: Negotiate ${negotiateValue})`,
       `Authorization:\r\n Basic ${foldedValue}`,
       `Authorization:\nBasic ${foldedValue}`,
       `Authorization:\\nBasic ${foldedValue}`,
+      `Authorization:\\tBearer ${foldedValue}`,
+      `Authorization: Bearer\\t${foldedValue}`,
+      `Authorization: ${rawValue}   `,
     ].join("\n");
 
     expect(redactSensitiveText(input)).toBe(
@@ -139,10 +144,14 @@ describe("redactSensitiveText", () => {
         "Authorization: Digest [REDACTED]; status=410",
         "Authorization: Digest [REDACTED]; status=412",
         "Authorization: Digest [REDACTED]; status=413",
+        "Authorization: Digest [REDACTED]; status=414",
         "(Authorization: Negotiate [REDACTED])",
         "Authorization:\r\n Basic [REDACTED]",
         "Authorization:\nBasic [REDACTED]",
         "Authorization:\\nBasic [REDACTED]",
+        "Authorization:\\tBearer [REDACTED]",
+        "Authorization: Bearer\\t[REDACTED]",
+        "Authorization: [REDACTED]   ",
       ].join("\n"),
     );
 
