@@ -1213,7 +1213,11 @@ function resolveSessionStorePathRelationship(
     return "same";
   }
   try {
-    return sameFileIdentity(fs.statSync(left), fs.statSync(right)) ? "same" : "different";
+    // bigint stats: filesystems like bcachefs use inode numbers above 2^53,
+    // which collide when coerced to JS numbers and make distinct stores look aliased.
+    return sameFileIdentity(fs.statSync(left, { bigint: true }), fs.statSync(right, { bigint: true }))
+      ? "same"
+      : "different";
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
