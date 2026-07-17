@@ -57,8 +57,10 @@ export function encodeWindowsLauncherScript(params: {
     return Buffer.from(params.content, "utf8");
   }
   const encoding = resolveWindowsOemEncoding();
-  if (!encoding || encoding === "utf-8" || !iconv.encodingExists(encoding)) {
-    return Buffer.from(params.content, "utf8");
+  if (!encoding || !iconv.encodingExists(encoding)) {
+    throw new Error(
+      "Windows cmd launcher script contains non-ASCII content, but the Windows OEM code page is unavailable or unsupported; writing UTF-8 would make cmd.exe misread the script. Switch Windows to UTF-8 (code page 65001) or remove the non-ASCII content.",
+    );
   }
   const codePage = resolveWindowsOemCodePageForEncoding(encoding);
   if (codePage === null) {

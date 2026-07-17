@@ -47,6 +47,7 @@ describe("windows output encoding", () => {
       [936, "gbk"],
       [949, "euc-kr"],
       [950, "big5"],
+      [1258, "windows-1258"],
       [437, "cp437"],
       [720, "cp720"],
       [737, "cp737"],

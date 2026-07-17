@@ -35,10 +35,10 @@ const WINDOWS_OEM_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   936: "gbk",
   949: "euc-kr",
   950: "big5",
+  1258: "windows-1258",
   // OEM-only single-byte pages used by windows-125x ANSI hosts, iconv-lite
   // `cp###` labels. 864 is omitted: real CP864 repurposes ASCII 0x25 "%",
-  // which generated cmd scripts contain. 1258 (Vietnamese, OEM==ANSI) is
-  // omitted: iconv-lite cannot round-trip Vietnamese in windows-1258.
+  // which generated cmd scripts contain. Unsupported OEM pages fail closed.
   437: "cp437",
   720: "cp720",
   737: "cp737",

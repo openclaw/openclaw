@@ -25,6 +25,7 @@ const GBK_MARKER = marker(936, "gbk");
 const EUC_KR_MARKER = marker(949, "euc-kr");
 const CP857_MARKER = marker(857, "cp857");
 const CP850_MARKER = marker(850, "cp850");
+const UTF8_MARKER = marker(65001, "utf-8");
 
 beforeEach(() => {
   resolveWindowsOemEncodingMock.mockReset();
@@ -122,19 +123,36 @@ describe("encodeWindowsLauncherScript", () => {
     expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
   });
 
-  it("falls back to UTF-8 when no OEM code page is available", () => {
+  it("fails closed when no OEM code page is available", () => {
     const content = `@echo off\r\ncd /d "C:\\Users\\苗振"\r\n`;
-    const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
-    expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
+    expect(() => encodeWindowsLauncherScript({ format: "cmd", content })).toThrow(
+      /OEM code page is unavailable or unsupported/,
+    );
   });
 
-  it("keeps plain UTF-8 on hosts whose OEM page is already UTF-8 (65001)", () => {
+  it("declares UTF-8 when the boot OEM page is 65001", () => {
     resolveWindowsOemEncodingMock.mockReturnValue("utf-8");
     const content = '@echo off\r\ncd /d "C:\\Users\\café"\r\n';
     const encoded = encodeWindowsLauncherScript({ format: "cmd", content });
 
-    expect(encoded.equals(Buffer.from(content, "utf8"))).toBe(true);
+    expect(encoded.equals(Buffer.from(UTF8_MARKER + content, "utf8"))).toBe(true);
+    expect(decodeWindowsLauncherScript({ buffer: encoded })).toBe(content);
+  });
+
+  it("allows only Windows-1258 content that round-trips exactly", () => {
+    resolveWindowsOemEncodingMock.mockReturnValue("windows-1258");
+    const supported = '@echo off\r\ncd /d "C:\\Users\\Đăng"\r\n';
+    const unsupported = '@echo off\r\ncd /d "C:\\Users\\Việt"\r\n';
+
+    expect(
+      decodeWindowsLauncherScript({
+        buffer: encodeWindowsLauncherScript({ format: "cmd", content: supported }),
+      }),
+    ).toBe(supported);
+    expect(() => encodeWindowsLauncherScript({ format: "cmd", content: unsupported })).toThrow(
+      /cannot be represented/,
+    );
   });
 
   it("fails the install instead of writing unrepresentable cmd content", () => {
