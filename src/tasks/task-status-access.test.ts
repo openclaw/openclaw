@@ -11,12 +11,16 @@ import {
   hasPendingGeneratedMediaTaskForSessionKey,
 } from "./task-status-access.js";
 
-const mocks = vi.hoisted(() => ({ listTaskRecords: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  listTaskRecords: vi.fn(),
+  listTaskRecordsUnsorted: vi.fn(),
+}));
 
 vi.mock("./task-registry.js", () => ({
   findTaskByRunId: vi.fn(),
   getTaskById: vi.fn(),
   listTaskRecords: mocks.listTaskRecords,
+  listTaskRecordsUnsorted: mocks.listTaskRecordsUnsorted,
   listTasksForAgentId: vi.fn(),
   listTasksForSessionKey: vi.fn(),
 }));
@@ -27,6 +31,7 @@ describe("generated media task snapshots", () => {
   beforeEach(() => {
     resetGeneratedMediaTaskActivityForTests();
     mocks.listTaskRecords.mockReset();
+    mocks.listTaskRecordsUnsorted.mockReset();
   });
 
   it("detects only media admitted by the current exact-run attempt", () => {
@@ -78,50 +83,33 @@ describe("buildPendingGeneratedMediaSessionKeySet", () => {
 
   beforeEach(() => {
     resetGeneratedMediaTaskActivityForTests();
-    mocks.listTaskRecords.mockReset();
+    mocks.listTaskRecordsUnsorted.mockReset();
   });
 
   it("returns an empty set when no active media and no persisted tasks", () => {
-    mocks.listTaskRecords.mockReturnValue([]);
+    mocks.listTaskRecordsUnsorted.mockReturnValue([]);
     expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
   });
 
-  it("includes in-process active generated-media session keys", () => {
-    mocks.listTaskRecords.mockReturnValue([]);
-    registerGeneratedMediaTaskActivity("tool:image_generate:run-1", sessionKey);
-    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set([sessionKey]));
-  });
-
-  it("includes requester session keys from non-terminal generated-media tasks", () => {
-    mocks.listTaskRecords.mockReturnValue([
+  it("combines active, requester, and owner session keys in one unsorted snapshot", () => {
+    registerGeneratedMediaTaskActivity("tool:image_generate:run-1", "active-key");
+    mocks.listTaskRecordsUnsorted.mockReturnValue([
       {
         taskId: "img-task",
         taskKind: "image_generation",
         status: "queued",
         requesterSessionKey: sessionKey,
-        ownerKey: "other-owner",
+        ownerKey: "owner-key",
       },
     ]);
-    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set([sessionKey, "other-owner"]));
+    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(
+      new Set(["active-key", sessionKey, "owner-key"]),
+    );
+    expect(mocks.listTaskRecordsUnsorted).toHaveBeenCalledOnce();
   });
 
-  it("includes owner keys from non-terminal generated-media tasks", () => {
-    mocks.listTaskRecords.mockReturnValue([
-      {
-        taskId: "vid-task",
-        taskKind: "video_generation",
-        status: "running",
-        requesterSessionKey: "other-requester",
-        ownerKey: sessionKey,
-      },
-    ]);
-    const result = buildPendingGeneratedMediaSessionKeySet();
-    expect(result.has(sessionKey)).toBe(true);
-    expect(result.has("other-requester")).toBe(true);
-  });
-
-  it("excludes terminal generated-media tasks", () => {
-    mocks.listTaskRecords.mockReturnValue([
+  it("excludes terminal and non-generated-media tasks", () => {
+    mocks.listTaskRecordsUnsorted.mockReturnValue([
       {
         taskId: "done-task",
         taskKind: "image_generation",
@@ -129,12 +117,6 @@ describe("buildPendingGeneratedMediaSessionKeySet", () => {
         requesterSessionKey: sessionKey,
         ownerKey: sessionKey,
       },
-    ]);
-    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
-  });
-
-  it("excludes non-generated-media tasks", () => {
-    mocks.listTaskRecords.mockReturnValue([
       {
         taskId: "chat-task",
         taskKind: "chat",
@@ -144,21 +126,5 @@ describe("buildPendingGeneratedMediaSessionKeySet", () => {
       },
     ]);
     expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(new Set());
-  });
-
-  it("combines active media and persisted tasks in one scan", () => {
-    registerGeneratedMediaTaskActivity("tool:in-proc:run-1", "active-key");
-    mocks.listTaskRecords.mockReturnValue([
-      {
-        taskId: "persisted-task",
-        taskKind: "music_generation",
-        status: "processing",
-        requesterSessionKey: "persisted-key",
-        ownerKey: "owner-key",
-      },
-    ]);
-    expect(buildPendingGeneratedMediaSessionKeySet()).toEqual(
-      new Set(["active-key", "persisted-key", "owner-key"]),
-    );
   });
 });

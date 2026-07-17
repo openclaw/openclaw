@@ -78,33 +78,31 @@ export async function sweepCronRunSessions(params: {
   let transcriptCleanupError: unknown;
   try {
     const cutoff = now - retentionMs;
-    // Lazily built on the first continuation row so idle sweeps (deployments
-    // with no cron jobs) skip the task-registry snapshot entirely. Once built,
-    // every subsequent continuation row uses O(1) Set.has() instead of
-    // repeating the full listTaskRecords() clone+sort for each row.
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     for (const { sessionKey, entry } of listSessionEntries({ storePath })) {
       if (!isCronRunSessionKey(sessionKey)) {
         continue;
       }
-      const continuation = entry.cronRunContinuation;
-      if (continuation) {
+      const updatedAt = entry.updatedAt ?? 0;
+      if (updatedAt >= cutoff) {
+        continue;
+      }
+      if (entry.cronRunContinuation) {
+        // Build one unordered snapshot only when an expired continuation needs it.
+        // Fresh rows and stores without continuations never touch the task registry.
         pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
         if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
         }
       }
-      const updatedAt = entry.updatedAt ?? 0;
-      if (updatedAt < cutoff) {
-        removals.push({
-          sessionKey,
-          expectedEntry: entry,
-          ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
-          expectedUpdatedAt: entry.updatedAt,
-          archiveRemovedTranscript: true,
-        });
-      }
+      removals.push({
+        sessionKey,
+        expectedEntry: entry,
+        ...(entry.sessionId ? { expectedSessionId: entry.sessionId } : {}),
+        expectedUpdatedAt: entry.updatedAt,
+        archiveRemovedTranscript: true,
+      });
     }
     if (removals.length > 0) {
       // Archive-age cleanup follows the session maintenance retention knob:

@@ -15,12 +15,10 @@ import { resetReaperThrottle } from "./session-reaper.test-support.js";
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({
-  hasPendingGeneratedMediaTask: vi.fn(),
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
 }));
 
 vi.mock("../tasks/task-status-access.js", () => ({
-  hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
   buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
 }));
 
@@ -80,7 +78,6 @@ describe("sweepCronRunSessions", () => {
 
   beforeEach(async () => {
     resetReaperThrottle();
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
     taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
@@ -454,16 +451,17 @@ describe("sweepCronRunSessions", () => {
     }
   });
 
-  it("does not build the pending-media snapshot when no cron continuations exist", async () => {
+  it("does not build the pending-media snapshot without an expired continuation", async () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1:run:recent-1": {
         sessionId: "recent-1",
         updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
       },
-      "agent:main:cron:job1:run:recent-2": {
-        sessionId: "recent-2",
-        updatedAt: now - 2 * 3_600_000, // 2h ago — not expired
+      "agent:main:cron:job1:run:expired": {
+        sessionId: "expired",
+        updatedAt: now - 25 * 3_600_000,
       },
       "agent:main:telegram:dm:123": {
         sessionId: "regular-dm",
@@ -480,8 +478,38 @@ describe("sweepCronRunSessions", () => {
       force: true,
     });
 
-    expect(result.pruned).toBe(0);
-    // Lazy snapshot: no continuation rows → buildPendingSet never called.
+    expect(result.pruned).toBe(1);
     expect(taskStatusMocks.buildPendingSet).not.toHaveBeenCalled();
+  });
+
+  it("builds one pending-media snapshot for multiple expired continuations", async () => {
+    const now = Date.now();
+    const keptKey = "agent:main:cron:job1:run:kept";
+    const prunedKey = "agent:main:cron:job1:run:pruned";
+    const continuation = { lifecycleRevision: "revision-1", phase: "ready" } as const;
+    await seedSessionEntries(storePath, {
+      [keptKey]: {
+        sessionId: "kept",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: continuation,
+      },
+      [prunedKey]: {
+        sessionId: "pruned",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: continuation,
+      },
+    });
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([keptKey]));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(taskStatusMocks.buildPendingSet).toHaveBeenCalledOnce();
+    expect(Object.keys(readSessionEntries(storePath))).toEqual([keptKey]);
   });
 });

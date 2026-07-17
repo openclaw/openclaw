@@ -10,6 +10,7 @@ import {
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
+  listTaskRecordsUnsorted,
   listTasksForAgentId,
   listTasksForSessionKey,
 } from "./task-registry.js";
@@ -104,11 +105,8 @@ export function hasPendingGeneratedMediaTaskForSessionKey(sessionKey: string): b
  * repeating global task and activity scans for every cron continuation row.
  */
 export function buildPendingGeneratedMediaSessionKeySet(): Set<string> {
-  const keys = new Set<string>();
-  for (const key of getAllActiveGeneratedMediaSessionKeys()) {
-    keys.add(key);
-  }
-  for (const task of listTaskRecords()) {
+  const keys = getAllActiveGeneratedMediaSessionKeys();
+  for (const task of listTaskRecordsUnsorted()) {
     if (GENERATED_MEDIA_TASK_KINDS.has(task.taskKind ?? "") && !isTerminalTaskStatus(task.status)) {
       if (task.requesterSessionKey) {
         keys.add(task.requesterSessionKey);
