@@ -2,6 +2,7 @@ import {
   buildChannelInboundEventContext,
   formatAgentEnvelope,
   formatInboundMediaUnavailableText,
+  recordChannelBotPairLoopAndCheckSuppression,
   resolveEnvelopeFormatOptions,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -43,6 +44,7 @@ import {
   resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
+import { resolveFeishuBotName } from "./bot-name.js";
 import {
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
@@ -59,7 +61,11 @@ import {
 } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
-import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
+import {
+  extractMentionTargets,
+  isFeishuBroadcastMention,
+  isMentionForwardRequest,
+} from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -178,6 +184,7 @@ export function parseFeishuMessageEvent(
     // Keep the historical field name, but fall back to user_id when open_id is unavailable
     // (common in some mobile app deliveries).
     senderOpenId: senderFallbackId,
+    senderType: event.sender.sender_type === "bot" ? "bot" : "user",
     chatType: event.message.chat_type,
     mentionedBot,
     hasAnyMention,
@@ -198,6 +205,23 @@ export function parseFeishuMessageEvent(
   }
 
   return ctx;
+}
+
+function resolveDeliveredBotMentionOpenId(
+  event: FeishuMessageEvent,
+  botName?: string,
+): string | undefined {
+  const mentions = (event.message.mentions ?? []).filter(
+    (mention) => !isFeishuBroadcastMention(mention) && mention.id.open_id?.trim(),
+  );
+  const normalizedBotName = botName?.trim();
+  const namedMatch = normalizedBotName
+    ? mentions.find((mention) => mention.name.trim() === normalizedBotName)
+    : undefined;
+  if (namedMatch?.id.open_id) {
+    return namedMatch.id.open_id.trim();
+  }
+  return mentions.length === 1 ? mentions[0]?.id.open_id?.trim() : undefined;
 }
 
 async function shouldIncludeFetchedGroupContextMessage(params: {
@@ -318,6 +342,42 @@ export async function handleFeishuMessage(params: {
   const isGroup = isFeishuGroupChatType(ctx.chatType);
   const isDirect = !isGroup;
   const senderUserId = normalizeOptionalString(event.sender.sender_id.user_id);
+  const localBotOpenId = botOpenId?.trim();
+
+  if (ctx.senderType === "bot") {
+    if (!localBotOpenId) {
+      log(
+        `feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (local bot identity unavailable)`,
+      );
+      return;
+    }
+    if (ctx.senderOpenId === localBotOpenId) {
+      log(`feishu[${account.accountId}]: dropping self-authored bot message ${ctx.messageId}`);
+      return;
+    }
+    if (feishuCfg?.allowBots !== true) {
+      log(`feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (allowBots=false)`);
+      return;
+    }
+    // Feishu only delivers bot-authored group events through the include-bot mention scope;
+    // the all-group scope explicitly excludes bot messages. Event delivery is therefore the
+    // authoritative mention signal, while mention open_ids can belong to another app (#40768).
+    if (isGroup && !ctx.mentionedBot) {
+      const deliveredMentionOpenId = resolveDeliveredBotMentionOpenId(event, botName);
+      const deliveredCtx = deliveredMentionOpenId
+        ? parseFeishuMessageEvent(event, deliveredMentionOpenId, botName)
+        : ctx;
+      ctx = {
+        ...deliveredCtx,
+        mentionedBot: true,
+        content: deliveredMentionOpenId
+          ? deliveredCtx.content
+          : normalizeFeishuCommandProbeBody(deliveredCtx.content),
+        // App-scoped IDs cannot safely identify additional recipients here.
+        mentionTargets: undefined,
+      };
+    }
+  }
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
   if (event.message.message_type === "merge_forward") {
@@ -355,24 +415,35 @@ export async function handleFeishuMessage(params: {
   // Optimization: skip if disabled to save API quota (Feishu free tier limit).
   let permissionErrorForAgent: FeishuPermissionError | undefined;
   if (feishuCfg?.resolveSenderNames ?? true) {
-    const senderResult = await resolveFeishuSenderName({
-      account,
-      senderId: ctx.senderOpenId,
-      log,
-    });
-    if (senderResult.name) {
-      ctx = { ...ctx, senderName: senderResult.name };
-    }
+    if (ctx.senderType === "bot") {
+      const senderName = await resolveFeishuBotName({
+        account,
+        openId: ctx.senderOpenId,
+        log,
+      });
+      if (senderName) {
+        ctx = { ...ctx, senderName };
+      }
+    } else {
+      const senderResult = await resolveFeishuSenderName({
+        account,
+        senderId: ctx.senderOpenId,
+        log,
+      });
+      if (senderResult.name) {
+        ctx = { ...ctx, senderName: senderResult.name };
+      }
 
-    // Track permission error to inform agent later (with cooldown to avoid repetition)
-    if (senderResult.permissionError) {
-      const appKey = account.appId ?? "default";
-      const now = Date.now();
-      const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
+      // Track permission error to inform agent later (with cooldown to avoid repetition)
+      if (senderResult.permissionError) {
+        const appKey = account.appId ?? "default";
+        const now = Date.now();
+        const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
 
-      if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
-        permissionErrorNotifiedAt.set(appKey, now);
-        permissionErrorForAgent = senderResult.permissionError;
+        if (now - lastNotified > PERMISSION_ERROR_COOLDOWN_MS) {
+          permissionErrorNotifiedAt.set(appKey, now);
+          permissionErrorForAgent = senderResult.permissionError;
+        }
       }
     }
   }
@@ -543,6 +614,29 @@ export async function handleFeishuMessage(params: {
         });
       }
       return;
+    }
+
+    if (ctx.senderType === "bot") {
+      if (!localBotOpenId || !ctx.senderOpenId) {
+        log(
+          `feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (loop identity unavailable)`,
+        );
+        return;
+      }
+      const loopResult = recordChannelBotPairLoopAndCheckSuppression({
+        scopeId: account.accountId,
+        conversationId: ctx.chatId,
+        senderId: ctx.senderOpenId,
+        receiverId: localBotOpenId,
+        defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+        defaultEnabled: true,
+      });
+      if (loopResult.suppressed) {
+        log(
+          `feishu[${account.accountId}]: bot-pair loop suppressed for ${ctx.senderOpenId} in ${ctx.chatId}`,
+        );
+        return;
+      }
     }
   }
 
@@ -920,6 +1014,16 @@ export async function handleFeishuMessage(params: {
     const inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
+    const requiredMentionTargets =
+      isGroup && ctx.senderType === "bot" && ctx.senderOpenId
+        ? [
+            {
+              openId: ctx.senderOpenId,
+              name: ctx.senderName ?? ctx.senderOpenId,
+              key: "",
+            },
+          ]
+        : undefined;
     const agentFacingContent = audioTranscript ?? mediaFailureContent;
     const commandFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
@@ -1237,6 +1341,7 @@ export async function handleFeishuMessage(params: {
         sender: {
           id: ctx.senderOpenId,
           name: ctx.senderName ?? ctx.senderOpenId,
+          isBot: ctx.senderType === "bot",
         },
         conversation: {
           kind: isGroup ? "group" : "direct",
@@ -1437,6 +1542,7 @@ export async function handleFeishuMessage(params: {
               accountId: account.accountId,
               identity,
               mentionTargets: ctx.mentionTargets,
+              requiredMentionTargets,
               messageCreateTimeMs,
               sessionKey: agentSessionKey,
             });
@@ -1610,6 +1716,7 @@ export async function handleFeishuMessage(params: {
           accountId: account.accountId,
           identity,
           mentionTargets: ctx.mentionTargets,
+          requiredMentionTargets,
           messageCreateTimeMs,
           sessionKey: route.sessionKey,
         });

@@ -220,6 +220,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  allowBots: z.boolean().optional(),
   tts: TtsOverrideSchema,
 };
 
