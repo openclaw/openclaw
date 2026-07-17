@@ -14,7 +14,7 @@ import { getLineRuntime } from "./runtime.js";
 
 const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_DRAIN_INTERVAL_MS = 500;
-const LINE_WEBHOOK_DRAIN_START_LIMIT = 8;
+const LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
 const LINE_WEBHOOK_DRAIN_SCAN_LIMIT = 100;
 const LINE_WEBHOOK_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60_000;
 const LINE_WEBHOOK_TOMBSTONE_MAX_ENTRIES = 4096;
@@ -155,13 +155,15 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       accountId: options.accountId,
     });
   const shutdown = new AbortController();
+  // Match the predecessor worker's per-spool cap across repeated drain pumps.
+  let activeDeliveries = 0;
   const drain = createChannelIngressDrain<LineWebhookSpoolPayload>({
     queue,
     abortSignal: shutdown.signal,
     adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
     orderBy: "received",
     scanLimit: LINE_WEBHOOK_DRAIN_SCAN_LIMIT,
-    startLimit: LINE_WEBHOOK_DRAIN_START_LIMIT,
+    startLimit: LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
     retryPolicy: {
       maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
       deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -180,10 +182,16 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     },
     onLog: (message) => options.runtime.error?.(danger(`line: ${message}`)),
     dispatchClaimedEvent: async (claimed, lifecycle) => {
-      const event = parseClaimedEvent(claimed.payload, claimed.id);
-      await options.deliver(event, claimed.payload.destination, {
-        turnAdoptionLifecycle: bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
-      });
+      activeDeliveries += 1;
+      try {
+        const event = parseClaimedEvent(claimed.payload, claimed.id);
+        await options.deliver(event, claimed.payload.destination, {
+          turnAdoptionLifecycle:
+            bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+        });
+      } finally {
+        activeDeliveries -= 1;
+      }
     },
   });
   let running = false;
@@ -202,7 +210,14 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     drainTask = runDetachedWebhookWork(async () => {
       while (running && drainRequested && !shutdown.signal.aborted) {
         drainRequested = false;
-        await drain.drainOnce({ shouldStop: () => !running || shutdown.signal.aborted });
+        await drain.drainOnce({
+          // startLimit caps one pump. Keep later timer pumps from exceeding this
+          // spool's delivery cap after an early turn adoption frees the core lane.
+          shouldStop: () =>
+            !running ||
+            shutdown.signal.aborted ||
+            activeDeliveries >= LINE_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
+        });
       }
     })
       .catch((error: unknown) => {

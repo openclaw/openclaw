@@ -163,6 +163,62 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  it("caps active deliveries across repeated drain pumps", async () => {
+    await withQueue(async (queue) => {
+      let releaseDeliveries = () => {};
+      const deliveryGate = new Promise<void>((resolve) => {
+        releaseDeliveries = resolve;
+      });
+      let activeDeliveries = 0;
+      let maxActiveDeliveries = 0;
+      const deliver = vi.fn(async (_event, _destination, control) => {
+        activeDeliveries += 1;
+        maxActiveDeliveries = Math.max(maxActiveDeliveries, activeDeliveries);
+        await control.turnAdoptionLifecycle.onAdopted();
+        try {
+          await deliveryGate;
+        } finally {
+          activeDeliveries -= 1;
+        }
+      });
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue,
+        deliver,
+      });
+      const firstBatch = Array.from({ length: 8 }, (_, index) =>
+        createEvent({
+          webhookEventId: `event-concurrency-${index}`,
+          userId: `user-${index}`,
+        }),
+      );
+      const ninth = createEvent({ webhookEventId: "event-concurrency-8", userId: "user-8" });
+
+      spool.start();
+      try {
+        await spool.accept({ destination: "destination-1", events: firstBatch });
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(8));
+
+        await spool.accept(callback(ninth));
+        // Hold the eight adopted-but-unfinished deliveries across two timer pumps.
+        await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+        expect(deliver).toHaveBeenCalledTimes(8);
+        expect(maxActiveDeliveries).toBe(8);
+
+        releaseDeliveries();
+        await vi.waitFor(() => expect(activeDeliveries).toBe(0));
+        await spool.accept(callback(ninth));
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(9));
+        expect(maxActiveDeliveries).toBe(8);
+      } finally {
+        releaseDeliveries();
+        await spool.stop();
+      }
+    });
+  });
+
   it("recovers an uncompleted event with a fresh drain and dispatches once", async () => {
     await withQueue(async (queue) => {
       const event = createEvent({ webhookEventId: "event-restart" });
