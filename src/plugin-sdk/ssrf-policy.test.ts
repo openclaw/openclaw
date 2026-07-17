@@ -296,7 +296,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       assertHttpUrlTargetsPrivateNetwork("not-a-url", {
         dangerouslyAllowPrivateNetwork: true,
       }),
-    ).rejects.toThrow(new Error("Invalid URL"));
+    ).rejects.toThrow(new TypeError("Invalid URL"));
   });
 
   it("does not reflect credential-bearing malformed URLs in errors", async () => {
@@ -313,7 +313,7 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       (err: unknown) => err,
     );
 
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(TypeError);
 
     // Outer message must be stable and non-disclosing.
     const message = (error as Error).message;

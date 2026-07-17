@@ -236,7 +236,7 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     // retains the rejected URL in its structured input property, so callers
     // that inspect or serialize the complete error graph could recover
     // credential-bearing endpoint strings despite the safe outer message.
-    throw new Error("Invalid URL");
+    throw new TypeError("Invalid URL");
   }
   if (parsed.protocol !== "http:") {
     return;
