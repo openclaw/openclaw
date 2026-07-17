@@ -6,7 +6,6 @@ import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-
 import type { HookEntry } from "../hooks/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withTimeout } from "../utils/with-timeout.js";
-import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
@@ -19,7 +18,10 @@ import {
   type PluginRegistryState,
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import type {
+  PluginAgentToolResultMiddlewareRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
@@ -200,19 +202,43 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    const matcher = normalizePluginToolMatcher(options?.matcher);
     const existing = registry.agentToolResultMiddlewares.find(
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
       existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
+      // Re-registration must only widen coverage: an unscoped registration
+      // wins match-all, scoped registrations union. The dispatch wrapper
+      // reads the live entry matcher, so this merge takes effect immediately.
+      const merged =
+        matcher && existing.matcher
+          ? normalizePluginToolMatcher([...existing.matcher, ...matcher])
+          : undefined;
+      if (merged) {
+        existing.matcher = merged;
+      } else {
+        delete existing.matcher;
+      }
       return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
-    const matcher = normalizePluginToolMatcher(options?.matcher);
-    const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+    const entry: PluginAgentToolResultMiddlewareRegistration = {
+      pluginId: record.id,
+      pluginName: record.name,
+      rawHandler: handler,
+      handler,
+      runtimes,
+      ...(matcher ? { matcher } : {}),
+      source: record.source,
+      rootDir: record.rootDir,
+    };
+    entry.handler = async (event, ctx) => {
       // Runners receive bare handler functions, so this wrapper is the only
-      // dispatch-time gate for matcher-scoped middleware.
-      if (matcher && !pluginToolMatcherCoversTool(matcher, event.toolName)) {
+      // dispatch-time gate for matcher-scoped middleware. It reads the live
+      // entry matcher so same-handler re-registrations that widen coverage
+      // are honored at dispatch.
+      if (entry.matcher && !pluginToolMatcherCoversTool(entry.matcher, event.toolName)) {
         return undefined;
       }
       try {
@@ -229,16 +255,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         throw error;
       }
     };
-    registry.agentToolResultMiddlewares.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      rawHandler: handler,
-      handler: safeHandler,
-      runtimes,
-      ...(matcher ? { matcher } : {}),
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.agentToolResultMiddlewares.push(entry);
   };
 
   const registerTool = (

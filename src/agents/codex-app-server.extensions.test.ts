@@ -7,7 +7,10 @@ import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
 } from "../plugin-sdk/agent-harness.js";
-import { listAgentToolResultMiddlewares } from "../plugins/agent-tool-result-middleware.js";
+import {
+  getAgentToolResultMiddlewareMatcherScope,
+  listAgentToolResultMiddlewares,
+} from "../plugins/agent-tool-result-middleware.js";
 import { listCodexAppServerExtensionFactories } from "../plugins/codex-app-server-extension-factory.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import {
@@ -226,6 +229,106 @@ export default { id: "tool-result-middleware", register(api) {
 
     expect(listAgentToolResultMiddlewares("openclaw")).toHaveLength(1);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  });
+
+  it("widens a scoped matcher to match-all when the same middleware re-registers unscoped", async () => {
+    const tmp = createBundledTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `const middleware = (event) => ({
+  result: { content: [{ type: "text", text: event.toolName + " transformed" }] }
+});
+export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"], matcher: ["message"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"] });
+} };`,
+    });
+
+    loadOpenClawPlugins({
+      onlyPluginIds: ["tool-result-middleware"],
+      config: {
+        plugins: {
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(getAgentToolResultMiddlewareMatcherScope("codex")).toEqual({ matchAll: true });
+    const handlers = listAgentToolResultMiddlewares("codex");
+    expect(handlers).toHaveLength(1);
+    const dispatched = await handlers[0]?.(
+      { toolName: "exec", result: { content: [] } } as never,
+      {} as never,
+    );
+    expect(dispatched?.result.content).toEqual([{ type: "text", text: "exec transformed" }]);
+  });
+
+  it("unions disjoint matchers when the same middleware re-registers with another scope", async () => {
+    const tmp = createBundledTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `const middleware = (event) => ({
+  result: { content: [{ type: "text", text: event.toolName + " transformed" }] }
+});
+export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"], matcher: ["message"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"], matcher: ["browser"] });
+} };`,
+    });
+
+    loadOpenClawPlugins({
+      onlyPluginIds: ["tool-result-middleware"],
+      config: {
+        plugins: {
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(getAgentToolResultMiddlewareMatcherScope("codex")).toEqual({
+      matchAll: false,
+      toolNames: ["browser", "message"],
+    });
+    const handlers = listAgentToolResultMiddlewares("codex");
+    expect(handlers).toHaveLength(1);
+    const dispatchedBrowser = await handlers[0]?.(
+      { toolName: "browser", result: { content: [] } } as never,
+      {} as never,
+    );
+    expect(dispatchedBrowser?.result.content).toEqual([
+      { type: "text", text: "browser transformed" },
+    ]);
+    const dispatchedExec = await handlers[0]?.(
+      { toolName: "exec", result: { content: [] } } as never,
+      {} as never,
+    );
+    expect(dispatchedExec).toBeUndefined();
   });
 
   it("lazily loads bundled middleware owners from manifest contracts", async () => {
