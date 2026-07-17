@@ -14,7 +14,7 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,
-        "providers": {
+    "providers": {
       "claude-cli": {
         "models": [
           {
