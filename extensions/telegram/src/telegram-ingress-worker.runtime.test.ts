@@ -23,7 +23,10 @@ function htmlResponse(status: number, body: string): Response {
   });
 }
 
-function createRuntime(responses: Response[]): {
+function createRuntime(
+  responses: Response[],
+  options: { stopAfterPollSuccesses?: number } = {},
+): {
   calls: number[];
   messages: TelegramIngressWorkerMessage[];
   done: Promise<void>;
@@ -31,6 +34,7 @@ function createRuntime(responses: Response[]): {
   const calls: number[] = [];
   const messages: TelegramIngressWorkerMessage[] = [];
   const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
+  let pollSuccesses = 0;
   const sendCommand = (message: TelegramIngressWorkerCommand) => {
     for (const listener of listeners) {
       listener(message);
@@ -40,7 +44,10 @@ function createRuntime(responses: Response[]): {
     postMessage(message) {
       messages.push(message);
       if (message.type === "poll-success") {
-        sendCommand({ type: "stop" });
+        pollSuccesses += 1;
+        if (pollSuccesses >= (options.stopAfterPollSuccesses ?? 1)) {
+          sendCommand({ type: "stop" });
+        }
       }
     },
     onMessage(listener) {
@@ -77,6 +84,29 @@ async function flushRuntime(): Promise<void> {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("telegram ingress worker poll cadence", () => {
+  it("paces fast successful empty getUpdates responses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
+    const runtime = createRuntime(
+      [jsonResponse(200, { ok: true, result: [] }), jsonResponse(200, { ok: true, result: [] })],
+      { stopAfterPollSuccesses: 2 },
+    );
+
+    expect(runtime.calls).toHaveLength(1);
+    await flushRuntime();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(runtime.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await runtime.done;
+
+    expect(runtime.calls).toHaveLength(2);
+    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBe(1000);
+  });
 });
 
 describe("telegram ingress worker durable-before-offset", () => {

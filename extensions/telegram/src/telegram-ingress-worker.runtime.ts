@@ -21,6 +21,7 @@ const pollLimit = 100;
 // getUpdates can return up to 100 updates; 4 MiB is a generous bound that no legitimate
 // Telegram Bot API response will reach, guarding against misbehaving/hostile endpoints.
 const TELEGRAM_GET_UPDATES_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const emptyPollMinIntervalMs = 1000;
 const retryInitialMs = 1000;
 const retryMaxMs = 30_000;
 
@@ -284,6 +285,14 @@ export async function runTelegramIngressWorkerRuntime(params: {
           count: result.length,
           finishedAt: Date.now(),
         });
+        if (result.length === 0) {
+          // A Bot API endpoint or proxy can return before the requested long-poll timeout.
+          // Pace empty successes so that behavior cannot spin this worker in a tight loop.
+          const elapsedMs = Math.max(0, Date.now() - startedAt);
+          if (elapsedMs < emptyPollMinIntervalMs) {
+            await sleep(emptyPollMinIntervalMs - elapsedMs, stopController.signal);
+          }
+        }
       } catch (err) {
         if (stopped) {
           break;
