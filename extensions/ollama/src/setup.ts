@@ -588,9 +588,10 @@ async function inspectOllamaModelsForSetup(
   baseUrl: string,
   models: OllamaModelWithContext[],
   signal?: AbortSignal,
-): Promise<OllamaModelWithContext[]> {
+): Promise<{ inspected: OllamaModelWithContext[]; inspectionFailures: string[] }> {
   const apiBase = resolveOllamaApiBase(baseUrl);
   const inspected: OllamaModelWithContext[] = [];
+  const inspectionFailures: string[] = [];
   for (let index = 0; index < models.length; index += OLLAMA_TOOLS_SCAN_CONCURRENCY) {
     signal?.throwIfAborted();
     const batch = models.slice(index, index + OLLAMA_TOOLS_SCAN_CONCURRENCY);
@@ -627,13 +628,18 @@ async function inspectOllamaModelsForSetup(
           }
         } catch (error) {
           signal?.throwIfAborted();
-          throw new Error(`Failed to inspect Ollama model ${model.name}`, { cause: error });
+          // Fail open per model: one stale/corrupt local model (observed: a
+          // months-old pull whose /api/show returns HTTP 500) must not brick
+          // the whole setup. Unenriched models carry no capabilities, so the
+          // tools-capable selection below skips them naturally.
+          inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
+          return model;
         }
       }),
     );
     inspected.push(...results);
   }
-  return inspected;
+  return { inspected, inspectionFailures };
 }
 
 async function promptAndConfigureHostBackedOllama(params: {
@@ -651,26 +657,44 @@ async function promptAndConfigureHostBackedOllama(params: {
     throw new WizardCancelledError("Ollama not reachable");
   }
 
-  let inspectedModels = await inspectOllamaModelsForSetup(
+  const firstScan = await inspectOllamaModelsForSetup(
     baseUrl,
     models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
     params.signal,
   );
+  let inspectedModels = firstScan.inspected;
+  const inspectionFailures = [...firstScan.inspectionFailures];
   const supportsTools = (model: OllamaModelWithContext) =>
     model.capabilities?.includes("tools") === true;
   let hasToolsCapableModel = inspectedModels.some(supportsTools);
   if (!hasToolsCapableModel && models.length > OLLAMA_CONTEXT_ENRICH_LIMIT) {
-    const remainingModels = await inspectOllamaModelsForSetup(
+    const remainingScan = await inspectOllamaModelsForSetup(
       baseUrl,
       models.slice(OLLAMA_CONTEXT_ENRICH_LIMIT),
       params.signal,
     );
-    inspectedModels = [...inspectedModels, ...remainingModels];
-    hasToolsCapableModel = remainingModels.some(supportsTools);
+    inspectedModels = [...inspectedModels, ...remainingScan.inspected];
+    inspectionFailures.push(...remainingScan.inspectionFailures);
+    hasToolsCapableModel = remainingScan.inspected.some(supportsTools);
+  }
+  if (inspectionFailures.length > 0) {
+    await params.prompter.note(
+      [
+        "Some installed models could not be inspected and were skipped:",
+        ...inspectionFailures.slice(0, 5).map((line) => `- ${line}`),
+        ...(inspectionFailures.length > 5 ? [`…and ${inspectionFailures.length - 5} more`] : []),
+      ].join("\n"),
+      "Ollama",
+    );
   }
   const discoveredModelsByName = new Map(inspectedModels.map((model) => [model.name, model]));
   let discoveredModelNames = models.map((model) => model.name);
-  if (!hasToolsCapableModel) {
+  // A pull offer is only meaningful when inspection actually worked: if every
+  // scan failed we cannot know what is installed, so recommending a multi-GB
+  // download would be guesswork against a misbehaving server.
+  const inspectionUsable =
+    inspectedModels.length === 0 || inspectionFailures.length < inspectedModels.length;
+  if (!hasToolsCapableModel && inspectionUsable) {
     const shouldPullRecommended = await params.prompter.confirm({
       message: `No tools-capable Ollama model is installed. Pull ${OLLAMA_RECOMMENDED_TOOLS_MODEL} (${OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE})?`,
       initialValue: false,
@@ -687,11 +711,20 @@ async function promptAndConfigureHostBackedOllama(params: {
         throw new WizardCancelledError("Failed to download recommended Ollama model");
       }
       params.signal?.throwIfAborted();
-      const [recommendedModel] = await inspectOllamaModelsForSetup(
+      const recommendedScan = await inspectOllamaModelsForSetup(
         baseUrl,
         [{ name: OLLAMA_RECOMMENDED_TOOLS_MODEL }],
         params.signal,
       );
+      // Unlike the pre-existing-model scan, a just-pulled model that cannot be
+      // verified is a hard failure: configuring it unenriched would silently
+      // drop the tools capability the pull was for.
+      if (recommendedScan.inspectionFailures.length > 0) {
+        throw new WizardCancelledError(
+          `Failed to verify pulled Ollama model: ${recommendedScan.inspectionFailures[0]}`,
+        );
+      }
+      const [recommendedModel] = recommendedScan.inspected;
       if (recommendedModel) {
         discoveredModelsByName.set(recommendedModel.name, recommendedModel);
       }
