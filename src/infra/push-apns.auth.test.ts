@@ -109,8 +109,62 @@ describe("push APNs auth and helper coverage", () => {
       expect(missingKey.error).toContain(
         `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${missingPath})`,
       );
+      expect(missingKey.error).toContain("file is missing or empty");
     }
   });
+
+  it("rejects oversized APNs private key files", async () => {
+    const { DEFAULT_SECRET_FILE_MAX_BYTES } = await import("./secret-file.js");
+    const dir = await makeTempDir();
+    const keyPath = path.join(dir, "oversized-key.p8");
+    await fs.writeFile(keyPath, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1), "utf8");
+
+    const resolved = await resolveApnsAuthConfigFromEnv({
+      OPENCLAW_APNS_TEAM_ID: "TEAM123",
+      OPENCLAW_APNS_KEY_ID: "KEY123",
+      OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
+    } as NodeJS.ProcessEnv);
+
+    expect(resolved.ok).toBe(false);
+    if (!resolved.ok) {
+      expect(resolved.error).toContain(
+        `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath})`,
+      );
+      expect(resolved.error).toContain("APNs private key file is too large");
+    }
+  });
+
+  it.runIf(process.platform !== "win32").each(["symlink", "hardlink"] as const)(
+    "preserves %s APNs private key files",
+    async (linkType) => {
+      const dir = await makeTempDir();
+      const targetPath = path.join(dir, "apns-key-target.p8");
+      const keyPath = path.join(dir, "apns-key.p8");
+      await fs.writeFile(
+        targetPath,
+        "-----BEGIN PRIVATE KEY-----\\nline-g\\nline-h\\n-----END PRIVATE KEY-----\n",
+        "utf8",
+      );
+      if (linkType === "symlink") {
+        await fs.symlink(targetPath, keyPath);
+      } else {
+        await fs.link(targetPath, keyPath);
+      }
+
+      const resolved = await resolveApnsAuthConfigFromEnv({
+        OPENCLAW_APNS_TEAM_ID: "TEAM123",
+        OPENCLAW_APNS_KEY_ID: "KEY123",
+        OPENCLAW_APNS_PRIVATE_KEY_PATH: keyPath,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) {
+        expect(resolved.value.privateKey).toBe(
+          "-----BEGIN PRIVATE KEY-----\nline-g\nline-h\n-----END PRIVATE KEY-----",
+        );
+      }
+    },
+  );
 
   it("clears only direct registrations without an environment override mismatch", () => {
     expect(
