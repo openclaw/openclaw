@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import * as replaceFile from "../infra/replace-file.js";
@@ -862,7 +863,7 @@ function manifestSortTime(manifest: SessionSqliteMigrationManifest): number {
 function createPrefilledGithubIssueUrl(title: string, body: string): string {
   const urlBody =
     body.length > 6_000
-      ? `${body.slice(0, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
+      ? `${truncateUtf16Safe(body, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
       : body;
   const params = new URLSearchParams({
     body: urlBody,
