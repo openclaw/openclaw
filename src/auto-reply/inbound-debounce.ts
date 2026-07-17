@@ -386,7 +386,9 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
     markApplied();
-    await previousFlush;
+    // The new item is already retained in its own buffer. A preceding flush
+    // failure must not reject this enqueue and invite a duplicate retry.
+    await previousFlush?.catch(() => undefined);
   };
 
   const enqueue = (item: T) => {
