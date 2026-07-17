@@ -361,6 +361,37 @@ describe("amazon-bedrock provider plugin", () => {
     expect(restricted?.thinkingLevelMap).toEqual({ xhigh: null, max: null });
   });
 
+  it("declares Nova cache retention through provider-owned model metadata", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const model = {
+      id: NOVA_MODEL,
+      name: "Nova Micro",
+      provider: "amazon-bedrock",
+      api: "bedrock-converse-stream",
+      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    };
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "amazon-bedrock",
+      modelId: NOVA_MODEL,
+      model,
+    } as never);
+
+    expect(normalized?.compat?.supportsCacheRetention).toBe(true);
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "amazon-bedrock",
+        modelId: NON_ANTHROPIC_MODEL,
+        model: { ...model, id: NON_ANTHROPIC_MODEL, name: "Mistral Large" },
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("mirrors Claude Opus 4.7 thinking levels for Bedrock model refs", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

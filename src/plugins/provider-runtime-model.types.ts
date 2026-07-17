@@ -7,7 +7,10 @@ import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.m
  * discovery, overrides, and compat normalization.
  */
 export type ProviderRuntimeModel = Omit<Model, "compat"> & {
-  compat?: ModelCompatConfig;
+  compat?: ModelCompatConfig & {
+    /** Provider-owned capability for forwarding explicit cache-retention settings. */
+    supportsCacheRetention?: boolean;
+  };
   contextTokens?: number;
   params?: Record<string, unknown>;
   requestTimeoutMs?: number;

@@ -42,7 +42,11 @@ import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
-import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+import {
+  modelSupportsExplicitCacheRetention,
+  parseCacheRetention,
+  resolveCacheRetention,
+} from "./prompt-cache-retention.js";
 import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -535,20 +539,12 @@ function createStreamFnWithExtraParams(
     streamParams.stop = resolvedStop;
   }
 
-  const readSupportsPromptCacheKey = (m: unknown): boolean => {
-    const compat = (m as { compat?: unknown })?.compat;
-    if (!compat || typeof compat !== "object") {
-      return false;
-    }
-    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
-  };
-
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
     typeof model?.api === "string" ? model.api : undefined,
     typeof model?.id === "string" ? model.id : undefined,
-    readSupportsPromptCacheKey(model),
+    modelSupportsExplicitCacheRetention(model),
   );
   if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
     const debugParams = initialCacheRetention
@@ -564,7 +560,7 @@ function createStreamFnWithExtraParams(
       provider,
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
-      readSupportsPromptCacheKey(callModel),
+      modelSupportsExplicitCacheRetention(callModel),
     );
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);

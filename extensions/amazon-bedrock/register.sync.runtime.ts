@@ -58,25 +58,37 @@ type AmazonBedrockPluginConfig = {
 
 function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeResolvedModelContext) {
   const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(modelId, model.params);
-  if (!thinkingLevelMap) {
-    return undefined;
-  }
   const reasoning =
     model.reasoning ||
     resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
     resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
-  if (
-    reasoning === model.reasoning &&
-    Object.entries(thinkingLevelMap).every(([level, effort]) => currentEfforts?.[level] === effort)
-  ) {
+  const thinkingChanged =
+    thinkingLevelMap !== undefined &&
+    (reasoning !== model.reasoning ||
+      Object.entries(thinkingLevelMap).some(
+        ([level, effort]) => currentEfforts?.[level] !== effort,
+      ));
+  const cacheRetentionChanged =
+    isBedrockNovaPromptCachingModel(modelId, model.name) &&
+    model.compat?.supportsCacheRetention !== true;
+  if (!thinkingChanged && !cacheRetentionChanged) {
     return undefined;
   }
   return {
     ...model,
-    reasoning,
-    thinkingLevelMap: { ...thinkingLevelMap, ...current },
+    ...(thinkingLevelMap
+      ? { reasoning, thinkingLevelMap: { ...thinkingLevelMap, ...current } }
+      : {}),
+    ...(cacheRetentionChanged
+      ? {
+          compat: {
+            ...model.compat,
+            supportsCacheRetention: true,
+          },
+        }
+      : {}),
   };
 }
 

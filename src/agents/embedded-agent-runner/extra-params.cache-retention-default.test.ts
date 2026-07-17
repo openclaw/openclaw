@@ -72,6 +72,7 @@ function captureAppliedCacheRetention(params: {
   };
   const model = {
     api: "openai-completions",
+    compat: { supportsCacheRetention: true },
     provider: "amazon-bedrock",
     id: params.modelId,
   } as Parameters<typeof applyExtraParamsToAgent>[8] & Parameters<StreamFn>[0];
@@ -297,13 +298,14 @@ describe("cacheRetention default behavior", () => {
     ).toBe("short");
   });
 
-  it("keeps explicit cacheRetention for supported Bedrock Nova models", () => {
+  it("keeps explicit cacheRetention for a provider-declared Bedrock model", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },
         "amazon-bedrock",
         "openai-completions",
         "amazon.nova-micro-v1:0",
+        true,
       ),
     ).toBe("long");
     expect(
@@ -312,6 +314,7 @@ describe("cacheRetention default behavior", () => {
         "amazon-bedrock",
         "openai-completions",
         "us.amazon.nova-pro-v1:0",
+        true,
       ),
     ).toBe("none");
   });
@@ -328,13 +331,14 @@ describe("cacheRetention default behavior", () => {
     },
   );
 
-  it("does not default cacheRetention for Bedrock Nova models", () => {
+  it("does not default cacheRetention for a provider-declared Bedrock model", () => {
     expect(
       resolveCacheRetention(
         undefined,
         "amazon-bedrock",
         "openai-completions",
         "amazon.nova-micro-v1:0",
+        true,
       ),
     ).toBeUndefined();
   });

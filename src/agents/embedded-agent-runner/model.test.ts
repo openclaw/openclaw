@@ -3288,6 +3288,7 @@ describe("resolveModel", () => {
       (params: { context: { model: { id: string } } }) => ({
         ...params.context.model,
         id: params.context.model.id.slice("openrouter/".length),
+        compat: { supportsCacheRetention: true },
       }),
     );
 
@@ -3315,6 +3316,7 @@ describe("resolveModel", () => {
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
     });
+    expect(result.model?.compat).toEqual(expect.objectContaining({ supportsCacheRetention: true }));
   });
 
   it("matches prefixed Hugging Face ids against discovered registry models", () => {

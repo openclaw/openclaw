@@ -10,20 +10,13 @@ export function parseCacheRetention(value: unknown): CacheRetention | undefined 
   return value === "none" || value === "short" || value === "long" ? value : undefined;
 }
 
-const BEDROCK_NOVA_PROMPT_CACHE_MODEL_RE =
-  /(?:^|-)amazon-nova-(?:micro|lite|pro|premier|2-lite)(?:-|$)|^nova-(?:micro|lite|pro|premier|2-lite)(?:-|$)/;
-
-function isBedrockNovaPromptCacheEligible(params: { provider: string; modelId?: string }): boolean {
-  if (
-    normalizeLowercaseStringOrEmpty(params.provider) !== "amazon-bedrock" ||
-    typeof params.modelId !== "string" ||
-    params.modelId.length === 0
-  ) {
+export function modelSupportsExplicitCacheRetention(model: unknown): boolean {
+  const compat = (model as { compat?: unknown } | null | undefined)?.compat;
+  if (!compat || typeof compat !== "object") {
     return false;
   }
-  return BEDROCK_NOVA_PROMPT_CACHE_MODEL_RE.test(
-    normalizeLowercaseStringOrEmpty(params.modelId).replace(/[\s_.:]+/g, "-"),
-  );
+  const record = compat as Record<string, unknown>;
+  return record.supportsPromptCacheKey === true || record.supportsCacheRetention === true;
 }
 
 export function isGooglePromptCacheEligible(params: {
@@ -42,7 +35,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
-  supportsPromptCacheKey?: boolean,
+  supportsExplicitCacheRetention?: boolean,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -53,18 +46,13 @@ export function resolveCacheRetention(
     hasExplicitCacheConfig,
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
-  // OpenAI-compatible completions backends (oMLX, llama.cpp, etc.) opt into
-  // prompt caching via `compat.supportsPromptCacheKey: true`. Without that
-  // flag they sit outside the anthropic/google family gates, so issue #81281
-  // dropped the user's explicit `cacheRetention` before the transport layer
-  // could emit it. Bedrock Nova models use the same OpenAI-compatible wire but
-  // have provider-native cache points, so explicit user retention also needs
-  // to survive this shared resolver.
-  const cacheKeyEligible = supportsPromptCacheKey === true;
-  const bedrockNovaEligible =
-    hasExplicitCacheConfig && isBedrockNovaPromptCacheEligible({ provider, modelId });
+  // Providers outside the Anthropic/Google families can declare that their
+  // resolved model accepts explicit cache retention. The provider owns the
+  // model-family decision; this shared resolver only consumes the capability.
+  const providerCapabilityEligible =
+    hasExplicitCacheConfig && supportsExplicitCacheRetention === true;
 
-  if (!family && !googleEligible && !cacheKeyEligible && !bedrockNovaEligible) {
+  if (!family && !googleEligible && !providerCapabilityEligible) {
     return undefined;
   }
 

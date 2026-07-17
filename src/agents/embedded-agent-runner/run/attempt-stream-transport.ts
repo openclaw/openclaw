@@ -16,7 +16,10 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
-import { resolveCacheRetention } from "../prompt-cache-retention.js";
+import {
+  modelSupportsExplicitCacheRetention,
+  resolveCacheRetention,
+} from "../prompt-cache-retention.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
@@ -176,6 +179,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.provider,
     attempt.model.api,
     attempt.modelId,
+    modelSupportsExplicitCacheRetention(attempt.model),
   );
   const agentTransportOverride = resolveAgentTransportOverride({
     settingsManager: input.settingsManager,
