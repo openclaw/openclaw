@@ -138,6 +138,11 @@ vi.mock("../process/supervisor/index.js", () => {
     if (command.includes("printf delayed-ok")) {
       return "delayed-ok";
     }
+    if (command.includes("approval-output-line-00")) {
+      return `${Array.from({ length: 60 }, (_, index) =>
+        `approval-output-line-${String(index).padStart(2, "0")}`,
+      ).join("\n")}\n`;
+    }
     if (command.includes("printf webchat-ok")) {
       return "webchat-ok";
     }
@@ -1174,6 +1179,47 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("completed");
     expect(getResultText(result)).toContain("delayed-ok");
     expect(agentCalls).toHaveLength(0);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves multiline approved gateway exec output in async follow-ups", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+    const outputLines = Array.from(
+      { length: 60 },
+      (_, index) => `approval-output-line-${String(index).padStart(2, "0")}`,
+    );
+    const command = `printf '%s\\n' ${outputLines.map((line) => JSON.stringify(line)).join(" ")}`;
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:discord:channel:123",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "discord",
+      currentChannelId: "123",
+      accountId: "default",
+      currentThreadTs: "456",
+    });
+
+    const result = await tool.execute("call-gw-followup-multiline-output", {
+      command,
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
+    const message = String(agentCalls[0]?.message);
+    expect(message).toContain(outputLines[0]);
+    expect(message).toContain(outputLines[outputLines.length - 1]);
+    expect(message).toContain(`${outputLines[0]}\n${outputLines[1]}`);
+    expect(message).not.toContain("Output truncated by exec capture limit");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

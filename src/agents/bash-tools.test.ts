@@ -663,6 +663,7 @@ const seedFinishedLogSession = (lines: string[]) => {
     tail: "",
     exited: false,
     truncated: false,
+    aggregateTruncated: false,
     backgrounded: false,
     cursorKeyMode: "unknown",
   };
