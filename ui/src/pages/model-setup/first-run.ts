@@ -31,31 +31,38 @@ export function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
 }): () => void {
-  let attempted = false;
+  let attemptedClient: GatewayBrowserClient | null = null;
   let redirected = false;
   return params.context.gateway.subscribe((snapshot) => {
     if (
-      attempted ||
       redirected ||
       !snapshot.connected ||
       !snapshot.client ||
+      attemptedClient === snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
     ) {
       return;
     }
-    attempted = true;
     const client = snapshot.client;
+    attemptedClient = client;
     void detectModelSetup(client)
       .then((result) => {
         cacheModelSetupDetection(client, result);
-        if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
+        if (
+          !result.setupComplete &&
+          !redirected &&
+          params.context.gateway.snapshot.client === client &&
+          params.isStillDefaultLanding()
+        ) {
           redirected = true;
           params.context.replace("model-setup", { search: "?firstRun=1" });
         }
       })
       .catch(() => {
-        // First-run guidance is best effort. The page offers an explicit retry.
+        if (attemptedClient === client) {
+          attemptedClient = null;
+        }
       });
   });
 }

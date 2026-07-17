@@ -123,6 +123,53 @@ describe("model setup first-run redirect", () => {
     expect(consumeCachedModelSetupDetection(client)).toEqual(result);
   });
 
+  it("retries detection with the replacement client after a transient failure", async () => {
+    const result = {
+      candidates: [],
+      manualProviders: [],
+      workspace: "/tmp/workspace",
+      setupComplete: false,
+    };
+    const firstRequest = vi.fn().mockRejectedValue(new Error("gateway disconnected"));
+    const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
+    const secondRequest = vi.fn().mockResolvedValue(result);
+    const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
+    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
+    let listener: GatewayListener | null = null;
+    const snapshot = {
+      connected: true,
+      client: firstClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["openclaw.setup.detect"] },
+      },
+    };
+    const replace = vi.fn();
+    const context = {
+      gateway: {
+        snapshot,
+        subscribe: (next: GatewayListener) => {
+          listener = next;
+          return () => undefined;
+        },
+      },
+      replace,
+    } as unknown as ApplicationContext<RouteId>;
+
+    startModelSetupFirstRunRedirect({ context, isStillDefaultLanding: () => true });
+    listener!(snapshot as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
+
+    const reconnected = { ...snapshot, client: secondClient };
+    context.gateway.snapshot = reconnected as typeof context.gateway.snapshot;
+    listener!(reconnected as Parameters<GatewayListener>[0]);
+    await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
+
+    expect(secondRequest).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith("model-setup");
+    expect(consumeCachedModelSetupDetection(secondClient)).toEqual(result);
+  });
+
   it("does not detect without admin scope or an advertised setup method", () => {
     const request = vi.fn();
     const client = { request } as unknown as GatewayBrowserClient;
