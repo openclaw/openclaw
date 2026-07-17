@@ -1712,6 +1712,7 @@ class ChatPane extends OpenClawLightDomElement {
     );
     if (selectedSession) {
       state.selectedChatSessionArchived = selectedSession.archived === true;
+      state.chatQueueModeOverride = selectedSession.queueMode;
       state.chatEffectiveQueueMode = selectedSession.effectiveQueueMode;
       this.markSessionRead(selectedSession);
     }
@@ -2190,11 +2191,15 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
-    const configSnapshot = this.context.runtimeConfig.state.configSnapshot;
-    const serverQueueMode = resolveControlUiServerQueueMode(
-      configSnapshot?.runtimeConfig,
-      state.chatEffectiveQueueMode,
-    );
+    const runtimeConfigState = this.context.runtimeConfig.state;
+    const configSnapshot = runtimeConfigState.configSnapshot;
+    const serverQueueMode = resolveControlUiServerQueueMode(configSnapshot?.runtimeConfig, {
+      configNeedsApply: runtimeConfigState.configNeedsApply,
+      effectiveMode: state.chatEffectiveQueueMode,
+      sessionMetadataLoaded:
+        selectedSession !== undefined || state.chatEffectiveQueueMode !== undefined,
+      sessionMode: state.chatQueueModeOverride,
+    });
     state.chatFollowUpMode = resolveControlUiFollowUpMode(
       state.settings.chatFollowUpMode,
       serverQueueMode,

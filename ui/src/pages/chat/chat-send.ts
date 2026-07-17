@@ -9,7 +9,7 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import {
-  normalizeChatFollowUpMode,
+  normalizeChatFollowUpModeOverride,
   setLastActiveSessionKey,
   type ChatFollowUpMode,
 } from "../../app/settings.ts";
@@ -1318,7 +1318,7 @@ async function sendDetachedCommandMessage(
 async function sendQueuedChatMessageWithQueueMode(
   host: ChatHost,
   id: string,
-  queueMode: QueueMode,
+  queueMode?: QueueMode,
 ) {
   if (!host.connected || !hasAbortableSessionRun(host)) {
     return;
@@ -1391,7 +1391,7 @@ async function sendQueuedChatMessageWithQueueMode(
     hasAttachments ? attachments : undefined,
     {
       canApplyError: () => visibleSessionMatches(host, itemSessionKey, item.agentId),
-      queueMode,
+      ...(queueMode ? { queueMode } : {}),
     },
   );
   const pendingStillVisible =
@@ -2457,7 +2457,7 @@ export async function handleSendChat(
     }
 
     let sendResult: QueuedChatSendResult;
-    if (isChatBusy(host)) {
+    if (isChatBusy(host) || hasAbortableSessionRun(host)) {
       const pending = updateQueuedMessage(host, queued.id, (item) => ({
         ...item,
         sendError: undefined,
@@ -2473,7 +2473,8 @@ export async function handleSendChat(
         // collect, and interrupt semantics. Browser-local queueing only applies
         // to an explicit browser override.
         const followUpMode =
-          host.chatFollowUpMode ?? normalizeChatFollowUpMode(host.settings?.chatFollowUpMode);
+          host.chatFollowUpMode ??
+          normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode);
         if (
           !skillWorkshopRevision &&
           followUpMode !== "queue" &&

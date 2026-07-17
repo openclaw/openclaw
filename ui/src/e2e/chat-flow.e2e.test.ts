@@ -2178,6 +2178,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
             key: "main",
             kind: "direct",
             label: "Main",
+            queueMode: "interrupt",
             updatedAt: Date.now(),
           },
         ]),

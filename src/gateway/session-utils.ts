@@ -2250,6 +2250,7 @@ export function buildGatewaySessionRow(params: {
       cfg.messages?.responseUsage,
       channel,
     ),
+    queueMode: entry?.queueMode,
     effectiveQueueMode: resolveQueueSettings({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,

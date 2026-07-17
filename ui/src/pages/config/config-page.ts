@@ -801,7 +801,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       serverQueueMode: configState.configSnapshot
-        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig)
+        ? resolveControlUiServerQueueMode(configState.configSnapshot.runtimeConfig, {
+            configNeedsApply: configState.configNeedsApply,
+          })
         : undefined,
       setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),

@@ -4,6 +4,7 @@ import { resolveControlUiFollowUpMode, resolveControlUiServerQueueMode } from ".
 describe("Control UI follow-up mode", () => {
   it("matches webchat queue resolution precedence", () => {
     expect(resolveControlUiServerQueueMode({})).toBe("steer");
+    expect(resolveControlUiServerQueueMode(undefined)).toBeUndefined();
     expect(resolveControlUiServerQueueMode({ messages: { queue: { mode: "followup" } } })).toBe(
       "followup",
     );
@@ -15,14 +16,47 @@ describe("Control UI follow-up mode", () => {
     expect(
       resolveControlUiServerQueueMode(
         { messages: { queue: { byChannel: { webchat: "collect" }, mode: "interrupt" } } },
-        "followup",
+        { sessionMode: "followup" },
       ),
     ).toBe("followup");
-    expect(resolveControlUiServerQueueMode(undefined, "followup")).toBe("followup");
+    expect(resolveControlUiServerQueueMode(undefined, { effectiveMode: "followup" })).toBe(
+      "followup",
+    );
+  });
+
+  it("distinguishes saved config from applied config", () => {
+    const savedConfig = { messages: { queue: { byChannel: { webchat: "followup" } } } };
+    expect(
+      resolveControlUiServerQueueMode(savedConfig, {
+        configNeedsApply: true,
+        effectiveMode: "steer",
+      }),
+    ).toBe("steer");
+    expect(
+      resolveControlUiServerQueueMode(savedConfig, {
+        configNeedsApply: true,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveControlUiServerQueueMode(savedConfig, {
+        sessionMetadataLoaded: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveControlUiServerQueueMode(savedConfig, {
+        effectiveMode: "steer",
+      }),
+    ).toBe("followup");
+    expect(
+      resolveControlUiServerQueueMode(savedConfig, {
+        effectiveMode: "steer",
+        sessionMode: "interrupt",
+      }),
+    ).toBe("interrupt");
   });
 
   it("inherits the server behavior until the browser has an explicit override", () => {
-    expect(resolveControlUiFollowUpMode(undefined, undefined)).toBe("queue");
+    expect(resolveControlUiFollowUpMode(undefined, undefined)).toBeUndefined();
     expect(resolveControlUiFollowUpMode(undefined, "steer")).toBe("steer");
     expect(resolveControlUiFollowUpMode(undefined, "followup")).toBe("followup");
     expect(resolveControlUiFollowUpMode(undefined, "collect")).toBe("collect");

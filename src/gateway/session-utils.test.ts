@@ -1268,6 +1268,7 @@ describe("gateway session utils", () => {
       key: "agent:main:main",
       entry: inheritedEntry,
     });
+    expect(inheritedRow.queueMode).toBeUndefined();
     expect(inheritedRow.effectiveQueueMode).toBe("collect");
 
     const overriddenEntry = {
@@ -1282,6 +1283,7 @@ describe("gateway session utils", () => {
       key: "agent:main:other",
       entry: overriddenEntry,
     });
+    expect(overriddenRow.queueMode).toBe("followup");
     expect(overriddenRow.effectiveQueueMode).toBe("followup");
   });
 
