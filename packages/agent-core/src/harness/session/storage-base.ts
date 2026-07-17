@@ -252,7 +252,7 @@ export abstract class BaseSessionStorage<
       }
       seen.add(current.id);
       if (current.type !== "leaf") {
-        path.unshift(current);
+        path.push(current);
       }
       // Leaf rows are control records. Descendants written by older appenders
       // may point at the marker, but their visible ancestry starts at its target.
@@ -271,6 +271,7 @@ export abstract class BaseSessionStorage<
       }
       current = parent;
     }
+    path.reverse();
     return path;
   }
 

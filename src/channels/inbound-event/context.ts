@@ -546,6 +546,9 @@ export function buildChannelInboundEventContext(
     OriginatingChannel: params.channel,
     OriginatingTo: params.reply.originatingTo ?? params.reply.to,
     ThreadParentId: params.reply.threadParentId ?? params.conversation.parentId,
+    // This builder is the post-admission boundary for channel events. Preserve
+    // that fact so interceptors cannot bypass sender, route, or pairing gates.
+    InboundAccessAuthorized: true,
     ...params.extra,
   };
   const finalizeParams = {

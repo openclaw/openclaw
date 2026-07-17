@@ -13,6 +13,7 @@ import {
 import {
   ackDelivery,
   enqueueDelivery,
+  enqueueDeliveryOnce,
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
@@ -76,10 +77,17 @@ describe("delivery-queue storage", () => {
           gifPlayback: true,
           silent: true,
           gatewayClientScopes: ["operator.write"],
+          preparedMessageId: "prepared-message-1",
           mirror: {
             sessionKey: "agent:main:main",
+            expectedSessionId: "session-main",
             text: "hello",
             mediaUrls: ["https://example.com/file.png"],
+            idempotencyKey: "channel-final:message-1",
+            deliveryMirror: {
+              kind: "channel-final",
+              sourceMessageId: "message-1",
+            },
           },
           session: {
             key: "agent:main:main",
@@ -110,10 +118,17 @@ describe("delivery-queue storage", () => {
       expect(entry.gifPlayback).toBe(true);
       expect(entry.silent).toBe(true);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
+      expect(entry.preparedMessageId).toBe("prepared-message-1");
       expect(entry.mirror).toEqual({
         sessionKey: "agent:main:main",
+        expectedSessionId: "session-main",
         text: "hello",
         mediaUrls: ["https://example.com/file.png"],
+        idempotencyKey: "channel-final:message-1",
+        deliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "message-1",
+        },
       });
       expect(entry.session).toEqual({
         key: "agent:main:main",
@@ -126,6 +141,43 @@ describe("delivery-queue storage", () => {
 
       await ackDelivery(id, tmpDir());
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    });
+
+    it("does not replace an existing stable queue intent", async () => {
+      const first = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "first" }],
+          deliveryCompletion: {
+            kind: "conversation",
+            agentId: "main",
+            operationId: "operation-stable",
+          },
+        },
+        "operation-stable",
+        tmpDir(),
+      );
+      const repeated = await enqueueDeliveryOnce(
+        {
+          channel: "directchat",
+          to: "+1555",
+          payloads: [{ text: "replacement" }],
+        },
+        "operation-stable",
+        tmpDir(),
+      );
+
+      expect(first).toEqual({ id: "operation-stable", created: true });
+      expect(repeated).toEqual({ id: "operation-stable", created: false });
+      expect(readQueuedEntry(tmpDir(), "operation-stable")).toMatchObject({
+        payloads: [{ text: "first" }],
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-stable",
+        },
+      });
     });
 
     it("ack is idempotent (no error on missing file)", async () => {

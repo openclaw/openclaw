@@ -39,9 +39,12 @@ identically-named `exec`/`wait` tools.
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
-- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden from
-  the model prompt and exposed inside the guest program through `ALL_TOOLS`
+- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
+  standalone model tool and exposed inside the guest program through `ALL_TOOLS`
   and `tools`.
+- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
+  catalog ids and compact input hints. It omits descriptions, full schemas, MCP
+  entries, and overflow entries; guest-side catalog lookup remains the fallback.
 - Guest code searches the hidden catalog, describes a tool's schema, and calls
   a tool through the same execution path used by normal agent turns (policy,
   approvals, hooks, telemetry all still apply).
@@ -56,8 +59,9 @@ behavior, or model selection.
 
 ## Why use it
 
-- Smaller prompt surface: providers get two control tools and only the few
-  required direct tools instead of dozens or hundreds of full tool schemas.
+- Smaller prompt surface: providers get two control tools, a bounded native-tool
+  index, and only the few required direct tools instead of dozens or hundreds
+  of full tool schemas.
 - Better orchestration: the model can use loops, joins, small transforms,
   conditional logic, and parallel nested tool calls inside one code cell.
 - Provider neutral: works for OpenClaw, plugin, MCP, and client tools without
@@ -375,7 +379,18 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 `ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not
-contain full schemas by default.
+contain full schemas by default. The model-visible `exec` description also
+includes a bounded, deterministic subset of exact OpenClaw/plugin ids and
+compact input hints so common calls can start without a separate catalog
+discovery turn. Descriptions remain deferred so adversarial catalog prose cannot
+steer the model. When that index omits a tool, read `ALL_TOOLS` or call
+`tools.search(...)` inside the guest program.
+
+Compact entries describe tool inputs, not result schemas, so the index marks
+their result shape as `-> ?` (output unknown). When a workflow needs result
+fields, the first `exec` must return the raw
+`tools.callValue(...)` result unchanged. Filter or map the observed shape only
+in a later `exec` call instead of guessing field names.
 
 ```typescript
 type ToolCatalogEntry = {

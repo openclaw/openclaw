@@ -787,6 +787,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+          build-all-cache-scope: full
 
       - name: Build dist for repo E2E
         env:
@@ -830,6 +831,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+          build-all-cache-scope: full
 
       - name: Build dist for special E2E
         if: |

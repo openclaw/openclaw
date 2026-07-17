@@ -573,5 +573,30 @@ describe("ensureOutboundSessionEntry", () => {
     const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
+    expect(metadata.ctx).toMatchObject({
+      NativeChannelId: "c1",
+      OriginatingTo: "channel:C1",
+    });
+  });
+
+  it("persists the canonical direct peer separately from its adapter target", async () => {
+    await ensureOutboundSessionEntry({
+      cfg: {} as OpenClawConfig,
+      channel: "reef",
+      route: {
+        sessionKey: "agent:main:main",
+        baseSessionKey: "agent:main:main",
+        peer: { kind: "direct", id: "peer-agent" },
+        chatType: "direct",
+        from: "reef:peer-agent",
+        to: "reef:peer-agent",
+      },
+    });
+
+    const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
+    expect(metadata.ctx).toMatchObject({
+      NativeDirectUserId: "peer-agent",
+      OriginatingTo: "reef:peer-agent",
+    });
   });
 });

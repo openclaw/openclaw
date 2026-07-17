@@ -2405,7 +2405,15 @@ describe("runPreparedReply media-only handling", () => {
         messageId: "35676",
       }),
       timestamp: expect.any(Number),
-      __openclaw: { senderIsOwner: false, senderName: "Keśava" },
+      __openclaw: {
+        senderIsOwner: false,
+        senderName: "Keśava",
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/),
+          messageId: "35676",
+        },
+      },
     });
     call?.followupRun.userTurnTranscriptRecorder?.markRuntimePersisted({
       role: "user",
@@ -3367,6 +3375,14 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.messageProvider).toBe("webchat");
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: {
+        transport: {
+          channel: "telegram",
+          conversationRef: expect.stringMatching(/^conv_[a-f0-9]{32}$/u),
+        },
+      },
+    });
   });
 
   it("prefers Provider over Surface when origin channel is missing", async () => {

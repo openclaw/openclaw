@@ -72,7 +72,7 @@ on:
           - stable
           - full
       wait_for_clawhub:
-        description: Wait for ClawHub plugin publish before marking this workflow complete
+        description: Wait for and auto-approve ClawHub plugin publish; otherwise approve and monitor the detached runs separately
         required: true
         default: false
         type: boolean
@@ -2197,14 +2197,11 @@ jobs:
               fi
             fi
           else
+            # Detached mode deliberately leaves protected ClawHub approvals to
+            # the operator monitoring the linked child runs. Polling for those
+            # gates here would put plugin fan-out back on the core release path.
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
-              wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval" "${TARGET_SHA}"
-              if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}"; then
-                :
-              else
-                echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+              echo "- plugin-clawhub-release.yml: detached; approval and publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- plugin-clawhub-release.yml: no normal OIDC publish to await" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -2212,12 +2209,7 @@ jobs:
               if [[ "${plugin_clawhub_bootstrap_completed}" == "true" ]]; then
                 echo "- plugin-clawhub-new.yml: bootstrap already completed before continuing" >> "$GITHUB_STEP_SUMMARY"
               else
-                if approve_clawhub_bootstrap_environments "${plugin_clawhub_bootstrap_run_id}" "${bootstrap_workflow_sha}"; then
-                  :
-                else
-                  echo "- plugin-clawhub-new.yml: child environment gates not ready; bootstrap was left dispatched (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
-                fi
-                echo "- plugin-clawhub-new.yml: bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
+                echo "- plugin-clawhub-new.yml: detached; approvals and bootstrap not awaited (${plugin_clawhub_bootstrap_run_id})" >> "$GITHUB_STEP_SUMMARY"
               fi
             else
               echo "- plugin-clawhub-new.yml: no bootstrap publish to await" >> "$GITHUB_STEP_SUMMARY"

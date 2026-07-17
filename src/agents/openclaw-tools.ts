@@ -44,6 +44,11 @@ import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
+import {
+  createConversationsListTool,
+  createConversationsSendTool,
+  createConversationsTurnTool,
+} from "./tools/conversation-tools.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
@@ -577,6 +582,27 @@ export function createOpenClawTools(
     ...(embedded
       ? []
       : [
+          createConversationsListTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsSendTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsTurnTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
           createSessionsSendTool({
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,

@@ -30,6 +30,11 @@ jobs:
           node-compile-cache-scope: "test"
           runtime-cache-sticky-disk: "true"
           save-node-compile-cache: "true"
+          # Daily deadline writer for the protected dependency snapshot:
+          # canonical main pushes cancel each other under merge traffic, so
+          # build-artifacts commits can starve; this scheduled run cannot be
+          # superseded and keeps the snapshot within a day of main.
+          save-sticky-disk: "true"
           save-vitest-fs-cache: "true"
           sticky-disk: "true"
           use-actions-cache: "false"

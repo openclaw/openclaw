@@ -80,6 +80,10 @@ const loadConfigHandlers = lazyHandlerModule(
   () => import("./server-methods/config.js"),
   (module) => module.configHandlers,
 );
+const loadConversationHandlers = lazyHandlerModule(
+  () => import("./server-methods/conversations.js"),
+  (module) => module.conversationHandlers,
+);
 const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
@@ -720,6 +724,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["message.action", "send", "poll"],
     loadHandlers: loadSendHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["conversations.send", "conversations.turn", "conversations.turn.cancel"],
+    loadHandlers: loadConversationHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

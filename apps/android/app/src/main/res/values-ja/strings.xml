@@ -171,6 +171,7 @@
     <string name="native_1d183f3f10e963ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"分離"</string>
     <string name="native_1d19464a31484a7e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"© 2026 OpenClaw Foundation — MITライセンス。"</string>
     <string name="native_1d393b0081b632c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"PDF"</string>
+    <string name="native_1d432f58690c2b4a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversations"</string>
     <string name="native_1d4ca3259ee90b68" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"メモリ統合と夢日記。"</string>
     <string name="native_1d5e35075a1017e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Create Goal"</string>
     <string name="native_1d91629837639a5c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"編集中にこの自動化が変更されました。保存する前に、Gatewayの最新バージョンに戻してください。"</string>
@@ -328,6 +329,7 @@
     <string name="native_37582309e7a1dbe5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"承認 %1$s"</string>
     <string name="native_379ce0aacf46c35f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway から %1$s の準備状態が返されませんでした"</string>
     <string name="native_37b637bd85f6d2cb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"設定済みのモデルが%1$s件あります。更新して利用可能か再確認してください。"</string>
+    <string name="native_381428f5f251a764" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Send"</string>
     <string name="native_3824a9f4dafe92c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"キャンバス"</string>
     <string name="native_384ae4ab1a2830f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"プロバイダー1件"</string>
     <string name="native_387b2569e440838c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"送信に失敗しました: %1$s"</string>
@@ -1271,6 +1273,7 @@
     <string name="native_de9f057a471cdb8d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"常に許可"</string>
     <string name="native_df0bf21d612f1c1c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ドリーミングを読み込めませんでした。"</string>
     <string name="native_df194cb3eb3cb3cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"自動化の実行がキューに登録されました。"</string>
+    <string name="native_df2e1ea7f2793fb8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Turn"</string>
     <string name="native_df539a150f19b260" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"自動化を開始しました。"</string>
     <string name="native_df796c655f6f5ed4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"新しいグループ"</string>
     <string name="native_dfe0c2e802b1ff63" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"サーバーエラー"</string>

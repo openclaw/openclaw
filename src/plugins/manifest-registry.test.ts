@@ -586,6 +586,33 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("rejects plugins whose declared ids collide after case folding", () => {
+    const upperDir = makeTempDir();
+    const lowerDir = makeTempDir();
+    writeManifest(upperDir, { id: "Case-Collision", configSchema: { type: "object" } });
+    writeManifest(lowerDir, { id: "case-collision", configSchema: { type: "object" } });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "Case-Collision",
+        rootDir: upperDir,
+        origin: "workspace",
+      }),
+      createPluginCandidate({
+        idHint: "case-collision",
+        rootDir: lowerDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(registry.plugins).toStrictEqual([]);
+    expect(
+      registry.diagnostics.filter((diagnostic) =>
+        diagnostic.message.includes('collide as normalized id "case-collision"'),
+      ),
+    ).toHaveLength(2);
+  });
+
   it("lets config-loaded plugins replace bundled duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();
@@ -2528,7 +2555,7 @@ describe("loadPluginManifestRegistry", () => {
         dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
         secretInputs: {
           bundledDefaultEnabled: false,
-          paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+          paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
         },
       },
     });
@@ -2545,7 +2572,7 @@ describe("loadPluginManifestRegistry", () => {
       dangerousFlags: [{ path: "permissionMode", equals: "approve-all" }],
       secretInputs: {
         bundledDefaultEnabled: false,
-        paths: [{ path: "mcpServers.*.env.*", expected: "string" }],
+        paths: [{ path: "mcpServers.*.env.*", expected: "string", ownerKind: "route" }],
       },
     });
   });

@@ -82,6 +82,8 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
   messageId: string;
   timestamp?: number;
   commandAuthorized?: boolean;
+  /** Set only after the channel's sender/pairing guard admits this event. */
+  inboundAccessAuthorized?: boolean;
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -131,8 +133,10 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     MessageSidFull: params.messageId,
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
+    ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
     OriginatingChannel: params.originatingChannel ?? params.channel,
     OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });
 
