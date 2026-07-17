@@ -6269,6 +6269,78 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.isError).toBe(true);
   });
 
+  it("fails closed and warns once for an unknown Codex-native item status", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const notification = forCurrentTurn("item/completed", {
+      item: {
+        type: "commandExecution",
+        id: "cmd-future-status",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "pausedByProtocol",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      },
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-future-status",
+      }).data.status,
+    ).toBe("failed");
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-future-status",
+      name: "bash",
+    }).data;
+    expect(toolResult).toMatchObject({ status: "failed", isError: true });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("codex app-server item reported unknown status", {
+      itemId: "cmd-future-status",
+      itemType: "commandExecution",
+      status: "pausedByProtocol",
+    });
+  });
+
+  it("warns once for a correlated unknown notification method", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector();
+    const notification = forCurrentTurn("item/futureStatus/updated", {
+      itemId: "future-1",
+    });
+
+    await projector.handleNotification(notification);
+    await projector.handleNotification(notification);
+    await projector.handleNotification(
+      forCurrentTurn("item/fileChange/patchUpdated", { itemId: "patch-1", changes: [] }),
+    );
+    await projector.handleNotification(forCurrentTurn("thread/compacted", {}));
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("codex app-server notification ignored with unknown method", {
+      method: "item/futureStatus/updated",
+      paramsKeys: ["itemId", "threadId", "turnId"],
+      activeThreadId: THREAD_ID,
+      activeTurnId: TURN_ID,
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      matchesActiveThread: true,
+      matchesActiveTurn: true,
+    });
+  });
+
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });

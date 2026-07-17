@@ -91,6 +91,7 @@ type Route = {
   pending: PendingNotification[];
   notificationTail: Promise<void>;
   nativeTurnCompleted: boolean;
+  ignoredTurnNotificationKeys: Set<string>;
   nativeTurnCompletion?: Deferred;
   detachReleaseOn?: () => void;
 };
@@ -144,6 +145,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       pending: [],
       notificationTail: Promise.resolve(),
       nativeTurnCompleted: false,
+      ignoredTurnNotificationKeys: new Set(),
     };
     this.routes.set(threadId, route);
     if (options.onNotification || options.onRequest) {
@@ -254,6 +256,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       throw new Error(`codex app-server thread route cannot arm from ${route.gate}`);
     }
     route.gate = "armed";
+    route.ignoredTurnNotificationKeys.clear();
     route.nativeTurnCompleted = false;
     route.binding = deferred();
   }
@@ -337,6 +340,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return undefined;
     }
     if (route.gate === "bound" && scope.turnId && scope.turnId !== route.turnId) {
+      this.warnDroppedStaleTurnNotification(route, notification, routeScope);
       return undefined;
     }
     if (route.gate === "armed") {
@@ -410,19 +414,44 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
       return;
     }
     for (const pending of route.pending.splice(0)) {
-      if (
-        !pending.scope.turnId ||
-        route.gate !== "bound" ||
-        pending.scope.turnId === route.turnId
-      ) {
-        route.handlers?.onNotificationReceived?.(
-          pending.notification,
-          pending.scope,
-          pending.receivedAtMs,
-        );
-        this.enqueueNotification(route, handler, pending.notification, pending.scope);
+      if (route.gate === "bound" && pending.scope.turnId && pending.scope.turnId !== route.turnId) {
+        this.warnDroppedStaleTurnNotification(route, pending.notification, pending.scope);
+        continue;
       }
+      route.handlers?.onNotificationReceived?.(
+        pending.notification,
+        pending.scope,
+        pending.receivedAtMs,
+      );
+      this.enqueueNotification(route, handler, pending.notification, pending.scope);
     }
+  }
+
+  private warnDroppedStaleTurnNotification(
+    route: Route,
+    notification: CodexServerNotification,
+    scope: CodexThreadRouteScope,
+  ): void {
+    if (notification.method === "turn/completed" || !scope.turnId || !route.turnId) {
+      return;
+    }
+    const key = `${notification.method}:${scope.turnId}`;
+    if (route.ignoredTurnNotificationKeys.has(key)) {
+      return;
+    }
+    route.ignoredTurnNotificationKeys.add(key);
+    embeddedAgentLog.warn("codex app-server notification ignored for inactive turn", {
+      method: notification.method,
+      paramsKeys: isJsonObject(notification.params)
+        ? Object.keys(notification.params).toSorted()
+        : [],
+      activeThreadId: route.threadId,
+      activeTurnId: route.turnId,
+      threadId: scope.threadId,
+      turnId: scope.turnId,
+      matchesActiveThread: true,
+      matchesActiveTurn: false,
+    });
   }
 
   private bufferNotification(

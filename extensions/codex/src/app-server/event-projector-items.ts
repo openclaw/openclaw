@@ -51,6 +51,9 @@ export function itemTitle(item: CodexThreadItem): string {
 
 export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
+  if (status === undefined || status === "completed") {
+    return "completed";
+  }
   if (status === "failed" || status === "error") {
     return "failed";
   }
@@ -60,7 +63,24 @@ export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "run
   if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
-  return "completed";
+  return "failed";
+}
+
+export function unknownItemStatus(item: CodexThreadItem): string | undefined {
+  const status = readItemString(item, "status");
+  switch (status) {
+    case undefined:
+    case "completed":
+    case "failed":
+    case "error":
+    case "declined":
+    case "inProgress":
+    case "in_progress":
+    case "running":
+      return undefined;
+    default:
+      return status;
+  }
 }
 
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
