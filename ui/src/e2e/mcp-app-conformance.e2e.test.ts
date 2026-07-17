@@ -314,7 +314,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
     const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
     const appModuleSource = await fs.readFile(appEntryPath, "utf8");
     const appAssetPort = await getFreeGatewayPort();
-    appAssetServer = createHttpServer((request, response) => {
+    const fixtureAssetServer = createHttpServer((request, response) => {
       if (request.url !== "/app.js") {
         response.writeHead(404).end();
         return;
@@ -327,7 +327,10 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       });
       response.end(appModuleSource);
     });
-    await new Promise<void>((resolve) => appAssetServer.listen(appAssetPort, "127.0.0.1", resolve));
+    appAssetServer = fixtureAssetServer;
+    await new Promise<void>((resolve) =>
+      fixtureAssetServer.listen(appAssetPort, "127.0.0.1", resolve),
+    );
     const appModuleUrl = `http://127.0.0.1:${appAssetPort}/app.js`;
     const resourceOrigin = new URL(appModuleUrl).origin;
     const controlUiOrigin = new URL(controlUiServer.baseUrl).origin;
@@ -365,7 +368,7 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
       cfg,
     });
     const materialized = await materializeBundleMcpToolsForRun({ runtime });
-    materialized.restrictAppTools?.([...materialized.tools, ...materialized.appTools]);
+    materialized.restrictAppTools?.([...materialized.tools, ...(materialized.appTools ?? [])]);
     const show = materialized.tools.find((tool) => tool.name === "conformance__show");
     if (!show) {
       throw new Error("Official MCP App fixture tool did not materialize");
