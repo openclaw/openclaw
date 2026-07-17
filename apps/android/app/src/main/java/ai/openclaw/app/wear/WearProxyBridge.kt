@@ -14,6 +14,7 @@ import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -97,7 +98,7 @@ internal class WearProxyBridge(
   // marker occupies the exact queue position where dropped sequences become visible.
   private val operations = Channel<WearBridgeOperation>(capacity = Channel.UNLIMITED)
 
-  init {
+  private val actorJob =
     scope.launch {
       var lastDeliveredSequence = 0L
       for (operation in operations) {
@@ -110,7 +111,6 @@ internal class WearProxyBridge(
         }
       }
     }
-  }
 
   private suspend fun processOperation(
     operation: WearBridgeOperation,
@@ -209,6 +209,11 @@ internal class WearProxyBridge(
     val completion = CompletableDeferred<Unit>()
     operations.send(WearBridgeOperation.Barrier(completion))
     completion.await()
+  }
+
+  /** Test-only lifecycle boundary; production owns the bridge through its process scope. */
+  internal suspend fun stopForTests() {
+    actorJob.cancelAndJoin()
   }
 
   /** Projection/reset, sequence allocation, and actor insertion share [overflowLock]. */

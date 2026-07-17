@@ -13,10 +13,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.job
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -31,14 +28,14 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WearProxyBridgeTest {
-  private suspend fun TestScope.withActorScope(block: suspend TestScope.(CoroutineScope) -> Unit) {
-    // Keep the infinite actor on runTest's scheduler, but make its lifecycle explicit.
-    // An external dispatcher can strand Robolectric; backgroundScope can finish too early.
-    val actorJob = SupervisorJob(coroutineContext.job)
+  private suspend fun TestScope.withActorScope(
+    block: suspend TestScope.(CoroutineScope, (WearProxyBridge) -> Unit) -> Unit,
+  ) {
+    var bridge: WearProxyBridge? = null
     try {
-      block(CoroutineScope(coroutineContext + actorJob))
+      block(backgroundScope) { bridge = it }
     } finally {
-      actorJob.cancelAndJoin()
+      bridge?.stopForTests()
     }
   }
 
@@ -118,7 +115,7 @@ class WearProxyBridgeTest {
   @Test
   fun eventSendCancellationDoesNotTerminateRequestActor() =
     runTest {
-      withActorScope { actorScope ->
+      withActorScope { actorScope, registerBridge ->
         var cancelFirstEvent = true
         val sent = mutableListOf<SentWearMessage>()
         val bridge =
@@ -135,6 +132,7 @@ class WearProxyBridgeTest {
             peerResolver = WearPeerResolver { setOf("watch-1") },
             handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
           )
+        registerBridge(bridge)
 
         bridge.publishConnection(connected = true, status = "Connected")
         bridge.awaitIdleForTests()
@@ -147,7 +145,7 @@ class WearProxyBridgeTest {
   @Test
   fun discoveryTaskCancellationDoesNotTerminateEventActor() =
     runTest {
-      withActorScope { actorScope ->
+      withActorScope { actorScope, registerBridge ->
         var cancelFirstDiscovery = true
         val sent = mutableListOf<SentWearMessage>()
         val bridge =
@@ -164,6 +162,7 @@ class WearProxyBridgeTest {
               },
             handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
           )
+        registerBridge(bridge)
 
         bridge.publishConnection(connected = true, status = "first")
         bridge.publishConnection(connected = true, status = "second")
@@ -588,7 +587,7 @@ class WearProxyBridgeTest {
   @Test
   fun queueOverflowRetainsTerminalEventAndEmitsResync() =
     runTest {
-      withActorScope { actorScope ->
+      withActorScope { actorScope, registerBridge ->
         val sent = mutableListOf<SentWearMessage>()
         val requestStarted = CompletableDeferred<Unit>()
         val finishRequest = CompletableDeferred<Unit>()
@@ -602,6 +601,7 @@ class WearProxyBridgeTest {
               WearMessage.Response(requestId = request.requestId, ok = true)
             },
           )
+        registerBridge(bridge)
         val requestJob = async { bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1"))) }
         runCurrent()
         requestStarted.await()
@@ -722,7 +722,7 @@ class WearProxyBridgeTest {
   @Test
   fun staleEventFailureDoesNotRemoveRefreshedPeer() =
     runTest {
-      withActorScope { actorScope ->
+      withActorScope { actorScope, registerBridge ->
         val eventStarted = CompletableDeferred<Unit>()
         val releaseEvent = CompletableDeferred<Unit>()
         val sent = mutableListOf<SentWearMessage>()
@@ -742,6 +742,7 @@ class WearProxyBridgeTest {
               },
             handleRequest = { request -> WearMessage.Response(requestId = request.requestId, ok = true) },
           )
+        registerBridge(bridge)
         bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
 
         bridge.publishConnection(connected = true, status = "Connected")
