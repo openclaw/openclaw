@@ -7,7 +7,11 @@ import {
   isDangerousHostEnvVarName,
 } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isSkillSecretOwnerUnavailable, resolveSkillConfig } from "../loading/config.js";
+import {
+  hasUnavailableSkillSecretOwners,
+  isSkillSecretOwnerUnavailable,
+  resolveSkillConfig,
+} from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
@@ -263,6 +267,11 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const updates: EnvUpdate[] = [];
 
   for (const skill of snapshot.skills) {
+    // Legacy snapshots lack the config key, so aliases cannot be matched to an
+    // unavailable owner. Skip their overrides instead of guessing by display name.
+    if (!skill.skillKey && hasUnavailableSkillSecretOwners()) {
+      continue;
+    }
     const skillKey = skill.skillKey ?? skill.name;
     if (isSkillSecretOwnerUnavailable(skillKey)) {
       continue;
