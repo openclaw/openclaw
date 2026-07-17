@@ -207,6 +207,21 @@ describe("PluginUiBridgeController", () => {
     connected.childPort.close();
   });
 
+  it("keeps a ready-connected port across the iframe's late initial load", async () => {
+    const connected = await connectBridge();
+    connected.frame.dispatchEvent(new Event("load"));
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    expect(connected.postMessage).toHaveBeenCalledOnce();
+
+    connected.frame.dispatchEvent(new Event("load"));
+    await vi.waitFor(() => expect(connected.postMessage).toHaveBeenCalledTimes(2));
+    connected.bridge.clear();
+    connected.childPort.close();
+  });
+
   it("keeps the active port while refreshing its session context and client", async () => {
     const connected = await connectBridge();
     const request = vi.fn(async () => ({ ok: true, result: { saved: true } }));

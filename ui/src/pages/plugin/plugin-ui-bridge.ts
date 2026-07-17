@@ -46,6 +46,7 @@ export class PluginUiBridgeController {
   private loadHandler: (() => void) | null = null;
   private readyHandler: ((event: MessageEvent) => void) | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private observedInitialLoad = false;
 
   sync(target: PluginUiBridgeTarget | null) {
     if (!target) {
@@ -67,6 +68,16 @@ export class PluginUiBridgeController {
     this.clear();
     this.target = target;
     this.loadHandler = () => {
+      if (!this.observedInitialLoad) {
+        this.observedInitialLoad = true;
+        // A child can announce readiness before its initial iframe load event
+        // reaches the parent. Keep the port established by that ready message;
+        // only later loads represent a replacement document.
+        if (!this.port) {
+          this.scheduleConnect();
+        }
+        return;
+      }
       // A load means the frame has a new document and can no longer use the
       // previously transferred port. Invalidate it before reconnecting.
       this.port?.close();
@@ -227,5 +238,6 @@ export class PluginUiBridgeController {
     this.loadHandler = null;
     this.readyHandler = null;
     this.connectTimer = null;
+    this.observedInitialLoad = false;
   }
 }
