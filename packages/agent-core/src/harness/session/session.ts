@@ -259,7 +259,7 @@ export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
       id: await this.storage.createEntryId(),
       parentId: await this.getAppendParentId(),
       timestamp: new Date().toISOString(),
-      name: name.trim(),
+      name: name.replace(/[\r\n]+/g, " ").trim(),
     } satisfies SessionInfoEntry);
   }
 

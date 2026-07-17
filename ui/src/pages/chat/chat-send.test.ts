@@ -3281,6 +3281,99 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
   });
 
+  it("leaves active-run resolution to the Gateway while its effective mode is loading", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "gateway-resolved-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "use the live server mode",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+      sessionKey: "agent:main:main",
+    });
+
+    await handleSendChat(host);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("use the live server mode");
+    expect(payload).not.toHaveProperty("queueMode");
+  });
+
+  it.each(["followup", "collect", "interrupt"] as const)(
+    "preserves the inherited %s mode for active-run sends",
+    async (queueMode) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "chat.send") {
+          return { status: "started", runId: `${queueMode}-run` };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        chatFollowUpMode: queueMode,
+        chatMessage: `send with ${queueMode}`,
+        chatRunId: "run-1",
+        chatStream: "Working...",
+        sessionKey: "agent:main:main",
+      });
+
+      await handleSendChat(host);
+
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "chat.send",
+          expect.objectContaining({
+            message: `send with ${queueMode}`,
+            queueMode,
+            sessionKey: "agent:main:main",
+          }),
+        ),
+      );
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(0));
+    },
+  );
+
+  it("honors the selected mode when only the session row reports an active run", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "interrupt-run" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatFollowUpMode: "interrupt",
+      chatMessage: "replace the active run",
+      chatRunId: null,
+      sessionKey: "agent:main:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main:main", { hasActiveRun: true, status: "running" }),
+      ]),
+    });
+
+    await handleSendChat(host);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          message: "replace the active run",
+          queueMode: "interrupt",
+          sessionKey: "agent:main:main",
+        }),
+      ),
+    );
+  });
+
   it("keeps busy sends queued in steer mode while disconnected", async () => {
     const host = makeHost({
       client: null,

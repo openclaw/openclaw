@@ -1,7 +1,8 @@
-// Feishu plugin module implements bot behavior.
 import {
   buildChannelInboundEventContext,
+  formatAgentEnvelope,
   formatInboundMediaUnavailableText,
+  resolveEnvelopeFormatOptions,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
@@ -17,6 +18,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
@@ -24,6 +26,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
@@ -49,7 +52,11 @@ import type { ClawdbotConfig, RuntimeEnv } from "./bot-runtime-api.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
-import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
+import {
+  finalizeFeishuMessageProcessing,
+  recordProcessedFeishuMessage,
+  type FeishuMessageProcessingClaim,
+} from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -270,7 +277,7 @@ export async function handleFeishuMessage(params: {
   channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
-  processingClaimHeld?: boolean;
+  processingClaim?: FeishuMessageProcessingClaim;
   messageDedupeKey?: string;
 }): Promise<void> {
   const {
@@ -282,7 +289,7 @@ export async function handleFeishuMessage(params: {
     channelRuntime,
     chatHistories,
     accountId,
-    processingClaimHeld = false,
+    processingClaim,
     messageDedupeKey: messageDedupeKeyOverride,
   } = params;
 
@@ -300,7 +307,7 @@ export async function handleFeishuMessage(params: {
       messageId: messageDedupeKey,
       namespace: account.accountId,
       log,
-      claimHeld: processingClaimHeld,
+      processingClaim,
     }))
   ) {
     log(`feishu: skipping duplicate message ${messageId}`);
@@ -973,7 +980,7 @@ export async function handleFeishuMessage(params: {
       (groupSession?.groupSessionScope === "group_topic" ||
         groupSession?.groupSessionScope === "group_topic_sender");
 
-    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+    const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
     const messageBody = buildFeishuAgentBody({
       ctx: agentFacingCtx,
       quotedContent,
@@ -986,7 +993,7 @@ export async function handleFeishuMessage(params: {
       log(`feishu[${account.accountId}]: appending permission error notice to message body`);
     }
 
-    const body = core.channel.reply.formatAgentEnvelope({
+    const body = formatAgentEnvelope({
       channel: "Feishu",
       from: envelopeFrom,
       timestamp: new Date(),
@@ -1004,7 +1011,7 @@ export async function handleFeishuMessage(params: {
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
+          formatAgentEnvelope({
             channel: "Feishu",
             // Preserve speaker identity in group history as well.
             from: `${ctx.chatId}:${entry.sender}`,
@@ -1112,7 +1119,7 @@ export async function handleFeishuMessage(params: {
         return threadContext;
       }
 
-      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, { agentId });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId });
       const previousThreadSessionTimestamp = core.channel.session.readSessionUpdatedAt({
         storePath,
         sessionKey: agentSessionKey,
@@ -1178,7 +1185,7 @@ export async function handleFeishuMessage(params: {
           : relevantMessages.slice(1);
         const historyParts = historyMessages.map((msg) => {
           const role = msg.senderType === "app" ? "assistant" : "user";
-          return core.channel.reply.formatAgentEnvelope({
+          return formatAgentEnvelope({
             channel: "Feishu",
             from: `${msg.senderId ?? "Unknown"} (${role})`,
             timestamp: msg.createTime,
@@ -1212,7 +1219,6 @@ export async function handleFeishuMessage(params: {
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
       return buildChannelInboundEventContext({
         channel: "feishu",
-        finalize: core.channel.reply.finalizeInboundContext,
         supplemental: {
           quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
           thread: {
@@ -1384,7 +1390,7 @@ export async function handleFeishuMessage(params: {
         }
 
         const agentSessionKey = buildBroadcastSessionKey(route.sessionKey, route.agentId, agentId);
-        const agentStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+        const agentStorePath = resolveStorePath(cfg.session?.store, {
           agentId,
         });
         const agentRecord = {
@@ -1452,12 +1458,11 @@ export async function handleFeishuMessage(params: {
                 raw: ctx,
               }),
               resolveTurn: () => ({
+                cfg,
                 channel: "feishu",
                 accountId: route.accountId,
-                routeSessionKey: agentSessionKey,
-                storePath: agentStorePath,
+                route: { agentId, sessionKey: agentSessionKey },
                 ctxPayload: agentCtx,
-                recordInboundSession: core.channel.session.recordInboundSession,
                 record: agentRecord,
                 onPreDispatchFailure: () =>
                   core.channel.reply.settleReplyDispatcher({
@@ -1465,16 +1470,12 @@ export async function handleFeishuMessage(params: {
                     onSettled: () => markDispatchIdle(),
                   }),
                 runDispatch: () =>
-                  core.channel.reply.withReplyDispatcher({
+                  dispatchInboundMessage({
+                    ctx: agentCtx,
+                    cfg,
                     dispatcher,
                     onSettled: () => markDispatchIdle(),
-                    run: () =>
-                      core.channel.reply.dispatchReplyFromConfig({
-                        ctx: agentCtx,
-                        cfg,
-                        dispatcher,
-                        replyOptions,
-                      }),
+                    replyOptions,
                   }),
               }),
             },
@@ -1520,22 +1521,17 @@ export async function handleFeishuMessage(params: {
                 raw: ctx,
               }),
               resolveTurn: () => ({
+                cfg,
                 channel: "feishu",
                 accountId: route.accountId,
-                routeSessionKey: agentSessionKey,
-                storePath: agentStorePath,
+                route: { agentId, sessionKey: agentSessionKey },
                 ctxPayload: agentCtx,
-                recordInboundSession: core.channel.session.recordInboundSession,
                 record: agentRecord,
                 runDispatch: () =>
-                  core.channel.reply.withReplyDispatcher({
+                  dispatchInboundMessage({
+                    ctx: agentCtx,
+                    cfg,
                     dispatcher: noopDispatcher,
-                    run: () =>
-                      core.channel.reply.dispatchReplyFromConfig({
-                        ctx: agentCtx,
-                        cfg,
-                        dispatcher: noopDispatcher,
-                      }),
                   }),
               }),
             },
@@ -1588,7 +1584,7 @@ export async function handleFeishuMessage(params: {
       );
 
       const identity = resolveAgentOutboundIdentity(effectiveCfg, route.agentId);
-      const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
+      const storePath = resolveStorePath(effectiveCfg.session?.store, {
         agentId: route.agentId,
       });
       const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
@@ -1633,12 +1629,11 @@ export async function handleFeishuMessage(params: {
             raw: ctx,
           }),
           resolveTurn: () => ({
+            cfg: effectiveCfg,
             channel: "feishu",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
+            route: { agentId: route.agentId, sessionKey: route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             record: {
               updateLastRoute: buildFeishuInboundLastRouteUpdate({
                 sessionKey: route.sessionKey,
@@ -1662,18 +1657,12 @@ export async function handleFeishuMessage(params: {
                 onSettled: () => markDispatchIdle(),
               }),
             runDispatch: () =>
-              core.channel.reply.withReplyDispatcher({
+              dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg: effectiveCfg,
                 dispatcher,
-                onSettled: () => {
-                  markDispatchIdle();
-                },
-                run: () =>
-                  core.channel.reply.dispatchReplyFromConfig({
-                    ctx: ctxPayload,
-                    cfg: effectiveCfg,
-                    dispatcher,
-                    replyOptions,
-                  }),
+                onSettled: () => markDispatchIdle(),
+                replyOptions,
               }),
           }),
         },

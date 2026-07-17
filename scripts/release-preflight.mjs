@@ -84,6 +84,13 @@ const releaseTasks = [
     scopes: ["plugin-sdk"],
     check: pnpmCommand("plugin-sdk:surface:check"),
   },
+  {
+    id: "control-ui-i18n",
+    name: "Control UI locale bundles",
+    scopes: ["version"],
+    fix: pnpmCommand("ui:i18n:sync"),
+    check: pnpmCommand("ui:i18n:check"),
+  },
 ];
 const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));
 const shouldCheckMacosVersions = parsedArgs.scopes.has("all") || parsedArgs.scopes.has("version");

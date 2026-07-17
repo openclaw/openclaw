@@ -20,6 +20,11 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+// Real-app cases boot through a cold Vite dev server that transforms the whole
+// Control UI module graph on first request; with 6 Vitest workers sharing an
+// 8vCPU CI runner that first render can starve well past 10s. Budget the
+// first-render waits for contention while staying inside the 60s testTimeout.
+const APP_FIRST_RENDER_TIMEOUT_MS = 30_000;
 const LONG_SIDE_CHAT_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
@@ -617,7 +622,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           ],
         });
         await page.goto(`${realChatServer.baseUrl}chat`);
-        await page.getByText("Context hover regression fixture.").waitFor({ timeout: 10_000 });
+        await page
+          .getByText("Context hover regression fixture.")
+          .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
 
         const details = page.locator("details.msg-meta");
         const context = page.locator(".msg-meta__details");
@@ -635,7 +642,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         // the group is hovered, so enter through the message body first.
         await page.locator(".chat-text").first().hover();
         await page.locator(".msg-meta__summary").hover();
-        expect(await context.isVisible()).toBe(true);
+        // The reveal is state-driven, so the re-render can lag the hover event
+        // under CPU contention; poll instead of a one-shot visibility read.
+        await context.waitFor({ state: "visible", timeout: 10_000 });
         const hoverLayout = await page.evaluate(() => {
           const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
           const group = document.querySelector<HTMLElement>(".chat-group")!;
@@ -653,13 +662,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
         await page.mouse.move(0, 0);
-        expect(await context.isVisible()).toBe(false);
+        await context.waitFor({ state: "hidden", timeout: 10_000 });
 
         await page.locator(".chat-text").first().hover();
         await page.locator(".msg-meta__summary").click();
         await page.mouse.move(0, 0);
+        // Click-to-open must survive the pointer leaving the message group.
+        await context.waitFor({ state: "visible", timeout: 10_000 });
         expect(await details.getAttribute("open")).toBe("");
-        expect(await context.isVisible()).toBe(true);
       } finally {
         await closeBrowserPage(page);
       }
@@ -694,7 +704,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       const image = page.locator("img.chat-message-image");
       const video = page.locator("video");
-      await image.waitFor({ timeout: 10_000 });
+      // First wait absorbs the cold-app render; both elements land in the same
+      // history render pass, so the video follows immediately after.
+      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
       await video.waitFor({ timeout: 10_000 });
       expect(await image.getAttribute("src")).toBe(imageUrl);
       expect(await video.getAttribute("src")).toBe(videoUrl);
@@ -1886,7 +1898,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.goto(`${realChatServer.baseUrl}chat`);
       await page
         .getByText("Short landscape slash command keyboard regression fixture.")
-        .waitFor({ timeout: 10_000 });
+        .waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
       const textarea = page.locator(".agent-chat__composer-combobox > textarea");
       await textarea.fill("/");
       await textarea.focus();

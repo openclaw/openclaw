@@ -23,6 +23,7 @@ import {
   createTelegramSpooledReplayParticipant,
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
@@ -34,7 +35,7 @@ import type { TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
-import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-retry-policy.js";
+import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -262,10 +263,13 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       await turnContext.onDispatchStart?.();
     }
     const runDispatch = async (params: {
-      onTurnAdopted?: () => void | Promise<void>;
-      onTurnDeferred?: () => void;
-      onTurnAbandoned?: () => void;
-      turnAbortSignal?: AbortSignal;
+      turnAdoptionLifecycle?: {
+        admission?: "exclusive" | "cancel-only";
+        onAdopted: () => void | Promise<void>;
+        onDeferred?: () => void;
+        onAbandoned?: () => void;
+        abortSignal?: AbortSignal;
+      };
     }): Promise<TelegramMessageProcessingResult> => {
       try {
         const dispatchResult = await dispatchTelegramMessage({
@@ -281,10 +285,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
-          onTurnAdopted: params.onTurnAdopted,
-          onTurnDeferred: params.onTurnDeferred,
-          onTurnAbandoned: params.onTurnAbandoned,
-          turnAbortSignal: params.turnAbortSignal,
+          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           const result: TelegramMessageProcessingResult = {
@@ -389,34 +390,49 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }
       };
       const run = async () => {
-        const turnAbortSignal = turnContext.spooledReplayAbortSignal
-          ? AbortSignal.any([participant.abortSignal, turnContext.spooledReplayAbortSignal])
-          : participant.abortSignal;
+        const drainLifecycle = getTelegramSpooledReplayLifecycle();
+        // Participant always owns an AbortSignal on the spooled-replay path;
+        // merge optional drain/context signals without widening to undefined.
+        const turnAbortSignal: AbortSignal = (() => {
+          const extras = [turnContext.spooledReplayAbortSignal, drainLifecycle?.abortSignal].filter(
+            (signal): signal is AbortSignal => signal !== undefined,
+          );
+          if (extras.length === 0) {
+            return participant.abortSignal;
+          }
+          return AbortSignal.any([participant.abortSignal, ...extras]);
+        })();
         const result = await runDispatch({
-          turnAbortSignal,
-          onTurnAdopted: async () => {
-            if (adopted) {
-              return;
-            }
-            adoptionAttempted = true;
-            const adoptedResult = await settle({ kind: "completed" }, "adopted");
-            if (adoptedResult.kind !== "completed") {
-              adoptionFinalizationError =
-                adoptedResult.kind === "failed-retryable"
+          turnAdoptionLifecycle: {
+            admission: "exclusive",
+            abortSignal: turnAbortSignal,
+            onAdopted: async () => {
+              if (adopted) {
+                return;
+              }
+              adoptionAttempted = true;
+              const adoptedResult = await settle({ kind: "completed" }, "adopted");
+              if (adoptedResult.kind !== "completed") {
+                adoptionFinalizationError =
+                  adoptedResult.kind === "failed-retryable"
+                    ? adoptedResult.error
+                    : new Error("telegram spooled turn adoption was not completed");
+                throw adoptedResult.kind === "failed-retryable"
                   ? adoptedResult.error
                   : new Error("telegram spooled turn adoption was not completed");
-              throw adoptedResult.kind === "failed-retryable"
-                ? adoptedResult.error
-                : new Error("telegram spooled turn adoption was not completed");
-            }
-          },
-          onTurnDeferred: () => {
-            deferred = true;
-          },
-          onTurnAbandoned: () => {
-            if (!adopted) {
-              void settle({ kind: "skipped" }, "terminal");
-            }
+              }
+              await drainLifecycle?.onAdopted();
+            },
+            onDeferred: () => {
+              deferred = true;
+              drainLifecycle?.onDeferred();
+            },
+            onAbandoned: () => {
+              if (!adopted) {
+                void settle({ kind: "skipped" }, "terminal");
+              }
+              drainLifecycle?.onAbandoned();
+            },
           },
         });
         if (adopted) {

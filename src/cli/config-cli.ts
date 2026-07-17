@@ -19,6 +19,7 @@ import {
 } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -952,7 +953,15 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
+  const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    effective: snapshot.sourceConfig,
+    configPath: snapshot.path,
+    formatPathForDisplay: true,
+    includeReceivedValueHint: true,
+  });
+  for (const line of formatConfigIssueLines(displayIssues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
@@ -2241,7 +2250,7 @@ async function runConfigOperations(params: {
     const dryRunResult: ConfigSetDryRunResult = {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
-      configPath: shortenHomePath(snapshot.path),
+      configPath: snapshot.path,
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema:
@@ -2513,7 +2522,7 @@ export async function runConfigUnset(opts: {
         throw new ConfigSetDryRunValidationError({
           ok: false,
           operations: 1,
-          configPath: shortenHomePath(snapshot.path),
+          configPath: snapshot.path,
           inputModes: ["unset"],
           checks: {
             schema: false,
@@ -2567,7 +2576,7 @@ async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
-    runtime.log(shortenHomePath(snapshot.path));
+    runtime.log(snapshot.path);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -2626,8 +2635,18 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
+        const displayIssues = attachConfigIssueDiagnostics(issues, {
+          raw: snapshot.raw,
+          parsed: snapshot.parsed,
+          effective: snapshot.sourceConfig,
+          configPath: snapshot.path,
+          formatPathForDisplay: true,
+          includeReceivedValueHint: true,
+        });
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+        for (const line of formatConfigIssueLines(displayIssues, danger("×"), {
+          normalizeRoot: true,
+        })) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");

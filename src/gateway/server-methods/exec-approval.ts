@@ -449,6 +449,7 @@ export function createExecApprovalHandlers(
       const { inputId, decision } = resolveParams;
       let autoReviewResolution = false;
       await handleApprovalResolve({
+        approvalKind: "exec",
         manager,
         inputId,
         decision,
@@ -490,7 +491,6 @@ export function createExecApprovalHandlers(
             ? manager.resolveAutoReview(approvalId, resolvedBy)
             : manager.resolve(approvalId, decisionLocal, resolvedBy),
         resolvedEventName: "exec.approval.resolved",
-        approvalKind: "exec",
         buildResolvedEvent: ({
           approvalId,
           decision: decisionLocal,

@@ -135,6 +135,24 @@ export const en = {
       sourcePathHint: "Enter a source path next",
       targetWorkspace: "Target workspace directory",
     },
+    memoryImport: {
+      applyFailed:
+        "{label} memory import failed: {reason}\nRetry from the dashboard's Memory import page (Settings → Import Memory).",
+      confirm: "Import these memories into your OpenClaw workspace?",
+      conflictSuffix: ", {count} already imported",
+      errorTitle: "Memory import failed",
+      failureLine: "{label} failed: {reason}. Retry from the Memory import page.",
+      imported: "Imported {label} memories",
+      importFailed: "Could not import {label} memories",
+      importing: "Importing {label} memories…",
+      offerLine: "{label} — {source} ({count} memories{conflictSuffix})",
+      partialFailure: "{count} memory items failed",
+      selectSources: "Choose memory sources to import",
+      skipHint: "Import later from the dashboard's Memory import page (Settings → Import Memory).",
+      summaryLine: "{label}: {migrated} migrated, {skipped} skipped → {target}",
+      summaryTitle: "Memory import summary",
+      title: "Memories found",
+    },
     plugins: {
       configureBackHint: "Return to section menu",
       configureEmpty: "No plugins with configurable fields found.",
@@ -255,6 +273,8 @@ export const en = {
       failureUnavailable: "This AI route is not available right now.",
       failureUnknown: "The completion failed for an unknown reason.",
       foundNothing: "No existing AI access was detected on this machine.",
+      recommendedInstall: "{label} — {hint}\n  {website}",
+      recommendedInstallsTitle: "Recommended installs",
       intro: "Connect your AI",
       invalidConfigDetails: "OpenClaw config {path} is invalid:\n{issues}",
       invalidConfigRepair:

@@ -59,7 +59,6 @@ function collectAgentModelRefs(params: {
   agent: unknown;
   path: string;
   runtime?: string;
-  collectModelsMap?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
@@ -108,14 +107,12 @@ function collectAgentModelRefs(params: {
     value: asMutableRecord(compaction?.memoryFlush)?.model,
     blockedModelIdentities: params.blockedModelIdentities,
   });
-  if (params.collectModelsMap) {
-    collectModelsMapRefs({
-      hits: params.hits,
-      path: `${params.path}.models`,
-      models: agent.models,
-      blockedModelIdentities: params.blockedModelIdentities,
-    });
-  }
+  collectModelsMapRefs({
+    hits: params.hits,
+    path: `${params.path}.models`,
+    models: agent.models,
+    blockedModelIdentities: params.blockedModelIdentities,
+  });
 }
 
 export function collectConfigModelRefs(
@@ -130,7 +127,6 @@ export function collectConfigModelRefs(
     agent: defaults,
     path: "agents.defaults",
     runtime: resolveRuntime({ defaultsRuntime }),
-    collectModelsMap: true,
     blockedModelIdentities,
   });
 
@@ -306,12 +302,12 @@ export function collectDisabledCodexPluginRouteIssues(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): DisabledCodexPluginRouteIssue[] {
-  const blockedOutsideEntry = codexPluginIsBlockedOutsideEntry(cfg);
+  const repairBlocked = codexPluginRepairIsBlocked(cfg);
   return collectDisabledCodexPluginRouteHits(cfg, env).map((hit) => ({
     path: hit.path,
     modelRef: hit.modelRef,
     canonicalModel: hit.canonicalModel,
-    blockedOutsideEntry,
+    repairBlocked,
   }));
 }
 
@@ -319,7 +315,8 @@ export function enableCodexPluginForRequiredRoutes(params: {
   cfg: OpenClawConfig;
   routeHits: DisabledCodexPluginRouteHit[];
 }): { cfg: OpenClawConfig; changes: string[] } {
-  if (params.routeHits.length === 0 || codexPluginIsBlockedOutsideEntry(params.cfg)) {
+  // Explicit user opt-out wins over managed-harness repair; doctor warns instead.
+  if (params.routeHits.length === 0 || codexPluginRepairIsBlocked(params.cfg)) {
     return { cfg: params.cfg, changes: [] };
   }
   const cfg = structuredClone(params.cfg);
@@ -352,15 +349,19 @@ export function enableCodexPluginForRequiredRoutes(params: {
   return { cfg, changes };
 }
 
-export function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
+function codexPluginIsBlockedOutsideEntry(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false || pluginIdListIncludes(cfg.plugins?.deny, "codex");
 }
 
+export function codexPluginRepairIsBlocked(cfg: OpenClawConfig): boolean {
+  return (
+    codexPluginIsBlockedOutsideEntry(cfg) ||
+    asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false
+  );
+}
+
 function isCodexPluginUnavailableByConfig(cfg: OpenClawConfig): boolean {
-  if (codexPluginIsBlockedOutsideEntry(cfg)) {
-    return true;
-  }
-  if (asMutableRecord(asMutableRecord(cfg.plugins?.entries)?.codex)?.enabled === false) {
+  if (codexPluginRepairIsBlocked(cfg)) {
     return true;
   }
   const allow = cfg.plugins?.allow;

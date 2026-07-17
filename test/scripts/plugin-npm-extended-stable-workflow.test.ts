@@ -329,8 +329,19 @@ describe("plugin npm extended-stable workflow", () => {
     });
     expect(publish.env?.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publish.env?.NPM_TOKEN).toBeUndefined();
+    const bootstrapCheck = step(
+      parsed.jobs?.publish_plugins_npm,
+      "Check bootstrap npm package version",
+    );
+    expect(bootstrapCheck.if).toContain("npm-token-bootstrap");
+    expect(bootstrapCheck.run).toContain("fetchNpmRegistryPackumentWithRetry");
+    expect(bootstrapCheck.run).toContain("publishedDist.integrity !== expectedIntegrity");
+    expect(bootstrapCheck.run).toContain("already_published=true");
     const bootstrap = step(parsed.jobs?.publish_plugins_npm, "Publish approved bootstrap tarball");
     expect(bootstrap.if).toContain("npm-token-bootstrap");
+    expect(bootstrap.if).toContain(
+      "steps.bootstrap_npm_package_version.outputs.already_published != 'true'",
+    );
     expect(bootstrap.env?.NPM_TOKEN).toBe("${{ secrets.NPM_TOKEN }}");
     expect(bootstrap.env?.PACKAGE_NAME).toContain("publication_evidence.outputs.package_name");
     expect(bootstrap.run).not.toContain("@openclaw/meta-provider");
@@ -353,6 +364,9 @@ describe("plugin npm extended-stable workflow", () => {
     );
     expect(consume.run).toContain("--workflow-jobs-metadata");
     expect(consume.run).toContain("--source-package-json-sha256");
+    expect(consume.run).toContain("--connect-timeout 10");
+    expect(consume.run).toContain("--max-time 120");
+    expect(consume.run).toContain("actions/artifacts/${artifact_id}/zip");
     expect(consume.run).toContain("sha_pinned_release_publish=false");
     expect(consume.run).toContain(
       '[[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]',

@@ -18,6 +18,18 @@ private enum WebChatSwiftUILayout {
     static let anchorPadding: CGFloat = 8
 }
 
+/// SwiftUI's native toolbar bridge may restore visible title chrome while it
+/// installs toolbar items. Keep the full-window chat's titlebar merged.
+private final class WebChatWindow: NSWindow {
+    override var titleVisibility: NSWindow.TitleVisibility {
+        didSet {
+            if self.titleVisibility != .hidden {
+                self.titleVisibility = .hidden
+            }
+        }
+    }
+}
+
 struct MacGatewayChatTransport: OpenClawChatTransport {
     /// Shared across transport value copies so the live view model and its
     /// snapshot observer cannot diverge on the owner of the bare global alias.
@@ -75,6 +87,34 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         return try await GatewayConnection.shared.chatHistory(
             sessionKey: target.sessionKey,
             agentID: target.agentID)
+    }
+
+    func resolveInlineWidgetResource(
+        path: String,
+        replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
+    {
+        await OpenClawChatWidgetURLResolver.resolveResource(
+            target: path,
+            replacing: failedResource,
+            currentSurfaceRoutes: {
+                let node = await MacNodeModeCoordinator.shared.currentCanvasPluginSurfaceRoute()
+                let operatorSurface = await GatewayConnection.shared.canvasPluginSurfaceRoute()
+                return (node: node, operatorSurface: operatorSurface)
+            },
+            // Prefer the local node route; operator rotation keeps chat usable
+            // while macOS node mode is disabled or reconnecting.
+            refreshNodeSurfaceRoute: { observed in
+                await MacNodeModeCoordinator.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
+            },
+            refreshOperatorSurfaceRoute: { observed in
+                await GatewayConnection.shared.refreshCanvasPluginSurfaceRoute(replacing: observed?.url)
+            })
+    }
+
+    func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL? {
+        await self.resolveInlineWidgetResource(
+            path: path,
+            replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
     }
 
     func listModels() async throws -> [OpenClawChatModelChoice] {
@@ -580,10 +620,9 @@ final class WebChatSwiftUIWindowController {
             let hosting = NSHostingController(rootView: OpenClawChatWindowShell(
                 viewModel: vm,
                 userAccent: accent))
-            hosting.sceneBridgingOptions = [.toolbars, .title]
             self.contentController = hosting
         case .panel:
-            // Anchored quick-chat panel: compact single-column chat.
+            // Anchored compact chat panel: single-column chat.
             let hosting = NSHostingController(rootView: OpenClawChatView(
                 viewModel: vm,
                 showsSessionSwitcher: true,
@@ -705,16 +744,25 @@ final class WebChatSwiftUIWindowController {
     {
         switch presentation {
         case .window:
-            let window = NSWindow(
+            let window = WebChatWindow(
                 contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.windowSize),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false)
             window.title = "OpenClaw Chat"
             window.contentViewController = contentViewController
+            // Attaching an NSHostingController resets scene bridging to `.all`;
+            // opt back into toolbar items only so SwiftUI cannot restore the title.
+            (contentViewController as? NSHostingController<OpenClawChatWindowShell>)?
+                .sceneBridgingOptions = [.toolbars]
             window.isReleasedWhenClosed = false
-            window.titleVisibility = .visible
+            // Keep the SwiftUI toolbar controls, but merge their unified row
+            // with the traffic lights instead of stacking it below a title band.
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.toolbarStyle = .unified
+            window.titlebarSeparatorStyle = .none
+            window.isMovableByWindowBackground = true
             window.center()
             window.setFrameAutosaveName(WebChatSwiftUILayout.windowFrameAutosaveName)
             WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatSwiftUILayout.windowSize)
@@ -801,4 +849,14 @@ final class WebChatSwiftUIWindowController {
     private static func color(fromHex raw: String?) -> Color? {
         ColorHexSupport.color(fromHex: raw)
     }
+
+    #if DEBUG
+    var _testWindow: NSWindow? {
+        self.window
+    }
+
+    var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
+        (self.contentController as? NSHostingController<OpenClawChatWindowShell>)?.sceneBridgingOptions
+    }
+    #endif
 }

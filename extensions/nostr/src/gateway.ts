@@ -163,11 +163,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDmWithRuntime } =
-            await import("./inbound-direct-dm-runtime.js");
-          await dispatchInboundDirectDmWithRuntime({
+          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          await dispatchInboundDirectDm({
             cfg: ctx.cfg,
-            runtime,
             channel: "nostr",
             channelLabel: "Nostr",
             accountId: account.accountId,
