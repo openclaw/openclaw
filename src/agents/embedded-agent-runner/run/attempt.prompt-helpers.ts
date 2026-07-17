@@ -272,7 +272,7 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-const QUEUED_USER_MESSAGE_MARKER =
+export const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message from a previous active turn; preserved as context only. " +
   "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;

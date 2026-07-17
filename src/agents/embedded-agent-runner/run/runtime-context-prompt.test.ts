@@ -2,6 +2,7 @@
 // user-visible prompt while preserving model-only hook additions.
 import { describe, expect, it } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
+import { QUEUED_USER_MESSAGE_MARKER } from "./attempt.prompt-helpers.js";
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -94,6 +95,20 @@ describe("runtime context prompt submission", () => {
     ).toEqual({
       prompt: HEARTBEAT_TRANSCRIPT_PROMPT,
       modelPrompt: `${prependContext}\n\n${heartbeatTask}`,
+    });
+  });
+
+  it("keeps queued heartbeat task text model-visible while persisting the poll marker", () => {
+    const heartbeatTask = "Read HEARTBEAT.md and handle any due tasks.";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: `${QUEUED_USER_MESSAGE_MARKER}\n${heartbeatTask}\n\n${HEARTBEAT_TRANSCRIPT_PROMPT}`,
+        transcriptPrompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+      }),
+    ).toEqual({
+      prompt: HEARTBEAT_TRANSCRIPT_PROMPT,
+      modelPrompt: heartbeatTask,
     });
   });
 

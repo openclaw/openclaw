@@ -10,6 +10,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
+import { QUEUED_USER_MESSAGE_MARKER } from "./attempt.prompt-helpers.js";
 import type { CurrentInboundPromptContext } from "./params.js";
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -42,6 +43,8 @@ type ModelPromptBuildContext = {
   appendContext: string;
 };
 
+type PromptParts = { before: string; after: string };
+
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
@@ -62,10 +65,7 @@ export function buildCurrentInboundPrompt(params: {
   return [prefix, params.prompt].join(params.context?.promptJoiner ?? "\n\n");
 }
 
-function splitLastPromptOccurrence(
-  text: string,
-  prompt: string,
-): { before: string; after: string } | null {
+function splitLastPromptOccurrence(text: string, prompt: string): PromptParts | null {
   const index = text.lastIndexOf(prompt);
   if (index === -1) {
     return null;
@@ -74,6 +74,37 @@ function splitLastPromptOccurrence(
     before: text.slice(0, index),
     after: text.slice(index + prompt.length),
   };
+}
+
+function resolveQueuedUserTranscriptSubstitution(params: {
+  text: string;
+  transcriptPrompt?: string;
+}): { prompt: string; parts: PromptParts } | undefined {
+  const transcriptPrompt = params.transcriptPrompt?.trim();
+  if (!transcriptPrompt) {
+    return undefined;
+  }
+  const transcriptParts = splitLastPromptOccurrence(params.text, transcriptPrompt);
+  if (!transcriptParts) {
+    return undefined;
+  }
+  const beforeTranscript = transcriptParts.before.trimEnd();
+  const markerStart = beforeTranscript.lastIndexOf(QUEUED_USER_MESSAGE_MARKER);
+  if (markerStart === -1 || beforeTranscript.slice(0, markerStart).trim()) {
+    return undefined;
+  }
+  const queuedPrompt = beforeTranscript
+    .slice(markerStart + QUEUED_USER_MESSAGE_MARKER.length)
+    .trim();
+  if (!queuedPrompt) {
+    return undefined;
+  }
+  const queuedBlock = `${QUEUED_USER_MESSAGE_MARKER}\n${queuedPrompt}\n\n${transcriptPrompt}`;
+  const parts = splitLastPromptOccurrence(params.text, queuedBlock);
+  if (!parts) {
+    return undefined;
+  }
+  return { prompt: queuedPrompt, parts };
 }
 
 function replacePromptOccurrenceWithinHookBounds(params: {
@@ -154,10 +185,15 @@ export function resolveRuntimeContextPromptParts(params: {
   const transcriptPromptParts = transcriptPrompt?.trim()
     ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
     : undefined;
+  const queuedUserTranscriptSubstitution = resolveQueuedUserTranscriptSubstitution({
+    text: extracted.text,
+    transcriptPrompt,
+  });
   // Non-empty transcript substitutions are persistence-only; the effective
   // prompt must still reach the model when no hook supplied an explicit copy.
   const modelPromptText =
     modelPrompt?.text ??
+    queuedUserTranscriptSubstitution?.prompt ??
     (transcriptPrompt?.trim() && !transcriptPromptParts
       ? extracted.text
       : (transcriptPrompt ?? extracted.text));
@@ -183,7 +219,7 @@ export function resolveRuntimeContextPromptParts(params: {
   const fallbackPromptParts = !modelPromptBuildContext
     ? modelPrompt
       ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ?? transcriptPromptParts)
-      : transcriptPromptParts
+      : (queuedUserTranscriptSubstitution?.parts ?? transcriptPromptParts)
     : undefined;
   // Source context sits inside the active prompt; provenance sits outside all
   // prompt transforms. Preserve that nesting order when hiding both.
