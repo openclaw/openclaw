@@ -114,10 +114,14 @@ export function buildChannelSendResult(
   /** Legacy raw channel result to normalize. */
   result: ChannelSendRawResult,
 ) {
-  return {
+  const normalizedResult = {
     channel,
     ok: result.ok,
     messageId: result.messageId ?? "",
     error: result.error ? new Error(result.error) : undefined,
   };
+  if (!result.ok) {
+    throw new Error(result.error?.trim() || `Channel send failed for ${channel}`);
+  }
+  return normalizedResult;
 }
