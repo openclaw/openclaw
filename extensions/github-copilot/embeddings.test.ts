@@ -312,9 +312,9 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     await githubCopilotMemoryEmbeddingProviderAdapter.create({
       ...defaultCreateOptions(),
       remote: {
-        apiKey: "ignored-at-runtime",
+        apiKey: "test-token-placeholder",
         baseUrl: "https://proxy.example/v1",
-        headers: { "X-Proxy-Token": "proxy" },
+        headers: { "X-Proxy-Token": "test-token-placeholder" },
       },
     } as never);
 
@@ -325,7 +325,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
     expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
-    expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
+    expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("test-token-placeholder");
   });
 
   it("includes provider, baseUrl, and model in runtime cache data", async () => {
