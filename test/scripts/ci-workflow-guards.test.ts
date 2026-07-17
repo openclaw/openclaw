@@ -80,6 +80,7 @@ function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
   nativeI18nCapabilities?: boolean;
+  openClawKitTests?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
@@ -200,6 +201,9 @@ function runCiManifestFixture(options: {
           : []),
         ...((options.androidCiCapabilities ?? options.bundledPlanner)
           ? ["android-ci-contract-v2"]
+          : []),
+        ...((options.openClawKitTests ?? options.bundledPlanner)
+          ? ["openclawkit-tests-contract-v1"]
           : []),
       ].join("\n"),
     );
@@ -3278,6 +3282,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(legacy.outputs.historical_target).toBe("true");
     expect(legacy.outputs.run_ios_build).toBe("false");
     expect(legacy.outputs.run_native_i18n).toBe("false");
+    expect(legacy.outputs.run_openclawkit_tests).toBe("false");
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
@@ -3307,6 +3312,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(current.status, current.output).toBe(0);
     expect(current.outputs.run_ios_build).toBe("true");
     expect(current.outputs.run_native_i18n).toBe("true");
+    expect(current.outputs.run_openclawkit_tests).toBe("true");
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
@@ -3544,6 +3550,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const swiftLint = workflow.jobs["macos-swift"].steps.find(
       (step: { name?: string }) => step.name === "Swift lint",
     );
+    const openClawKitTests = workflow.jobs["macos-swift"].steps.find(
+      (step: { name?: string }) => step.name === "OpenClawKit tests",
+    );
     expect(swiftInstall.run).toContain("brew install xcodegen swiftlint");
     expect(swiftInstall.run).not.toContain("brew install xcodegen swiftlint swiftformat");
     expect(swiftInstall.run).toContain(
@@ -3571,6 +3580,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(swiftInstall.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
     expect(swiftLint.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(swiftLint.run).toContain('elif [[ "$HISTORICAL_TARGET" == "true" ]]');
+    expect(openClawKitTests.if).toBe("needs.preflight.outputs.run_openclawkit_tests == 'true'");
 
     const checkShard = workflow.jobs["check-shard"].steps.find(
       (step: { name?: string }) => step.name === "Run check shard",
