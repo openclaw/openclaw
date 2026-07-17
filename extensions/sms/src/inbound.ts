@@ -89,6 +89,9 @@ export async function dispatchSmsInboundEvent(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
   channelRuntime: SmsChannelRuntime;
+  turnAdoptionLifecycle?: NonNullable<
+    Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+  >;
   log?: SmsLog;
 }): Promise<void> {
   const from = normalizeSmsPhoneNumber(params.msg.from);
@@ -127,6 +130,9 @@ export async function dispatchSmsInboundEvent(params: {
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     adapter: {
       ingest: (msg) => ({
         id: msg.messageSid,
