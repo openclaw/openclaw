@@ -269,7 +269,7 @@ function J(t, e, n, o) {
 function Ae(t, e) {
   return Math.max(1, Math.round(B(t) ?? e));
 }
-function q(t) {
+function G(t) {
   let e = t === Number.POSITIVE_INFINITY ? 2147e6 : (B(t) ?? 0);
   return Math.min(Math.max(Math.round(e), 0), 2147e6);
 }
@@ -280,8 +280,8 @@ function ze(t, e) {
 }
 function Xe(t = Q, e) {
   let n = Ae(e?.attempts, t.attempts),
-    o = q(J(e?.minDelayMs, t.minDelayMs, 0)),
-    i = Math.max(o, q(J(e?.maxDelayMs, t.maxDelayMs, 0)));
+    o = G(J(e?.minDelayMs, t.minDelayMs, 0)),
+    i = Math.max(o, G(J(e?.maxDelayMs, t.maxDelayMs, 0)));
   return { attempts: n, minDelayMs: o, maxDelayMs: i, jitter: ze(e?.jitter, t.jitter) };
 }
 function Ze(t, e, n, o) {
@@ -316,7 +316,7 @@ function $e(t = {}) {
           return await r();
         } catch (D) {
           if ((d.push(D), E === g - 1)) break;
-          await e(q(u * 2 ** E));
+          await e(G(u * 2 ** E));
         }
       throw o(d);
     }
@@ -325,7 +325,7 @@ function $e(t = {}) {
       p = l.attempts,
       f = l.minDelayMs,
       y = l.maxDelayMs > 0 ? l.maxDelayMs : Number.POSITIVE_INFINITY,
-      T = a.retryAfterMaxDelayMs === void 0 ? y : Math.max(f, q(J(a.retryAfterMaxDelayMs, y, 0))),
+      T = a.retryAfterMaxDelayMs === void 0 ? y : Math.max(f, G(J(a.retryAfterMaxDelayMs, y, 0))),
       _ = a.random ?? n,
       C = a.sleep ?? e,
       P = a.shouldRetry ?? (() => !0);
@@ -338,7 +338,7 @@ function $e(t = {}) {
           N = a.retryAfterMs?.(E),
           x = typeof N == "number" && Number.isFinite(N),
           U = typeof a.delayMs == "function" ? a.delayMs(D) : a.delayMs,
-          ue = U === void 0 ? void 0 : q(U),
+          ue = U === void 0 ? void 0 : G(U),
           Be = x ? Math.max(N, f) : ue === void 0 ? f * 2 ** (g - 1) : Math.max(ue, f),
           X = x ? T : y,
           v = Math.min(Be, X),
@@ -353,7 +353,7 @@ function $e(t = {}) {
   };
 }
 var xt = $e();
-var G = class extends Error {
+var O = class extends Error {
     constructor(e) {
       (super(e.message ?? "request failed"),
         (this.name = "GatewayProtocolRequestError"),
@@ -618,7 +618,7 @@ var G = class extends Error {
           })
           .catch((r) => {
             if (!this.isActive(e, n)) return;
-            let s = r instanceof G ? r : new G({ message: String(r) }),
+            let s = r instanceof O ? r : new O({ message: String(r) }),
               u = this.opts.onConnectFailure?.(s, i) ?? {
                 closeCode: 1008,
                 closeReason: "connect failed",
@@ -679,7 +679,7 @@ var G = class extends Error {
         return;
       }
       (this.finishRequestTiming(e.id, n, !1, e.error?.code),
-        n.reject(this.opts.createRequestError?.(e.error ?? {}) ?? new G(e.error ?? {})));
+        n.reject(this.opts.createRequestError?.(e.error ?? {}) ?? new O(e.error ?? {})));
     }
     handleClose(e, n, o, i) {
       if (this.socket !== e) {
@@ -813,7 +813,7 @@ var Je = 4,
     Gy: 0x6666666666666666666666666666666666666666666666666666666666666658n,
   }),
   { p: Y, n: V, Gx: _e, Gy: Ce, a: te, d: ne, h: tt } = Me,
-  O = 32,
+  q = 32,
   nt = (...t) => {
     "captureStackTrace" in Error &&
       typeof Error.captureStackTrace == "function" &&
@@ -886,7 +886,7 @@ var Je = 4,
       n
     );
   },
-  ct = (t = O) => xe().getRandomValues(z(t)),
+  ct = (t = q) => xe().getRandomValues(z(t)),
   W = BigInt,
   S = (t, e, n, o = "bad number: out of range") => {
     if (!ot(t)) throw new TypeError(o);
@@ -951,7 +951,7 @@ var oe = (t) => (t instanceof k ? t : m("Point expected")),
     }
     static fromBytes(e, n = !1) {
       let o = ne,
-        i = ce(I(e, O)),
+        i = ce(I(e, q)),
         r = e[31];
       i[31] = r & -129;
       let s = Ue(i);
@@ -1149,8 +1149,8 @@ var He = (t) => Ne(Pe(S(t, 0n, re), 64)).reverse(),
       s = r.toBytes();
     return { head: n, prefix: o, scalar: i, point: r, pointBytes: s };
   },
-  de = (t) => ae(I(t, O)).then(Le),
-  pt = (t) => Le(lt(I(t, O))),
+  de = (t) => ae(I(t, q)).then(Le),
+  pt = (t) => Le(lt(I(t, q))),
   ft = (t) => de(t).then((e) => e.pointBytes);
 var ht = (t) => ae(t.hashable).then(t.finish);
 var yt = (t, e, n) => {
@@ -1179,7 +1179,7 @@ var Tt = {
     },
     sha512: void 0,
   },
-  gt = (t) => ((t = t === void 0 ? ct(O) : t), I(t, O));
+  gt = (t) => ((t = t === void 0 ? ct(q) : t), I(t, q));
 var Et = Object.freeze({
     getExtendedPublicKeyAsync: de,
     getExtendedPublicKey: pt,
@@ -1231,6 +1231,7 @@ export {
   Re as GATEWAY_CLIENT_MODES,
   j as GatewayBrowserDeviceAuthLifecycle,
   ee as GatewayProtocolClient,
+  O as GatewayProtocolRequestError,
   et as MIN_CLIENT_PROTOCOL_VERSION,
   Je as PROTOCOL_VERSION,
   Et as ed25519Utils,

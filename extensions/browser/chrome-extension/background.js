@@ -463,6 +463,7 @@ chrome.alarms.create("openclaw-relay-watchdog", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "openclaw-relay-watchdog") {
     void connectRelay();
+    void copilot.drainAborts();
     void copilot.drainArchives();
   }
 });

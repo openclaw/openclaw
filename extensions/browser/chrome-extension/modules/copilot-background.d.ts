@@ -38,6 +38,7 @@ export function createCopilotController(options: Record<string, unknown>): {
   onConsentChanged(): Promise<void>;
   onTabRemoved(tabId: number): Promise<void>;
   refreshConfig(): Promise<void>;
-  drainArchives(): Promise<void>;
+  drainAborts(gatewayScope?: string | null): Promise<void>;
+  drainArchives(gatewayScope?: string | null): Promise<void>;
   registry: CopilotSessionRegistry;
 };

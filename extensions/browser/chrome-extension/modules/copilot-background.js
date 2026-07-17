@@ -1,4 +1,4 @@
-import { CopilotGatewayClient } from "./copilot-gateway.js";
+import { CopilotGatewayClient, isDefinitiveGatewayRejection } from "./copilot-gateway.js";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
 import {
   buildCopilotChatSendParams,
@@ -130,10 +130,17 @@ export function createCopilotController({
   const subscribedKeys = new Set();
   const sendsByTab = new Set();
   const ensureByTab = new Map();
+  const suspendByTab = new Map();
   const tabRevisions = new Map();
+  const portRevisions = new Map();
   const historyTimers = new Map();
   let gatewayStatus = { state: "off", label: "Pair the extension first" };
   let currentConfig = null;
+  let gatewayRevision = 0;
+  let gatewayStatusRevision = 0;
+  let lastReadyStatus = null;
+  let abortRetryTimer = null;
+  let abortRetryDelayMs = 250;
   let initialized = null;
 
   async function initialize() {
@@ -171,11 +178,28 @@ export function createCopilotController({
     }
   }
 
+  function currentGatewayScope() {
+    return typeof currentConfig?.gatewayUrl === "string" ? currentConfig.gatewayUrl : null;
+  }
+
   async function refreshConfig() {
-    currentConfig = await getConfig();
-    const gatewayUrl = gatewayUrlFromPairing(currentConfig.relayUrl, currentConfig.gatewayUrl);
-    currentConfig.gatewayUrl = gatewayUrl;
-    if (!currentConfig.relayUrl || !gatewayUrl) {
+    const nextConfig = await getConfig();
+    const nextGatewayScope = gatewayUrlFromPairing(nextConfig.relayUrl, nextConfig.gatewayUrl);
+    const previousGatewayScope = currentGatewayScope();
+    if (previousGatewayScope && previousGatewayScope !== nextGatewayScope) {
+      clearAbortRetry();
+      lastReadyStatus = null;
+      gatewayStatusRevision += 1;
+      gatewayRevision += 1;
+      await registry.closeScope(previousGatewayScope);
+      await drainArchives(previousGatewayScope);
+      gateway.stop();
+      await Promise.allSettled([...ensureByTab.values()]);
+      sendsByTab.clear();
+      subscribedKeys.clear();
+    }
+    currentConfig = { ...nextConfig, gatewayUrl: nextGatewayScope };
+    if (!currentConfig.relayUrl || !nextGatewayScope) {
       gateway.stop();
       gatewayStatus = {
         state: "off",
@@ -189,12 +213,17 @@ export function createCopilotController({
     try {
       resolveBindingTarget(currentConfig);
     } catch (error) {
+      clearAbortRetry();
+      lastReadyStatus = null;
+      gatewayStatusRevision += 1;
+      await registry.closeScope(nextGatewayScope);
+      await drainArchives(nextGatewayScope);
       gateway.stop();
       gatewayStatus = { state: "denied", label: error.message };
       broadcastStatus();
       return;
     }
-    gateway.start(gatewayUrl);
+    gateway.start(nextGatewayScope);
   }
 
   async function refreshPanelState(tabId) {
@@ -205,30 +234,36 @@ export function createCopilotController({
       return;
     }
     const shared = await isTabShared(tabId);
+    const entry = registry.get(tabId, currentGatewayScope());
+    const reconcilingRun = Boolean(entry?.activeRunId);
     const state = !currentConfig?.relayUrl
       ? "needs-pairing"
       : !shared
         ? "needs-sharing"
-        : gatewayStatus.state;
+        : reconcilingRun
+          ? "reconciling"
+          : gatewayStatus.state;
     broadcastTab(tabId, {
       type: "panel.state",
       state,
       label:
         state === "needs-sharing"
           ? "Share this tab before the copilot can act"
-          : gatewayStatus.label,
+          : state === "reconciling"
+            ? "Stopping the previous tab run"
+            : gatewayStatus.label,
       requestId: gatewayStatus.requestId,
       tab: {
         title: typeof tab.title === "string" ? tab.title : "",
         url: typeof tab.url === "string" ? tab.url : "",
         label: safeTabLabel(tab),
       },
-      sessionKey: registry.get(tabId)?.sessionKey,
+      sessionKey: entry?.sessionKey,
     });
     if (shared && gatewayStatus.state === "ready") {
       await ensureSession(tabId);
     } else if (!shared) {
-      await unsubscribeTab(tabId);
+      await suspendTab(tabId);
     }
   }
 
@@ -240,8 +275,8 @@ export function createCopilotController({
     subscribedKeys.add(entry.sessionKey);
   }
 
-  async function unsubscribeTab(tabId) {
-    const entry = registry.get(tabId);
+  async function unsubscribeTab(tabId, gatewayScope = currentGatewayScope()) {
+    const entry = registry.get(tabId, gatewayScope);
     if (!entry || !subscribedKeys.delete(entry.sessionKey)) {
       return;
     }
@@ -252,7 +287,34 @@ export function createCopilotController({
     }
   }
 
-  async function hydrate(tabId, entry = registry.get(tabId)) {
+  async function suspendTab(tabId, expectedPortRevision) {
+    if (expectedPortRevision !== undefined && portRevisions.get(tabId) !== expectedPortRevision) {
+      return;
+    }
+    const gatewayScope = currentGatewayScope();
+    const entry = registry.get(tabId, gatewayScope);
+    const queued = await registry.queueAbort(tabId, gatewayScope);
+    sendsByTab.delete(tabId);
+    if (queued && gateway.ready) {
+      await abortEntry(queued);
+    }
+    if (expectedPortRevision !== undefined && portRevisions.get(tabId) !== expectedPortRevision) {
+      return;
+    }
+    await unsubscribeTab(tabId, gatewayScope);
+  }
+
+  function scheduleSuspend(tabId, portRevision) {
+    const pending = suspendTab(tabId, portRevision).finally(() => {
+      if (suspendByTab.get(tabId) === pending) {
+        suspendByTab.delete(tabId);
+      }
+    });
+    suspendByTab.set(tabId, pending);
+    return pending;
+  }
+
+  async function hydrate(tabId, entry = registry.get(tabId, currentGatewayScope())) {
     if (!entry || !portsByTab.has(tabId)) {
       return;
     }
@@ -284,11 +346,58 @@ export function createCopilotController({
     );
   }
 
-  async function ensureSessionInner(tabId, revision) {
+  function sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope) {
+    return (
+      (tabRevisions.get(tabId) ?? 0) === tabRevision &&
+      gatewayRevision === configRevision &&
+      currentGatewayScope() === gatewayScope
+    );
+  }
+
+  async function sessionSetupIsAuthorized(tabId, tabRevision, configRevision, gatewayScope) {
+    if (
+      !sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope) ||
+      !portsByTab.has(tabId)
+    ) {
+      return false;
+    }
+    try {
+      const shared = await isTabShared(tabId);
+      return (
+        shared &&
+        portsByTab.has(tabId) &&
+        sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  async function suspendUnauthorizedSetup(tabId) {
+    await suspendTab(tabId);
+    if (portsByTab.has(tabId)) {
+      void refreshPanelState(tabId);
+    }
+  }
+
+  async function ensureSessionInner(
+    tabId,
+    tabRevision,
+    configRevision,
+    gatewayScope,
+    hydrateHistory,
+  ) {
     if (!gateway.ready || !(await isTabShared(tabId))) {
       return null;
     }
     const { targetId } = await attachDebugger(tabId);
+    if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
+      return null;
+    }
+    if (!(await sessionSetupIsAuthorized(tabId, tabRevision, configRevision, gatewayScope))) {
+      await suspendUnauthorizedSetup(tabId);
+      return null;
+    }
     const binding = {
       kind: "tab",
       tabId,
@@ -296,10 +405,10 @@ export function createCopilotController({
       profile: "chrome",
       targetId,
     };
-    let entry = registry.get(tabId);
+    let entry = registry.get(tabId, gatewayScope);
     if (entry) {
-      await registry.updateBinding(tabId, binding);
-      entry = registry.get(tabId);
+      await registry.updateBinding(tabId, gatewayScope, binding);
+      entry = registry.get(tabId, gatewayScope);
     } else {
       const mainSessionKey = gateway.hello?.snapshot?.sessionDefaults?.mainSessionKey;
       const sessionKey = deriveTabSessionKey(mainSessionKey, crypto.randomUUID());
@@ -311,6 +420,7 @@ export function createCopilotController({
         label: "Browser copilot",
       });
       entry = await registry.put(tabId, {
+        gatewayScope,
         sessionKey,
         sessionId: created?.sessionId,
         binding,
@@ -320,27 +430,41 @@ export function createCopilotController({
         await chromeApi.tabs.get(tabId);
       } catch {
         await registry.closeTab(tabId);
-        await drainArchives();
+        await drainArchives(gatewayScope);
         return null;
       }
     }
-    if ((tabRevisions.get(tabId) ?? 0) !== revision) {
+    if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
       await registry.closeTab(tabId);
-      await drainArchives();
+      await drainArchives(gatewayScope);
+      return null;
+    }
+    if (!(await sessionSetupIsAuthorized(tabId, tabRevision, configRevision, gatewayScope))) {
+      await suspendUnauthorizedSetup(tabId);
       return null;
     }
     await subscribe(entry);
-    if ((tabRevisions.get(tabId) ?? 0) !== revision) {
-      await unsubscribeTab(tabId);
+    if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
+      await unsubscribeTab(tabId, gatewayScope);
       await registry.closeTab(tabId);
-      await drainArchives();
+      await drainArchives(gatewayScope);
       return null;
     }
-    await hydrate(tabId, entry);
-    if ((tabRevisions.get(tabId) ?? 0) !== revision) {
-      await unsubscribeTab(tabId);
+    if (!(await sessionSetupIsAuthorized(tabId, tabRevision, configRevision, gatewayScope))) {
+      await suspendUnauthorizedSetup(tabId);
+      return null;
+    }
+    if (hydrateHistory) {
+      await hydrate(tabId, entry);
+    }
+    if (!sessionSetupIsCurrent(tabId, tabRevision, configRevision, gatewayScope)) {
+      await unsubscribeTab(tabId, gatewayScope);
       await registry.closeTab(tabId);
-      await drainArchives();
+      await drainArchives(gatewayScope);
+      return null;
+    }
+    if (!(await sessionSetupIsAuthorized(tabId, tabRevision, configRevision, gatewayScope))) {
+      await suspendUnauthorizedSetup(tabId);
       return null;
     }
     broadcastTab(tabId, {
@@ -352,13 +476,24 @@ export function createCopilotController({
     return entry;
   }
 
-  async function ensureSession(tabId) {
+  async function ensureSession(tabId, { hydrateHistory = true } = {}) {
     const current = ensureByTab.get(tabId);
     if (current) {
       return await current;
     }
-    const revision = tabRevisions.get(tabId) ?? 0;
-    const pending = ensureSessionInner(tabId, revision).finally(() => {
+    const gatewayScope = currentGatewayScope();
+    if (!gatewayScope) {
+      return null;
+    }
+    const tabRevision = tabRevisions.get(tabId) ?? 0;
+    const configRevision = gatewayRevision;
+    const pending = ensureSessionInner(
+      tabId,
+      tabRevision,
+      configRevision,
+      gatewayScope,
+      hydrateHistory,
+    ).finally(() => {
       if (ensureByTab.get(tabId) === pending) {
         ensureByTab.delete(tabId);
       }
@@ -367,31 +502,57 @@ export function createCopilotController({
     return await pending;
   }
 
-  async function sendMessage(tabId, text) {
+  function panelOwnsSend(tabId, port, portRevision) {
+    return portRevisions.get(tabId) === portRevision && portsByTab.get(tabId)?.has(port) === true;
+  }
+
+  async function sendMessage(tabId, port, portRevision, text) {
+    if (!panelOwnsSend(tabId, port, portRevision)) {
+      throw new Error("This panel is no longer attached to the tab.");
+    }
     if (sendsByTab.has(tabId)) {
       throw new Error("Wait for the current turn to finish.");
     }
     if (!(await isTabShared(tabId))) {
       throw new Error("This tab is not shared with OpenClaw.");
     }
-    const entry = await ensureSession(tabId);
+    const entry = await ensureSession(tabId, { hydrateHistory: false });
     if (!entry) {
       throw new Error("This tab no longer exists.");
     }
+    const params = buildCopilotChatSendParams({
+      binding: entry.binding,
+      message: text,
+      sessionId: entry.sessionId,
+      sessionKey: entry.sessionKey,
+    });
+    const started = await registry.startRun(tabId, entry.gatewayScope, params.idempotencyKey);
+    if (!started) {
+      throw new Error("Wait for the current turn to finish.");
+    }
+    const stillShared = await isTabShared(tabId);
+    if (!stillShared || !panelOwnsSend(tabId, port, portRevision)) {
+      await registry.finishRun(entry.gatewayScope, entry.sessionKey, params.idempotencyKey);
+      await suspendTab(tabId);
+      throw new Error(
+        stillShared
+          ? "This panel is no longer attached to the tab."
+          : "This tab is not shared with OpenClaw.",
+      );
+    }
     sendsByTab.add(tabId);
     try {
-      const result = await gateway.request(
-        "chat.send",
-        buildCopilotChatSendParams({
-          binding: entry.binding,
-          message: text,
-          sessionId: entry.sessionId,
-          sessionKey: entry.sessionKey,
-        }),
-      );
+      const result = await gateway.request("chat.send", params);
       return result;
     } catch (error) {
       sendsByTab.delete(tabId);
+      if (isDefinitiveGatewayRejection(error)) {
+        await registry.finishRun(entry.gatewayScope, entry.sessionKey, params.idempotencyKey);
+      } else {
+        await registry.queueAbort(tabId, entry.gatewayScope);
+        scheduleAbortRetry();
+      }
+      await refreshPanelState(tabId);
       throw error;
     }
   }
@@ -402,25 +563,117 @@ export function createCopilotController({
     await refreshPanelState(tabId);
   }
 
-  async function drainArchives() {
-    if (!gateway.ready) {
+  async function drainArchives(gatewayScope = currentGatewayScope()) {
+    if (!gateway.ready || !gatewayScope) {
       return;
     }
-    for (const entry of registry.pendingArchives()) {
+    for (const entry of registry.pendingArchives(gatewayScope)) {
       try {
         await archiveCopilotSession(gateway, entry);
         subscribedKeys.delete(entry.sessionKey);
-        await registry.resolveArchive(entry.sessionKey);
+        await registry.resolveArchive(gatewayScope, entry.sessionKey);
       } catch {
         // The watchdog retries after reconnect or after an active run reaches terminal state.
       }
     }
   }
 
+  async function abortEntry(entry) {
+    try {
+      await gateway.request("sessions.abort", {
+        key: entry.sessionKey,
+        runId: entry.activeRunId,
+      });
+    } catch {
+      scheduleAbortRetry();
+      return false;
+    }
+    sendsByTab.delete(entry.tabId);
+    const finished = await registry.finishRun(
+      entry.gatewayScope,
+      entry.sessionKey,
+      entry.activeRunId,
+    );
+    if (finished) {
+      broadcastTab(entry.tabId, { type: "panel.turn-reset" });
+      void refreshPanelState(entry.tabId);
+    }
+    return true;
+  }
+
+  async function drainAborts(gatewayScope = currentGatewayScope()) {
+    if (!gateway.ready || !gatewayScope) {
+      return;
+    }
+    for (const entry of registry.pendingAborts(gatewayScope)) {
+      await abortEntry(entry);
+    }
+    if (
+      registry.pendingAborts(gatewayScope).length === 0 &&
+      gatewayStatus.state === "error" &&
+      lastReadyStatus
+    ) {
+      gatewayStatus = lastReadyStatus;
+      broadcastStatus();
+    }
+  }
+
+  function clearAbortRetry() {
+    if (abortRetryTimer) {
+      clearTimeout(abortRetryTimer);
+      abortRetryTimer = null;
+    }
+    abortRetryDelayMs = 250;
+  }
+
+  function scheduleAbortRetry() {
+    const gatewayScope = currentGatewayScope();
+    if (abortRetryTimer || !gateway.ready || !gatewayScope) {
+      return;
+    }
+    const delayMs = abortRetryDelayMs;
+    abortRetryTimer = setTimeout(() => {
+      abortRetryTimer = null;
+      void (async () => {
+        await drainAborts(gatewayScope);
+        if (registry.pendingAborts(gatewayScope).length > 0) {
+          abortRetryDelayMs = Math.min(abortRetryDelayMs * 2, 5_000);
+          scheduleAbortRetry();
+        } else {
+          abortRetryDelayMs = 250;
+        }
+      })();
+    }, delayMs);
+  }
+
+  async function reconcileGatewayReady(status, statusRevision) {
+    const gatewayScope = currentGatewayScope();
+    if (!gatewayScope) {
+      return;
+    }
+    // A connection gap loses terminal events. Abort every run whose durable
+    // custody is still active before panels can send again.
+    await registry.queueActiveAborts(gatewayScope);
+    await drainAborts(gatewayScope);
+    await drainArchives(gatewayScope);
+    if (
+      statusRevision !== gatewayStatusRevision ||
+      !gateway.ready ||
+      currentGatewayScope() !== gatewayScope
+    ) {
+      return;
+    }
+    gatewayStatus = registry.pendingAborts(gatewayScope).length
+      ? { state: "error", label: "Could not stop the previous tab run" }
+      : status;
+    broadcastStatus();
+  }
+
   async function onTabRemoved(tabId) {
     tabRevisions.set(tabId, (tabRevisions.get(tabId) ?? 0) + 1);
     await initialize();
     portsByTab.delete(tabId);
+    portRevisions.set(tabId, (portRevisions.get(tabId) ?? 0) + 1);
     sendsByTab.delete(tabId);
     const timer = historyTimers.get(tabId);
     if (timer) {
@@ -434,7 +687,7 @@ export function createCopilotController({
     }
     await registry.closeTab(tabId);
     await panelBindings.remove(tabId);
-    await drainArchives();
+    await drainArchives(currentGatewayScope());
   }
 
   async function onConsentChanged() {
@@ -466,11 +719,13 @@ export function createCopilotController({
     const ports = portsByTab.get(tabId) ?? new Set();
     ports.add(port);
     portsByTab.set(tabId, ports);
+    const portRevision = (portRevisions.get(tabId) ?? 0) + 1;
+    portRevisions.set(tabId, portRevision);
     port.onMessage.addListener((message) => {
       void (async () => {
         try {
           if (message?.type === "panel.send") {
-            await sendMessage(tabId, message.message);
+            await sendMessage(tabId, port, portRevision, message.message);
           } else if (message?.type === "panel.share") {
             await shareTab(tabId);
           } else if (message?.type === "panel.refresh") {
@@ -485,18 +740,28 @@ export function createCopilotController({
       ports.delete(port);
       if (ports.size === 0) {
         portsByTab.delete(tabId);
-        void unsubscribeTab(tabId);
+        const portRevision = (portRevisions.get(tabId) ?? 0) + 1;
+        portRevisions.set(tabId, portRevision);
+        void scheduleSuspend(tabId, portRevision);
       }
     });
+    await suspendByTab.get(tabId);
     await refreshPanelState(tabId);
   }
 
   gateway.onStatus((status) => {
-    gatewayStatus = status;
+    const statusRevision = ++gatewayStatusRevision;
+    subscribedKeys.clear();
     if (status.state === "ready") {
-      subscribedKeys.clear();
-      void drainArchives();
+      lastReadyStatus = status;
+      gatewayStatus = { state: "connecting", label: "Reconciling previous tab runs" };
+      broadcastStatus();
+      void reconcileGatewayReady(status, statusRevision);
+      return;
     }
+    clearAbortRetry();
+    lastReadyStatus = null;
+    gatewayStatus = status;
     broadcastStatus();
   });
 
@@ -506,7 +771,7 @@ export function createCopilotController({
       return;
     }
     for (const [tabId, ports] of portsByTab) {
-      const entry = registry.get(tabId);
+      const entry = registry.get(tabId, currentGatewayScope());
       if (entry?.sessionKey !== sessionKey) {
         continue;
       }
@@ -521,8 +786,13 @@ export function createCopilotController({
         event.event === "chat" &&
         (state === "final" || state === "aborted" || state === "error")
       ) {
-        sendsByTab.delete(tabId);
-        scheduleHydrate(tabId);
+        const runId = event.payload?.runId;
+        if (typeof runId === "string" && entry.activeRunId === runId) {
+          const gatewayScope = currentGatewayScope();
+          sendsByTab.delete(tabId);
+          scheduleHydrate(tabId);
+          void registry.finishRun(gatewayScope, entry.sessionKey, runId);
+        }
         void drainArchives();
       }
     }
@@ -540,6 +810,7 @@ export function createCopilotController({
     onConsentChanged,
     onTabRemoved,
     refreshConfig,
+    drainAborts,
     drainArchives,
     registry,
   };

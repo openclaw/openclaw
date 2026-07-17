@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CopilotPanelBindingRegistry, CopilotSessionRegistry } from "./copilot-session-registry.js";
 
+const GATEWAY_SCOPE = "ws://127.0.0.1:18789/";
+
 function storageArea(initial: Record<string, unknown> = {}) {
   const values = { ...initial };
   const setCalls: Record<string, unknown>[] = [];
@@ -27,13 +29,24 @@ describe("CopilotSessionRegistry", () => {
       {
         copilotSessionRegistryV1: {
           sessions: {
-            1: { browserInstanceId: "old", sessionKey: "session-old", sessionId: "id-old" },
+            1: {
+              browserInstanceId: "old",
+              gatewayScope: GATEWAY_SCOPE,
+              sessionKey: "session-old",
+              sessionId: "id-old",
+            },
             2: {
               browserInstanceId: "current",
+              gatewayScope: GATEWAY_SCOPE,
               sessionKey: "session-closed",
               sessionId: "id-closed",
             },
-            3: { browserInstanceId: "current", sessionKey: "session-live", sessionId: "id-live" },
+            3: {
+              browserInstanceId: "current",
+              gatewayScope: GATEWAY_SCOPE,
+              sessionKey: "session-live",
+              sessionId: "id-live",
+            },
           },
           pendingArchives: [],
         },
@@ -44,10 +57,10 @@ describe("CopilotSessionRegistry", () => {
 
     await registry.initialize(new Set([1, 3]));
 
-    expect(registry.get(1)).toBeNull();
-    expect(registry.get(2)).toBeNull();
-    expect(registry.get(3)?.sessionKey).toBe("session-live");
-    expect(registry.pendingArchives().map((entry) => entry.sessionKey)).toEqual([
+    expect(registry.get(1, GATEWAY_SCOPE)).toBeNull();
+    expect(registry.get(2, GATEWAY_SCOPE)).toBeNull();
+    expect(registry.get(3, GATEWAY_SCOPE)?.sessionKey).toBe("session-live");
+    expect(registry.pendingArchives(GATEWAY_SCOPE).map((entry) => entry.sessionKey)).toEqual([
       "session-old",
       "session-closed",
     ]);
@@ -57,15 +70,71 @@ describe("CopilotSessionRegistry", () => {
     const mock = storage();
     const registry = new CopilotSessionRegistry(mock as never);
     await registry.initialize(new Set([8]));
-    await registry.put(8, { sessionKey: "session-8", sessionId: "id-8" });
+    await registry.put(8, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-8",
+      sessionId: "id-8",
+    });
 
     await registry.closeTab(8);
     await registry.closeTab(8);
 
-    expect(registry.get(8)).toBeNull();
-    expect(registry.pendingArchives()).toHaveLength(1);
-    await registry.resolveArchive("session-8");
-    expect(registry.pendingArchives()).toEqual([]);
+    expect(registry.get(8, GATEWAY_SCOPE)).toBeNull();
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toHaveLength(1);
+    await registry.resolveArchive(GATEWAY_SCOPE, "session-8");
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
+  });
+
+  it("never reuses or drains session custody across Gateways", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    const otherGateway = "ws://127.0.0.1:28789/";
+    await registry.initialize(new Set([9]));
+    await registry.put(9, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-a",
+    });
+    await registry.put(9, {
+      gatewayScope: otherGateway,
+      sessionKey: "session-b",
+    });
+
+    expect(registry.get(9, GATEWAY_SCOPE)).toBeNull();
+    expect(registry.get(9, otherGateway)?.sessionKey).toBe("session-b");
+    expect(registry.pendingArchives(otherGateway)).toEqual([]);
+    expect(registry.pendingArchives(GATEWAY_SCOPE).map((entry) => entry.sessionKey)).toEqual([
+      "session-a",
+    ]);
+    await registry.resolveArchive(otherGateway, "session-a");
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toHaveLength(1);
+    await registry.resolveArchive(GATEWAY_SCOPE, "session-a");
+    expect(registry.pendingArchives(GATEWAY_SCOPE)).toEqual([]);
+  });
+
+  it("persists active-run cancellation until the owning Gateway resolves it", async () => {
+    const mock = storage();
+    const registry = new CopilotSessionRegistry(mock as never);
+    await registry.initialize(new Set([10]));
+    await registry.put(10, {
+      gatewayScope: GATEWAY_SCOPE,
+      sessionKey: "session-10",
+    });
+
+    await expect(registry.startRun(10, GATEWAY_SCOPE, "run-10")).resolves.toMatchObject({
+      activeRunId: "run-10",
+    });
+    await registry.queueActiveAborts(GATEWAY_SCOPE);
+    expect(registry.pendingAborts(GATEWAY_SCOPE)).toEqual([
+      expect.objectContaining({
+        abortPending: true,
+        activeRunId: "run-10",
+        sessionKey: "session-10",
+      }),
+    ]);
+    await expect(registry.finishRun(GATEWAY_SCOPE, "session-10", "stale-run")).resolves.toBe(false);
+    expect(registry.pendingAborts(GATEWAY_SCOPE)).toHaveLength(1);
+    await expect(registry.finishRun(GATEWAY_SCOPE, "session-10", "run-10")).resolves.toBe(true);
+    expect(registry.pendingAborts(GATEWAY_SCOPE)).toEqual([]);
   });
 });
 

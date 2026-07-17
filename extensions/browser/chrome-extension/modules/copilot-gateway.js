@@ -4,18 +4,20 @@ import {
   GATEWAY_CLIENT_MODES,
   GatewayBrowserDeviceAuthLifecycle,
   GatewayProtocolClient,
+  GatewayProtocolRequestError,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ed25519Utils,
   getPublicKeyAsync,
   signAsync,
 } from "./copilot-runtime.js";
+import { normalizeGatewayUrl } from "./panel-core.js";
 
 const CLIENT_ID = GATEWAY_CLIENT_IDS.BROWSER_COPILOT;
 const CLIENT_MODE = GATEWAY_CLIENT_MODES.UI;
 const ROLE = "operator";
 const SCOPES = ["operator.read", "operator.write"];
-const IDENTITY_KEY = "copilotDeviceIdentityV1";
+const IDENTITIES_KEY = "copilotDeviceIdentitiesV1";
 const TOKENS_KEY = "copilotDeviceTokensV1";
 
 function toBase64Url(bytes) {
@@ -39,8 +41,9 @@ async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function loadOrCreateIdentity(storage) {
-  const stored = (await storage.get([IDENTITY_KEY]))[IDENTITY_KEY];
+export async function loadOrCreateCopilotIdentity(storage, gatewayScope) {
+  const identities = (await storage.get([IDENTITIES_KEY]))[IDENTITIES_KEY];
+  const stored = identities?.[gatewayScope];
   if (
     typeof stored?.deviceId === "string" &&
     typeof stored?.publicKey === "string" &&
@@ -61,7 +64,12 @@ async function loadOrCreateIdentity(storage) {
     publicKey: toBase64Url(publicKeyBytes),
     secretKey: toBase64Url(secretKey),
   };
-  await storage.set({ [IDENTITY_KEY]: identity });
+  await storage.set({
+    [IDENTITIES_KEY]: {
+      ...(identities && typeof identities === "object" ? identities : {}),
+      [gatewayScope]: identity,
+    },
+  });
   return {
     deviceId: identity.deviceId,
     publicKey: identity.publicKey,
@@ -70,21 +78,24 @@ async function loadOrCreateIdentity(storage) {
   };
 }
 
-function tokenKey({ clientId, deviceId, role }) {
-  return `${clientId}:${deviceId}:${role}`;
+function tokenKey(gatewayScope, { clientId, deviceId, role }) {
+  return `${gatewayScope}\n${clientId}:${deviceId}:${role}`;
 }
 
-function createTokenStore(storage) {
+export function createCopilotTokenStore(storage, gatewayScope) {
   return {
     async load(params) {
       const tokens = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
-      const record = tokens?.[tokenKey(params)];
+      const record = tokens?.[tokenKey(gatewayScope, params)];
       return typeof record?.token === "string" && Array.isArray(record.scopes) ? record : null;
     },
     async store(params) {
       const current = (await storage.get([TOKENS_KEY]))[TOKENS_KEY];
       const tokens = current && typeof current === "object" ? { ...current } : {};
-      tokens[tokenKey(params)] = { token: params.token, scopes: [...params.scopes] };
+      tokens[tokenKey(gatewayScope, params)] = {
+        token: params.token,
+        scopes: [...params.scopes],
+      };
       await storage.set({ [TOKENS_KEY]: tokens });
     },
     async clear(params) {
@@ -93,10 +104,23 @@ function createTokenStore(storage) {
         return;
       }
       const tokens = { ...current };
-      delete tokens[tokenKey(params)];
+      delete tokens[tokenKey(gatewayScope, params)];
       await storage.set({ [TOKENS_KEY]: tokens });
     },
   };
+}
+
+export function resolveCopilotClose(context) {
+  const details = context.connectFailure?.error?.details;
+  return {
+    retry: details?.code === "PAIRING_REQUIRED" || details?.pauseReconnect !== true,
+    notify: !context.connectFailure,
+    pendingError: context.connectFailure?.error,
+  };
+}
+
+export function isDefinitiveGatewayRejection(error) {
+  return error instanceof GatewayProtocolRequestError;
 }
 
 function createBrowserSocket(url, handlers, WebSocketImpl) {
@@ -123,10 +147,7 @@ export class CopilotGatewayClient {
     this.hello = null;
     this.listeners = new Set();
     this.statusListeners = new Set();
-    this.lifecycle = new GatewayBrowserDeviceAuthLifecycle({
-      loadIdentity: () => loadOrCreateIdentity(this.storage),
-      tokenStore: createTokenStore(this.storage),
-    });
+    this.lifecycle = null;
   }
 
   onEvent(listener) {
@@ -140,17 +161,28 @@ export class CopilotGatewayClient {
   }
 
   start(url) {
-    if (this.protocol && this.url === url) {
+    const gatewayScope = normalizeGatewayUrl(url);
+    if (!gatewayScope) {
+      this.stop();
+      this.#emitStatus({ state: "error", label: "Invalid Gateway endpoint" });
+      return;
+    }
+    if (this.protocol && this.url === gatewayScope) {
       return;
     }
     this.stop();
-    this.url = url;
+    this.url = gatewayScope;
+    const lifecycle = new GatewayBrowserDeviceAuthLifecycle({
+      loadIdentity: () => loadOrCreateCopilotIdentity(this.storage, gatewayScope),
+      tokenStore: createCopilotTokenStore(this.storage, gatewayScope),
+    });
+    this.lifecycle = lifecycle;
     this.#emitStatus({ state: "connecting", label: "Connecting to Gateway" });
-    this.protocol = new GatewayProtocolClient({
-      createSocket: (handlers) => createBrowserSocket(url, handlers, this.WebSocketImpl),
+    const protocol = new GatewayProtocolClient({
+      createSocket: (handlers) => createBrowserSocket(gatewayScope, handlers, this.WebSocketImpl),
       createRequestId: () => crypto.randomUUID(),
       buildConnectPlan: ({ nonce }) =>
-        this.lifecycle.buildPlan({
+        lifecycle.buildPlan({
           client: {
             id: CLIENT_ID,
             version: chrome.runtime.getManifest().version,
@@ -181,7 +213,7 @@ export class CopilotGatewayClient {
         locale: navigator.language,
       }),
       onConnectHello: (hello, { plan }) => {
-        void this.lifecycle.acceptHello(hello, plan);
+        void lifecycle.acceptHello(hello, plan);
       },
       onHello: (hello) => {
         this.ready = true;
@@ -191,7 +223,7 @@ export class CopilotGatewayClient {
       onConnectFailure: (error, { plan }) => {
         const details = error.details && typeof error.details === "object" ? error.details : {};
         if (details.code === "AUTH_DEVICE_TOKEN_MISMATCH") {
-          void this.lifecycle.clearStoredToken(plan);
+          void lifecycle.clearStoredToken(plan);
         }
         this.#emitStatus({
           state: details.code === "PAIRING_REQUIRED" ? "approval" : "error",
@@ -202,17 +234,20 @@ export class CopilotGatewayClient {
           closeCode: 4008,
           closeReason: "connect failed",
           reconnectDelayMs: details.code === "PAIRING_REQUIRED" ? 2_000 : undefined,
-          stop: details.pauseReconnect === true,
+          stop: details.pauseReconnect === true && details.code !== "PAIRING_REQUIRED",
         };
       },
-      resolveClose: (context) => ({
-        retry: context.connectFailure?.error?.details?.pauseReconnect !== true,
-        notify: true,
-        pendingError: context.connectFailure?.error,
-      }),
+      resolveClose: resolveCopilotClose,
       onClose: (_context, decision) => {
+        if (this.protocol !== protocol) {
+          return;
+        }
         this.ready = false;
         this.hello = null;
+        if (!decision.retry) {
+          this.protocol = null;
+          this.lifecycle = null;
+        }
         if (decision.notify) {
           this.#emitStatus({ state: "connecting", label: "Gateway reconnecting" });
         }
@@ -228,14 +263,17 @@ export class CopilotGatewayClient {
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: 30_000,
     });
-    this.protocol.start();
+    this.protocol = protocol;
+    protocol.start();
   }
 
   stop() {
     this.ready = false;
     this.hello = null;
-    this.protocol?.stop();
+    const protocol = this.protocol;
     this.protocol = null;
+    protocol?.stop();
+    this.lifecycle = null;
     this.url = null;
   }
 
