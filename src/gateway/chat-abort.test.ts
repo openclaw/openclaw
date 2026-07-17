@@ -562,6 +562,7 @@ describe("abortChatRunsForProvider", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [sessionKey] },
     );
   });
 });

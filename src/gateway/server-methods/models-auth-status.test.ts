@@ -1270,6 +1270,7 @@ describe("models.authLogout", () => {
         state: "aborted",
         stopReason: "auth-revoked",
       }),
+      { sessionKeys: [openrouterRun.sessionKey] },
     );
     const [, payload] = firstRespondCall(opts) ?? [];
     expect((payload as ModelAuthLogoutResult).abortedRunIds).toEqual(["run-openrouter"]);

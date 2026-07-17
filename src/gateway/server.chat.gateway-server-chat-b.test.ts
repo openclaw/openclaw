@@ -4036,6 +4036,7 @@ describe("gateway server chat", () => {
       expect(broadcast).not.toHaveBeenCalledWith(
         "chat",
         expect.objectContaining({ runId: "idem-queued-followup", state: "final" }),
+        expect.anything(),
       );
       dispatchRelease.resolve();
       await waitForFast(() => {
