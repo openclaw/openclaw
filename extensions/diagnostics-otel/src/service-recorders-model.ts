@@ -46,7 +46,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: ModelCallLifecycleDiagnosticEvent,
     errorType?: string,
   ) => ({
-    "gen_ai.operation.name": genAiOperationName(evt.api),
+    "gen_ai.operation.name": genAiOperationName(evt.api, evt.observationUnit),
     "gen_ai.provider.name": lowCardinalityAttr(evt.provider),
     "gen_ai.request.model": lowCardinalityAttr(evt.model),
     ...(errorType ? { "error.type": errorType } : {}),
@@ -55,11 +55,6 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: ModelCallLifecycleDiagnosticEvent,
     errorType?: string,
   ) => {
-    // The standard GenAI series stays request-scoped so opaque CLI-turn latency
-    // cannot be averaged with direct provider-request latency.
-    if (modelCallObservationUnit(evt) !== "request") {
-      return;
-    }
     genAiOperationDurationHistogram.record(
       evt.durationMs / 1000,
       genAiModelCallMetricAttrs(evt, errorType),
