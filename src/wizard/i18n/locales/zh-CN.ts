@@ -159,6 +159,8 @@ export const zh_CN = {
       installFailed: "无法安装 {name}：{reason}",
       noneFound: "未找到基于应用的插件或技能推荐。",
       option: "{name} — {reason}（检测到：{app}）",
+      optionThirdParty:
+        "{name} — {reason}（检测到：{app}）— 第三方 ClawHub 技能；将安装其发布者的代码",
       scanning:
         "正在扫描已安装应用 — 应用名称将通过你配置的模型与 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）…",
       select: "安装推荐的插件和技能",

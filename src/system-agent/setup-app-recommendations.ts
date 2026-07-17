@@ -337,6 +337,9 @@ export async function getSetupAppRecommendations(params: {
   }
   const complete =
     params.deps?.complete ??
+    // Output is bounded by the resolved model's own maxTokens budget (the
+    // stream layer applies it when no explicit cap is passed), so a runaway
+    // completion cannot exceed what the model config already allows.
     (async (prompt: string) => await completeSetupInference({ prompt, runtime: params.runtime }));
   let completion: Awaited<ReturnType<typeof complete>>;
   try {

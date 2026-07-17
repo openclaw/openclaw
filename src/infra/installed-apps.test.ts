@@ -102,6 +102,21 @@ describe("scanInstalledApps", () => {
     });
   });
 
+  it("includes symlinked app bundles", async () => {
+    const roots = await makeFixtureRoot();
+    await createApp(roots.applications, "RealTarget", "com.example.symlinked");
+    await fs.symlink(
+      path.join(roots.applications, "RealTarget.app"),
+      path.join(roots.userApplications, "Linked.app"),
+    );
+    const readBundleId = async () => "com.example.symlinked";
+    const result = await scanInstalledApps({ platform: "darwin", roots, readBundleId });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.apps.map((app) => app.label)).toContain("Linked");
+    }
+  });
+
   it("returns a typed unsupported result off macOS", async () => {
     await expect(scanInstalledApps({ platform: "linux" })).resolves.toEqual({
       status: "unsupported",

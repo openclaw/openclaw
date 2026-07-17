@@ -125,15 +125,28 @@ export async function setupAppRecommendations(params: {
       { value: SKIP_VALUE, label: t("common.skipForNow") },
       ...result.matches.map((match, index) => ({
         value: selectionValue(index),
-        label: t("wizard.appRecommendations.option", {
-          name: match.candidate.displayName,
-          reason: match.reason,
-          app: match.appLabel,
-        }),
+        label:
+          match.candidate.source === "clawhub-skill"
+            ? t("wizard.appRecommendations.optionThirdParty", {
+                name: match.candidate.displayName,
+                reason: match.reason,
+                app: match.appLabel,
+              })
+            : t("wizard.appRecommendations.option", {
+                name: match.candidate.displayName,
+                reason: match.reason,
+                app: match.appLabel,
+              }),
       })),
     ],
+    // Supply-chain guard: ClawHub listing text is publisher-controlled and
+    // reaches the matcher prompt, so a listing can promote itself to
+    // "recommended". Only official catalog entries may be pre-selected;
+    // third-party skills always require an explicit opt-in tick.
     initialValues: result.matches.flatMap((match, index) =>
-      match.tier === "recommended" ? [selectionValue(index)] : [],
+      match.tier === "recommended" && match.candidate.source !== "clawhub-skill"
+        ? [selectionValue(index)]
+        : [],
     ),
   });
   if (selected.includes(SKIP_VALUE)) {

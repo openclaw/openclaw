@@ -160,6 +160,8 @@ export const en = {
       installFailed: "Could not install {name}: {reason}",
       noneFound: "No app-based plugin or skill recommendations found.",
       option: "{name} — {reason} (detected: {app})",
+      optionThirdParty:
+        "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
       scanning:
         "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
       select: "Install recommended plugins and skills",

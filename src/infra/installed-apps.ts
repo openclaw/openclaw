@@ -81,16 +81,31 @@ async function listAppPaths(
   } catch {
     return [];
   }
-  return entries.flatMap((entry) => {
-    if (!entry.isDirectory() || !entry.name.toLowerCase().endsWith(".app")) {
-      return [];
-    }
-    const label = entry.name.slice(0, -4);
-    if (isBackupishBundle(label) || (system && !SYSTEM_APP_NAMES.has(label))) {
-      return [];
-    }
-    return [{ path: path.join(root, entry.name), system }];
-  });
+  const results = await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.name.toLowerCase().endsWith(".app")) {
+        return [];
+      }
+      // Dirent.isDirectory() is false for symlinked bundles; /Applications
+      // commonly holds symlinks (brew cask, hand-linked apps) — stat through.
+      let isDirectory = entry.isDirectory();
+      if (!isDirectory && entry.isSymbolicLink()) {
+        isDirectory = await fs
+          .stat(path.join(root, entry.name))
+          .then((stats) => stats.isDirectory())
+          .catch(() => false);
+      }
+      if (!isDirectory) {
+        return [];
+      }
+      const label = entry.name.slice(0, -4);
+      if (isBackupishBundle(label) || (system && !SYSTEM_APP_NAMES.has(label))) {
+        return [];
+      }
+      return [{ path: path.join(root, entry.name), system }];
+    }),
+  );
+  return results.flat();
 }
 
 async function readBundleIdWithPlutil(appPath: string): Promise<string | undefined> {

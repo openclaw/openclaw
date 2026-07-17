@@ -74,6 +74,27 @@ describe("setupAppRecommendations", () => {
     expect(recommend).not.toHaveBeenCalled();
   });
 
+  it("never preselects third-party ClawHub skills even when model-recommended", async () => {
+    const result = recommendationResult();
+    result.matches[1] = {
+      ...result.matches[1]!,
+      tier: "recommended",
+    };
+    const prompter = createPrompter();
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime,
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: { recommend: vi.fn(async () => result) },
+    });
+    expect(prompter.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValues: ["recommendation:0"] }),
+    );
+  });
+
   it("preselects recommended matches and installs selected plugin and skill", async () => {
     const config: OpenClawConfig = {};
     const prompter = createPrompter(["recommendation:0", "recommendation:1"]);
