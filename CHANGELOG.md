@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
+- **Gateway TLS certificate generation:** bound automatic OpenSSL generation and stage, validate, and publish key/certificate outputs without overwriting files created during publication. (#109139) Thanks @Alix-007.
 - **Cron lifecycle conflict retries:** preserve execution-phase retry decisions across scheduled, manual, and startup-recovered runs so post-execution claim conflicts cannot replay completed messages or tools. Fixes #108428. Thanks @yetval.
 - **Discord gateway metadata deadline:** carry the existing lookup deadline through DNS and proxy preflight, request headers, and response bodies so stalled gateway startup aborts cleanly. (#104580) Thanks @hugenshen.
 - **Control UI cloud session thinking:** expose reasoning level in the New Session model picker and persist the selected level before cloud dispatch.
