@@ -1507,6 +1507,11 @@ function resolveModelWithPreparedRegistry(
     manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   },
 ): Model | undefined {
+  // Competing activated owners leave credentials and transport authority unresolved.
+  // Refuse the route before configured fallbacks can accidentally select either owner.
+  if (params.manifestAlias.ambiguous) {
+    return undefined;
+  }
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const explicitModel = resolveExplicitModelWithRegistry(params);
   if (explicitModel?.kind === "suppressed") {
@@ -1678,6 +1683,20 @@ export async function resolveModelAsync(
       ...(workspaceDir ? { workspaceDir } : {}),
     });
   const runtimeHooks = resolveRuntimeHooks(options);
+  if (normalizedRef.manifestAlias.ambiguous) {
+    return {
+      error: buildUnknownModelError({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        cfg,
+        agentDir: resolvedAgentDir,
+        workspaceDir,
+        runtimeHooks,
+      }),
+      authStorage,
+      modelRegistry,
+    };
+  }
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,
     modelId: normalizedRef.model,

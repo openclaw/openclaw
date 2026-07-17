@@ -57,6 +57,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
+  resolveManifestModelCatalogProviderAliasMetadata,
   resolveManifestModelCatalogProviderTransport,
 } from "./model.static-catalog.js";
 
@@ -186,13 +187,14 @@ function setConditionalSuppressionAliasPlugin(params?: { unconditional?: boolean
 function expectManifestAliasResolution(
   params: Parameters<typeof canonicalizeManifestModelCatalogProviderAlias>[0],
   expected: {
+    ambiguous?: true;
     provider: string;
     transport: ReturnType<typeof resolveManifestModelCatalogProviderTransport>;
   },
-  transportParams = params,
 ) {
+  expect(resolveManifestModelCatalogProviderAliasMetadata(params)).toEqual(expected);
   expect(canonicalizeManifestModelCatalogProviderAlias(params)).toBe(expected.provider);
-  expect(resolveManifestModelCatalogProviderTransport(transportParams)).toEqual(expected.transport);
+  expect(resolveManifestModelCatalogProviderTransport(params)).toEqual(expected.transport);
 }
 
 beforeEach(() => {
@@ -357,7 +359,9 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
         modelId: "gpt-5.5",
         cfg: {},
       },
-      { provider: "openai", transport: { api: "azure-openai-responses" } },
+      { provider: "openai", transport: undefined },
+    );
+    expectManifestAliasResolution(
       {
         provider: "azure-openai-responses",
         modelId: "gpt-5.5",
@@ -372,6 +376,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
           },
         },
       },
+      { provider: "azure-openai-responses", transport: { api: "azure-openai-responses" } },
     );
     expectManifestAliasResolution(
       {
@@ -523,10 +528,10 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     expectManifestAliasResolution(
       {
         provider: "azure-openai-responses",
-        modelId: "gpt-5.4-mini",
+        modelId: "gpt-5.3-codex-spark",
         cfg,
       },
-      { provider: "azure-openai-responses", transport: undefined },
+      { provider: "azure-openai-responses", transport: undefined, ambiguous: true },
     );
   });
 });

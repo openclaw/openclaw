@@ -102,6 +102,7 @@ export type ManifestModelCatalogProviderTransport = Readonly<
 >;
 
 export type ManifestModelCatalogProviderAliasMetadata = {
+  readonly ambiguous?: true;
   readonly provider: string;
   readonly transport?: ManifestModelCatalogProviderTransport;
 };
@@ -264,6 +265,7 @@ export function resolveManifestModelCatalogProviderAliasMetadata(params: {
     case "transport":
       return { provider: params.provider, transport: resolved.transport };
     case "conflict":
+      return { provider: params.provider, ambiguous: true };
     case "none":
       return { provider: params.provider };
     default: {

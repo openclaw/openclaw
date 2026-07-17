@@ -25,6 +25,7 @@ const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
       provider: string;
       cfg?: { models?: { providers?: Record<string, { baseUrl?: string }> } };
     }) => {
+      ambiguous?: true;
       provider: string;
       transport?: { api?: "azure-openai-responses"; baseUrl?: string };
     }
@@ -3110,6 +3111,35 @@ describe("resolveModel", () => {
     expect(result.error).toBeUndefined();
     expect(resolveManifestModelCatalogProviderAliasMetadataMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["sync", "async"] as const)(
+    "rejects configured fallbacks for ambiguous manifest aliases in the $path resolver",
+    async (path) => {
+      resolveManifestModelCatalogProviderAliasMetadataMock.mockReturnValue({
+        provider: "azure-openai-responses",
+        ambiguous: true,
+      });
+      const cfg = {
+        models: {
+          providers: {
+            "azure-openai-responses": {
+              baseUrl: "https://example.openai.azure.com/openai/v1",
+              api: "azure-openai-responses" as const,
+              models: [makeModel("gpt-5.5")],
+            },
+          },
+        },
+      };
+
+      const result =
+        path === "sync"
+          ? resolveModelForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg)
+          : await resolveModelAsyncForTest("azure-openai-responses", "gpt-5.5", "/tmp/agent", cfg);
+
+      expect(result.model).toBeUndefined();
+      expect(result.error).toBe("Unknown model: azure-openai-responses/gpt-5.5");
+    },
+  );
 
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
