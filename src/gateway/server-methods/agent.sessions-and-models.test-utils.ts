@@ -430,7 +430,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves aborted async gateway agent runs as timed out", async () => {
+  it("preserves aborted async gateway agent runs as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -454,7 +454,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           terminalSummary: "aborted",
         });
         expectRecordFields(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload, {
@@ -466,7 +466,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies aborted async gateway agent rejections as timed out", async () => {
+  it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -493,7 +493,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-abort-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           error: "AbortError: This operation was aborted",
         });
         expectRecordFields(
@@ -505,6 +505,9 @@ describe("gateway agent handler", () => {
             stopReason: "rpc",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -536,11 +539,15 @@ describe("gateway agent handler", () => {
       );
 
       await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(runId), {
+          status: "cancelled",
+        });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "restart",
+          timeoutPhase: "gateway_draining",
         });
       });
     });
@@ -585,6 +592,9 @@ describe("gateway agent handler", () => {
             stopReason: "timeout",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
