@@ -2262,6 +2262,13 @@ describe("ci workflow guards", () => {
       const baseline = fingerprint();
       expect(baseline).toMatch(/^v2-[a-f0-9]{64}$/);
 
+      // Presence is part of the record type, so a real file cannot collide
+      // with the representation of an absent optional install input.
+      writeFileSync(path.join(root, ".pnpmfile.cjs"), "<missing>");
+      expect(fingerprint()).not.toBe(baseline);
+      rmSync(path.join(root, ".pnpmfile.cjs"));
+      expect(fingerprint()).toBe(baseline);
+
       // Formatting, key order, and scripts that pnpm install never executes
       // should keep the existing dependency snapshot warm.
       writeManifest({

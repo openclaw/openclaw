@@ -137,17 +137,21 @@ export function computeDependencyFingerprint({ workspace, frozenLockfile }) {
 
   for (const relativePath of INSTALL_INPUT_FILES) {
     const absolutePath = path.join(workspace, relativePath);
-    let contents = "<missing>";
+    let kind = "missing-file";
+    let contents = "";
     try {
       if (statSync(absolutePath).isFile()) {
+        kind = "file";
         contents = readFileSync(absolutePath);
+      } else {
+        throw new Error(`${relativePath} is not a regular file`);
       }
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
       }
     }
-    addRecord(hash, "file", relativePath, contents);
+    addRecord(hash, kind, relativePath, contents);
   }
 
   return `v2-${hash.digest("hex")}`;
