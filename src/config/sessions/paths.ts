@@ -3,9 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
+import type { OpenClawConfig } from "../types.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
@@ -21,8 +23,9 @@ function resolveAgentSessionsDir(
 export function resolveSessionTranscriptsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
+  cfg?: OpenClawConfig,
 ): string {
-  return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
+  return resolveAgentSessionsDir(cfg ? resolveDefaultAgentId(cfg) : DEFAULT_AGENT_ID, env, homedir);
 }
 
 export function resolveSessionTranscriptsDirForAgent(

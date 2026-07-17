@@ -705,8 +705,10 @@ function findClaudeCliBackendConfig(
 
 function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFile): string[] {
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const seenScopeIds = new Set<string>();
   return [
-    { id: DEFAULT_AGENT_ID },
+    { id: defaultAgentId },
     ...agents
       .filter(
         (entry): entry is NonNullable<(typeof agents)[number]> =>
@@ -715,13 +717,18 @@ function collectYoloExecScopeIds(cfg: OpenClawConfig, approvals: ExecApprovalsFi
       .map((entry) => ({ id: entry.id })),
   ]
     .filter((entry) => {
+      if (seenScopeIds.has(entry.id)) {
+        return false;
+      }
+      seenScopeIds.add(entry.id);
+
       const execDefaults = resolveExecDefaults({
         cfg,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
+        agentId: entry.id,
       });
       const resolvedApprovals = resolveExecApprovalsFromFile({
         file: approvals,
-        agentId: entry.id === DEFAULT_AGENT_ID ? undefined : entry.id,
+        agentId: entry.id,
         overrides: {
           security: execDefaults.security,
           ask: execDefaults.ask,
@@ -762,6 +769,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const defaultAgentId = resolveDefaultAgentId(cfg);
   const riskyAgents = agents
     .filter(
       (entry) =>
@@ -791,7 +799,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
     new Map(
       [
         {
-          id: DEFAULT_AGENT_ID,
+          id: defaultAgentId,
           security: cfg.tools?.exec?.security ?? "deny",
           host: cfg.tools?.exec?.host ?? "auto",
         },
@@ -882,7 +890,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   const interpreterAllowlistHits = collectInterpreterAllowlistHits({
     approvals,
     strictInlineEvalForAgentId: (agentId) => {
-      if (!agentId || agentId === "*" || agentId === DEFAULT_AGENT_ID) {
+      if (!agentId || agentId === "*" || agentId === defaultAgentId) {
         return globalStrictInlineEval;
       }
       const agent = agents.find((entry) => entry?.id === agentId);

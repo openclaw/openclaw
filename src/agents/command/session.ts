@@ -376,7 +376,7 @@ export function resolveSessionKeyForRequest(opts: {
   if (requestedSessionId && !sessionKey) {
     sessionKey = buildExplicitSessionIdSessionKey({
       sessionId: requestedSessionId,
-      agentId: opts.agentId,
+      agentId: storeAgentId,
     });
   }
 
