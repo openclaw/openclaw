@@ -410,6 +410,31 @@ fs.writeFileSync(process.env.OPENCLAW_TEST_ARGV_PATH, JSON.stringify(process.arg
     setTimeoutSpy.mockRestore();
   });
 
+  it("keeps the command failure stdout tail free of split surrogate pairs", async () => {
+    // 65,540 UTF-16 units of stdout with an emoji at units 3-4: the
+    // last-65,536 failure-tail cut starts on the emoji's low surrogate.
+    const stdoutText = `${"a".repeat(3)}😀${"b".repeat(65_535)}`;
+    let message = "";
+    try {
+      await runCommand({
+        args: ["-e", `process.stdout.write(${JSON.stringify(stdoutText)}); process.exit(2);`],
+        command: process.execPath,
+        cwd: makeTempDir(),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("failed with exit code 2");
+    const marker = "[stdout truncated to last 65536 characters]\n";
+    expect(message).toContain(marker);
+    const tail = message.split(marker).at(-1) ?? "";
+    expect(tail.startsWith("b")).toBe(true);
+    expect(tail).not.toMatch(
+      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u,
+    );
+  });
+
   posixIt("kills timed-out command process groups when the leader exits first", async () => {
     const root = makeTempDir();
     const scriptPath = path.join(root, "trap-term.mjs");

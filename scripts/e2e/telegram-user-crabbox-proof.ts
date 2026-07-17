@@ -610,9 +610,7 @@ function appendCommandStderrTail(
 function commandFailureOutput(stdout: string, stderr: string): string {
   const stdoutTail =
     stdout.length > COMMAND_FAILURE_STDOUT_TAIL_CHARS
-      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${stdout.slice(
-          -COMMAND_FAILURE_STDOUT_TAIL_CHARS,
-        )}`
+      ? `\n[stdout truncated to last ${COMMAND_FAILURE_STDOUT_TAIL_CHARS} characters]\n${sliceUtf16Safe(stdout, -COMMAND_FAILURE_STDOUT_TAIL_CHARS)}`
       : stdout;
   return `${stdoutTail}${stderr}`;
 }
