@@ -41,12 +41,25 @@ struct WebChatSwiftUISmokeTests {
         func setActiveSessionKey(_: String) async throws {}
     }
 
-    @Test func `window controller show and close`() {
+    @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             presentation: .window,
             transport: TestTransport())
+        let window = try #require(controller._testWindow)
+
+        #expect(window.styleMask.contains(.fullSizeContentView))
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.titlebarAppearsTransparent)
+        #expect(window.toolbarStyle == .unified)
+        #expect(window.titlebarSeparatorStyle == .none)
+        #expect(window.isMovableByWindowBackground)
+        #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
+        #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
+
         controller.show()
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.toolbar != nil)
         controller.close()
     }
 

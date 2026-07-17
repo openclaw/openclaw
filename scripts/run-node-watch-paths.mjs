@@ -40,6 +40,13 @@ const ignoredRunNodeRepoPathPatterns = [
   /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
   /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
 ];
+// Asset build hooks write these generated runtime bundles. They are outputs, not
+// source inputs; watching them makes the dev build react to its own writes.
+const generatedPluginAssetPaths = new Set([
+  "extensions/diffs-language-pack/assets/viewer-runtime.js",
+  "extensions/diffs/assets/viewer-runtime.js",
+  "extensions/discord/assets/embedded-app-sdk.mjs",
+]);
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
 /** Normalizes watch paths to repository-style POSIX separators. */
@@ -69,7 +76,10 @@ const isRestartRelevantExtensionPath = (relativePath) => {
 
 const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
+  if (
+    generatedPluginAssetPaths.has(normalizedPath) ||
+    ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
+  ) {
     return false;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {

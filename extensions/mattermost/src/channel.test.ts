@@ -1109,25 +1109,54 @@ describe("mattermostPlugin", () => {
       expect(sendMessageMattermostMock).not.toHaveBeenCalled();
     });
 
-    it("rejects unsupported buffer-only Mattermost send attachments", async () => {
+    it.each(["buffer", "base64"] as const)(
+      "rejects unsupported %s-only Mattermost send attachments",
+      async (field) => {
+        const cfg = createMattermostTestConfig();
+
+        await expect(
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "send",
+              params: {
+                to: "channel:CHAN1",
+                message: "report",
+                [field]: "cmVwb3J0",
+                filename: "report.md",
+              },
+              cfg,
+              accountId: "default",
+            }),
+          ),
+        ).rejects.toThrow("buffer/base64 payloads are not supported");
+        expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      { location: "top-level", params: { buffer: "", base64: "  " } },
+      {
+        location: "nested",
+        params: { attachments: [{ buffer: "", base64: "  " }] },
+      },
+    ])("ignores blank $location attachment payload fields", async ({ params }) => {
       const cfg = createMattermostTestConfig();
 
-      await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "send",
-            params: {
-              to: "channel:CHAN1",
-              message: "report",
-              buffer: "cmVwb3J0",
-              filename: "report.md",
-            },
-            cfg,
-            accountId: "default",
-          }),
-        ),
-      ).rejects.toThrow("buffer/base64 payloads are not supported");
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "plain text",
+            ...params,
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "plain text");
+      expect(options.mediaUrl).toBeUndefined();
     });
 
     it("rejects mixed supported and unsupported Mattermost send attachments", async () => {
@@ -1407,6 +1436,40 @@ describe("mattermostPlugin", () => {
       expect(options.buttons).toBeUndefined();
       expect(JSON.stringify(options)).not.toContain("approval-1");
       expect(JSON.stringify(options)).not.toContain("/approve");
+    });
+
+    it("skips hosted widget actions without a Mattermost URL", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Hosted widget",
+                action: {
+                  type: "web-app" as const,
+                  widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        await renderPresentation({
+          payload: { presentation },
+          presentation,
+          ctx: {
+            cfg,
+            to: "channel:CHAN1",
+            text: "",
+            payload: { presentation },
+          },
+        }),
+      ).toBeNull();
     });
 
     it("requires upload success for local media on presentation button payloads", async () => {

@@ -16,4 +16,18 @@ describe("tts runtime facade", () => {
     expect(runtimeFacadeSource).toContain('from "../../packages/speech-core/runtime-api.js";');
     expect(runtimeFacadeSource).not.toContain('dirName: "speech-core"');
   });
+
+  it("keeps agent prompt TTS settings off the synthesis runtime chain", () => {
+    const agentConfigSource = readSource("../agents/system-prompt-config.ts");
+    const settingsFacadeSource = readSource("./tts-settings.ts");
+    const packageSettingsSource = readSource("../../packages/speech-core/src/tts-settings.ts");
+
+    expect(agentConfigSource).toContain('from "../tts/tts-settings.js";');
+    expect(settingsFacadeSource).toContain(
+      'from "../../packages/speech-core/src/tts-settings.js";',
+    );
+    expect(settingsFacadeSource).not.toContain("tts-runtime");
+    expect(packageSettingsSource).toContain('from "openclaw/plugin-sdk/speech-settings";');
+    expect(packageSettingsSource).not.toContain("plugin-sdk/media-runtime");
+  });
 });

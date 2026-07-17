@@ -10,7 +10,8 @@ import {
 } from "./api.js";
 
 const sendMock = vi.fn();
-const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
+const destroyMock = vi.fn();
+const clientFactory = () => ({ send: sendMock, destroy: destroyMock }) as unknown as BedrockClient;
 
 const baseActiveAnthropicSummary = {
   modelId: "anthropic.claude-3-7-sonnet-20250219-v1:0",
@@ -44,6 +45,7 @@ function expectModelFields(model: unknown, expected: Record<string, unknown>): v
 describe("bedrock discovery", () => {
   beforeEach(() => {
     sendMock.mockClear();
+    destroyMock.mockClear();
     resetBedrockDiscoveryCacheForTest();
   });
 
@@ -105,6 +107,7 @@ describe("bedrock discovery", () => {
       contextWindow: 200000,
       maxTokens: 4096,
     });
+    expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider filter", async () => {
@@ -280,14 +283,14 @@ describe("bedrock discovery", () => {
       .mockResolvedValueOnce({
         inferenceProfileSummaries: [
           {
-            inferenceProfileId: "jp.anthropic.claude-sonnet-4-6-v1:0",
+            inferenceProfileId: "jp.anthropic.claude-sonnet-4-6",
             inferenceProfileName: "JP Claude Sonnet 4.6",
             status: "ACTIVE",
             type: "SYSTEM_DEFINED",
             models: [
               {
                 modelArn:
-                  "arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-sonnet-4-6-v1:0",
+                  "arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.claude-sonnet-4-6",
               },
             ],
           },
@@ -297,7 +300,7 @@ describe("bedrock discovery", () => {
     const models = await discoverBedrockModels({ region: "ap-northeast-1", clientFactory });
 
     expectModelFields(models[0], {
-      id: "jp.anthropic.claude-sonnet-4-6-v1:0",
+      id: "jp.anthropic.claude-sonnet-4-6",
       contextWindow: 1_000_000,
     });
   });
@@ -486,6 +489,7 @@ describe("bedrock discovery", () => {
       expect(sendMock).toHaveBeenCalledTimes(2);
       expect(abortSignals).toHaveLength(2);
       expect(abortSignals.every((signal) => signal.aborted)).toBe(true);
+      expect(destroyMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -725,7 +729,7 @@ describe("bedrock discovery", () => {
             models: [
               {
                 modelArn:
-                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-6-v1:0",
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-4-6-v1",
               },
             ],
           },
@@ -739,7 +743,7 @@ describe("bedrock discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 4096,
       input: ["text"],
-      params: { canonicalModelId: "claude-opus-4-6-v1:0" },
+      params: { canonicalModelId: "claude-opus-4-6-v1" },
       thinkingLevelMap: { xhigh: null, max: "max" },
     });
   });

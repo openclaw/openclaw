@@ -1,5 +1,6 @@
 // Speech Core tests cover tts behavior.
-import { rmSync } from "node:fs";
+import { realpathSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -121,7 +122,7 @@ const {
   setTtsMaxLength,
   synthesizeSpeech,
   textToSpeechTelephony,
-} = await import("./tts.js");
+} = await import("../runtime-api.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
 
@@ -147,13 +148,21 @@ function installSpeechProviders(providers: SpeechProviderPlugin[]): void {
   );
 }
 
+// macOS os.tmpdir() is a /var -> /private/var symlink and fs-safe rejects
+// symlinked store roots; resolve the canonical dir before writing prefs.
+const PREFS_TMP_DIR = realpathSync(os.tmpdir());
+
+function prefsPathFor(prefsName: string): string {
+  return path.join(PREFS_TMP_DIR, `${prefsName}.json`);
+}
+
 function createTtsConfig(prefsName: string): OpenClawConfig {
   return {
     messages: {
       tts: {
         enabled: true,
         provider: "mock",
-        prefsPath: `/tmp/${prefsName}.json`,
+        prefsPath: prefsPathFor(prefsName),
       },
     },
   };
@@ -969,7 +978,7 @@ describe("speech-core native voice-note routing", () => {
 
   it("truncates long TTS text on a UTF-16 boundary", async () => {
     const prefsName = "openclaw-speech-core-utf16-truncate-test";
-    const prefsPath = `/tmp/${prefsName}.json`;
+    const prefsPath = prefsPathFor(prefsName);
     const cfg = createTtsConfig(prefsName);
     setTtsMaxLength(prefsPath, 11);
     setSummarizationEnabled(prefsPath, false);

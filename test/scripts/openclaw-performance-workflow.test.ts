@@ -102,6 +102,9 @@ describe("OpenClaw performance workflow", () => {
       installRun.indexOf('npm --prefix "$KOVA_SRC" ci --ignore-scripts --no-audit --no-fund'),
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
     expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
+    expect(workflow).toContain(
+      "KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}",
+    );
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
@@ -115,6 +118,10 @@ describe("OpenClaw performance workflow", () => {
     );
     expect(installRun).toContain(
       '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain("--max-time 180");
+    expect(installRun).toContain(
+      "--retry 8 --retry-max-time 180 --retry-all-errors --retry-connrefused",
     );
     expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });

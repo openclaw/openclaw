@@ -252,16 +252,22 @@ describe("handleFeishuCommentEvent", () => {
   });
 
   it("records a comment-thread inbound context with a routable Feishu origin", async () => {
+    const abortController = new AbortController();
     await handleFeishuCommentEvent({
       cfg: buildConfig(),
       accountId: "default",
       event: { event_id: "evt_1" },
       botOpenId: "ou_bot",
+      abortSignal: abortController.signal,
       runtime: {
         log: vi.fn(),
         error: vi.fn(),
       } as never,
     });
+
+    expect(resolveDriveCommentEventTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ abortSignal: abortController.signal }),
+    );
 
     const runtime = (await import("./runtime.js")).getFeishuRuntime();
     const finalizeInboundContext = runtime.channel.reply.finalizeInboundContext as ReturnType<

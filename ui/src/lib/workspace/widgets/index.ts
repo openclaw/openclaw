@@ -5,6 +5,7 @@
 // names (extensions/workspaces/src/schema.ts).
 
 import { renderActivity } from "./activity.ts";
+import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
@@ -25,6 +26,7 @@ const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   cron: (widget, value) => renderCron(widget, value),
   instances: (widget, value) => renderInstances(widget, value),
   activity: (widget, value) => renderActivity(widget, value),
+  chart: (widget, value) => renderChart(widget, value),
 };
 
 export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefined {

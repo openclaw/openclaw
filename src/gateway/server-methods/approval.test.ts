@@ -5,7 +5,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  type ApprovalHistoryResult,
   validateApprovalGetResult,
+  validateApprovalHistoryResult,
   validateApprovalResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
@@ -43,7 +45,9 @@ const managersForCleanup: Array<{
 }> = [];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-"));
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-handler-")),
+  );
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
@@ -226,7 +230,7 @@ function createContext(controlUiBasePath?: string) {
 
 async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.resolve";
+  method: "approval.get" | "approval.history" | "approval.resolve";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];
@@ -282,12 +286,14 @@ describe("unified approval handlers", () => {
       systemAgentApprovalManager: managers.systemAgent,
       databaseOptions,
     });
+    const context = createContext();
 
     const response = await invoke({
       handlers,
       method: "approval.resolve",
       body: { id: pending.record.id, kind: "system-agent", decision: "allow-once" },
       client: createClient({ deviceId: "reviewer" }),
+      context,
     });
 
     expect(response.result).toMatchObject({
@@ -303,6 +309,62 @@ describe("unified approval handlers", () => {
       },
     });
     await expect(pending.decision).resolves.toBe("allow-once");
+    expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalKind: "system-agent" }),
+    );
+  });
+
+  it("returns mapped terminal history with attribution and a next cursor", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const first = registerExec(managers.exec, { id: "history:first" });
+    const second = registerPlugin(managers.plugin, { id: "history:second" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    for (const [id, kind] of [
+      [first.record.id, "exec"],
+      [second.record.id, "plugin"],
+    ] as const) {
+      const response = await invoke({
+        handlers,
+        method: "approval.resolve",
+        body: { id, kind, decision: "deny" },
+        client: createClient({ deviceId: "reviewer" }),
+      });
+      expect(response.ok).toBe(true);
+    }
+
+    const firstPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+      context: createContext("/operator/"),
+    });
+    expect(firstPage.ok).toBe(true);
+    expect(validateApprovalHistoryResult(firstPage.result)).toBe(true);
+    const firstResult = firstPage.result as ApprovalHistoryResult;
+    expect(firstResult.items).toHaveLength(1);
+    expect(firstResult.items[0]).toMatchObject({
+      status: "denied",
+      decision: "deny",
+      source: { agentId: "main", sessionKey: "agent:main:child" },
+      resolver: { kind: "device", id: "reviewer" },
+    });
+    expect(firstResult.nextCursor).toEqual(expect.any(String));
+
+    const secondPage = await invoke({
+      handlers,
+      method: "approval.history",
+      body: { cursor: firstResult.nextCursor, limit: 1 },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(secondPage.ok).toBe(true);
+    expect((secondPage.result as ApprovalHistoryResult).items).toHaveLength(1);
+    expect((secondPage.result as ApprovalHistoryResult).nextCursor).toBeUndefined();
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
@@ -900,6 +962,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { id: string },
@@ -907,6 +970,7 @@ describe("unified approval handlers", () => {
           record?: { id: string };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("plugin");
     expect(
       recipientOptions?.filter?.(createClient({ deviceId: "unrelated" }), recipientOptions.record),
     ).toBe(false);
@@ -1121,6 +1185,7 @@ describe("unified approval handlers", () => {
     const recipientLookup = context.getApprovalClientConnIds as ReturnType<typeof vi.fn>;
     const recipientOptions = recipientLookup.mock.calls[0]?.[0] as
       | {
+          approvalKind?: string;
           filter?: (
             client: GatewayRequestHandlerOptions["client"],
             record?: { requestedByConnId?: string | null },
@@ -1128,6 +1193,7 @@ describe("unified approval handlers", () => {
           record?: { requestedByConnId?: string | null };
         }
       | undefined;
+    expect(recipientOptions?.approvalKind).toBe("exec");
     expect(recipientOptions?.record?.requestedByConnId).toBe("requester-connection");
     expect(
       recipientOptions?.filter?.(

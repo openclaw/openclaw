@@ -6,6 +6,7 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
 import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
@@ -39,8 +40,12 @@ function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProvide
   };
 }
 
+function resolveGradiumApiKey(configApiKey: unknown): string | undefined {
+  return resolveSpeechProviderApiKey(trimToUndefined(configApiKey), process.env.GRADIUM_API_KEY);
+}
+
 function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
-  const apiKey = trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.GRADIUM_API_KEY);
+  const apiKey = resolveGradiumApiKey(config.apiKey);
   if (!apiKey) {
     return false;
   }
@@ -99,7 +104,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     synthesize: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey = config.apiKey || process.env.GRADIUM_API_KEY;
+      const apiKey = resolveGradiumApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Gradium API key missing");
       }
@@ -124,7 +129,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readGradiumProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey = config.apiKey || process.env.GRADIUM_API_KEY;
+      const apiKey = resolveGradiumApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Gradium API key missing");
       }
