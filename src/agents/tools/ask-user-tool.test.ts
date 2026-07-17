@@ -3,14 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt.queue-message.js";
 import {
-  buildAskUserQuestionId,
   createAskUserTool,
   isAskUserPromptActive,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
-  resetPendingAskUserQuestionsForTest,
   settleAskUserPromptDelivery,
 } from "./ask-user-tool.js";
+import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
 type GatewayCall = NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>;
 
@@ -38,6 +37,15 @@ function gatewayStub(
 ) {
   const mock = vi.fn(implementation);
   return { mock, call: mock as unknown as GatewayCall };
+}
+
+function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {
+  const requestCall = mock.mock.calls.find(([method]) => method === "question.request");
+  const questionId = requestCall?.[2].id;
+  if (typeof questionId !== "string") {
+    throw new Error("question.request did not include an id");
+  }
+  return questionId;
 }
 
 afterEach(() => {
@@ -95,11 +103,10 @@ describe("ask_user normalization", () => {
 
 describe("ask_user execution", () => {
   it("returns answered details plus readable answer lines", async () => {
-    const questionId = buildAskUserQuestionId("call-answered", "agent:main:main");
     const answers = { answers: { deploy_target: { answers: ["Staging (Recommended)"] } } };
-    const gateway = gatewayStub(async (method) => {
+    const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
-        return { id: questionId, expiresAtMs: Date.now() + 30_000 };
+        return { id: params.id, expiresAtMs: Date.now() + 30_000 };
       }
       if (method === "question.waitAnswer") {
         return { status: "answered", answers };
@@ -113,6 +120,7 @@ describe("ask_user execution", () => {
     });
 
     const result = await tool.execute("call-answered", validArgs);
+    const questionId = requestedQuestionId(gateway.mock);
 
     expect(result.details).toEqual({ status: "answered", answers });
     expect(result.content).toEqual([
@@ -147,14 +155,14 @@ describe("ask_user execution", () => {
     ["pending", "No answer arrived"],
     ["cancelled", "question was cancelled"],
   ] as const)("maps %s to no_answer", async (status, text) => {
-    const questionId = buildAskUserQuestionId(`call-${status}`, `agent:main:${status}`);
-    const gateway = gatewayStub(async (method) =>
-      method === "question.request" ? { id: questionId } : { status },
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request" ? { id: params.id } : { status },
     );
     const result = await createAskUserTool({
       sessionKey: `agent:main:${status}`,
       gatewayCall: gateway.call,
     }).execute(`call-${status}`, validArgs);
+    const questionId = requestedQuestionId(gateway.mock);
 
     expect(result.details).toEqual({ status: "no_answer" });
     expect(result.content[0]).toMatchObject({ text: expect.stringContaining(text) });
@@ -200,10 +208,9 @@ describe("ask_user execution", () => {
 
   it("cancels the gateway question when the run aborts", async () => {
     const controller = new AbortController();
-    const questionId = buildAskUserQuestionId("call-abort", "agent:main:abort");
-    const gateway = gatewayStub(async (method, _opts, _params, extra) => {
+    const gateway = gatewayStub(async (method, _opts, params, extra) => {
       if (method === "question.request") {
-        return { id: questionId };
+        return { id: params.id };
       }
       if (method === "question.resolve") {
         return { status: "cancelled" };
@@ -221,6 +228,7 @@ describe("ask_user execution", () => {
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some((call) => call[0] === "question.waitAnswer")).toBe(true),
     );
+    const questionId = requestedQuestionId(gateway.mock);
 
     controller.abort(new Error("stop"));
 
@@ -234,7 +242,6 @@ describe("ask_user execution", () => {
 
   it("aborts registration and still attempts gateway cancellation", async () => {
     const controller = new AbortController();
-    const questionId = buildAskUserQuestionId("call-register-abort", "agent:main:register-abort");
     const gateway = gatewayStub(async (method, _opts, _params, extra) => {
       if (method === "question.resolve") {
         return { status: "cancelled" };
@@ -252,6 +259,7 @@ describe("ask_user execution", () => {
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true),
     );
+    const questionId = requestedQuestionId(gateway.mock);
 
     controller.abort(new Error("stop"));
 
@@ -302,7 +310,6 @@ describe("ask_user execution", () => {
 
   it("best-effort cancels a deterministic id after an ambiguous registration failure", async () => {
     const sessionKey = "agent:main:registration-loss";
-    const questionId = buildAskUserQuestionId("call-registration-loss", sessionKey);
     const gateway = gatewayStub(async (method) => {
       if (method === "question.request") {
         throw new Error("connection lost after send");
@@ -319,6 +326,7 @@ describe("ask_user execution", () => {
         validArgs,
       ),
     ).rejects.toThrow("connection lost after send");
+    const questionId = requestedQuestionId(gateway.mock);
     expect(gateway.mock).toHaveBeenCalledWith(
       "question.resolve",
       { timeoutMs: 10_000 },
@@ -485,6 +493,7 @@ describe("ask_user execution", () => {
       gatewayCall: gateway.call,
     }).execute("call-claim", validArgs);
     await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
     const activeSession = { steer, subscribe: vi.fn(() => () => undefined) };
     const persistApproved = vi.fn(async () => undefined);
@@ -507,7 +516,7 @@ describe("ask_user execution", () => {
       "question.resolve",
       {},
       {
-        id: buildAskUserQuestionId("call-claim", "agent:main:claim"),
+        id: questionId,
         answers: { answers: { deploy_target: { answers: ["A custom destination"] } } },
         resolvedBy: "plain-text",
       },
@@ -545,6 +554,7 @@ describe("ask_user execution", () => {
       validArgs,
     );
     await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
     const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
@@ -560,7 +570,7 @@ describe("ask_user execution", () => {
       "question.resolve",
       { timeoutMs: 10_000 },
       {
-        id: buildAskUserQuestionId(`call-${suffix}`, sessionKey),
+        id: questionId,
         cancel: true,
         resolvedBy: "image-reply",
       },

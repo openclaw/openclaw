@@ -8,7 +8,7 @@ import { SLACK_BUTTON_VALUE_MAX } from "./presentation.js";
 const SLACK_QUESTION_VALUE_PREFIX = "slq1:";
 const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 
-export type SlackQuestionAction = {
+type SlackQuestionAction = {
   questionId: string;
   optionIndex: number;
 };

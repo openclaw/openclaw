@@ -91,7 +91,7 @@ type AskUserQuestionState = {
 
 const askUserQuestions = new Map<string, AskUserQuestionState>();
 
-export type NormalizedAskUserParams = {
+type NormalizedAskUserParams = {
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
 };
@@ -194,7 +194,7 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
 }
 
 /** Stable client-generated gateway question id shared with tool-start delivery. */
-export function buildAskUserQuestionId(toolCallId: string, sessionKey?: string): string {
+function buildAskUserQuestionId(toolCallId: string, sessionKey?: string): string {
   const identity = `${sessionKey?.trim() ?? ""}\0${toolCallId}`;
   return `ask_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
@@ -298,10 +298,7 @@ export async function waitForAskUserPromptReady(
 }
 
 /** Opens prompt delivery after question.request succeeds. */
-export function markAskUserPromptReady(
-  questionId: string,
-  questions: QuestionRequestQuestion[],
-): void {
+function markAskUserPromptReady(questionId: string, questions: QuestionRequestQuestion[]): void {
   const state = askUserQuestions.get(questionId);
   if (!state || (state.phase.kind !== "reserved" && state.phase.kind !== "registering")) {
     return;
@@ -498,11 +495,16 @@ export async function cancelPendingAskUserForSession(params: {
   }
 }
 
-/** Test-only reset for process-local pending question state. */
-export function resetPendingAskUserQuestionsForTest(): void {
+function resetPendingAskUserQuestionsForTest(): void {
   for (const questionId of askUserQuestions.keys()) {
     releaseAskUserQuestion(questionId);
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.askUserToolTestApi")] = {
+    resetPendingAskUserQuestionsForTest,
+  };
 }
 
 /** Creates the main-session-only blocking ask_user tool. */

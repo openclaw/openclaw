@@ -121,7 +121,7 @@ const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModu
   () => import("../plugins/hook-runner-global.js"),
 );
 
-export function buildAskUserQuestionPresentation(params: {
+function buildAskUserQuestionPresentation(params: {
   questionId: string;
   questions: QuestionRequestQuestion[];
 }): MessagePresentation | undefined {

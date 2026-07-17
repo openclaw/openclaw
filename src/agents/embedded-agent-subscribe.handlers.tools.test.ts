@@ -21,7 +21,6 @@ import {
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
-  buildAskUserQuestionPresentation,
   handleToolExecutionEnd,
   handleToolExecutionStart,
   handleToolExecutionUpdate,
@@ -31,18 +30,55 @@ import type {
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
-  buildAskUserQuestionId,
-  markAskUserPromptReady,
+  createAskUserTool,
   normalizeAskUserParams,
   reserveAskUserPromptDelivery,
-  resetPendingAskUserQuestionsForTest,
 } from "./tools/ask-user-tool.js";
+import { resetPendingAskUserQuestionsForTest } from "./tools/ask-user-tool.test-support.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
 type PayloadToolMetas = Parameters<typeof buildEmbeddedRunPayloads>[0]["toolMetas"];
 
-afterEach(() => {
+const pendingAskUserFinishes = new Set<() => Promise<void>>();
+
+async function activateAskUserPrompt(toolCallId: string, args: unknown) {
+  let questionId: string | undefined;
+  let resolveAnswer: ((value: { status: "cancelled" }) => void) | undefined;
+  const tool = createAskUserTool({
+    sessionKey: "agent:unit-session",
+    gatewayCall: async (method, _opts, params) => {
+      if (method === "question.request") {
+        questionId = String(params.id);
+        return { id: questionId };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          resolveAnswer = resolve;
+        });
+      }
+      throw new Error(`unexpected method ${method}`);
+    },
+  });
+  const pending = tool.execute(toolCallId, args);
+  let finished = false;
+  const finish = async () => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    await vi.waitFor(() => expect(resolveAnswer).toBeTypeOf("function"));
+    resolveAnswer?.({ status: "cancelled" });
+    await pending;
+    pendingAskUserFinishes.delete(finish);
+  };
+  pendingAskUserFinishes.add(finish);
+  await vi.waitFor(() => expect(questionId).toBeTypeOf("string"));
+  return { questionId: questionId!, finish };
+}
+
+afterEach(async () => {
+  await Promise.all([...pendingAskUserFinishes].map((finish) => finish()));
   resetPendingAskUserQuestionsForTest();
 });
 
@@ -283,11 +319,9 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId: "ask-call-1",
       args,
     });
-    markAskUserPromptReady(
-      buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
-      normalizeAskUserParams(args).questions,
-    );
+    const activation = await activateAskUserPrompt("ask-call-1", args);
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    const { questionId } = activation;
 
     expect(onToolResult).toHaveBeenCalledWith({
       text: [
@@ -303,7 +337,7 @@ describe("handleToolExecutionStart read path checks", () => {
       ].join("\n"),
       channelData: {
         askUser: {
-          questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+          questionId,
         },
       },
       presentationTextMode: "fallback",
@@ -327,7 +361,7 @@ describe("handleToolExecutionStart read path checks", () => {
                 label: "Staging (Recommended)",
                 action: {
                   type: "question",
-                  questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+                  questionId,
                   optionValue: "Staging (Recommended)",
                 },
               },
@@ -335,7 +369,7 @@ describe("handleToolExecutionStart read path checks", () => {
                 label: "Production",
                 action: {
                   type: "question",
-                  questionId: buildAskUserQuestionId("ask-call-1", "agent:unit-session"),
+                  questionId,
                   optionValue: "Production",
                 },
               },
@@ -344,6 +378,7 @@ describe("handleToolExecutionStart read path checks", () => {
         ],
       },
     });
+    await activation.finish();
   });
 
   it.each([
@@ -388,33 +423,14 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId,
       args: { questions },
     });
-    markAskUserPromptReady(
-      buildAskUserQuestionId(toolCallId, "agent:unit-session"),
-      normalizeAskUserParams({ questions }).questions,
-    );
+    const activation = await activateAskUserPrompt(toolCallId, { questions });
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
 
     const payload = onToolResult.mock.calls[0]?.[0];
     expect(payload?.text).toContain("Reply with the number, the option text, or your own answer.");
     expect(payload).not.toHaveProperty("presentation");
     expect(payload).not.toHaveProperty("presentationTextMode");
-  });
-
-  it("does not build buttons for secret runtime questions", () => {
-    expect(
-      buildAskUserQuestionPresentation({
-        questionId: buildAskUserQuestionId("ask-secret", "agent:unit-session"),
-        questions: [
-          {
-            id: "secret",
-            header: "Secret",
-            question: "Which secret?",
-            options: [{ label: "Alpha" }, { label: "Beta" }],
-            isSecret: true,
-          },
-        ],
-      }),
-    ).toBeUndefined();
+    await activation.finish();
   });
 
   it("reserves ask_user before awaiting block-reply flush", async () => {
@@ -445,16 +461,14 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId: "ask-flush",
       args,
     });
-    markAskUserPromptReady(
-      buildAskUserQuestionId("ask-flush", "agent:unit-session"),
-      normalizeAskUserParams(args).questions,
-    );
+    const activation = await activateAskUserPrompt("ask-flush", args);
     await Promise.resolve();
     expect(onToolResult).not.toHaveBeenCalled();
 
     releaseFlush?.();
     await pending;
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
   });
 
   it.each(["buffer", "callback"] as const)(
@@ -522,10 +536,7 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId: "ask-first",
       args,
     });
-    markAskUserPromptReady(
-      buildAskUserQuestionId("ask-first", "agent:unit-session"),
-      normalizeAskUserParams(args).questions,
-    );
+    const activation = await activateAskUserPrompt("ask-first", args);
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
     await handleToolExecutionStart(ctx, {
       type: "tool_execution_start",
@@ -539,11 +550,12 @@ describe("handleToolExecutionStart read path checks", () => {
       expect.objectContaining({
         channelData: {
           askUser: {
-            questionId: buildAskUserQuestionId("ask-first", "agent:unit-session"),
+            questionId: activation.questionId,
           },
         },
       }),
     );
+    await activation.finish();
   });
 
   it("releases an undelivered ask_user reservation when execution is rejected", async () => {
@@ -583,11 +595,9 @@ describe("handleToolExecutionStart read path checks", () => {
       toolCallId: "ask-after-denial",
       args,
     });
-    markAskUserPromptReady(
-      buildAskUserQuestionId("ask-after-denial", "agent:unit-session"),
-      normalizeAskUserParams(args).questions,
-    );
+    const activation = await activateAskUserPrompt("ask-after-denial", args);
     await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
+    await activation.finish();
   });
 
   it("emits trace-only tool start diagnostics when trace logging is enabled", async () => {

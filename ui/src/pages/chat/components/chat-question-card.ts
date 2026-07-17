@@ -5,7 +5,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
 import type { QuestionStatus } from "../tool-stream.ts";
 
-export type QuestionCardQuestion = {
+type QuestionCardQuestion = {
   id: string;
   header: string;
   question: string;
@@ -14,9 +14,9 @@ export type QuestionCardQuestion = {
   isOther?: boolean;
 };
 
-export type QuestionCardTerminalState = "answered" | "answered-elsewhere" | "expired" | "cancelled";
+type QuestionCardTerminalState = "answered" | "answered-elsewhere" | "expired" | "cancelled";
 
-export type QuestionCardViewModel = {
+type QuestionCardViewModel = {
   requestKey: string;
   title: string;
   questions: QuestionCardQuestion[];
@@ -28,7 +28,7 @@ export type QuestionCardViewModel = {
   error?: string | null;
 };
 
-export type QuestionCardProps = {
+type QuestionCardProps = {
   model: QuestionCardViewModel;
   onSubmit: (answersById: Record<string, string[]>) => void | Promise<void>;
   onAnswersChange?: (answersById: Record<string, string[]>) => void;

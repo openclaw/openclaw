@@ -3,13 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 import type { ButtonInteraction } from "../internal/discord.js";
 import { createDiscordQuestionButton } from "./questions.js";
 
-function createInteraction(): ButtonInteraction {
-  return {
+type InteractionHarness = {
+  interaction: ButtonInteraction;
+  acknowledge: ReturnType<typeof vi.fn>;
+  followUp: ReturnType<typeof vi.fn>;
+};
+
+function createInteraction(): InteractionHarness {
+  const acknowledge = vi.fn();
+  const followUp = vi.fn();
+  const interaction = {
     userId: "user-1",
     reply: vi.fn(),
-    acknowledge: vi.fn(),
-    followUp: vi.fn(),
+    acknowledge,
+    followUp,
   } as unknown as ButtonInteraction;
+  return { interaction, acknowledge, followUp };
 }
 
 describe("Discord question button", () => {
@@ -20,7 +29,7 @@ describe("Discord question button", () => {
       "This question was already answered.",
     ],
   ] as const)("shows ephemeral outcome feedback", async (result, expectedText) => {
-    const interaction = createInteraction();
+    const { interaction, acknowledge, followUp } = createInteraction();
     const button = createDiscordQuestionButton({
       cfg: {} as never,
       accountId: "default",
@@ -33,12 +42,12 @@ describe("Discord question button", () => {
       i: "1",
     });
 
-    expect(interaction.acknowledge).toHaveBeenCalledOnce();
-    expect(interaction.followUp).toHaveBeenCalledWith({ content: expectedText, ephemeral: true });
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(followUp).toHaveBeenCalledWith({ content: expectedText, ephemeral: true });
   });
 
   it("does not resolve unauthorized clicks", async () => {
-    const interaction = createInteraction();
+    const { interaction, acknowledge } = createInteraction();
     const resolveQuestion = vi.fn();
     const button = createDiscordQuestionButton({
       cfg: {} as never,
@@ -53,12 +62,12 @@ describe("Discord question button", () => {
     });
 
     expect(resolveQuestion).not.toHaveBeenCalled();
-    expect(interaction.acknowledge).not.toHaveBeenCalled();
+    expect(acknowledge).not.toHaveBeenCalled();
   });
 
   it("does not turn a committed answer into an error when feedback fails", async () => {
-    const interaction = createInteraction();
-    vi.mocked(interaction.followUp).mockRejectedValue(new Error("receipt failed"));
+    const { interaction, followUp } = createInteraction();
+    followUp.mockRejectedValue(new Error("receipt failed"));
     const button = createDiscordQuestionButton({
       cfg: {} as never,
       accountId: "default",
@@ -76,8 +85,8 @@ describe("Discord question button", () => {
         i: "1",
       }),
     ).resolves.toBeUndefined();
-    expect(interaction.followUp).toHaveBeenCalledOnce();
-    expect(interaction.followUp).toHaveBeenCalledWith({
+    expect(followUp).toHaveBeenCalledOnce();
+    expect(followUp).toHaveBeenCalledWith({
       content: "Answer submitted.",
       ephemeral: true,
     });

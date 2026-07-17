@@ -1,21 +1,16 @@
 // Control UI tests cover operator question parsing and lifecycle state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  cancelQuestion,
   createQuestionPromptState,
   disposeQuestionPromptState,
   handleQuestionPromptEvent,
-  parseQuestionRequestedEvent,
-  parseQuestionResolvedEvent,
-  refreshPendingQuestions,
   refreshPendingQuestionsWithRetry,
-  resolveQuestion,
   setQuestionPromptClient,
   submitQuestionPrompt,
-  type QuestionPromptState,
 } from "./question-prompt.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+type QuestionPromptState = ReturnType<typeof createQuestionPromptState>;
 
 const states: QuestionPromptState[] = [];
 
@@ -62,41 +57,61 @@ afterEach(() => {
 
 describe("question event parsing", () => {
   it("round-trips requested and resolved event payloads", () => {
-    expect(parseQuestionRequestedEvent(requestedPayload())).toMatchObject({
+    const state = createState();
+    expect(
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload(),
+      }),
+    ).toBe(true);
+    expect(state.prompts.get("question-1")).toMatchObject({
       id: "question-1",
       sessionKey: "agent:main:main",
       status: "pending",
       questions: [{ id: "format", options: [{ label: "Compact" }, { label: "Detailed" }] }],
     });
     expect(
-      parseQuestionResolvedEvent({
-        id: "question-1",
-        status: "answered",
-        answers: { answers: { format: { answers: ["Compact"] } } },
+      handleQuestionPromptEvent(state, {
+        event: "question.resolved",
+        payload: {
+          id: "question-1",
+          status: "answered",
+          answers: { answers: { format: { answers: ["Compact"] } } },
+        },
       }),
-    ).toEqual({
-      id: "question-1",
+    ).toBe(true);
+    expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answers: { answers: { format: { answers: ["Compact"] } } },
     });
   });
 
   it("rejects malformed records and answer maps", () => {
-    expect(parseQuestionRequestedEvent(requestedPayload({ id: "" }))).toBeNull();
+    const state = createState();
     expect(
-      parseQuestionRequestedEvent(
-        requestedPayload({
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload({ id: "" }),
+      }),
+    ).toBe(false);
+    expect(
+      handleQuestionPromptEvent(state, {
+        event: "question.requested",
+        payload: requestedPayload({
           questions: [{ id: "Bad ID", header: "Bad", question: "Bad?", options: [] }],
         }),
-      ),
-    ).toBeNull();
-    expect(
-      parseQuestionResolvedEvent({
-        id: "question-1",
-        status: "answered",
-        answers: { answers: { format: { answers: "Compact" } } },
       }),
-    ).toBeNull();
+    ).toBe(false);
+    expect(
+      handleQuestionPromptEvent(state, {
+        event: "question.resolved",
+        payload: {
+          id: "question-1",
+          status: "answered",
+          answers: { answers: { format: { answers: "Compact" } } },
+        },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -300,8 +315,14 @@ describe("question prompt state", () => {
 describe("question RPC helpers", () => {
   it("sends option labels, free text, and multi-select arrays in the frozen answer shape", async () => {
     const request = vi.fn<RequestFn>(async () => ({}));
+    const state = createState();
+    setQuestionPromptClient(state, { request });
+    handleQuestionPromptEvent(state, {
+      event: "question.requested",
+      payload: requestedPayload(),
+    });
 
-    await resolveQuestion({ request }, "question-1", {
+    await submitQuestionPrompt(state, "question-1", {
       format: ["Compact"],
       destination: ["My own target"],
       extras: ["Tests", "Docs"],
@@ -318,17 +339,6 @@ describe("question RPC helpers", () => {
       },
     });
   });
-
-  it("sends cancellation through question.resolve", async () => {
-    const request = vi.fn<RequestFn>(async () => ({}));
-
-    await cancelQuestion({ request }, "question-1");
-
-    expect(request).toHaveBeenCalledWith("question.resolve", {
-      id: "question-1",
-      cancel: true,
-    });
-  });
 });
 
 describe("refreshPendingQuestions", () => {
@@ -338,7 +348,8 @@ describe("refreshPendingQuestions", () => {
     const client = { request };
     setQuestionPromptClient(state, client);
 
-    await expect(refreshPendingQuestions(state, client)).resolves.toBe(true);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("pending"));
 
     expect(request).toHaveBeenCalledWith("question.list", {});
     expect(state.prompts.get("question-1")?.status).toBe("pending");
@@ -384,7 +395,7 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload(),
     });
 
-    const refresh = refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
     handleQuestionPromptEvent(state, {
       event: "question.resolved",
       payload: {
@@ -394,7 +405,7 @@ describe("refreshPendingQuestions", () => {
       },
     });
     finishList({ questions: [requestedPayload()] });
-    await refresh;
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")?.status).toBe("answered");
   });
@@ -417,7 +428,7 @@ describe("refreshPendingQuestions", () => {
     const client = { request };
     setQuestionPromptClient(state, client);
 
-    const refresh = refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
     handleQuestionPromptEvent(state, {
       event: "question.resolved",
       payload: {
@@ -427,7 +438,7 @@ describe("refreshPendingQuestions", () => {
       },
     });
     finishList({ questions: [] });
-    await refresh;
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -458,7 +469,8 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload(),
     });
 
-    await refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
@@ -493,10 +505,12 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload(),
     });
 
-    await refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(state.prompts.get("question-1")?.status).toBe("pending");
 
-    await refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       answeredElsewhere: true,
@@ -519,7 +533,8 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload(),
     });
 
-    await expect(refreshPendingQuestions(state, client)).resolves.toBe(true);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -556,7 +571,8 @@ describe("refreshPendingQuestions", () => {
       locallyExpired: true,
     });
 
-    await refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
 
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -586,7 +602,10 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload({ expiresAtMs: Date.now() + 1_000 }),
     });
 
-    const refresh = refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" }),
+    );
     await vi.advanceTimersByTimeAsync(1_000);
     expect(state.prompts.get("question-1")?.locallyExpired).toBe(true);
     finishGet({
@@ -596,7 +615,7 @@ describe("refreshPendingQuestions", () => {
       }),
     });
 
-    await expect(refresh).resolves.toBe(true);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
       locallyExpired: false,
@@ -629,11 +648,11 @@ describe("refreshPendingQuestions", () => {
       payload: requestedPayload({ expiresAtMs: Date.now() + 1_000 }),
     });
 
-    const refresh = refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
     await vi.advanceTimersByTimeAsync(1_000);
     finishList({ questions: [] });
 
-    await expect(refresh).resolves.toBe(true);
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("answered"));
     expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" });
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "answered",
@@ -664,7 +683,7 @@ describe("refreshPendingQuestions", () => {
     });
     onChange.mockClear();
 
-    const refresh = refreshPendingQuestions(state, client);
+    refreshPendingQuestionsWithRetry(state, client);
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("question.get", { id: "question-1" }),
     );
@@ -673,6 +692,6 @@ describe("refreshPendingQuestions", () => {
     expect(onChange).toHaveBeenCalled();
 
     finishGet({ question: requestedPayload({ status: "cancelled" }) });
-    await refresh;
+    await vi.waitFor(() => expect(state.prompts.get("question-1")?.status).toBe("cancelled"));
   });
 });

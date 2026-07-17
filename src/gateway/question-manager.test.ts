@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Question, QuestionAnswers } from "../../packages/gateway-protocol/src/index.js";
 import {
-  QUESTION_RESOLVED_ENTRY_GRACE_MS,
   QuestionManager,
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "./question-manager.js";
+
+const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 const questions: Question[] = [
   {
@@ -202,8 +203,8 @@ describe("QuestionManager", () => {
 
 describe("answer canonicalization", () => {
   it("stores declared option labels for trim-variant submissions", () => {
-    const manager = new QuestionManager();
-    const record = manager.request({
+    const localManager = new QuestionManager();
+    const record = localManager.request({
       questions: [
         {
           id: "pick",
@@ -215,11 +216,13 @@ describe("answer canonicalization", () => {
       ],
       timeoutMs: 60_000,
     });
-    const result = manager.resolve(record.id, { answers: { pick: { answers: ["  Two  "] } } });
+    const result = localManager.resolve(record.id, {
+      answers: { pick: { answers: ["  Two  "] } },
+    });
     expect(result).toEqual({
       status: "answered",
       answers: { answers: { pick: { answers: ["Two"] } } },
     });
-    manager.reset();
+    localManager.reset();
   });
 });

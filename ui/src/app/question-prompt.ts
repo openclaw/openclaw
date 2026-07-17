@@ -11,7 +11,7 @@ type QuestionClient = {
   request: (method: string, params?: unknown) => Promise<unknown>;
 };
 
-export type QuestionDraft = {
+type QuestionDraft = {
   selected: Set<string>;
   freeText: string;
 };
@@ -35,7 +35,7 @@ export type QuestionPrompt = {
   revision: number;
 };
 
-export type QuestionPromptState = {
+type QuestionPromptState = {
   client: QuestionClient | null;
   prompts: Map<string, QuestionPrompt>;
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
@@ -205,12 +205,12 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   return payload.status === "expired" ? { ...base, status: "expired" } : null;
 }
 
-export function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {
+function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {
   const record = parseQuestionRecord(payload);
   return record?.status === "pending" ? record : null;
 }
 
-export function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | null {
+function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | null {
   if (!isRecord(payload)) {
     return null;
   }
@@ -399,7 +399,7 @@ function markResolvedElsewhere(state: QuestionPromptState, prompt: QuestionPromp
   prompt.revision = ++state.revision;
 }
 
-export async function refreshPendingQuestions(
+async function refreshPendingQuestions(
   state: QuestionPromptState,
   client: QuestionClient,
   isCurrentClient: () => boolean = () => state.client === client,
@@ -556,16 +556,12 @@ function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
   };
 }
 
-export async function resolveQuestion(
+async function resolveQuestion(
   client: QuestionClient,
   id: string,
   answers: QuestionAnswerValues,
 ): Promise<void> {
   await client.request("question.resolve", { id, answers: buildAnswers(answers) });
-}
-
-export async function cancelQuestion(client: QuestionClient, id: string): Promise<void> {
-  await client.request("question.resolve", { id, cancel: true });
 }
 
 export async function submitQuestionPrompt(

@@ -13,7 +13,7 @@ import type {
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
-export const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
+const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 export const QuestionManagerErrorCodes = {
   NOT_FOUND: "QUESTION_NOT_FOUND",
@@ -22,7 +22,7 @@ export const QuestionManagerErrorCodes = {
   INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
 } as const;
 
-export type QuestionManagerErrorCode =
+type QuestionManagerErrorCode =
   (typeof QuestionManagerErrorCodes)[keyof typeof QuestionManagerErrorCodes];
 
 export class QuestionManagerError extends Error {

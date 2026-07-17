@@ -4,7 +4,7 @@ import type { ComponentData } from "./internal/discord.js";
 const DISCORD_QUESTION_CUSTOM_ID_MAX_CHARS = 100;
 const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 
-export type DiscordQuestionCallback = {
+type DiscordQuestionCallback = {
   questionId: string;
   optionIndex: number;
 };
@@ -26,7 +26,8 @@ export function buildDiscordQuestionCustomId(
 
 export function parseDiscordQuestionData(data: ComponentData): DiscordQuestionCallback | null {
   const questionId = typeof data.id === "string" ? data.id : "";
-  const rawIndex = typeof data.i === "string" || typeof data.i === "number" ? String(data.i) : "";
+  const rawIndex =
+    typeof data.i === "string" ? data.i : typeof data.i === "number" ? String(data.i) : "";
   if (!QUESTION_RECORD_ID_PATTERN.test(questionId) || !/^[0-3]$/u.test(rawIndex)) {
     return null;
   }
