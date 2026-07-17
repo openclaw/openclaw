@@ -144,7 +144,7 @@ export interface NostrBusHandle {
   /** Get the bot's public key */
   publicKey: string;
   /** Send a DM to a pubkey */
-  sendDm: (toPubkey: string, text: string) => Promise<void>;
+  sendDm: (toPubkey: string, text: string) => Promise<string>;
   /** Get current metrics snapshot */
   getMetrics: () => MetricsSnapshot;
   /** Publish a profile (kind:0) to all relays */
@@ -643,8 +643,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   });
 
   // Public sendDm function
-  const sendDm = async (toPubkey: string, text: string): Promise<void> => {
-    await sendEncryptedDm(
+  const sendDm = async (toPubkey: string, text: string): Promise<string> => {
+    return await sendEncryptedDm(
       pool,
       sk,
       toPubkey,
@@ -744,7 +744,7 @@ async function sendEncryptedDm(
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
   replyToEventId?: string,
-): Promise<void> {
+): Promise<string> {
   const ciphertext = encrypt(sk, toPubkey, text);
   // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
   const tags = [["p", toPubkey]];
@@ -788,7 +788,7 @@ async function sendEncryptedDm(
       cb?.recordSuccess();
       healthTracker.recordSuccess(relay, latency);
 
-      return; // Success - exit early
+      return reply.id;
     } catch (err) {
       lastError = err as Error;
       const latency = Date.now() - startTime;
