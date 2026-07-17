@@ -147,6 +147,16 @@ function resolveAccountContext(
   return { accountId };
 }
 
+function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
+  const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
+  return (
+    requestError instanceof Error &&
+    requestError.name === "GatewayClientRequestError" &&
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    requestError.message === "invalid channels.start channel"
+  );
+}
+
 async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
@@ -177,10 +187,9 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       deviceIdentity: null,
     });
   } catch (error) {
-    // The gateway may not have loaded the channel plugin yet (e.g. plugin was
-    // installed or enabled after the gateway started). Request a graceful
-    // restart so the gateway discovers the plugin and starts the channel.
-    if (isChannelNotLoadedError(error)) {
+    // A plugin installed or enabled after Gateway startup is absent from its
+    // process-stable registry. Restart only for that exact RPC rejection.
+    if (isChannelMissingFromGatewayRegistry(error)) {
       try {
         await callGateway({
           config: params.cfg,
@@ -191,7 +200,7 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
           deviceIdentity: null,
         });
         params.runtime.log(
-          `Gateway is restarting to load ${params.channelId}; the channel will start automatically.`,
+          `Gateway restart requested to load ${params.channelId}; the channel will start after restart.`,
         );
         return;
       } catch {
@@ -202,11 +211,6 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
     );
   }
-}
-
-function isChannelNotLoadedError(error: unknown): boolean {
-  const message = formatErrorMessage(error);
-  return /invalid channels\.start channel|unknown channel/i.test(message);
 }
 
 async function logoutViaGatewayRuntime(params: {

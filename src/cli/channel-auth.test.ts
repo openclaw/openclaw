@@ -102,6 +102,13 @@ function readFirstLogMessage(runtime: { log: ReturnType<typeof vi.fn> }): string
   return String(message);
 }
 
+function gatewayRequestError(message: string, gatewayCode: string): Error {
+  const error = new Error(message) as Error & { gatewayCode: string };
+  error.name = "GatewayClientRequestError";
+  error.gatewayCode = gatewayCode;
+  return error;
+}
+
 function findCallArg(
   mock: ReturnType<typeof vi.fn>,
   predicate: (arg: Record<string, unknown>) => boolean,
@@ -246,7 +253,9 @@ describe("channel-auth", () => {
 
   it("requests gateway restart when channels.start fails because plugin is not loaded", async () => {
     mocks.callGateway
-      .mockRejectedValueOnce(new Error("invalid channels.start channel"))
+      .mockRejectedValueOnce(
+        gatewayRequestError("invalid channels.start channel", "INVALID_REQUEST"),
+      )
       .mockResolvedValueOnce(undefined);
 
     await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
@@ -265,12 +274,14 @@ describe("channel-auth", () => {
         params: { reason: "channel login: load whatsapp" },
       }),
     );
-    expect(readFirstLogMessage(runtime)).toContain("Gateway is restarting to load whatsapp");
+    expect(readFirstLogMessage(runtime)).toContain("Gateway restart requested to load whatsapp");
   });
 
   it("falls back to generic warning when both channels.start and gateway restart fail", async () => {
     mocks.callGateway
-      .mockRejectedValueOnce(new Error("invalid channels.start channel"))
+      .mockRejectedValueOnce(
+        gatewayRequestError("invalid channels.start channel", "INVALID_REQUEST"),
+      )
       .mockRejectedValueOnce(new Error("restart denied"));
 
     await expect(
@@ -283,13 +294,23 @@ describe("channel-auth", () => {
     );
   });
 
-  it("does not request restart for non-channel-loading errors", async () => {
-    mocks.callGateway.mockRejectedValue(new Error("timeout connecting"));
+  it.each([
+    ["plain error", new Error("invalid channels.start channel")],
+    [
+      "plugin start failure",
+      gatewayRequestError("plugin failed: unknown channel upstream", "UNAVAILABLE"),
+    ],
+    [
+      "different invalid request",
+      gatewayRequestError("unknown channel: whatsapp", "INVALID_REQUEST"),
+    ],
+  ])("does not restart for %s", async (_label, error) => {
+    mocks.callGateway.mockRejectedValue(error);
 
     await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    expect(readFirstLogMessage(runtime)).toContain("running gateway did not restart it: timeout");
+    expect(readFirstLogMessage(runtime)).toContain("running gateway did not restart it:");
   });
 
   it("auto-picks the single configured channel that supports login when opts are empty", async () => {
