@@ -16,6 +16,7 @@ import {
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
+  loadClawHubSecurityVerdicts,
   loadSkillCard,
   loadSkills,
   refreshSkills,
@@ -232,6 +233,9 @@ class SkillsPage extends OpenClawLightDomElement {
     this.skillsLoading = false;
     this.skillsReport = data.report;
     this.skillsError = data.error;
+    if (data.report) {
+      void loadClawHubSecurityVerdicts(this, data.report);
+    }
   }
 
   private ensureInitialData() {
