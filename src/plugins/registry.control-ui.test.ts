@@ -97,7 +97,7 @@ describe("plugin registry Control UI descriptors", () => {
       expect.objectContaining({
         level: "error",
         pluginId: "bad-bridge",
-        message: expect.stringContaining("require tab surface"),
+        message: expect.stringContaining("valid optional fields"),
       }),
     );
   });

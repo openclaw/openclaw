@@ -128,7 +128,6 @@ export class PluginUiBridgeController {
     port.start();
     // Sandboxed plugin frames have an opaque origin, so source-window and
     // transferred-port identity are the capability boundary rather than origin.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
     frameWindow.postMessage(
       {
         v: 1,
@@ -157,7 +156,6 @@ export class PluginUiBridgeController {
       return;
     }
     // MessagePort has no targetOrigin.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
     port.postMessage({ v: 1, type: "openclaw.pluginUi.response", id, ...payload });
   }
 
