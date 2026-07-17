@@ -1,6 +1,41 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
-/// Chat-specific image upload policy built on the shared JPEG transcoder.
+public enum ImageUploadFormat: Sendable, Equatable {
+    case jpeg
+    case png
+
+    public var fileExtension: String {
+        switch self {
+        case .jpeg: "jpg"
+        case .png: "png"
+        }
+    }
+
+    public var mimeType: String {
+        switch self {
+        case .jpeg: "image/jpeg"
+        case .png: "image/png"
+        }
+    }
+
+    public static func detect(data: Data) -> Self? {
+        guard
+            let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let typeIdentifier = CGImageSourceGetType(source)
+        else {
+            return nil
+        }
+        return switch typeIdentifier as String {
+        case UTType.jpeg.identifier: .jpeg
+        case UTType.png.identifier: .png
+        default: nil
+        }
+    }
+}
+
+/// Chat-specific image upload policy built on the shared image transcoder.
 public enum ChatImageProcessor {
     public static let maxLongEdgePx = 1600
     public static let jpegQuality = 0.8
@@ -25,11 +60,18 @@ public enum ChatImageProcessor {
 
     public static func processForUpload(data: Data) throws -> Data {
         do {
-            let result = try JPEGTranscoder.transcodeToJPEG(
-                imageData: data,
-                maxLongEdgePx: self.maxLongEdgePx,
-                quality: self.jpegQuality,
-                maxBytes: self.maxPayloadBytes)
+            let result = if ImageUploadFormat.detect(data: data) == .png {
+                try JPEGTranscoder.transcodeToPNG(
+                    imageData: data,
+                    maxLongEdgePx: self.maxLongEdgePx,
+                    maxBytes: self.maxPayloadBytes)
+            } else {
+                try JPEGTranscoder.transcodeToJPEG(
+                    imageData: data,
+                    maxLongEdgePx: self.maxLongEdgePx,
+                    quality: self.jpegQuality,
+                    maxBytes: self.maxPayloadBytes)
+            }
             return result.data
         } catch JPEGTranscodeError.decodeFailed {
             throw ProcessError.notAnImage

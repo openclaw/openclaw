@@ -100,9 +100,11 @@ extension OpenClawChatViewModel {
             return
         }
 
+        let outputFormat = ImageUploadFormat.detect(data: processed) ?? .jpeg
         let outputFileName: String = {
             let baseName = (fileName as NSString).deletingPathExtension
-            return baseName.isEmpty ? "image.jpg" : "\(baseName).jpg"
+            let outputBaseName = baseName.isEmpty ? "image" : baseName
+            return "\(outputBaseName).\(outputFormat.fileExtension)"
         }()
 
         let preview = Self.previewImage(data: processed)
@@ -111,7 +113,7 @@ extension OpenClawChatViewModel {
                 url: url,
                 data: processed,
                 fileName: outputFileName,
-                mimeType: "image/jpeg",
+                mimeType: outputFormat.mimeType,
                 preview: preview))
     }
 

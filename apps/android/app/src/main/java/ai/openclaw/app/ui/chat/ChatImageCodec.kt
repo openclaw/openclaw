@@ -26,54 +26,82 @@ private val decodedBitmapCache =
     ): Int = value.byteCount.coerceAtLeast(1)
   }
 
-/** Loads a picked image URI into the bounded JPEG attachment shape sent to chat. */
+/** Loads a picked image URI into the bounded attachment shape sent to chat. */
 internal fun loadSizedImageAttachment(
   resolver: ContentResolver,
   uri: Uri,
 ): PendingAttachment {
-  val fileName = normalizeAttachmentFileName((uri.lastPathSegment ?: "image").substringAfterLast('/'))
-  val bitmap = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
-  if (bitmap == null) {
+  val decoded = decodeScaledBitmap(resolver, uri, maxDimension = CHAT_ATTACHMENT_MAX_WIDTH)
+  if (decoded == null) {
     throw IllegalStateException("unsupported attachment")
   }
+  val bitmap = decoded.bitmap
   val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
-  // Reuse the node JPEG limiter so chat attachments and node photo payloads
-  // stay within the same gateway frame budget.
-  val encoded =
-    JpegSizeLimiter.compressToLimit(
-      initialWidth = bitmap.width,
-      initialHeight = bitmap.height,
-      startQuality = CHAT_ATTACHMENT_START_QUALITY,
-      maxBytes = maxBytes,
-      minSize = 240,
-      encode = { width, height, quality ->
-        val working =
-          if (width == bitmap.width && height == bitmap.height) {
-            bitmap
-          } else {
-            bitmap.scale(width, height, true)
+  val outputMimeType = attachmentOutputMimeType(decoded.mimeType)
+  val preservePng = outputMimeType == "image/png"
+  val compressionFormat = if (preservePng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+  // Reuse the node limiter so chat attachments and node photo payloads stay
+  // within the same gateway frame budget. PNG has no lossy quality ladder,
+  // so its search only reduces dimensions when needed.
+  val encodedBytes =
+    JpegSizeLimiter
+      .compressToLimit(
+        initialWidth = bitmap.width,
+        initialHeight = bitmap.height,
+        startQuality = if (preservePng) 100 else CHAT_ATTACHMENT_START_QUALITY,
+        minQuality = if (preservePng) 100 else 20,
+        maxQualityAttempts = if (preservePng) 1 else 6,
+        maxBytes = maxBytes,
+        minSize = 240,
+        encode = { width, height, quality ->
+          val working =
+            if (width == bitmap.width && height == bitmap.height) {
+              bitmap
+            } else {
+              bitmap.scale(width, height, true)
+            }
+          try {
+            val out = ByteArrayOutputStream()
+            if (!working.compress(compressionFormat, quality, out)) {
+              throw IllegalStateException("attachment encode failed")
+            }
+            out.toByteArray()
+          } finally {
+            if (working !== bitmap) {
+              working.recycle()
+            }
           }
-        try {
-          val out = ByteArrayOutputStream()
-          if (!working.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-            throw IllegalStateException("attachment encode failed")
-          }
-          out.toByteArray()
-        } finally {
-          if (working !== bitmap) {
-            working.recycle()
-          }
-        }
-      },
-    )
-  val base64 = Base64.encodeToString(encoded.bytes, Base64.NO_WRAP)
+        },
+      ).bytes
+  val base64 = Base64.encodeToString(encodedBytes, Base64.NO_WRAP)
+  val rawFileName = (uri.lastPathSegment ?: "image").substringAfterLast('/')
   return PendingAttachment(
     id = uri.toString() + "#" + System.currentTimeMillis().toString(),
-    fileName = fileName,
-    mimeType = "image/jpeg",
+    fileName = normalizeAttachmentFileName(rawFileName, outputMimeType),
+    mimeType = outputMimeType,
     base64 = base64,
   )
 }
+
+internal fun attachmentOutputMimeType(sourceMimeType: String?): String =
+  if (sourceMimeType.equals("image/png", ignoreCase = true)) "image/png" else "image/jpeg"
+
+/** Normalizes arbitrary picked-image names to match the encoded format sent upstream. */
+internal fun normalizeAttachmentFileName(
+  raw: String,
+  mimeType: String,
+): String {
+  val trimmed = raw.trim()
+  val extension = if (mimeType == "image/png") "png" else "jpg"
+  if (trimmed.isEmpty()) return "image.$extension"
+  val stem = trimmed.substringBeforeLast('.', missingDelimiterValue = trimmed).ifEmpty { "image" }
+  return "$stem.$extension"
+}
+
+private data class DecodedAttachmentBitmap(
+  val bitmap: Bitmap,
+  val mimeType: String?,
+)
 
 /** Decodes chat image payloads into display-sized bitmaps with an LRU cache. */
 internal fun decodeBase64Bitmap(
@@ -123,19 +151,11 @@ internal fun computeInSampleSize(
   return sample.coerceAtLeast(1)
 }
 
-/** Normalizes arbitrary picked-image names to the JPEG file name sent upstream. */
-internal fun normalizeAttachmentFileName(raw: String): String {
-  val trimmed = raw.trim()
-  if (trimmed.isEmpty()) return "image.jpg"
-  val stem = trimmed.substringBeforeLast('.', missingDelimiterValue = trimmed).ifEmpty { "image" }
-  return "$stem.jpg"
-}
-
 private fun decodeScaledBitmap(
   resolver: ContentResolver,
   uri: Uri,
   maxDimension: Int,
-): Bitmap? {
+): DecodedAttachmentBitmap? {
   val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
   resolver.openInputStream(uri).use { input ->
     if (input == null) return null
@@ -157,7 +177,9 @@ private fun decodeScaledBitmap(
     } ?: return null
 
   val longestEdge = max(decoded.width, decoded.height)
-  if (longestEdge <= maxDimension) return decoded
+  if (longestEdge <= maxDimension) {
+    return DecodedAttachmentBitmap(bitmap = decoded, mimeType = bounds.outMimeType)
+  }
 
   val scale = maxDimension.toDouble() / longestEdge.toDouble()
   val targetWidth = max(1, (decoded.width * scale).roundToInt())
@@ -166,5 +188,5 @@ private fun decodeScaledBitmap(
   if (scaled !== decoded) {
     decoded.recycle()
   }
-  return scaled
+  return DecodedAttachmentBitmap(bitmap = scaled, mimeType = bounds.outMimeType)
 }

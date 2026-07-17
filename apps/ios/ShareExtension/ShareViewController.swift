@@ -369,12 +369,13 @@ final class ShareViewController: UIViewController {
         guard let image = UIImage(data: data) else {
             throw ShareImageProcessor.ProcessError.invalidImage
         }
+        let outputFormat = ImageUploadFormat.detect(data: data) ?? .jpeg
 
         return await LoadedAttachment(
             payload: ShareAttachment(
                 type: "image",
-                mimeType: "image/jpeg",
-                fileName: "shared-image-\(index + 1).jpg",
+                mimeType: outputFormat.mimeType,
+                fileName: "shared-image-\(index + 1).\(outputFormat.fileExtension)",
                 content: data.base64EncodedString()),
             preview: self.boundedPreview(from: image))
     }

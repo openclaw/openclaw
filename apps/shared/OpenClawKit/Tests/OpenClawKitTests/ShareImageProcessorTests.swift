@@ -36,6 +36,39 @@ struct ShareImageProcessorTests {
         }
     }
 
+    @Test func `preserves PNG output format`() throws {
+        let input = try self.makePNG(width: 320, height: 240)
+        let output = try ShareImageProcessor.processForUpload(data: input)
+
+        #expect(ImageUploadFormat.detect(data: output) == .png)
+        #expect(output.count <= ShareImageProcessor.maxPayloadBytes)
+    }
+
+    private func makePNG(width: Int, height: Int) throws -> Data {
+        let context = try #require(CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 0.5))
+        context.fill(CGRect(x: 20, y: 20, width: width - 40, height: height - 40))
+
+        let image = try #require(context.makeImage())
+        let output = NSMutableData()
+        let destination = try #require(CGImageDestinationCreateWithData(
+            output,
+            UTType.png.identifier as CFString,
+            1,
+            nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return output as Data
+    }
+
     private func makeNoiseJPEG(width: Int, height: Int, orientation: Int) throws -> Data {
         let bytesPerPixel = 4
         let byteCount = width * height * bytesPerPixel

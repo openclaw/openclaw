@@ -159,7 +159,7 @@ private func makeDurableAttachmentViewModel(
         outbox: outbox)
 }
 
-private func makeChatAttachmentJPEG(width: Int, height: Int) throws -> Data {
+private func makeChatAttachmentImage(width: Int, height: Int, type: UTType = .jpeg) throws -> Data {
     guard
         let context = CGContext(
             data: nil,
@@ -183,10 +183,13 @@ private func makeChatAttachmentJPEG(width: Int, height: Int) throws -> Data {
     }
 
     let data = NSMutableData()
-    guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else {
+    guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
         throw NSError(domain: "ChatViewModelAttachmentTests", code: 5)
     }
-    CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary)
+    let properties: CFDictionary? = type == .jpeg
+        ? [kCGImageDestinationLossyCompressionQuality: 0.95] as CFDictionary
+        : nil
+    CGImageDestinationAddImage(destination, image, properties)
     guard CGImageDestinationFinalize(destination) else {
         throw NSError(domain: "ChatViewModelAttachmentTests", code: 6)
     }
@@ -207,7 +210,7 @@ private func chatAttachmentDimensions(for data: Data) -> (width: Int, height: In
 
 final class ChatViewModelAttachmentTests: XCTestCase {
     func testImageAttachmentsAreProcessedBeforeStaging() async throws {
-        let imageData = try makeChatAttachmentJPEG(width: 3000, height: 4000)
+        let imageData = try makeChatAttachmentImage(width: 3000, height: 4000)
         let viewModel = await MainActor.run {
             OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
         }
@@ -232,6 +235,31 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertEqual(attachment.1, "image/jpeg")
         XCTAssertLessThanOrEqual(attachment.2.count, ChatImageProcessor.maxPayloadBytes)
         XCTAssertLessThanOrEqual(max(dimensions.width, dimensions.height), ChatImageProcessor.maxLongEdgePx)
+        let errorText = await MainActor.run { viewModel.errorText }
+        XCTAssertNil(errorText)
+    }
+
+    func testPngAttachmentsKeepTheirFormatBeforeStaging() async throws {
+        let imageData = try makeChatAttachmentImage(width: 800, height: 600, type: .png)
+        let viewModel = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: AttachmentProcessingTransport())
+        }
+
+        await MainActor.run {
+            viewModel.addImageAttachment(data: imageData, fileName: "diagram.png", mimeType: "image/png")
+        }
+
+        try await waitUntil("PNG attachment processed") {
+            await MainActor.run { !viewModel.attachments.isEmpty || viewModel.errorText != nil }
+        }
+
+        let attachment = try await MainActor.run {
+            let attachment = try XCTUnwrap(viewModel.attachments.first)
+            return (attachment.fileName, attachment.mimeType, attachment.data)
+        }
+        XCTAssertEqual(attachment.0, "diagram.png")
+        XCTAssertEqual(attachment.1, "image/png")
+        XCTAssertEqual(ImageUploadFormat.detect(data: attachment.2), .png)
         let errorText = await MainActor.run { viewModel.errorText }
         XCTAssertNil(errorText)
     }

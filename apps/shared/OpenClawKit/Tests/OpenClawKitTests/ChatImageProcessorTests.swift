@@ -86,7 +86,13 @@ struct ChatImageProcessorTests {
         else {
             throw NSError(domain: "ChatImageProcessorTests", code: 7)
         }
-        CGImageDestinationAddImage(destination, image, nil)
+        let properties: [CFString: Any] = [
+            kCGImagePropertyGPSDictionary: [
+                kCGImagePropertyGPSLatitude: 60.02,
+                kCGImagePropertyGPSLatitudeRef: "N",
+            ] as CFDictionary,
+        ]
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
         guard CGImageDestinationFinalize(destination) else {
             throw NSError(domain: "ChatImageProcessorTests", code: 8)
         }
@@ -176,12 +182,16 @@ struct ChatImageProcessorTests {
         }
     }
 
-    @Test func `flattens transparent sources to opaque JPEG`() throws {
+    @Test func `preserves transparent PNG format while stripping metadata`() throws {
         let source = try self.syntheticPNGWithAlpha(width: 800, height: 600)
         let output = try ChatImageProcessor.processForUpload(data: source)
         let imageSource = try #require(CGImageSourceCreateWithData(output as CFData, nil))
         let image = try #require(CGImageSourceCreateImageAtIndex(imageSource, 0, nil))
+        let outputProperties = self.properties(for: output)
+        let gps = outputProperties[kCGImagePropertyGPSDictionary] as? [CFString: Any] ?? [:]
 
-        #expect([.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo))
+        #expect(ImageUploadFormat.detect(data: output) == .png)
+        #expect(![.none, .noneSkipFirst, .noneSkipLast].contains(image.alphaInfo))
+        #expect(gps.isEmpty)
     }
 }

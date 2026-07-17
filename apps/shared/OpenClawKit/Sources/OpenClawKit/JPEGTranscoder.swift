@@ -16,9 +16,9 @@ enum JPEGTranscodeError: LocalizedError, Sendable {
         case .propertiesMissing:
             "Failed to read image properties"
         case .encodeFailed:
-            "Failed to encode JPEG"
+            "Failed to encode image"
         case let .sizeLimitExceeded(maxBytes, actualBytes):
-            "JPEG exceeds size limit (\(actualBytes) bytes > \(maxBytes) bytes)"
+            "Image exceeds size limit (\(actualBytes) bytes > \(maxBytes) bytes)"
         }
     }
 }
@@ -58,6 +58,38 @@ struct JPEGTranscoder: Sendable {
         quality: Double,
         maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
     {
+        try self.transcode(
+            imageData: imageData,
+            maxWidthPx: maxWidthPx,
+            maxLongEdgePx: maxLongEdgePx,
+            outputType: .jpeg,
+            quality: quality,
+            maxBytes: maxBytes)
+    }
+
+    /// Re-encodes image data to PNG, preserving alpha while normalizing orientation and stripping source metadata.
+    static func transcodeToPNG(
+        imageData: Data,
+        maxLongEdgePx: Int?,
+        maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
+    {
+        try self.transcode(
+            imageData: imageData,
+            maxWidthPx: nil,
+            maxLongEdgePx: maxLongEdgePx,
+            outputType: .png,
+            quality: nil,
+            maxBytes: maxBytes)
+    }
+
+    private static func transcode(
+        imageData: Data,
+        maxWidthPx: Int?,
+        maxLongEdgePx: Int?,
+        outputType: UTType,
+        quality: Double?,
+        maxBytes: Int?) throws -> (data: Data, widthPx: Int, heightPx: Int)
+    {
         guard let src = CGImageSourceCreateWithData(imageData as CFData, nil) else {
             throw JPEGTranscodeError.decodeFailed
         }
@@ -94,7 +126,7 @@ struct JPEGTranscoder: Sendable {
             return max(1, Int((Double(maxDim) * scale).rounded(.toNearestOrAwayFromZero)))
         }()
 
-        func encode(maxPixelSize: Int, quality: Double) throws -> (data: Data, widthPx: Int, heightPx: Int) {
+        func encode(maxPixelSize: Int, quality: Double?) throws -> (data: Data, widthPx: Int, heightPx: Int) {
             let thumbOpts: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
@@ -105,35 +137,52 @@ struct JPEGTranscoder: Sendable {
             guard let img = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts as CFDictionary) else {
                 throw JPEGTranscodeError.decodeFailed
             }
-            let opaqueImage = Self.flattenAlphaIfNeeded(img)
+            let outputImage = outputType == .jpeg ? Self.flattenAlphaIfNeeded(img) : img
 
             let out = NSMutableData()
-            guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
+            guard let dest = CGImageDestinationCreateWithData(out, outputType.identifier as CFString, 1, nil) else {
                 throw JPEGTranscodeError.encodeFailed
             }
-            let q = self.clampQuality(quality)
-            let encodeProps = [kCGImageDestinationLossyCompressionQuality: q] as CFDictionary
-            CGImageDestinationAddImage(dest, opaqueImage, encodeProps)
+            let encodeProps: CFDictionary? = quality.map {
+                [kCGImageDestinationLossyCompressionQuality: self.clampQuality($0)] as CFDictionary
+            }
+            CGImageDestinationAddImage(dest, outputImage, encodeProps)
             guard CGImageDestinationFinalize(dest) else {
                 throw JPEGTranscodeError.encodeFailed
             }
 
-            return (out as Data, opaqueImage.width, opaqueImage.height)
+            return (out as Data, outputImage.width, outputImage.height)
         }
 
         guard let maxBytes, maxBytes > 0 else {
             return try encode(maxPixelSize: targetMaxPixelSize, quality: quality)
         }
 
-        let minQuality = max(0.2, self.clampQuality(quality) * 0.35)
         let minPixelSize = 256
         var best = try encode(maxPixelSize: targetMaxPixelSize, quality: quality)
         if best.data.count <= maxBytes {
             return best
         }
 
+        if quality == nil {
+            for _ in 0..<6 {
+                let nextPixelSize = max(Int(Double(targetMaxPixelSize) * 0.85), minPixelSize)
+                if nextPixelSize == targetMaxPixelSize {
+                    break
+                }
+                targetMaxPixelSize = nextPixelSize
+                best = try encode(maxPixelSize: targetMaxPixelSize, quality: nil)
+                if best.data.count <= maxBytes {
+                    return best
+                }
+            }
+            throw JPEGTranscodeError.sizeLimitExceeded(maxBytes: maxBytes, actualBytes: best.data.count)
+        }
+
+        let initialQuality = quality ?? 1
+        let minQuality = max(0.2, self.clampQuality(initialQuality) * 0.35)
         for _ in 0..<6 {
-            var q = self.clampQuality(quality)
+            var q = self.clampQuality(initialQuality)
             for _ in 0..<6 {
                 let candidate = try encode(maxPixelSize: targetMaxPixelSize, quality: q)
                 best = candidate

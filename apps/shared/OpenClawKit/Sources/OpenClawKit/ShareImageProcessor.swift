@@ -1,6 +1,6 @@
 import Foundation
 
-/// Share Extension image policy built on the shared, orientation-normalizing JPEG transcoder.
+/// Share Extension image policy built on the shared, orientation-normalizing image transcoder.
 public enum ShareImageProcessor {
     public static let maxLongEdgePx = 2560
     public static let jpegQuality = 0.9
@@ -14,6 +14,12 @@ public enum ShareImageProcessor {
 
     public static func processForUpload(data: Data) throws -> Data {
         do {
+            if ImageUploadFormat.detect(data: data) == .png {
+                return try JPEGTranscoder.transcodeToPNG(
+                    imageData: data,
+                    maxLongEdgePx: self.maxLongEdgePx,
+                    maxBytes: self.maxPayloadBytes).data
+            }
             return try JPEGTranscoder.transcodeToJPEG(
                 imageData: data,
                 maxLongEdgePx: self.maxLongEdgePx,
