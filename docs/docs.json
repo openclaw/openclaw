@@ -1300,6 +1300,7 @@
                   "plugins/codex-computer-use",
                   "plugins/logbook",
                   "plugins/google-meet",
+                  "plugins/teams-meetings",
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",

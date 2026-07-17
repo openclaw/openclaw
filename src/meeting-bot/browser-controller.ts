@@ -288,15 +288,15 @@ function findRecoverableTab<
 >(params: {
   adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
   tabs: MeetingBrowserCandidateTab[];
-  url?: string;
+  requestedMeetingUrl: string | undefined;
 }): MeetingBrowserCandidateTab | undefined {
   const candidates = params.tabs.filter((tab) =>
-    params.adapter.urls.isRecoverableTab(tab, params.url),
+    params.adapter.urls.isRecoverableTab(tab, params.requestedMeetingUrl),
   );
-  if (!params.url) {
+  if (!params.requestedMeetingUrl) {
     return candidates[0];
   }
-  const accountHint = params.adapter.urls.accountHint(params.url);
+  const accountHint = params.adapter.urls.accountHint(params.requestedMeetingUrl);
   const accountCandidates = accountHint
     ? candidates.filter((tab) => params.adapter.urls.accountHint(tab.url) === accountHint)
     : candidates;
@@ -321,6 +321,7 @@ async function inspectRecoverableTab<
   config: MeetingBrowserControllerConfig;
   mode: Mode;
   readOnly?: boolean;
+  requestedMeetingUrl: string | undefined;
   tab: MeetingBrowserCandidateTab;
   targetId: string;
   timeoutMs: number;
@@ -367,7 +368,7 @@ async function inspectRecoverableTab<
       fn: params.adapter.browser.buildStatusJoinScript({
         meetingSessionId: "",
         mode: params.mode,
-        url: params.tab.url ?? "",
+        url: params.requestedMeetingUrl ?? params.tab.url ?? "",
         autoJoin: false,
         captureCaptions: params.adapter.browser.captions.enabled(params.mode),
         guestName: params.config.guestName,
@@ -418,8 +419,10 @@ export async function recoverMeetingBrowserTab<
   config: MeetingBrowserControllerConfig;
   locationLabel: string;
   mode: Mode;
-  url?: string;
+  requestedMeetingUrl: string | undefined;
   readOnly?: boolean;
+  trackedMeetingUrl: string | undefined;
+  trackedTargetId: string | undefined;
 }): Promise<{
   found: boolean;
   targetId?: string;
@@ -435,18 +438,42 @@ export async function recoverMeetingBrowserTab<
       timeoutMs: Math.min(timeoutMs, 5_000),
     }),
   );
-  const tab = findRecoverableTab({
-    adapter: params.adapter,
-    tabs,
-    url: params.url,
-  });
+  const trackedCandidate = params.trackedTargetId
+    ? tabs.find((tab) => tab.targetId === params.trackedTargetId)
+    : undefined;
+  const trackedUrlHasMeetingIdentity = Boolean(
+    params.adapter.urls.normalizeForReuse(trackedCandidate?.url),
+  );
+  const trackedIdentityMatches = params.adapter.urls.isSameMeeting(
+    params.trackedMeetingUrl,
+    params.requestedMeetingUrl,
+  );
+  const trackedUrlMatches = params.adapter.urls.isSameMeeting(
+    trackedCandidate?.url,
+    params.requestedMeetingUrl,
+  );
+  // Meeting SPAs may replace the join URL after admission. Keep the persisted
+  // target for non-identifying URLs, but never follow it into another meeting.
+  const trackedTab =
+    trackedCandidate &&
+    trackedIdentityMatches &&
+    (!trackedUrlHasMeetingIdentity || trackedUrlMatches)
+      ? trackedCandidate
+      : undefined;
+  const tab =
+    trackedTab ??
+    findRecoverableTab({
+      adapter: params.adapter,
+      tabs,
+      requestedMeetingUrl: params.requestedMeetingUrl,
+    });
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
       found: false,
       tab,
-      message: params.url
-        ? `No existing ${params.adapter.browserLabel} tab matched ${params.url}.`
+      message: params.requestedMeetingUrl
+        ? `No existing ${params.adapter.browserLabel} tab matched ${params.requestedMeetingUrl}.`
         : `No existing ${params.adapter.browserLabel} tab found ${params.locationLabel}.`,
     };
   }
@@ -456,6 +483,7 @@ export async function recoverMeetingBrowserTab<
     config: params.config,
     mode: params.mode,
     readOnly: params.readOnly,
+    requestedMeetingUrl: params.requestedMeetingUrl,
     timeoutMs,
     tab,
     targetId,
