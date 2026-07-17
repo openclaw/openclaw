@@ -7198,6 +7198,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
+    public let capabilities: [String]?
 
     public init(
         sessionkey: String? = nil,
@@ -7210,7 +7211,8 @@ public struct TalkClientCreateParams: Codable, Sendable {
         reasoningeffort: String? = nil,
         mode: AnyCodable? = nil,
         transport: AnyCodable? = nil,
-        brain: AnyCodable? = nil)
+        brain: AnyCodable? = nil,
+        capabilities: [String]? = nil)
     {
         self.sessionkey = sessionkey
         self.provider = provider
@@ -7223,6 +7225,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         self.mode = mode
         self.transport = transport
         self.brain = brain
+        self.capabilities = capabilities
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7237,6 +7240,7 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case mode
         case transport
         case brain
+        case capabilities
     }
 }
 
