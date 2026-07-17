@@ -1783,6 +1783,11 @@ export const tr: TranslationMap = {
       testingButton: "Test ediliyor…",
       testing: "Test ediliyor — hızlı bir yanıt için {modelRef} modeline soruluyor…",
     },
+    empty: {
+      title: "Önerilen kurulumlar",
+      intro:
+        "Mevcut bir AI erişimi algılanmadı. Bu araçlardan birini yükleyip tekrar kontrol edin.",
+    },
     unavailable: {
       title: "Algılandı ancak otomatik olarak test edilmedi",
     },

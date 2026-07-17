@@ -1792,6 +1792,11 @@ export const de: TranslationMap = {
       testingButton: "Wird getestet…",
       testing: "Wird getestet – {modelRef} wird um eine kurze Antwort gebeten…",
     },
+    empty: {
+      title: "Empfohlene Installationen",
+      intro:
+        "Es wurde kein bestehender KI-Zugriff erkannt. Installieren Sie eines dieser Tools und prüfen Sie dann erneut.",
+    },
     unavailable: {
       title: "Erkannt, aber nicht automatisch getestet",
     },

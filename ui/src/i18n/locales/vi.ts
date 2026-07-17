@@ -1778,6 +1778,11 @@ export const vi: TranslationMap = {
       testingButton: "Đang kiểm tra…",
       testing: "Đang kiểm tra — yêu cầu {modelRef} phản hồi nhanh…",
     },
+    empty: {
+      title: "Các công cụ nên cài đặt",
+      intro:
+        "Không phát hiện quyền truy cập AI hiện có. Hãy cài đặt một trong các công cụ này, rồi kiểm tra lại.",
+    },
     unavailable: {
       title: "Đã phát hiện nhưng chưa được tự động kiểm tra",
     },

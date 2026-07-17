@@ -1743,6 +1743,10 @@ export const zh_CN: TranslationMap = {
       testingButton: "正在测试…",
       testing: "正在测试——正请求 {modelRef} 快速回复…",
     },
+    empty: {
+      title: "推荐安装",
+      intro: "未检测到现有的 AI 访问方式。请安装以下工具之一，然后重新检查。",
+    },
     unavailable: {
       title: "已检测到，但未自动测试",
     },

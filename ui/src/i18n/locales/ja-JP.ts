@@ -1784,6 +1784,11 @@ export const ja_JP: TranslationMap = {
       testingButton: "テスト中…",
       testing: "テスト中 — {modelRef}に簡単な応答を要求しています…",
     },
+    empty: {
+      title: "推奨インストール",
+      intro:
+        "既存のAIアクセスが検出されませんでした。以下のツールのいずれかをインストールしてから、もう一度確認してください。",
+    },
     unavailable: {
       title: "検出済み（自動テスト未実施）",
     },

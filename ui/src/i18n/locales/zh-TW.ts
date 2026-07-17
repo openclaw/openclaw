@@ -1745,6 +1745,10 @@ export const zh_TW: TranslationMap = {
       testingButton: "測試中…",
       testing: "測試中 — 正在請 {modelRef} 快速回覆…",
     },
+    empty: {
+      title: "建議安裝項目",
+      intro: "未偵測到現有的 AI 存取方式。請安裝以下其中一項工具，然後再次檢查。",
+    },
     unavailable: {
       title: "已偵測，但未自動測試",
     },
