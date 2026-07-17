@@ -4,7 +4,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode } from "../../api/types.ts";
+import type { CronStatus, FastMode } from "../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -155,6 +155,13 @@ function mcpServerCount(config: unknown): number {
     : 0;
 }
 
+function skillCount(config: unknown): number {
+  const entries = asConfigRecord(asConfigRecord(config)?.skills)?.entries;
+  return entries && typeof entries === "object" && !Array.isArray(entries)
+    ? Object.keys(entries).length
+    : 0;
+}
+
 function quickChannels(config: unknown): QuickSettingsChannel[] {
   const configured = asConfigRecord(asConfigRecord(config)?.channels) ?? {};
   const configuredIds = Object.keys(configured).filter((id) => id.trim().length > 0);
@@ -243,6 +250,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private cronJobCount: number | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
@@ -278,6 +286,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
+  private cronStatusRequestId = 0;
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -327,6 +336,8 @@ export class ConfigPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
+    this.cronJobCount = null;
+    this.cronStatusRequestId = 0;
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
     this.systemInfoGatewaySource = null;
@@ -346,8 +357,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
     if (pageChanged || modeChanged) {
       this.invalidateSystemInfoRequest();
+      this.cronJobCount = null;
     }
     this.syncSystemInfoPolling();
+    if (this.pageId === "config" && this.settingsMode === "quick" && this.cronJobCount === null) {
+      void this.loadCronStatus();
+    }
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants mic permission; the
     // refresh button next to the picker requests it explicitly.
@@ -441,6 +456,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoClient = null;
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
+      this.cronJobCount = null;
     }
     this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
   }
@@ -550,6 +566,27 @@ export class ConfigPage extends OpenClawLightDomElement {
       if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
         this.systemInfoLoading = false;
       }
+    }
+  }
+
+  private async loadCronStatus() {
+    const client = this.context.gateway?.snapshot?.client;
+    if (!client || !this.context.gateway?.snapshot?.connected) {
+      return;
+    }
+
+    const requestId = ++this.cronStatusRequestId;
+    try {
+      const res = await client.request<CronStatus>("cron.status", {});
+      if (requestId !== this.cronStatusRequestId) {
+        return;
+      }
+      this.cronJobCount = res.jobs;
+    } catch {
+      if (requestId !== this.cronStatusRequestId) {
+        return;
+      }
+      this.cronJobCount = null;
     }
   }
 
@@ -846,8 +883,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
       channels: quickChannels(configObject),
       automation: {
-        cronJobCount: 0,
-        skillCount: 0,
+        cronJobCount: this.cronJobCount ?? 0,
+        skillCount: skillCount(configObject),
         mcpServerCount: mcpServerCount(configObject),
       },
       security: extractQuickSettingsSecurity(configObject),
