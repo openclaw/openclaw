@@ -29,6 +29,7 @@ If no `index.html` exists at the root, the app shows a built-in scaffold page.
 ## Panel behavior
 
 - Borderless, resizable panel anchored near the menu bar (or mouse cursor).
+- Presenting Canvas does not switch apps or steal keyboard focus.
 - Remembers size/position per session.
 - Auto-reloads when local canvas files change.
 - Only one Canvas panel is visible at a time (session switches as needed).

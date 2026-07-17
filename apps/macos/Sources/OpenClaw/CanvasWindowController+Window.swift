@@ -46,7 +46,8 @@ extension CanvasWindowController {
         guard case .panel = self.presentation, let window else { return }
         self.repositionPanel(using: anchorProvider)
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Agent-driven presents must not steal focus; the elevated panel stays visible without activation.
+        // User entry points such as AppNavigationActions own activation.
         window.makeFirstResponder(self.webView)
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.onVisibilityChanged?(true)
