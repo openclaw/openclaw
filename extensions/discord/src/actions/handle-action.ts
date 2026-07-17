@@ -101,6 +101,7 @@ export async function handleDiscordMessageAction(
     const target =
       readStringParam(params, "channelId") ??
       readStringParam(params, "to") ??
+      readStringParam(params, "target") ??
       readCurrentDiscordTarget(ctx.toolContext);
     if (!target) {
       throw new Error("Discord channel target is required (use channel:<id>).");

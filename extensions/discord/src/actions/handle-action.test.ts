@@ -360,6 +360,46 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("accepts message.action target as a Discord read channel alias", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "read",
+      params: {
+        target: "123",
+      },
+      cfg,
+      accountId: "ops",
+      requesterAccountId: "ops",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "channel:123",
+      },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "readMessages",
+        accountId: "ops",
+        channelId: "123",
+        limit: undefined,
+        before: undefined,
+        after: undefined,
+        around: undefined,
+      },
+      cfg,
+      options: {
+        ...defaultActionOptions(),
+        conversationReadOrigin: "delegated",
+        readContext: {
+          requesterAccountId: "ops",
+          currentChannelProvider: "discord",
+          currentChannelId: "channel:123",
+        },
+      },
+    });
+  });
+
   it("forwards attested current-conversation context to Discord channel info", async () => {
     const cfg = discordConfig({ channelInfo: true });
     await handleDiscordMessageAction({
