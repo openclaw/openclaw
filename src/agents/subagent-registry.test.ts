@@ -599,7 +599,7 @@ describe("subagent registry seam flow", () => {
     ]);
   });
 
-  it("replays a persisted requester-settle obligation during registry restore", async () => {
+  it("replays a past-due requester-settle obligation during registry restore", async () => {
     const endedAt = Date.now() - 1_000;
     mocks.restoreSubagentRunsFromDisk.mockImplementation(((params: {
       runs: Map<string, unknown>;
@@ -621,7 +621,7 @@ describe("subagent registry seam flow", () => {
         requesterSettleWake: {
           status: "pending",
           attemptCount: 1,
-          nextAttemptAt: endedAt + 30_000,
+          nextAttemptAt: endedAt,
           batchRunIds: ["run-settle-restore"],
           retireAfterSettle: true,
         },
