@@ -42,7 +42,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Claude CLI observability overhead:** create turn diagnostics only while an internal event listener is active, bound opted-in prompt and response capture, and reuse existing stream byte counts so default CLI turns avoid telemetry-only CPU and memory work. Thanks @amknight.
 - **Gateway control-plane rate limiting:** use per-method buckets with a 30-per-minute budget so interactive admin writes remain responsive while retaining runaway-loop protection.
 - **External supervisor restart health:** accept device-identity policy closes only when the replacement gateway lock and listener PID agree, preventing OCM-managed restarts from timing out after a successful handoff. Thanks @shakkernerd.
 - **ACPX cleanup process inspection:** bound host process-table reads so stalled `ps` calls cannot hang gateway startup or session cleanup while retaining fail-closed ownership checks. Thanks @Alix-007.
