@@ -16,6 +16,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -2009,6 +2010,55 @@ describe("state migrations", () => {
     ]);
     expect(result.changes).toContain("healthy plugin state migrated");
     expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
+
+  it("requires exclusive state ownership before plugin doctor migrations", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "memory-core",
+        migration: {
+          id: "memory-core-lock-test",
+          label: "Memory Core lock test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+    const gatewayLock = await acquireGatewayLock({
+      allowInTests: true,
+      env,
+      pollIntervalMs: 10,
+      port: 18_791,
+      timeoutMs: 100,
+    });
+    if (!gatewayLock) {
+      throw new Error("expected test Gateway lock");
+    }
+
+    let result: Awaited<ReturnType<typeof autoMigrateLegacyPluginDoctorState>>;
+    try {
+      result = await autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      });
+    } finally {
+      await gatewayLock.release();
+    }
+
+    expect(result.changes).not.toContain("plugin state migrated");
+    expect(result.warnings.join("\n")).toContain("exclusive state ownership is unavailable");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
   });
 
   it("skips stale plugin doctor plans when refresh detection fails", async () => {

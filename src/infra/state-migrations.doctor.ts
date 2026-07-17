@@ -27,6 +27,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
+import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
@@ -164,6 +165,9 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
 }
 
 let autoMigrateChecked = false;
+
+const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
+const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 
 export function resetAutoMigrateLegacyStateForTest(): void {
   autoMigrateChecked = false;
@@ -755,21 +759,80 @@ async function runPluginDoctorStateMigrationPlans(params: {
     refreshedPlans.length > 0 || hasDetectorFailure
       ? refreshedPlans
       : (params.detected.pluginPlans?.plans ?? []);
-  for (const plan of plans) {
-    try {
-      const result = await plan.migration.migrateLegacyState({
-        config: params.config,
-        env: params.env,
-        stateDir: params.detected.stateDir,
-        oauthDir: params.detected.oauthDir,
-        context: createPluginDoctorStateMigrationContext(plan.pluginId, params.env),
-      });
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    } catch (err) {
-      warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+  const migrated = await migratePluginDoctorStatePlans({
+    plans,
+    config: params.config,
+    env: params.env,
+    stateDir: params.detected.stateDir,
+    oauthDir: params.detected.oauthDir,
+  });
+  changes.push(...migrated.changes);
+  warnings.push(...migrated.warnings);
+  notices.push(...(migrated.notices ?? []));
+  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+}
+
+async function migratePluginDoctorStatePlans(params: {
+  plans: readonly DetectedPluginDoctorStateMigrationPlan[];
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  oauthDir: string;
+}): Promise<MigrationMessages> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const notices: string[] = [];
+  if (params.plans.length === 0) {
+    return { changes, warnings };
+  }
+
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+  try {
+    lock = await acquireGatewayLock({
+      allowInTests: true,
+      env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+      pollIntervalMs: PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS,
+      role: "sqlite-maintenance",
+      timeoutMs: PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS,
+    });
+  } catch (error) {
+    return {
+      changes,
+      warnings: [
+        `Skipped plugin doctor state migrations because exclusive state ownership is unavailable: ${String(error)}`,
+      ],
+    };
+  }
+  if (!lock) {
+    return {
+      changes,
+      warnings: [
+        "Skipped plugin doctor state migrations because exclusive state ownership is unavailable",
+      ],
+    };
+  }
+
+  try {
+    // Plugin migrations may claim retired files after verified import. Keep the
+    // predecessor Gateway excluded for the full read, import, and archive window.
+    for (const plan of params.plans) {
+      try {
+        const result = await plan.migration.migrateLegacyState({
+          config: params.config,
+          env: params.env,
+          stateDir: params.stateDir,
+          oauthDir: params.oauthDir,
+          context: createPluginDoctorStateMigrationContext(plan.pluginId, params.env),
+        });
+        changes.push(...result.changes);
+        warnings.push(...result.warnings);
+        notices.push(...(result.notices ?? []));
+      } catch (err) {
+        warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+      }
     }
+  } finally {
+    await lock.release();
   }
   return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
@@ -816,22 +879,16 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
     oauthDir,
     warnings,
   });
-  for (const plan of plans) {
-    try {
-      const result = await plan.migration.migrateLegacyState({
-        config: params.config,
-        env,
-        stateDir,
-        oauthDir,
-        context: createPluginDoctorStateMigrationContext(plan.pluginId, env),
-      });
-      changes.push(...result.changes);
-      warnings.push(...result.warnings);
-      notices.push(...(result.notices ?? []));
-    } catch (err) {
-      warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
-    }
-  }
+  const migrated = await migratePluginDoctorStatePlans({
+    plans,
+    config: params.config,
+    env,
+    stateDir,
+    oauthDir,
+  });
+  changes.push(...migrated.changes);
+  warnings.push(...migrated.warnings);
+  notices.push(...(migrated.notices ?? []));
   return {
     migrated: stateDirResult.migrated || stateSchema.changes.length > 0 || plans.length > 0,
     skipped: false,
