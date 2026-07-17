@@ -310,9 +310,10 @@ describe("executeSendAction", () => {
     expect(result.deliveredText).toBe("[Peer] hello");
   });
 
-  it("forces durable core delivery with a required queue and lifecycle callbacks", async () => {
+  it("makes required queue persistence force core delivery and lifecycle callbacks", async () => {
     const onDeliveryIntent = vi.fn();
     const onDeliveryResult = vi.fn();
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "demo-outbound",
       to: "channel:123",
@@ -327,7 +328,6 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
         dryRun: false,
-        forceCoreDelivery: true,
         requireQueuePersistence: true,
         onDeliveryIntent,
         onDeliveryResult,

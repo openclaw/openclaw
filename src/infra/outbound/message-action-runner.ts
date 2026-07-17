@@ -1391,9 +1391,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     requesterSenderE164: input.requesterSenderE164,
   });
 
+  // Required queue persistence is itself an ownership decision: neither the
+  // remote gateway action nor a provider-native action may bypass core queueing.
+  const requiresCoreDelivery =
+    input.forceCoreDelivery === true || input.requireQueuePersistence === true;
+
   // Gateway action ownership wins even when this process has a render-capable
   // outbound adapter; credentials and account selection may exist only remotely.
-  const gatewayPluginAction = input.forceCoreDelivery
+  const gatewayPluginAction = requiresCoreDelivery
     ? null
     : await runGatewayPluginMessageActionOrNull({
         cfg,
@@ -1463,7 +1468,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       dryRun,
       preparedMessageId: input.preparedMessageId,
       gatewayOwnedDelivery: input.gatewayOwnedDelivery,
-      forceCoreDelivery: input.forceCoreDelivery,
+      forceCoreDelivery: requiresCoreDelivery,
       requireQueuePersistence: input.requireQueuePersistence,
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,

@@ -349,7 +349,11 @@ export async function executeSendAction(params: {
   };
   const queuePolicy =
     params.bestEffort === false || params.ctx.requireQueuePersistence ? "required" : "best_effort";
-  const pluginPreparation = params.ctx.forceCoreDelivery
+  // Queue persistence cannot be guaranteed by provider-native action handlers.
+  // Treat the guarantee as forcing the one core path at every dispatch gate.
+  const requiresCoreDelivery =
+    params.ctx.forceCoreDelivery === true || params.ctx.requireQueuePersistence === true;
+  const pluginPreparation = requiresCoreDelivery
     ? ({ kind: "unavailable" } as const)
     : await preparePluginSendPayload({
         ctx: params.ctx,
@@ -364,7 +368,7 @@ export async function executeSendAction(params: {
     cfg: params.ctx.cfg,
   });
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
-  const corePayload = params.ctx.forceCoreDelivery
+  const corePayload = requiresCoreDelivery
     ? defaultPayload
     : pluginPreparation.kind === "prepared"
       ? pluginPreparation.payload
@@ -411,7 +415,7 @@ export async function executeSendAction(params: {
           ...params.ctx,
           params: { ...params.ctx.params, message: pluginMessage },
         };
-  const pluginHandled = params.ctx.forceCoreDelivery
+  const pluginHandled = requiresCoreDelivery
     ? null
     : await tryHandleWithPluginAction({
         ctx: pluginCtx,

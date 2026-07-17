@@ -1291,6 +1291,68 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("makes required queue persistence bypass gateway plugin dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat durable send test plugin.",
+        actions: ["send"],
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
+      );
+      mocks.executeSendAction.mockResolvedValueOnce({
+        handledBy: "core",
+        payload: { ok: true, messageId: "core-send-1" },
+        sendResult: {
+          channel: "gatewaychat",
+          to: "user-123",
+          via: "direct",
+          mediaUrl: null,
+        },
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "durable hello",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        requireQueuePersistence: true,
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      expectRecordFields(
+        readRecordField(executeCall, "ctx", "execute send context"),
+        {
+          forceCoreDelivery: true,
+          requireQueuePersistence: true,
+        },
+        "execute send context",
+      );
+      expectRecordFields(result, { handledBy: "core" }, "result");
+    });
+
     it("owns terminal source-reply receipts before dispatching to a remote gateway", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
