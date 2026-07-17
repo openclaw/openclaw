@@ -3144,6 +3144,13 @@ describe("memory plugin e2e", () => {
       }),
     ).toBe(false);
     expect(
+      testing.isEmbeddingDimensionsRejectedError({
+        status: 400,
+        param: "dimensions",
+        error: { message: "Unsupported parameter value for dimensions: 4" },
+      }),
+    ).toBe(false);
+    expect(
       testing.isEmbeddingDimensionsRejectedError(new Error("400 Unknown parameter: dimensions")),
     ).toBe(false);
     expect(

@@ -363,6 +363,9 @@ function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
 }
 
 function isUnsupportedEmbeddingFieldError(details: string): boolean {
+  if (/\b(?:parameter|field|argument)[_ -]value\b/.test(details)) {
+    return false;
+  }
   return (
     /\bextra[_ -]forbidden\b/.test(details) ||
     /\bextra inputs? (?:are )?not permitted\b/.test(details) ||
