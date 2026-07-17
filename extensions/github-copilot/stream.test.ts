@@ -173,19 +173,27 @@ describe("wrapCopilotAnthropicStream", () => {
   });
 
   it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
-    const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
-    const overlongReasoningId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
+    const reasoningId = "rs_exact";
     const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
-          { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
-          { type: "reasoning", encrypted_content: "idless-encrypted-payload", summary: [] },
           {
-            id: overlongReasoningId,
+            id: reasoningId,
             type: "reasoning",
-            encrypted_content: "invalid-encrypted-payload",
+            encrypted_content: "valid-encrypted-payload",
+            summary: [],
+          },
+          {
+            type: "reasoning",
+            encrypted_content: "idless-encrypted-payload",
+            summary: [],
+          },
+          {
+            id: "thinking_0",
+            type: "reasoning",
+            encrypted_content: "foreign-encrypted-payload",
             summary: [],
           },
           { id: messageId, type: "message" },
@@ -242,8 +250,8 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(payloads[0]?.input[2]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
-  it("rewrites Copilot Responses IDs returned by an existing payload hook", async () => {
-    const connectionBoundId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
+  it("rewrites Copilot Responses reasoning returned by an async payload hook", async () => {
+    const connectionBoundId = Buffer.from(`reasoning-${"y".repeat(320)}`).toString("base64");
     let returnedPayload: unknown;
     const baseStreamFn = vi.fn(async (_model, _context, options) => {
       returnedPayload = await options?.onPayload?.({ input: [] }, _model);
@@ -262,13 +270,22 @@ describe("wrapCopilotAnthropicStream", () => {
       } as never,
       { messages: [{ role: "user", content: "hi" }] } as never,
       {
-        onPayload: () => ({ input: [{ id: connectionBoundId, type: "message" }] }),
+        onPayload: async () => ({
+          input: [
+            {
+              id: connectionBoundId,
+              type: "reasoning",
+              encrypted_content: "hook-ciphertext",
+              summary: [],
+            },
+          ],
+        }),
       } as never,
     );
 
-    expect((returnedPayload as { input: Array<Record<string, unknown>> }).input[0]?.id).toMatch(
-      /^msg_[a-f0-9]{16}$/,
-    );
+    const reasoning = (returnedPayload as { input: Array<Record<string, unknown>> }).input[0];
+    expect(reasoning?.id).toBeUndefined();
+    expect(reasoning?.encrypted_content).toBe("hook-ciphertext");
   });
 
   it("adds Copilot headers for Chat Completions models", () => {

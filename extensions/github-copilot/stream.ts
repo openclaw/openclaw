@@ -10,8 +10,6 @@ import {
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 import { stripCopilotAssistantThinkingMessages } from "./replay-policy.js";
 
-type StreamOptions = Parameters<StreamFn>[2];
-
 function containsCopilotContentType(value: unknown, type: string): boolean {
   if (Array.isArray(value)) {
     return value.some((item) => containsCopilotContentType(item, type));
@@ -59,14 +57,14 @@ function buildCopilotDynamicHeaders(params: {
   };
 }
 
-function patchOnPayloadResult(result: unknown): unknown {
+function patchOnPayloadResult(result: unknown, originalPayload: unknown): unknown {
   if (result && typeof result === "object" && "then" in result) {
     return Promise.resolve(result).then((next) => {
-      rewriteCopilotResponsePayloadConnectionBoundIds(next);
+      rewriteCopilotResponsePayloadConnectionBoundIds(next === undefined ? originalPayload : next);
       return next;
     });
   }
-  rewriteCopilotResponsePayloadConnectionBoundIds(result);
+  rewriteCopilotResponsePayloadConnectionBoundIds(result === undefined ? originalPayload : result);
   return result;
 }
 
@@ -128,15 +126,14 @@ function wrapCopilotOpenAIResponsesStream(
     }
 
     const originalOnPayload = options?.onPayload;
-    const wrappedOptions: StreamOptions = {
+    return underlying(model, context, {
       ...options,
       headers: buildCopilotRequestHeaders(context, options?.headers),
       onPayload: (payload, payloadModel) => {
         rewriteCopilotResponsePayloadConnectionBoundIds(payload);
-        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));
+        return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel), payload);
       },
-    };
-    return underlying(model, context, wrappedOptions);
+    });
   };
 }
 

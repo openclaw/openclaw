@@ -1,9 +1,15 @@
-// Github Copilot plugin module implements connection bound ids behavior.
+// Github Copilot plugin module implements connection-bound replay sanitation.
 import { createHash } from "node:crypto";
 
-// Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs
-// that encode upstream connection state. Those IDs are rejected after the
-// connection changes, so sanitize them at the provider boundary before send.
+type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
+
+function isInputItem(value: unknown): value is InputItem {
+  return Boolean(value) && typeof value === "object";
+}
+
+function isAssistantMessage(item: unknown): item is InputItem {
+  return isInputItem(item) && item.type === "message" && item.role === "assistant";
+}
 
 function looksLikeConnectionBoundId(id: string): boolean {
   if (id.length < 24) {
@@ -24,55 +30,74 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
   return `${prefix}_${hex}`;
 }
 
-type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
-
-function isInputItem(value: unknown): value is InputItem {
-  return Boolean(value) && typeof value === "object";
+function isValidNativeReasoningReplayId(id: unknown): id is string {
+  return (
+    typeof id === "string" && id.length > 0 && id.length <= 64 && /^rs_[A-Za-z0-9_-]+$/.test(id)
+  );
 }
 
-function isValidReasoningReplayId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id.length <= 64;
-}
-
-function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
-  if (!Array.isArray(input)) {
+function normalizeCopilotReasoningId(item: InputItem): boolean {
+  const id = item.id;
+  if (id === undefined) {
+    return true;
+  }
+  if (typeof id !== "string" || id.length === 0) {
     return false;
   }
-  let rewrote = false;
+  if (isValidNativeReasoningReplayId(id)) {
+    return true;
+  }
+  if (looksLikeConnectionBoundId(id)) {
+    delete item.id;
+    return true;
+  }
+  return false;
+}
+
+function rewriteCopilotConnectionBoundResponseIds(input: unknown[]): boolean {
+  let changed = false;
+
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (!isInputItem(item)) {
       continue;
     }
-    const id = item.id;
-    // Reasoning items with replay IDs reference server-side encrypted state
-    // bound to that ID. Drop unsafe IDs, but keep the store-disabled idless
-    // replay form produced by core Responses conversion.
-    if (item.type === "reasoning") {
-      if (id !== undefined && !isValidReasoningReplayId(id)) {
-        input.splice(index, 1);
-        rewrote = true;
+    if (item.type !== "reasoning") {
+      const id = item.id;
+      if (typeof id === "string" && id.length > 0 && looksLikeConnectionBoundId(id)) {
+        item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
+        changed = true;
       }
       continue;
     }
-    if (typeof id !== "string" || id.length === 0) {
+
+    const originalId = item.id;
+    if (
+      typeof item.encrypted_content !== "string" ||
+      item.encrypted_content.length === 0 ||
+      !normalizeCopilotReasoningId(item)
+    ) {
+      input.splice(index, 1);
+      const next = input[index];
+      if (isAssistantMessage(next) && "id" in next) {
+        // Signed message ids are replayable only with their preceding reasoning item.
+        delete next.id;
+      }
+      changed = true;
       continue;
     }
-    if (looksLikeConnectionBoundId(id)) {
-      item.id = deriveReplacementId(typeof item.type === "string" ? item.type : undefined, id);
-      rewrote = true;
-    }
+    changed ||= originalId !== undefined && item.id === undefined;
   }
-  return rewrote;
-}
-
-function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object") {
-    return false;
-  }
-  return sanitizeCopilotReplayResponseIds((payload as { input?: unknown }).input);
+  return changed;
 }
 
 export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
-  return sanitizeCopilotReplayResponsePayloadIds(payload);
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+  const input = (payload as { input?: unknown }).input;
+  if (!Array.isArray(input)) {
+    return false;
+  }
+  return rewriteCopilotConnectionBoundResponseIds(input);
 }
