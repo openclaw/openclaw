@@ -1,9 +1,9 @@
 // Spawn utility tests cover child process setup and stream handling helpers.
-import type { ChildProcess } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { spawnWithFallback } from "./spawn-utils.js";
+import { sanitizeSpawnOptionsForPlatform, spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
   const child = new EventEmitter() as ChildProcess;
@@ -22,7 +22,7 @@ function createStubChild() {
 function spawnOptionsAt(
   spawnMock: { mock: { calls: readonly unknown[][] } },
   callIndex: number,
-): { stdio?: unknown } {
+): SpawnOptions {
   const call = spawnMock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected spawn call ${callIndex}`);
@@ -31,8 +31,33 @@ function spawnOptionsAt(
   if (typeof options !== "object" || options === null || Array.isArray(options)) {
     throw new Error(`expected spawn call ${callIndex} options`);
   }
-  return options;
+  return options as SpawnOptions;
 }
+
+describe("sanitizeSpawnOptionsForPlatform", () => {
+  it("forces detached false on Windows when callers request detached true (#105528)", () => {
+    const sanitized = sanitizeSpawnOptionsForPlatform(
+      { detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+      "win32",
+    );
+    expect(sanitized.detached).toBe(false);
+    expect(sanitized.windowsHide).toBe(true);
+    expect(sanitized.stdio).toEqual(["pipe", "pipe", "pipe"]);
+  });
+
+  it("leaves detached true alone on POSIX", () => {
+    const sanitized = sanitizeSpawnOptionsForPlatform(
+      { detached: true, stdio: ["ignore", "pipe", "pipe"] },
+      "linux",
+    );
+    expect(sanitized.detached).toBe(true);
+  });
+
+  it("leaves already-attached Windows options unchanged", () => {
+    const options = { detached: false, stdio: ["pipe", "pipe", "pipe"] as const };
+    expect(sanitizeSpawnOptionsForPlatform(options, "win32")).toBe(options);
+  });
+});
 
 describe("spawnWithFallback", () => {
   it("retries on EBADF using fallback options", async () => {
@@ -76,4 +101,81 @@ describe("spawnWithFallback", () => {
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
+
+  it("strips detached true before spawn on Windows (#105528)", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const spawnMock = vi.fn().mockImplementation(() => createStubChild());
+    try {
+      await spawnWithFallback({
+        argv: ["cmd.exe", "/c", "echo", "hello"],
+        options: {
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        },
+        fallbacks: [{ label: "retry-detach", options: { detached: true } }],
+        spawnImpl: spawnMock,
+        retryCodes: ["EBADF"],
+      });
+
+      expect(spawnOptionsAt(spawnMock, 0).detached).toBe(false);
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
+  });
+
+  it("keeps detached true on POSIX hosts", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const spawnMock = vi.fn().mockImplementation(() => createStubChild());
+    try {
+      await spawnWithFallback({
+        argv: ["echo", "hello"],
+        options: {
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+        spawnImpl: spawnMock,
+      });
+
+      expect(spawnOptionsAt(spawnMock, 0).detached).toBe(true);
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "captures stdout for Windows cmd echo through spawnWithFallback",
+    async () => {
+      const { spawn } = await import("node:child_process");
+      const result = await spawnWithFallback({
+        argv: ["cmd.exe", "/d", "/s", "/c", "echo hello-105528"],
+        options: {
+          // Intentionally request detached; the Windows guard must clear it.
+          detached: true,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+        spawnImpl: spawn,
+      });
+
+      const chunks: Buffer[] = [];
+      result.child.stdout?.on("data", (chunk: Buffer) => {
+        chunks.push(Buffer.from(chunk));
+      });
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        result.child.once("error", reject);
+        result.child.once("close", (code) => resolve(code));
+      });
+      const stdout = Buffer.concat(chunks).toString("utf8");
+
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("hello-105528");
+    },
+  );
 });
