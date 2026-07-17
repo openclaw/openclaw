@@ -13,14 +13,21 @@ function cancelReaderSoon(reader) {
     .catch(() => undefined);
 }
 
+function canonicalDecimal(value) {
+  if (!/^\d+$/u.test(value)) {
+    return undefined;
+  }
+  return value.replace(/^0+/u, "") || "0";
+}
+
 function parseContentLengthHeader(headers) {
   const raw = headers.get("content-length");
   if (!raw) {
     return undefined;
   }
   const values = raw.includes(",") ? raw.split(",").map((value) => value.trim()) : [raw];
-  const declared = values[0];
-  if (!declared || !/^\d+$/u.test(declared) || values.some((value) => value !== declared)) {
+  const declared = values[0] ? canonicalDecimal(values[0]) : undefined;
+  if (!declared || values.some((value) => canonicalDecimal(value) !== declared)) {
     return undefined;
   }
   const parsed = Number(declared);
