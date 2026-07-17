@@ -70,18 +70,19 @@ function createProgressStore() {
 function createApi(config?: Record<string, unknown>) {
   const progressStore = createProgressStore();
   const openKeyedStore = vi.fn(<T>() => progressStore.store as unknown as PluginStateKeyedStore<T>);
-  return {
-    api: {
-      config: config ?? {
-        channels: { discord: { token: "test-token", subagentProgress: true } },
-      },
-      logger: { debug: vi.fn() },
-      runtime: {
-        state: {
-          openKeyedStore,
-        },
+  const api = {
+    config: config ?? {
+      channels: { discord: { token: "test-token", subagentProgress: true } },
+    },
+    logger: { debug: vi.fn() },
+    runtime: {
+      state: {
+        openKeyedStore,
       },
     },
+  } as unknown as Parameters<typeof handleDiscordSubagentProgress>[0];
+  return {
+    api,
     progressStore,
     openKeyedStore,
   };
