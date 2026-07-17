@@ -35,7 +35,10 @@ import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
 
 type CliPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
-  "handlePartialForTyping" | "preparePartialForTyping" | "startPresentationWhileTyping"
+  | "handlePartialForTyping"
+  | "preparePartialForTyping"
+  | "startPresentationWhileTyping"
+  | "blockReplyHandler"
 >;
 
 export async function runCliFallbackCandidate(params: {
@@ -118,6 +121,21 @@ export async function runCliFallbackCandidate(params: {
       await turn.opts?.onToolResult?.(payload);
     },
   });
+  const bridgeCliPreambleEvents =
+    turn.opts?.onItemEvent !== undefined && shouldBridgeCliPreambleEvents(turn.opts);
+  const cliBlockReplyHandler = turn.blockStreamingEnabled
+    ? params.presentation.blockReplyHandler
+    : undefined;
+  let cliBlockReplyDelivery: Promise<void> = Promise.resolve();
+  const queueCliBlockReply = (text: string): Promise<void> => {
+    if (!cliBlockReplyHandler) {
+      return Promise.resolve();
+    }
+    cliBlockReplyDelivery = cliBlockReplyDelivery
+      .catch(() => undefined)
+      .then(() => cliBlockReplyHandler({ text }));
+    return cliBlockReplyDelivery;
+  };
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnAdmission(
       {
@@ -166,6 +184,12 @@ export async function runCliFallbackCandidate(params: {
             await turn.opts?.onReasoningProgress?.(payload);
           },
           onToolEvent: async (payload) => {
+            // Commentary and tool bridges drain independently. Flush the preceding
+            // assistant block first so tool progress cannot overtake it.
+            await cliBlockReplyDelivery.catch(() => undefined);
+            if (cliBlockReplyHandler && payload.phase !== "result") {
+              await turn.blockReplyPipeline?.flush({ force: true });
+            }
             if (!params.preserveProgressCallbackStartOrder) {
               await cliToolSummaryTracker.noteToolEvent(payload);
               if (payload.phase === "result") {
@@ -205,13 +229,16 @@ export async function runCliFallbackCandidate(params: {
             ]);
           },
           onCommentaryText:
-            turn.opts?.onItemEvent && shouldBridgeCliPreambleEvents(turn.opts)
+            cliBlockReplyHandler || bridgeCliPreambleEvents
               ? async (payload) => {
-                  await turn.opts?.onItemEvent?.({
-                    itemId: payload.itemId,
-                    kind: "preamble",
-                    progressText: payload.text,
-                  });
+                  await queueCliBlockReply(payload.text);
+                  if (bridgeCliPreambleEvents) {
+                    await turn.opts?.onItemEvent?.({
+                      itemId: payload.itemId,
+                      kind: "preamble",
+                      progressText: payload.text,
+                    });
+                  }
                 }
               : undefined,
           onFastModeAutoProgress: async (payload) => {
