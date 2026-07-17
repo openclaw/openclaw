@@ -100,13 +100,30 @@ function compactSchemaUnion(
   schema: Record<string, unknown>,
   depth: number,
 ): SchemaHint | undefined {
-  const variants = Array.isArray(schema.anyOf)
-    ? schema.anyOf
-    : Array.isArray(schema.oneOf)
-      ? schema.oneOf
-      : undefined;
-  if (!variants || variants.length === 0 || variants.length > MAX_COMPACT_UNION_TYPES) {
+  const hasAnyOf = Object.hasOwn(schema, "anyOf");
+  const hasOneOf = Object.hasOwn(schema, "oneOf");
+  if (!hasAnyOf && !hasOneOf) {
     return undefined;
+  }
+  if (hasAnyOf && hasOneOf) {
+    return UNKNOWN_HINT;
+  }
+  const variants = hasAnyOf ? schema.anyOf : schema.oneOf;
+  if (
+    !Array.isArray(variants) ||
+    variants.length === 0 ||
+    variants.length > MAX_COMPACT_UNION_TYPES
+  ) {
+    return UNKNOWN_HINT;
+  }
+  // A union plus a base structural shape is an intersection. This compact
+  // renderer cannot preserve that composition, so never promote it as complete.
+  if (
+    ["const", "enum", "type", "properties", "required", "additionalProperties", "items"].some(
+      (key) => Object.hasOwn(schema, key),
+    )
+  ) {
+    return UNKNOWN_HINT;
   }
   const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1));
   if (rendered.some((hint) => !hint.complete)) {
@@ -241,6 +258,10 @@ function compactSchemaType(schema: unknown, depth = 0): SchemaHint {
   }
   const finish = (hint: SchemaHint) => withSupportedShape(schema, hint);
 
+  const schemaUnion = compactSchemaUnion(schema, depth);
+  if (schemaUnion) {
+    return finish(schemaUnion);
+  }
   const literal = renderPrimitive(schema.const);
   if (literal !== undefined) {
     return finish(completeHint(literal));
@@ -248,10 +269,6 @@ function compactSchemaType(schema: unknown, depth = 0): SchemaHint {
   const enumUnion = compactLiteralUnion(schema.enum);
   if (enumUnion) {
     return finish(enumUnion);
-  }
-  const schemaUnion = compactSchemaUnion(schema, depth);
-  if (schemaUnion) {
-    return finish(schemaUnion);
   }
 
   const type = schema.type;

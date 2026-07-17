@@ -75,6 +75,26 @@ describe("tool schema hints", () => {
     expect(compactToolOutputHint(cyclic)).toBeUndefined();
     expect(compactToolOutputHint({ $ref: "#/$defs/result" })).toBeUndefined();
     expect(compactToolOutputHint({ anyOf: [] })).toBeUndefined();
+    const closedBaseShape = {
+      type: "object",
+      properties: { id: { type: "string" } },
+      required: ["id"],
+      additionalProperties: false,
+    };
+    expect(compactToolOutputHint({ ...closedBaseShape, oneOf: [] })).toBeUndefined();
+    expect(
+      compactToolOutputHint({
+        ...closedBaseShape,
+        anyOf: Array.from({ length: 5 }, (_unused, index) => ({ const: index })),
+      }),
+    ).toBeUndefined();
+    expect(
+      compactToolOutputHint({
+        ...closedBaseShape,
+        anyOf: [{ const: "a" }],
+        oneOf: [{ const: "b" }],
+      }),
+    ).toBeUndefined();
     expect(compactToolOutputHint(Type.Object({ id: Type.String() }))).toBeUndefined();
     expect(
       compactToolOutputHint({
