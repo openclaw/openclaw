@@ -166,6 +166,46 @@ describe("check-database-first-legacy-stores", () => {
     expect(violations).toEqual([{ kind: "legacy restart sentinel reference", line: 2 }]);
   });
 
+  it("allows the CLI preflight to detect exact legacy restart sentinel inputs", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        [
+          path.join(stateDir, "restart-sentinel.json"),
+          path.join(stateDir, "restart-sentinel.json.doctor-importing"),
+        ].some(fileOrDirExists);
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("flags direct legacy restart sentinel reads from the CLI preflight", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        await readFile(path.join(stateDir, "restart-sentinel.json"), "utf8");
+        await readFile(path.join(stateDir, "restart-sentinel.json.doctor-importing"), "utf8");
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy restart sentinel reference", line: 2 },
+      { kind: "legacy restart sentinel reference", line: 3 },
+    ]);
+  });
+
+  it("flags nested restart sentinel paths disguised as CLI preflight detection", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        [path.join(stateDir, "archive/restart-sentinel.json")].some(fileOrDirExists);
+      `,
+      "src/cli/program/config-guard.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy restart sentinel reference", line: 2 }]);
+  });
+
   it("flags retired Diffs viewer sidecar writes", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `

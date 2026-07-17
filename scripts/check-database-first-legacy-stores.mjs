@@ -87,8 +87,14 @@ const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
 // The restart handoff must survive its one cutover migration without leaving
 // filesystem fallback imports in the steady-state runtime owner.
 const legacyRestartSentinelMigrationPath = "src/infra/state-migrations.restart-sentinel.ts";
+const legacyRestartSentinelPreflightPath = "src/cli/program/config-guard.ts";
 const legacyRestartSentinelRuntimePath = "src/infra/restart-sentinel.ts";
-const legacyRestartSentinelFilenamePattern = /(?:^|[/\\])restart-sentinel\.json$/u;
+const legacyRestartSentinelPreflightFilenames = new Set([
+  "restart-sentinel.json",
+  "restart-sentinel.json.doctor-importing",
+]);
+const legacyRestartSentinelFilenamePattern =
+  /(?:^|[/\\])restart-sentinel\.json(?:\.doctor-importing)?$/u;
 const legacyRestartSentinelRuntimeImportSpecifiers = new Set([
   "fs",
   "fs/promises",
@@ -342,6 +348,48 @@ function importSource(node) {
   return ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : "";
 }
 
+function isLegacyRestartSentinelPreflightDetection(node, relativePath) {
+  if (
+    relativePath !== legacyRestartSentinelPreflightPath ||
+    !legacyRestartSentinelPreflightFilenames.has(node.text)
+  ) {
+    return false;
+  }
+  const joinCall = node.parent;
+  if (
+    !ts.isCallExpression(joinCall) ||
+    joinCall.arguments.length !== 2 ||
+    joinCall.arguments[1] !== node ||
+    !ts.isPropertyAccessExpression(joinCall.expression) ||
+    !ts.isIdentifier(joinCall.expression.expression) ||
+    joinCall.expression.expression.text !== "path" ||
+    joinCall.expression.name.text !== "join" ||
+    !ts.isIdentifier(joinCall.arguments[0]) ||
+    joinCall.arguments[0].text !== "stateDir"
+  ) {
+    return false;
+  }
+  const paths = joinCall.parent;
+  if (!ts.isArrayLiteralExpression(paths)) {
+    return false;
+  }
+  const someAccess = paths.parent;
+  if (
+    !ts.isPropertyAccessExpression(someAccess) ||
+    someAccess.expression !== paths ||
+    someAccess.name.text !== "some"
+  ) {
+    return false;
+  }
+  const someCall = someAccess.parent;
+  return (
+    ts.isCallExpression(someCall) &&
+    someCall.arguments.length === 1 &&
+    ts.isIdentifier(someCall.arguments[0]) &&
+    someCall.arguments[0].text === "fileOrDirExists"
+  );
+}
+
 function collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath) {
   if (relativePath === legacyRestartSentinelMigrationPath) {
     return [];
@@ -360,7 +408,11 @@ function collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath
   }
 
   function visit(node) {
-    if (ts.isStringLiteralLike(node) && legacyRestartSentinelFilenamePattern.test(node.text)) {
+    if (
+      ts.isStringLiteralLike(node) &&
+      legacyRestartSentinelFilenamePattern.test(node.text) &&
+      !isLegacyRestartSentinelPreflightDetection(node, relativePath)
+    ) {
       add(node, "legacy restart sentinel reference");
     }
     if (
