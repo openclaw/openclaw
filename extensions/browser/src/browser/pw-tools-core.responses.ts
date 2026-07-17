@@ -7,6 +7,34 @@ import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
+async function withResponseBodyDeadline<T>(
+  work: Promise<T>,
+  deadlineMs: number,
+  timeoutMs: number,
+  url: string,
+): Promise<T> {
+  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  if (remainingMs === 0) {
+    throw new Error(`Response body read timed out after ${timeoutMs}ms for "${url}".`);
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Response body read timed out after ${timeoutMs}ms for "${url}".`));
+    }, remainingMs);
+    timer.unref?.();
+  });
+
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 /** Waits for a response URL pattern and returns a bounded text body. */
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
@@ -34,6 +62,7 @@ export async function responseBodyViaPlaywright(opts: {
 
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
+  const deadlineMs = Date.now() + timeout;
 
   const promise = new Promise<unknown>((resolve, reject) => {
     let done = false;
@@ -94,7 +123,7 @@ export async function responseBodyViaPlaywright(opts: {
   let bodyByteLength = 0;
   try {
     if (typeof resp.body === "function") {
-      const buf = await resp.body();
+      const buf = await withResponseBodyDeadline(resp.body(), deadlineMs, timeout, url);
       bodyByteLength = buf.byteLength;
       // Playwright exposes only a full-body Buffer. Bound the second allocation
       // while preserving the existing response-prefix contract.
