@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
@@ -427,7 +428,10 @@ describe("gateway broadcaster", () => {
     const legacy = makeOperatorWsClient("legacy", legacySocket, ["operator.read"]);
     const first = makeOperatorWsClient("first", firstSocket, ["operator.read"]);
     const second = makeOperatorWsClient("second", secondSocket, ["operator.read"]);
-    first.connect.caps = ["session-scoped-events"];
+    first.connect.caps = [
+      GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ];
     second.connect.caps = [];
     second.connect.client = {
       id: GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
@@ -446,12 +450,15 @@ describe("gateway broadcaster", () => {
 
     broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a"] });
     broadcast("agent", { stream: "lifecycle" });
+    broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([first.connId]), {
+      sessionKeys: ["session-a"],
+    });
     broadcastToConnIds("agent", { sessionKey: "session-a" }, new Set([second.connId]), {
       sessionKeys: ["session-a"],
     });
 
     expect(sentEvents(legacySocket)).toEqual(["chat", "agent"]);
-    expect(sentEvents(firstSocket)).toEqual(["chat"]);
+    expect(sentEvents(firstSocket)).toEqual(["chat", "agent"]);
     expect(sentEvents(secondSocket)).toEqual([]);
   });
 

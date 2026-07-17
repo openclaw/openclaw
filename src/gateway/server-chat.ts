@@ -1450,7 +1450,8 @@ export function createAgentEventHandler({
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
-      // messages to messaging surfaces (Telegram, Discord, etc.).
+      // messages to messaging surfaces (Telegram, Discord, etc.). Carry the
+      // delivery key so scoped clients must also own the session subscription.
       const runToolRecipients = toolEventRecipients.get(evt.runId);
       if (
         isControlUiVisible &&
@@ -1467,6 +1468,11 @@ export function createAgentEventHandler({
               }
             : agentPayload,
           runToolRecipients,
+          {
+            sessionKeys: sessionKey
+              ? [resolveSessionDeliveryKey(sessionKey, sessionAgentId)]
+              : undefined,
+          },
         );
       }
       if (!isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {

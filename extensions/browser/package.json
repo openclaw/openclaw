@@ -12,7 +12,10 @@
     "ws": "8.21.0"
   },
   "devDependencies": {
+    "@noble/ed25519": "3.1.0",
+    "@openclaw/gateway-client": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
+    "esbuild": "0.28.1",
     "undici": "8.6.0"
   },
   "openclaw": {
@@ -20,6 +23,7 @@
       "./index.ts"
     ],
     "assetScripts": {
+      "build": "node scripts/build-copilot-runtime.mjs",
       "copy": "node scripts/copy-chrome-extension.mjs"
     }
   }

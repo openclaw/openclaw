@@ -91,6 +91,47 @@ openclaw config set browser.defaultProfile chrome
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
 
+### Tab copilot side panel
+
+After pairing the extension, click **Open tab copilot** in its toolbar popup.
+OpenClaw configures `sidepanel.html` for that exact Chrome tab; the manifest has
+no global side-panel path. Each tab therefore gets a separate panel document,
+Gateway session, message subscription, and typed browser-tool binding.
+
+The panel does not place the page URL, title, DOM, or visible text in your
+message. It sends only the text you type. Browser actions carry a separate
+Gateway-authenticated binding containing the Chrome tab and CDP target, and the
+browser tool rejects attempts to replace that target or use browser-wide
+actions. Replies stay in the panel (`deliver: false`); they do not inherit a
+Telegram, Discord, or other channel route.
+
+The copilot is a dedicated paired Gateway device with `operator.read` and
+`operator.write` scopes. On first use, inspect and approve its request:
+
+```bash
+openclaw devices list
+openclaw devices approve <requestId>
+```
+
+The extension retains that device identity and the Gateway-issued device token.
+It does not persist the Gateway shared secret. A panel can subscribe only to
+its own tab sessions, and the Gateway filters those events before delivery.
+
+Closing a tab immediately removes its live subscription, aborts any visible
+run, and marks that tab's session archived. If the Gateway is temporarily
+offline, the extension persists the pending archive and retries on reconnect;
+after a browser crash, the next launch archives sessions left by the previous
+browser instance. Archived sessions reject new work, while their transcripts
+remain available in session history. Browser-copilot keys are thread sessions,
+so normal age and entry-count maintenance preserves them. The per-agent session
+disk budget still applies (default `2gb`) and may evict the oldest sessions
+under pressure; see [session maintenance](/reference/session-management-compaction#store-maintenance-and-disk-controls).
+
+The side panel currently requires either a Gateway-hosted extension relay or a
+direct remote Gateway relay. A loopback relay on a browser node cannot yet
+provide the node route required by the typed tab binding, so the panel denies
+that topology instead of falling back to browser-wide routing.
+
 ## Remote / cross-machine
 
 Chrome does not have to run on the Gateway host. Three topologies work:
@@ -134,6 +175,9 @@ extension popup shows **Connected**.
   the bundled extension carries it in the WebSocket subprotocol list instead.
 - The agent can only see and drive tabs in the **OpenClaw tab group**. Your
   other tabs stay private.
+- Side-panel runs are scoped twice: Gateway delivery uses a per-session
+  allowlist, and browser tools enforce the Chrome tab/target binding carried
+  outside the prompt.
 - Compared with the `user` (Chrome MCP) profile, which exposes your whole
   signed-in browser once you approve the remote-debugging prompt, the extension
   keeps the shared surface scoped to a tab group you control at a glance.
