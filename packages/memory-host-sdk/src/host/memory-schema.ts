@@ -242,10 +242,18 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.found === 1;
 }
 
+// Same-identity value mismatches keep the canonical row: every copied table is
+// derived search state that normal sync rebuilds, and aborting on them wedges
+// every later index open on the untouched legacy tables (same canonical-wins
+// rule as the sidecar import in memory-core's doctor contract). Only a row the
+// copy could not place at all (e.g. STRICT rejected it) still aborts, so
+// legacy rows are never silently dropped.
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
-    throw new Error(`legacy memory ${tableName} rows conflict with canonical memory index rows`);
+    throw new Error(
+      `legacy memory ${tableName} rows could not be copied into canonical memory index rows`,
+    );
   }
 }
 
@@ -379,7 +387,7 @@ function copyLegacyMemoryIndexRows(
      FROM ${schema}.meta AS legacy
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
-       WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
+       WHERE canonical.key = legacy.key
      )`,
     "meta",
   );
@@ -391,9 +399,6 @@ function copyLegacyMemoryIndexRows(
        SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
        WHERE canonical.path = legacy.path
          AND canonical.source IS legacy.source
-         AND canonical.hash IS legacy.hash
-         AND canonical.mtime IS legacy.mtime
-         AND canonical.size IS legacy.size
      )`,
     "files",
   );
@@ -404,15 +409,6 @@ function copyLegacyMemoryIndexRows(
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
        WHERE canonical.id = legacy.id
-         AND canonical.path IS legacy.path
-         AND canonical.source IS legacy.source
-         AND canonical.start_line IS legacy.start_line
-         AND canonical.end_line IS legacy.end_line
-         AND canonical.hash IS legacy.hash
-         AND canonical.model IS legacy.model
-         AND canonical.text IS legacy.text
-         AND canonical.embedding IS legacy.embedding
-         AND canonical.updated_at IS legacy.updated_at
      )`,
     "chunks",
   );
@@ -447,9 +443,6 @@ function copyLegacyMemoryIndexRows(
            AND canonical.model = legacy.model
            AND canonical.provider_key = legacy.provider_key
            AND canonical.hash = legacy.hash
-           AND canonical.embedding IS legacy.embedding
-           AND canonical.dims IS legacy.dims
-           AND canonical.updated_at IS legacy.updated_at
        )`,
       "embedding_cache",
     );
