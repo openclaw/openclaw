@@ -1,14 +1,10 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { build } from "esbuild";
 
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rootDir = path.resolve(pluginDir, "../..");
 const outfile = path.join(pluginDir, "chrome-extension", "modules", "copilot-runtime.js");
-const execFileAsync = promisify(execFile);
 
 await build({
   entryPoints: [path.join(pluginDir, "scripts", "copilot-runtime-entry.ts")],
@@ -19,9 +15,7 @@ await build({
   minify: true,
   platform: "browser",
   target: "chrome125",
-  banner: { js: "/* oxlint-disable -- generated bundle; lint the TypeScript source instead. */" },
+  banner: {
+    js: `/* oxlint-disable eslint/constructor-super, eslint/curly, eslint/default-param-last, eslint/no-implicit-coercion, eslint/no-param-reassign, eslint/no-return-assign, eslint/no-sequences, eslint/no-underscore-dangle, eslint/no-unused-expressions, eslint/no-unused-vars, eslint/no-useless-assignment, eslint/no-var, eslint/prefer-const, typescript/consistent-return, typescript/no-misused-promises, typescript/prefer-promise-reject-errors, typescript/use-unknown-in-catch-callback-variable, unicorn/no-array-reverse -- generated bundle; lint the TypeScript source instead. */`,
+  },
 });
-await execFileAsync(process.execPath, [
-  path.join(rootDir, "node_modules", "oxfmt", "bin", "oxfmt"),
-  outfile,
-]);
