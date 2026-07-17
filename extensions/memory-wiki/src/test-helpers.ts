@@ -14,7 +14,6 @@ import type { OpenClawPluginApi } from "../api.js";
 import {
   configureMemoryWikiCompiledCacheStore,
   createMemoryWikiCompiledCacheStore,
-  resetMemoryWikiCompiledCacheOwnersForTests,
 } from "./compiled-cache.js";
 import {
   resolveMemoryWikiConfig,
@@ -158,7 +157,6 @@ export function createMemoryWikiTestHarness() {
 
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
-    resetMemoryWikiCompiledCacheOwnersForTests();
     compiledBlobStore = createMemoryBlobStore<unknown>();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),

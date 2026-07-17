@@ -16,7 +16,6 @@ import {
   createMemoryWikiCompiledCacheStore,
   deactivateMemoryWikiCompiledCacheOwnersExcept,
   loadMemoryWikiCompiledCache,
-  resetMemoryWikiCompiledCacheOwnersForTests,
   resolveMemoryWikiCompiledCacheOwnerId,
   writeMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -102,7 +101,7 @@ async function preparePrompt(config: ReturnType<typeof resolveMemoryWikiConfig>)
 describe("Memory Wiki compiled cache lifecycle", () => {
   beforeEach(async () => {
     resetPluginBlobStoreForTests();
-    resetMemoryWikiCompiledCacheOwnersForTests();
+    configureMemoryWikiCompiledCacheStore(undefined);
     blobStateDir = await createTempDir("memory-wiki-compiled-cache-state-");
     blobStoreEnv = { ...process.env, OPENCLAW_STATE_DIR: blobStateDir };
     configureMemoryWikiCompiledCacheStore(createCacheStore());
@@ -110,7 +109,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
-    resetMemoryWikiCompiledCacheOwnersForTests();
     resetPluginBlobStoreForTests();
     blobStateDir = "";
     blobStoreEnv = {};
@@ -154,7 +152,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     });
 
     configureMemoryWikiCompiledCacheStore(undefined);
-    resetMemoryWikiCompiledCacheOwnersForTests();
     configureMemoryWikiCompiledCacheStore(createCacheStore());
     await activateVault(config);
 
@@ -202,6 +199,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
 
     configureMemoryWikiCompiledCacheStore(undefined);
     configureMemoryWikiCompiledCacheStore(createCacheStore());
+    await activateVault(config);
 
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(text);
   });

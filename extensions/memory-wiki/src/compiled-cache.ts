@@ -92,7 +92,7 @@ type ActiveVault = {
   generation: string;
 };
 
-export type MemoryWikiCompiledCacheStore = {
+type MemoryWikiCompiledCacheStore = {
   read(config: ResolvedMemoryWikiConfig): Promise<MemoryWikiCompiledCacheSnapshot | null>;
   write(config: ResolvedMemoryWikiConfig, snapshot: MemoryWikiCompiledCacheSnapshot): Promise<void>;
   delete(config: ResolvedMemoryWikiConfig): Promise<void>;
@@ -148,10 +148,6 @@ export function deactivateMemoryWikiCompiledCacheOwnersExcept(ownerIds: Readonly
       activeVaults.delete(ownerId);
     }
   }
-}
-
-export function resetMemoryWikiCompiledCacheOwnersForTests(): void {
-  activeVaults.clear();
 }
 
 function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | null {
@@ -294,6 +290,9 @@ export function configureMemoryWikiCompiledCacheStore(
   store: MemoryWikiCompiledCacheStore | undefined,
 ): void {
   configuredStore = store;
+  if (!store) {
+    activeVaults.clear();
+  }
 }
 
 function requireConfiguredStore(): MemoryWikiCompiledCacheStore {

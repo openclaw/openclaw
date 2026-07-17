@@ -22,7 +22,7 @@ export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => 
  * Implementations may perform async state reads here, but must validate their
  * owner instance before returning lines for the current run.
  */
-export type MemoryPromptSectionPreparer = (
+type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
 ) => Promise<readonly string[]>;
 
