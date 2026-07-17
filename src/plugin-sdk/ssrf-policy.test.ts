@@ -291,12 +291,31 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
 
-  it("rejects malformed URLs with a typed error", async () => {
+  it("rejects malformed URLs with a stable error", async () => {
     await expect(
       assertHttpUrlTargetsPrivateNetwork("not-a-url", {
         dangerouslyAllowPrivateNetwork: true,
       }),
-    ).rejects.toThrow("Invalid URL: not-a-url");
+    ).rejects.toThrow(new Error("Invalid URL"));
+  });
+
+  it("does not reflect credential-bearing malformed URLs in errors", async () => {
+    const secretUser = "matrix-user";
+    const secretPass = "matrix-fixture";
+    const malformed = `http://${secretUser}:${secretPass}@${["invalid", "host"].join(" ")}`;
+
+    await expect(
+      assertHttpUrlTargetsPrivateNetwork(malformed, {
+        dangerouslyAllowPrivateNetwork: true,
+      }),
+    ).rejects.toSatisfy((error: unknown) => {
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toBe("Invalid URL");
+      expect(message).not.toContain(secretUser);
+      expect(message).not.toContain(secretPass);
+      return true;
+    });
   });
 });
 
