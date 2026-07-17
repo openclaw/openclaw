@@ -133,6 +133,7 @@ function createProgressNarrator(params: {
   };
 
   const stopTurn = () => {
+    params.abortSignal?.removeEventListener("abort", stopTurn);
     if (!turnActive) {
       return;
     }
