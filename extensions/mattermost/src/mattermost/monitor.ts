@@ -2145,6 +2145,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   });
   const debouncer = core.channel.debounce.createInboundDebouncer<MattermostDebouncedPost>({
     debounceMs: inboundDebounceMs,
+    serializeImmediate: true,
     buildKey: (entry) => {
       const channelId =
         entry.post.channel_id ??
