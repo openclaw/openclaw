@@ -490,13 +490,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
               </div>
             `
           : nothing}
-        <div
-          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
-            .sessionsScrollState}"
-          aria-label=${titleForRoute("sessions")}
-          @scroll=${(event: Event) =>
-            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
-        >
+        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
@@ -510,16 +504,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                 this.toggleSessionSortMenu(event.currentTarget as HTMLElement)}
             >
               ${icons.listFilter}
-            </button>
-            <button
-              type="button"
-              class="sidebar-session-sort sidebar-session-new"
-              title=${navigationState.newSessionTitle}
-              aria-label=${t("chat.runControls.newSession")}
-              ?disabled=${navigationState.newSessionDisabled}
-              @click=${() => this.onOpenNewSession?.(expandedAgentId)}
-            >
-              ${icons.plus}
             </button>
           </div>
           ${this.renderSessionListBody(visibleSessions, {

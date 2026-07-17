@@ -421,7 +421,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarBase {
   }
 
   private syncSessionsScrollObserver() {
-    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    const element = this.querySelector<HTMLElement>(".sidebar-shell__body");
     if (element !== this.sessionsScrollElement) {
       this.sessionsScrollResizeObserver?.disconnect();
       this.sessionsScrollElement = element;
