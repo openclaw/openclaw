@@ -64,7 +64,7 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
-export type ResolvedRuntimeWebTools = {
+type ResolvedRuntimeWebTools = {
   metadata: RuntimeWebToolsMetadata;
   degradedOwners: DegradedSecretOwner[];
 };
