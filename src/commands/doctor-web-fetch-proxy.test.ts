@@ -18,6 +18,9 @@ async function collectDiagnostic(
   await noteWebFetchProxyDiagnostic({
     ...params,
     noteFn: (message) => {
+      if (typeof message !== "string") {
+        throw new TypeError("expected doctor proxy diagnostic to be a string");
+      }
       diagnostic = message;
     },
   });
