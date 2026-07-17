@@ -3,6 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import {
+  isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
@@ -502,11 +503,36 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     ) {
       scopedRootRows.push(lineageRoot);
     }
+    // Promote the hidden main session's children to top-level threads, with
+    // the same visibility rules and sort order as ordinary roots so archived
+    // or cron children cannot sneak in and pagination stays deterministic.
+    const scopedRootKeys = new Set(scopedRootRows.map((row) => row.key));
+    const promotedRows = [...rows, ...Object.values(this.childSessionRowsByParent).flat()].filter(
+      (row) => {
+        const parentKey = row.spawnedBy ?? row.parentSessionKey;
+        return (
+          parentKey != null &&
+          mainSessionKeys.has(parentKey) &&
+          !scopedRootKeys.has(row.key) &&
+          !row.archived &&
+          (this.sessionsShowCron || (row.kind !== "cron" && !isCronSessionKey(row.key)))
+        );
+      },
+    );
+    for (const row of promotedRows) {
+      if (!scopedRootKeys.has(row.key)) {
+        scopedRootKeys.add(row.key);
+        scopedRootRows.push(row);
+      }
+    }
+    const orderedRootRows =
+      promotedRows.length > 0
+        ? scopedRootRows.toSorted(this.compareSidebarSessionRows)
+        : scopedRootRows;
     return this.projectSessionTree(
-      scopedRootRows.filter((row) => !adopted.has(row.key)),
+      orderedRootRows.filter((row) => !adopted.has(row.key)),
       rows,
       navigationState.toSidebarSession,
-      mainSessionKeys,
     );
   }
 
@@ -583,7 +609,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     roots: readonly GatewaySessionRow[],
     agentRows: readonly GatewaySessionRow[],
     toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession,
-    promoteChildrenOf?: ReadonlySet<string>,
   ): SidebarRecentSession[] {
     const rowsByKey = new Map<string, GatewaySessionRow>();
     for (const rows of Object.values(this.childSessionRowsByParent)) {
@@ -658,22 +683,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       };
     };
 
-    // Children of hidden parents (the main session behind the identity card)
-    // are promoted to top-level threads so the subtree stays reachable.
-    const promotedRoots: GatewaySessionRow[] = [];
-    const rootKeySet = new Set(roots.map((row) => row.key));
-    for (const parentKey of promoteChildrenOf ?? []) {
-      for (const childKey of childKeysByParent.get(parentKey) ?? []) {
-        const child = rowsByKey.get(childKey);
-        if (child && !rootKeySet.has(childKey)) {
-          promotedRoots.push(child);
-          rootKeySet.add(childKey);
-        }
-      }
-    }
-    const allRoots = [...roots, ...promotedRoots];
-    const rootKeys = new Set(allRoots.map((row) => row.key));
-    return allRoots
+    const rootKeys = new Set(roots.map((row) => row.key));
+    return roots
       .filter((row) => {
         const parentKey = row.spawnedBy ?? row.parentSessionKey;
         return !parentKey || !rootKeys.has(parentKey);

@@ -362,7 +362,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarMenusElemen
                     >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                   >
                   <span class="sidebar-recent-sessions__label-text">${label}</span>
-                  <span class="sidebar-session-group-count">${section.rows.length}</span>
+                  ${section.work && section.rows.length === 0
+                    ? nothing
+                    : html`<span class="sidebar-session-group-count">${section.rows.length}</span>`}
                   ${collapsedRunningDot
                     ? html`<span
                         class="session-run-spinner sidebar-session-group-running"
