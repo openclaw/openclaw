@@ -66,6 +66,10 @@ function findGitPaths(cwd: string): GitPaths | null {
   }
 }
 
+// This synchronous probe runs during gateway prompt footer assembly. A stalled
+// git symbolic-ref call should not block the gateway process indefinitely.
+const GIT_SYMBOLIC_REF_TIMEOUT_MS = 5_000;
+
 /** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
 function resolveBranchWithGitSync(repoDir: string): string | null {
   const result = spawnSync(
@@ -75,6 +79,8 @@ function resolveBranchWithGitSync(repoDir: string): string | null {
       cwd: repoDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: GIT_SYMBOLIC_REF_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     },
   );
   const branch = result.status === 0 ? result.stdout.trim() : "";
