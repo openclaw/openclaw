@@ -129,7 +129,7 @@ export function buildContextEnginePromptCacheInfo(params: {
  * Finds the assistant message produced by the current attempt, ignoring
  * historical messages that were present before prompt submission.
  */
-function findCurrentAttemptAssistantMessage(params: {
+export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
 }): AssistantMessage | undefined {

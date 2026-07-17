@@ -27,6 +27,7 @@ import {
 } from "./attempt.async-tasks.js";
 import {
   buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   resolvePromptCacheTouchTimestamp,
 } from "./attempt.context-engine-helpers.js";
 import type { createEmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
@@ -57,6 +58,7 @@ type StreamSettleResult = {
   sessionIdUsed: string;
   lastAssistant: EmbeddedRunAttemptResult["lastAssistant"];
   currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
   attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   cacheBreak: PromptCacheBreak | null;
   lastCallUsage: NormalizedUsage | undefined;
@@ -172,7 +174,10 @@ export async function settleEmbeddedAttemptStream(input: {
 
   try {
     if (input.onBlockReplyFlush) {
-      const currentAssistant = subscription.getCurrentAttemptAssistant();
+      const currentAssistant = findCurrentAttemptAssistantMessage({
+        messagesSnapshot: snapshot,
+        prePromptMessageCount: input.prePromptMessageCount,
+      });
       const attemptAccepted =
         !promptError &&
         !input.readLifecycleState().aborted &&
@@ -222,6 +227,7 @@ export async function settleEmbeddedAttemptStream(input: {
   let messagesSnapshot: AgentMessage[] = [];
   let lastAssistant: AssistantMessage | undefined;
   let currentAttemptAssistant: AssistantMessage | undefined;
+  let currentAttemptCompletedAssistant: AssistantMessage | undefined;
   let attemptUsage: EmbeddedRunAttemptResult["attemptUsage"];
   let cacheBreak: PromptCacheBreak | null = null;
   let lastCallUsage: NormalizedUsage | undefined;
@@ -277,7 +283,12 @@ export async function settleEmbeddedAttemptStream(input: {
       .slice()
       .toReversed()
       .find((message): message is AssistantMessage => message.role === "assistant");
-    currentAttemptAssistant = subscription.getCurrentAttemptAssistant();
+    currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot,
+      prePromptMessageCount: input.prePromptMessageCount,
+    });
+    currentAttemptCompletedAssistant = subscription.getCurrentAttemptAssistant();
+    const usageAssistant = currentAttemptCompletedAssistant ?? currentAttemptAssistant;
     attemptUsage = subscription.getUsageTotals();
     cacheBreak = input.cache.observabilityEnabled
       ? completePromptCacheObservation({
@@ -287,7 +298,7 @@ export async function settleEmbeddedAttemptStream(input: {
           usage: attemptUsage,
         })
       : null;
-    lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
+    lastCallUsage = normalizeUsage(usageAssistant?.usage);
     const promptCacheObservation =
       input.cache.observabilityEnabled &&
       (cacheBreak || input.cache.changesForTurn || typeof attemptUsage?.cacheRead === "number")
@@ -314,7 +325,7 @@ export async function settleEmbeddedAttemptStream(input: {
       observation: promptCacheObservation,
       lastCacheTouchAt: resolvePromptCacheTouchTimestamp({
         lastCallUsage,
-        assistantTimestamp: currentAttemptAssistant?.timestamp,
+        assistantTimestamp: usageAssistant?.timestamp,
         fallbackLastCacheTouchAt,
       }),
     });
@@ -349,6 +360,7 @@ export async function settleEmbeddedAttemptStream(input: {
     sessionIdUsed,
     lastAssistant,
     currentAttemptAssistant,
+    currentAttemptCompletedAssistant,
     attemptUsage,
     cacheBreak,
     lastCallUsage,

@@ -797,12 +797,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       model: "gpt-5.5",
       content: [{ type: "text", text: "Prior transcript reply." }],
     } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    const completedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Current run reply." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Current run reply." }]);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Current run reply."],
         lastAssistant: staleAssistant,
-        currentAttemptAssistant: undefined,
+        currentAttemptAssistant: staleAssistant,
+        currentAttemptCompletedAssistant: completedAssistant,
       }),
     );
 
@@ -817,11 +825,21 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.finalAssistantVisibleText).toBe("Current run reply.");
     expect(result.meta.finalAssistantRawText).toBe("Current run reply.");
     expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ currentAssistant: null, lastAssistant: undefined }),
+      expect.objectContaining({
+        currentAssistant: completedAssistant,
+        lastAssistant: completedAssistant,
+      }),
     );
   });
 
   it("retains the yielded attempt assistant for paused-turn payload classification", async () => {
+    const completedAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Earlier completed cycle." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"]>;
     const yieldedAssistant = {
       role: "assistant",
       stopReason: "aborted",
@@ -834,6 +852,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         assistantTexts: [],
         lastAssistant: yieldedAssistant,
         currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: completedAssistant,
         yieldDetected: true,
       }),
     );
@@ -2585,7 +2604,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
           stopReason: "stop",
           content: [{ type: "text", text: finalText }],
         }),
-        lastAssistant: expect.objectContaining({ stopReason: "toolUse" }),
+        lastAssistant: expect.objectContaining({
+          stopReason: "stop",
+          content: [{ type: "text", text: finalText }],
+        }),
       }),
     );
     expect(result.meta.finalAssistantVisibleText).toBe(finalText);

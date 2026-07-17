@@ -21,7 +21,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export function prepareEmbeddedRunTerminal(input: {
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptResult;
-  currentAttemptAssistant?: AssistantMessage;
+  currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
   model: string;
   activeErrorContext: { provider: string; model: string };
@@ -58,7 +58,7 @@ export function prepareEmbeddedRunTerminal(input: {
     input.terminalTimedOut && !input.timedOutDuringCompaction && !input.timedOutDuringToolExecution;
   // Session transcript fallbacks can reference an earlier rewritten turn.
   // Terminal delivery and metadata must stay scoped to this model attempt.
-  const terminalAssistant = input.currentAttemptAssistant;
+  const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
     lastAssistantUsage: terminalAssistant?.usage as UsageLike | undefined,
@@ -96,16 +96,18 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantVisibleText =
     resolveFinalAssistantVisibleText(terminalAssistant) ?? attemptFinalText;
   const finalAssistantRawText = resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText;
+  // A yielded attempt ends before message_end. Its aborted tool-call assistant,
+  // not an earlier completed cycle, owns paused-turn classification.
+  const payloadAssistant = attempt.yieldDetected
+    ? attempt.lastAssistant
+    : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
     assistantTexts: attempt.assistantTexts,
     assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
     assistantTranscriptOwned: attempt.assistantTranscriptOwned,
     toolMetas: attempt.toolMetas,
-    // sessions_yield aborts before message_end, but its tool-call assistant is
-    // still required to classify the turn as a clean pause instead of an LLM error.
-    lastAssistant:
-      input.currentAttemptAssistant || attempt.yieldDetected ? attempt.lastAssistant : undefined,
-    currentAssistant: input.currentAttemptAssistant ?? null,
+    lastAssistant: payloadAssistant,
+    currentAssistant: attempt.yieldDetected ? null : (payloadAssistant ?? null),
     lastToolError: attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
