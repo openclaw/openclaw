@@ -17,6 +17,11 @@ import {
   unbindThreadBindingsBySessionKey,
 } from "./monitor/thread-bindings.js";
 
+export {
+  handleDiscordSubagentProgress,
+  recoverDiscordSubagentProgress,
+} from "./subagent-progress.js";
+
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
