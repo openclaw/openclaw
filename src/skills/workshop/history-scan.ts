@@ -15,7 +15,6 @@ import {
   reconcileSkillHistoryScanProgress,
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
-import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
 import { HISTORY_SCAN_SESSION_SEGMENT, runSkillHistoryScanReview } from "./history-scan-review.js";
 import {
@@ -38,6 +37,7 @@ import {
   HISTORY_SCAN_SESSION_OVERHEAD_CHARS,
   readHistoryScanSession,
   resolveSkillHistoryScanTranscriptBudget,
+  type SkillHistoryScanBatchSession,
 } from "./history-scan-transcript.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
@@ -65,15 +65,13 @@ function toStoredState(params: {
   previous: StoredSkillHistoryScanState | undefined;
   direction: SkillHistoryScanDirection;
   considered: readonly SkillHistoryScanCandidate[];
-  sessions: readonly SkillHistoryScanPromptSession[];
+  sessions: readonly SkillHistoryScanBatchSession[];
   candidates: readonly SkillHistoryScanCandidate[];
   ideasFound: number;
   now: number;
 }): StoredSkillHistoryScanState {
   const previous = params.previous;
-  const reviewedTimes = params.sessions
-    .map((session) => Date.parse(session.updatedAt))
-    .filter((ms): ms is number => Number.isFinite(ms));
+  const reviewedTimes = params.sessions.map((session) => session.updatedAtMs);
   const previousOldest = previous?.oldestReviewedAt
     ? Date.parse(previous.oldestReviewedAt)
     : undefined;
@@ -303,14 +301,10 @@ async function runSkillHistoryScanCore(
       progress,
       sessionCursors:
         resumedPending?.sessionCursors ??
-        batch.sessions
-          .map((session) => ({
-            instanceId: session.instanceId,
-            updatedAtMs: Date.parse(session.updatedAt),
-          }))
-          .filter((cursor): cursor is { instanceId: string; updatedAtMs: number } =>
-            Number.isFinite(cursor.updatedAtMs),
-          ),
+        batch.sessions.map((session) => ({
+          instanceId: session.instanceId,
+          updatedAtMs: session.updatedAtMs,
+        })),
     },
   });
   let reviewError: unknown;
