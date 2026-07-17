@@ -60,7 +60,7 @@ export function defaultValue(schema?: JsonSchema): unknown {
 // openclaw.json stores plain decimals; a bare Number() would also reinterpret
 // 0x10/0b1010/1e3 spellings and silently persist a value that differs from the
 // typed text. Non-matches stay strings so schema validation rejects them.
-export const CONFIG_FORM_DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/;
+const CONFIG_FORM_DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
 /**
  * Normalizes numeric config input text at the earliest boundary (the input
