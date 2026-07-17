@@ -102,6 +102,9 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "current_conversation_bindings.target_agent_id": [
       "target_agent_id TEXT NOT NULL DEFAULT 'main'",
     ],
+    "managed_outgoing_image_records.original_media_root": [
+      "original_media_root TEXT NOT NULL DEFAULT ''",
+    ],
   },
 } satisfies SqliteSchemaCompatibility;
 
@@ -1512,7 +1515,14 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "commitments", "expired_at_ms INTEGER");
   // The shipped JSON runtime predeclared this table but never populated it.
   // Add required typed columns before Doctor or runtime can insert canonical rows.
-  ensureColumn(db, "managed_outgoing_image_records", "original_media_root TEXT NOT NULL");
+  // ALTER TABLE ADD COLUMN rejects NOT NULL without a DEFAULT on populated tables
+  // (and on all tables for older SQLite builds); without one this additive step
+  // wedges every pre-beta.2 upgrade at gateway startup and doctor repair (#109867).
+  ensureColumn(
+    db,
+    "managed_outgoing_image_records",
+    "original_media_root TEXT NOT NULL DEFAULT ''",
+  );
   ensureColumn(db, "managed_outgoing_image_records", "agent_id TEXT");
   ensureColumn(
     db,

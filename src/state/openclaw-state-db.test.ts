@@ -1967,6 +1967,91 @@ describe("openclaw state database", () => {
     expect(credentialTable?.name).toBe("worker_environment_credentials");
   });
 
+  it("adds managed outgoing image columns to a populated pre-beta.2 state database at startup", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP INDEX idx_managed_outgoing_images_agent_session;
+      DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN original_media_root;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN cleanup_pending;
+      INSERT INTO managed_outgoing_image_records (
+        attachment_id, session_key, created_at, alt, original_media_id,
+        original_media_subdir, original_content_type, record_json
+      ) VALUES ('att-legacy', 'sess-legacy', '2026-07-01T00:00:00Z', 'alt text',
+        'media-1', 'outbound', 'image/png', '{}');
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(managed_outgoing_image_records)")
+      .all() as Array<{ name?: string }>;
+    const row = reopened.db
+      .prepare(
+        "SELECT attachment_id, original_media_root, cleanup_pending FROM managed_outgoing_image_records",
+      )
+      .get() as {
+      attachment_id?: string;
+      original_media_root?: string;
+      cleanup_pending?: number;
+    };
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["agent_id", "original_media_root", "cleanup_pending"]),
+    );
+    expect(row.attachment_id).toBe("att-legacy");
+    expect(row.original_media_root).toBe("");
+    expect(row.cleanup_pending).toBe(0);
+  });
+
+  it("doctor repairs a populated pre-beta.2 managed outgoing image table", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP INDEX idx_managed_outgoing_images_agent_session;
+      DROP INDEX idx_managed_outgoing_images_agent_message;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN agent_id;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN original_media_root;
+      ALTER TABLE managed_outgoing_image_records DROP COLUMN cleanup_pending;
+      INSERT INTO managed_outgoing_image_records (
+        attachment_id, session_key, created_at, alt, original_media_id,
+        original_media_subdir, original_content_type, record_json
+      ) VALUES ('att-legacy', 'sess-legacy', '2026-07-01T00:00:00Z', 'alt text',
+        'media-1', 'outbound', 'image/png', '{}');
+    `);
+    legacyDb.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    const repaired = new DatabaseSync(databasePath);
+    const names = repaired
+      .prepare("PRAGMA table_info(managed_outgoing_image_records)")
+      .all() as Array<{ name?: string }>;
+    repaired.close();
+
+    expect(names.map((column) => column.name)).toEqual(
+      expect.arrayContaining(["agent_id", "original_media_root", "cleanup_pending"]),
+    );
+  });
+
   it("adds worker transcript commit tables to existing state databases", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({
