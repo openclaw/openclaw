@@ -140,6 +140,7 @@ enum class GatewayMethod(
   OpenclawSetupDetect("openclaw.setup.detect"),
   OpenclawSetupActivate("openclaw.setup.activate"),
   OpenclawSetupAuthStart("openclaw.setup.auth.start"),
+  OpenclawSetupPrepareStart("openclaw.setup.prepare.start"),
   WizardStart("wizard.start"),
   WizardNext("wizard.next"),
   WizardCancel("wizard.cancel"),
