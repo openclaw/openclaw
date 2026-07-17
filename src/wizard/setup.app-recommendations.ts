@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   ensureOnboardingPluginInstalled,
   type OnboardingPluginInstallEntry,
@@ -233,6 +236,3 @@ export async function setupAppRecommendations(params: {
   }
   return next;
 }
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
