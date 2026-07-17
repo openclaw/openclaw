@@ -40,6 +40,7 @@ import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
+  compactToolSearchCatalogEntry,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -67,6 +68,7 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
+const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -1269,6 +1271,54 @@ function telemetry(runtime: ToolSearchRuntime) {
   };
 }
 
+function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
+  const omitted = total - lines.length;
+  const footer =
+    omitted > 0
+      ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
+      : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+  return [
+    "OpenClaw/plugin tool quick index (exact catalog ids and compact input hints; descriptions are intentionally deferred):",
+    "Each line contains an exact catalog id and compact input hint; `-> ?` means its output schema is unknown.",
+    "OUTPUT UNKNOWN RULE: the first exec must return that tool's raw value unchanged; filter or map it only in a later exec after observing its shape.",
+    ...lines,
+    "",
+    footer,
+  ].join("\n");
+}
+
+function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]): string {
+  const lines = catalog
+    .filter((entry) => entry.source === "openclaw")
+    .map((entry) => compactToolSearchCatalogEntry(entry))
+    .toSorted((a, b) => a.id.localeCompare(b.id))
+    .map((entry) => `- ${JSON.stringify(entry.id)} ${entry.input ?? "unknown"} -> ?`);
+  if (lines.length === 0) {
+    return "";
+  }
+  const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
+  if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
+    return fullIndex;
+  }
+
+  // Prompt bytes and ordering must stay stable for provider prompt caches.
+  // Truncated entries remain discoverable inside the guest through ALL_TOOLS.
+  let low = 0;
+  let high = lines.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (
+      renderCodeModeCatalogIndex(lines.slice(0, middle), lines.length).length <=
+      MAX_CODE_MODE_CATALOG_INDEX_CHARS
+    ) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return renderCodeModeCatalogIndex(lines.slice(0, low), lines.length);
+}
+
 function createCodeModeExecDescription(
   ctx: CodeModeToolContext,
   catalog?: readonly ToolSearchCatalogEntry[],
@@ -1288,12 +1338,14 @@ function createCodeModeExecDescription(
     !catalogKnown || namespacePrompt
       ? " Registered plugin namespaces are available as direct globals and through `namespaces` when their required tools are visible in the run catalog."
       : "";
+  const catalogIndex = catalog ? formatCodeModeCatalogIndex(catalog) : "";
   return (
-    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Prefer one exec invocation for a complete dependent workflow: select tools, call them, and process their results in the same program. Await prerequisites before later calls; parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids and input hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
+    "Run JavaScript or TypeScript in OpenClaw code mode. Use `return` to pass the final value back to the agent; awaited calls without a returned value complete as `null`. Quick-index input hints are not output schemas: `output unknown` means never guess result field names. For an unknown output, the first exec must return the raw tool value unchanged with `return await tools.callValue(id, args);`; filter or map it only in a later exec after observing its shape. Prefer one exec invocation only when required result fields are documented: select tools, call them, and process their results in the same program. Await prerequisites before later calls; parallelize only independent work. `ALL_TOOLS` is the complete compact catalog with exact ids and input hints. Select from it directly when practical, use `tools.search(query: string, options?)` when lookup is ambiguous, and use `tools.describe(id: string)` only when the compact input hint is insufficient. Never invent or transform a tool id. `tools.callValue(id: string, args?)` executes a tool and returns its JSON value directly; `tools.call(id: string, args?)` preserves the raw `{ tool, result }` envelope. Example: `const hit = ALL_TOOLS.find((entry) => entry.description.includes('weather')) ?? (await tools.search('weather'))[0]; return await tools.callValue(hit.id, {});`. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code." +
     mcpGuidance +
     namespaceGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    (namespacePrompt ? `\n\n${namespacePrompt}` : "")
+    (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
+    (catalogIndex ? `\n\n${catalogIndex}` : "")
   );
 }
 

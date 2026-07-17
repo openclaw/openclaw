@@ -1261,7 +1261,7 @@ function compactInputHint(parameters: unknown): string {
   return `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`;
 }
 
-function compactEntry(entry: ToolSearchCatalogEntry) {
+export function compactToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   return {
     id: entry.id,
     source: entry.source,
@@ -1289,7 +1289,9 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+function formatToolDirectoryEntry(
+  entry: ReturnType<typeof compactToolSearchCatalogEntry>,
+): string | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -1312,7 +1314,9 @@ function renderToolSearchCatalogDirectory(lines: string[], total: number): strin
   return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
 }
 
-function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compactEntry>>): string {
+function formatToolSearchCatalogDirectory(
+  entries: Array<ReturnType<typeof compactToolSearchCatalogEntry>>,
+): string {
   if (entries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
@@ -1648,7 +1652,7 @@ export function estimateToolSchemaDirectoryToolNames(params: {
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
-    ...compactEntry(entry),
+    ...compactToolSearchCatalogEntry(entry),
     parameters: entry.parameters ?? {},
   };
 }
@@ -1879,18 +1883,20 @@ export class ToolSearchRuntime {
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
       .slice(0, limit)
-      .map((hit) => compactEntry(hit.entry));
+      .map((hit) => compactToolSearchCatalogEntry(hit.entry));
   };
 
   all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
   };
 
   namespaceEntries = () => {
     const catalog = resolveCatalog(this.ctx);
     return catalog.entries.map((entry) =>
-      Object.assign(compactEntry(entry), {
+      Object.assign(compactToolSearchCatalogEntry(entry), {
         parameters: entry.parameters ?? {},
       }),
     );
@@ -1984,7 +1990,7 @@ export class ToolSearchRuntime {
       onUpdate: options?.onUpdate,
     });
     return {
-      tool: compactEntry(entry),
+      tool: compactToolSearchCatalogEntry(entry),
       result,
     };
   };
