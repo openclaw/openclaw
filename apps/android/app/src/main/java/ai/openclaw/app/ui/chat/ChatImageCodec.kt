@@ -89,8 +89,9 @@ internal fun loadSizedImageAttachment(
   )
 }
 
-internal fun attachmentOutputMimeType(sourceMimeType: String?): String =
-  if (sourceMimeType.equals("image/png", ignoreCase = true)) "image/png" else "image/jpeg"
+internal fun attachmentOutputMimeType(sourceMimeType: String?): String {
+  return if (sourceMimeType.equals("image/png", ignoreCase = true)) "image/png" else "image/jpeg"
+}
 
 /** Normalizes arbitrary picked-image names to match the encoded format sent upstream. */
 internal fun normalizeAttachmentFileName(
