@@ -186,6 +186,21 @@ describe("PluginUiBridgeController", () => {
     bridge.clear();
   });
 
+  it("ignores a repeated ready message after the bridge port is connected", async () => {
+    const connected = await connectBridge();
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { v: 1, type: "openclaw.pluginUi.ready" },
+        source: connected.frame.contentWindow,
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(connected.postMessage).toHaveBeenCalledOnce();
+    connected.bridge.clear();
+    connected.childPort.close();
+  });
+
   it("keeps the active port when the connected client wrapper refreshes", async () => {
     const connected = await connectBridge();
     connected.bridge.sync({

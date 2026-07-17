@@ -80,7 +80,13 @@ export class PluginUiBridgeController {
     this.clear();
     this.target = target;
     this.bridgeKey = nextBridgeKey;
-    this.loadHandler = () => this.scheduleConnect();
+    this.loadHandler = () => {
+      // A load means the frame has a new document and can no longer use the
+      // previously transferred port. Invalidate it before reconnecting.
+      this.port?.close();
+      this.port = null;
+      this.scheduleConnect();
+    };
     target.frame.addEventListener("load", this.loadHandler);
     this.readyHandler = (event: MessageEvent) => {
       const data = event.data as { v?: unknown; type?: unknown } | null;
@@ -90,7 +96,12 @@ export class PluginUiBridgeController {
         data?.v === 1 &&
         data.type === "openclaw.pluginUi.ready"
       ) {
-        this.scheduleConnect();
+        // Plugins may repeat `ready` until the first connection arrives. A
+        // queued repeat can land just after the port transfer; do not replace
+        // that healthy port merely because the readiness retry was in flight.
+        if (!this.port) {
+          this.scheduleConnect();
+        }
       }
     };
     window.addEventListener("message", this.readyHandler);
