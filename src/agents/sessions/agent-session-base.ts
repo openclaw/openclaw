@@ -370,6 +370,8 @@ export abstract class AgentSessionBase {
         this.lastAssistantMessage = event.message;
 
         const assistantMsg = event.message;
+        // A length response may still need overflow recovery in checkCompaction();
+        // retryCount is independent and resets for every non-error response below.
         if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
           this.overflowRecoveryAttempted = false;
         }
