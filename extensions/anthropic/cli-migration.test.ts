@@ -61,6 +61,20 @@ describe("anthropic Claude model refs", () => {
     );
   });
 
+  it("canonicalizes fable family aliases in bare and provider-qualified forms", () => {
+    // "fable-5" must map to the full model id, not the family name: the
+    // canonicalizer only accepts alias values that already start with
+    // "claude-", so a family-name value would leave the shorthand unresolved.
+    expect(resolveKnownAnthropicModelRef("fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/claude-fable-5")).toBe(
+      "anthropic/claude-fable-5",
+    );
+  });
+
   it("preserves the current claude-haiku-4-5 model and its bare alias", () => {
     // claude-haiku-4-5 is a current production model (not retired), so neither
     // its full ref, its dotted variant, nor the bare "haiku" family alias must
