@@ -756,14 +756,13 @@ function applyConfiguredProviderOverrides(params: {
     configuredStaticCatalogModel?.baseUrl,
   );
   const manifestAliasBaseUrl = normalizeTransportBaseUrl(manifestAliasTransport?.baseUrl);
-  // A retained alias owns transport identity. Static discovery may supply model
-  // metadata, but must not replace the alias's wire API or endpoint.
+  // A retained alias owns transport identity and always takes the second branch
+  // below. Discovery-first ordering is therefore alias-free by construction.
   const preferDiscoveredTransport = params.preferDiscoveredTransport && !manifestAliasTransport;
   const resolvedTransportApi = preferDiscoveredTransport
     ? (discoveredModel.api ??
       metadataOverrideModel?.api ??
       providerConfig.api ??
-      manifestAliasTransport?.api ??
       configuredStaticCatalogModel?.api ??
       providerDefaultApi)
     : (metadataOverrideModel?.api ??
@@ -776,7 +775,6 @@ function applyConfiguredProviderOverrides(params: {
     ? (discoveredBaseUrl ??
       metadataOverrideBaseUrl ??
       providerConfiguredBaseUrl ??
-      manifestAliasBaseUrl ??
       configuredStaticCatalogBaseUrl)
     : (metadataOverrideBaseUrl ??
       providerConfiguredBaseUrl ??
