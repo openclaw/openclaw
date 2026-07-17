@@ -12,7 +12,7 @@ type FeishuVcIdentity = {
   union_id?: string | null;
 };
 
-export type FeishuVcMeetingInvitedEvent = {
+type FeishuVcMeetingInvitedEvent = {
   event_id?: string;
   call_id?: string;
   meeting?: {
@@ -73,7 +73,7 @@ function buildJoinPrompt(params: { meetingNo: string; callId?: string }): string
     : base;
 }
 
-export function resolveVcMeetingInvitedTurn(
+function resolveVcMeetingInvitedTurn(
   event: FeishuVcMeetingInvitedEvent,
   uuid: () => string = () => crypto.randomUUID(),
 ): VcMeetingInvitedTurn | null {

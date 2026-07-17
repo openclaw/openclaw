@@ -2,10 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { monitorSingleAccount } from "./monitor.account.js";
-import {
-  createFeishuVcMeetingInvitedHandler,
-  resolveVcMeetingInvitedTurn,
-} from "./monitor.vc-meeting-invited-handler.js";
+import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -122,48 +119,6 @@ const vcEvent = {
   invite_time: "1712345678",
 };
 
-describe("resolveVcMeetingInvitedTurn", () => {
-  it("builds a deterministic synthetic turn from the real event fields", () => {
-    expect(resolveVcMeetingInvitedTurn(vcEvent)).toEqual({
-      turnId: "vc-invited:event:evt_vc_123",
-      meetingNo: "123456789",
-      topic: "Weekly sync",
-      inviteTime: "1712345678",
-      inviter: {
-        senderId: "ou_inviter_1",
-        openId: "ou_inviter_1",
-        userId: "u_inviter_1",
-        unionId: "on_inviter_1",
-        name: "Alice",
-      },
-      prompt:
-        'Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation. If the join tool supports a call_id parameter, pass call_id="call_vc_123"; otherwise join by meeting number only.',
-    });
-  });
-
-  it("skips malformed events without a meeting number or inviter identity", () => {
-    expect(resolveVcMeetingInvitedTurn({ ...vcEvent, meeting: { topic: "Weekly sync" } })).toBe(
-      null,
-    );
-    expect(resolveVcMeetingInvitedTurn({ ...vcEvent, inviter: { id: {} } })).toBe(null);
-    expect(
-      resolveVcMeetingInvitedTurn({
-        ...vcEvent,
-        inviter: {
-          id: { union_id: "on_inviter_1" },
-          user_name: "Alice",
-        },
-      }),
-    ).toBe(null);
-    expect(
-      resolveVcMeetingInvitedTurn({
-        ...vcEvent,
-        meeting: { meeting_no: "not-a-meeting", topic: "Weekly sync" },
-      }),
-    ).toBe(null);
-  });
-});
-
 describe("createFeishuVcMeetingInvitedHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -277,6 +232,11 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     });
 
     await handler({ ...vcEvent, meeting: { topic: "Weekly sync" } });
+    await handler({ ...vcEvent, inviter: { id: {} } });
+    await handler({
+      ...vcEvent,
+      meeting: { meeting_no: "not-a-meeting", topic: "Weekly sync" },
+    });
 
     expect(handleFeishuMessageMock).not.toHaveBeenCalled();
   });
