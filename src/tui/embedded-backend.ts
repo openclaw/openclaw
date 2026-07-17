@@ -1068,12 +1068,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
       const target = [...this.runs.entries()].findLast(
         ([, run]) => this.isSameRunScope(run, params.runScope) && run.pendingQueue,
       );
-      if (target?.[1].pendingQueue?.mode === "collect" && !target[1].controller.signal.aborted) {
-        const [targetRunId, targetRun] = target;
-        targetRun.pendingQueue.messages.push(params.message);
-        targetRun.pendingQueue.dropPolicy = params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP;
-        targetRun.pendingQueue.droppedCount += overflowQueue.droppedCount;
-        targetRun.pendingQueue.summaryLines.push(...overflowQueue.summaryLines);
+      const targetQueue = target?.[1].pendingQueue;
+      if (target && targetQueue?.mode === "collect" && !target[1].controller.signal.aborted) {
+        const [targetRunId] = target;
+        targetQueue.messages.push(params.message);
+        targetQueue.dropPolicy = params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP;
+        targetQueue.droppedCount += overflowQueue.droppedCount;
+        targetQueue.summaryLines.push(...overflowQueue.summaryLines);
         return { kind: "handled", runId: targetRunId };
       }
     }
