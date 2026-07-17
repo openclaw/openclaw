@@ -22,6 +22,8 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -172,6 +174,7 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { extractShortModelName, type ResponsePrefixContext } from "./response-prefix-template.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -700,7 +703,12 @@ async function dispatchReplyFromConfigInner(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean;
+      kind?: ReplyDispatchKind;
+      responsePrefixContext?: ResponsePrefixContext;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -734,6 +742,7 @@ async function dispatchReplyFromConfigInner(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      responsePrefixContext: options?.responsePrefixContext,
     });
   };
 
@@ -1110,10 +1119,24 @@ async function dispatchReplyFromConfigInner(
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (!suppressDelivery) {
+        const selectedModel = resolveSessionModelRef(cfg, sessionStoreEntry.entry, sessionAgentId);
+        const modelSelection = {
+          ...selectedModel,
+          thinkLevel: sessionStoreEntry.entry?.thinkingLevel,
+        };
+        const responsePrefixContext = {
+          identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
+          provider: selectedModel.provider,
+          model: extractShortModelName(selectedModel.model),
+          modelFull: `${selectedModel.provider}/${selectedModel.model}`,
+          thinkingLevel: modelSelection.thinkLevel ?? "off",
+        };
         const payload = {
           text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents, fastAbort.rejectionReason),
         } satisfies ReplyPayload;
-        const result = await routeReplyToOriginating(payload);
+        // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
+        // their prefix, so seed that live context only when no cross-channel route is used.
+        const result = await routeReplyToOriginating(payload, { responsePrefixContext });
         if (result) {
           queuedFinal = result.ok;
           if (isRoutedReplyDelivered(result)) {
@@ -1126,6 +1149,7 @@ async function dispatchReplyFromConfigInner(
           }
         } else {
           markInboundDedupeReplayUnsafe();
+          params.replyOptions?.onModelSelected?.(modelSelection);
           queuedFinal = dispatcher.sendFinalReply(payload);
         }
       } else {
