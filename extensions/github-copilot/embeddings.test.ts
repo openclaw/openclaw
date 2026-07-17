@@ -301,7 +301,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("honors remote overrides when creating the provider", async () => {
-    resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "gh_remote_token" });
+    resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "test-token-placeholder" });
     mockDiscoveryResponse({
       ok: true,
       json: buildModelsResponse([
@@ -320,7 +320,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
     expect(firstCopilotApiTokenRequest().env).toBe(process.env);
-    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_remote_token");
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("test-token-placeholder");
 
     const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
