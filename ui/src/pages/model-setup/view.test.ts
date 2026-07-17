@@ -80,6 +80,11 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
+    iconUrls: {
+      "https://cdn.example.com/codex.png": "blob:codex",
+      "https://cdn.example.com/openai.png": "blob:openai",
+      "https://cdn.simpleicons.org/ollama": "blob:ollama",
+    },
     onDetect: vi.fn(),
     onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
@@ -88,6 +93,7 @@ function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProp
     onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
+    onIconError: vi.fn(),
     onOpenChat: vi.fn(),
     onWizardValueChange: vi.fn(),
     onWizardAnswer: vi.fn(),
@@ -168,7 +174,7 @@ describe("renderModelSetup", () => {
     const card = container.querySelector('[data-recommended-install="ollama"]');
     const image = card?.querySelector<HTMLImageElement>("img");
     const link = card?.querySelector<HTMLAnchorElement>("a");
-    expect(image?.src).toBe("https://cdn.simpleicons.org/ollama");
+    expect(image?.getAttribute("src")).toBe("blob:ollama");
     expect(image?.alt).toBe("Ollama");
     expect(image?.width).toBe(24);
     expect(link?.href).toBe("https://ollama.com/download");
@@ -181,6 +187,13 @@ describe("renderModelSetup", () => {
       }),
     );
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
+  });
+
+  it("never renders remote icon URLs directly", () => {
+    const container = mount(props({ iconUrls: {} }));
+
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(container.innerHTML).not.toContain("https://cdn.example.com");
   });
 
   it("renders admin and older-gateway gates without actions", () => {
