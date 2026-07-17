@@ -48,13 +48,19 @@ export async function deliverMattermostReplyWithDraftPreview(
     kind: params.info.kind,
     payload: params.payload,
     adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
-      draft: {
-        flush: params.draftStream.flush,
-        clear: params.draftStream.clear,
-        discardPending: params.draftStream.discardPending,
-        seal: params.draftStream.seal,
-        id: params.draftStream.postId,
-      },
+      // Once the preview is finalized, later warning/media payloads must use durable sends.
+      // Reusing the sealed draft would clear and delete the successful final post.
+      ...(params.previewState.finalizedViaPreviewPost
+        ? {}
+        : {
+            draft: {
+              flush: params.draftStream.flush,
+              clear: params.draftStream.clear,
+              discardPending: params.draftStream.discardPending,
+              seal: params.draftStream.seal,
+              id: params.draftStream.postId,
+            },
+          }),
       buildFinalEdit: (payload) => {
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
         const ttsSupplement = getReplyPayloadTtsSupplement(payload);
