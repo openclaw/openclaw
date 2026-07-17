@@ -19,6 +19,7 @@ type WarningParams = {
 };
 
 const warnedContexts = new Map<string, string>();
+const MAX_WARNED_CONTEXTS = 512;
 const log = createSubsystemLogger("session-maintenance-warning");
 const messageRuntimeLoader = createLazyPromiseLoader(
   () => import("../channels/message/runtime.js"),
@@ -116,6 +117,10 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
   // Dedupe by effective warning context so repeated maintenance scans do not
   // spam the same session, but changed limits still produce a fresh warning.
+  // Bound the dedupe map so it never grows without limit over the gateway lifetime.
+  if (warnedContexts.size >= MAX_WARNED_CONTEXTS) {
+    return;
+  }
   warnedContexts.set(params.sessionKey, contextKey);
 
   const text = buildWarningText(params.warning);
