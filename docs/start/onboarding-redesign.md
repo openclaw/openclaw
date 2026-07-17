@@ -186,16 +186,21 @@ Remote-gateway onboarding keeps its legacy conversational handoff
 ### Phase 5 — hatch and bootstrap (planned)
 
 - Custodian creates a nameless agent (tool call); the agent's bootstrap opens
-  with self-naming and a self-drawn avatar (image-gen ladder: model-generated
-  candidates → preset marks → keep logo). Same thread, avatar swap; the claw
-  mark stays reserved for the custodian. Cap the birth sequence at roughly
-  three beats (name+face → soul line → skills question) before the agent is
-  useful.
+  with self-naming. PR1 ships the ceremony capped at three beats (name → soul
+  line → skills question) and defers the self-drawn avatar/image-gen ladder
+  (model-generated candidates → preset marks → keep logo) to a follow-up. Same
+  thread, avatar swap; the claw mark stays reserved for the custodian. The
+  agreed identity persists twice: into `IDENTITY.md`/`SOUL.md` (what the agent
+  reads) and via `openclaw agents set-identity` (what channels and the UI
+  display).
 - Recommendations (phase 1 service, stored scan with once-semantics) land as
   the last bootstrap step before the bootstrap file is removed: "minimal set
-  or maximum convenience?" Channel connect buttons carry per-channel setup
-  playbooks; the agent collects credentials conversationally and relays config
-  writes to the custodian ("asking OpenClaw…" is the canonical idiom).
+  or maximum convenience?" The bootstrap reads the stored offer via
+  `openclaw onboard recommendations --json` (opaque install IDs only) and
+  acknowledges it after the choice is handled so it never asks again. Channel
+  connect buttons carry per-channel setup playbooks; the agent collects
+  credentials conversationally and relays config writes to the custodian
+  ("asking OpenClaw…" is the canonical idiom).
 - Self-learning is asked, not announced, and doubles as skill-workshop
   consent; describe ClawHub's release-trust, scan, verification, and integrity
   checks plus the publisher-code warning — never imply every release is signed.
