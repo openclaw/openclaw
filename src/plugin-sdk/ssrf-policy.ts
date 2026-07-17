@@ -228,7 +228,12 @@ export async function assertHttpUrlTargetsPrivateNetwork(
     errorMessage?: string;
   } = {},
 ): Promise<void> {
-  const parsed = new URL(url);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`Invalid URL: ${url}`);
+  }
   if (parsed.protocol !== "http:") {
     return;
   }

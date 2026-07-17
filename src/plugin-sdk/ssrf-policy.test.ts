@@ -290,6 +290,14 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       }),
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
+
+  it("rejects malformed URLs with a typed error", async () => {
+    await expect(
+      assertHttpUrlTargetsPrivateNetwork("not-a-url", {
+        dangerouslyAllowPrivateNetwork: true,
+      }),
+    ).rejects.toThrow("Invalid URL: not-a-url");
+  });
 });
 
 describe("normalizeHostnameSuffixAllowlist", () => {
