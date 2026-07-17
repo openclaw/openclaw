@@ -36,7 +36,7 @@ import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("../../media-understanding/runtime.js"),
 );
@@ -333,6 +333,9 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     logging: createRuntimeLogging(),
     state: {
       resolveStateDir,
+      openBlobStore: () => {
+        throw new Error("openBlobStore is only available through the plugin runtime proxy.");
+      },
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },

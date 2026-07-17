@@ -20,7 +20,7 @@ import {
 import {
   moveHeartbeatMainSessionEntry,
   resolveHeartbeatMainSessionRepairCandidate,
-} from "./doctor-heartbeat-main-session-repair.js";
+} from "./doctor-heartbeat-main-session-repair.test-support.js";
 import {
   detectStateIntegrityHealthIssues,
   noteStateIntegrity,

@@ -8,7 +8,6 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   isHuggingfacePolicyLocked,
 } from "./api.js";
-import { HUGGINGFACE_DISCOVERY_TIMEOUT_MS } from "./models.js";
 
 const ORIGINAL_VITEST = process.env.VITEST;
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -55,6 +54,12 @@ describe("huggingface models", () => {
     expect(def.maxTokens).toBe(entry.maxTokens);
   });
 
+  it("does not advertise the retired Llama 3.3 Turbo route", () => {
+    expect(HUGGINGFACE_MODEL_CATALOG.map((model) => model.id)).not.toContain(
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    );
+  });
+
   it("discoverHuggingfaceModels returns static catalog when apiKey is empty", async () => {
     const models = await discoverHuggingfaceModels("");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
@@ -81,7 +86,7 @@ describe("huggingface models", () => {
 
     await discoverHuggingfaceModels("hf_test_token");
 
-    expect(timeoutSpy).toHaveBeenCalledWith(HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("accepts a custom discovery timeout override", async () => {

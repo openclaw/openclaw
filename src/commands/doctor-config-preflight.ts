@@ -16,6 +16,7 @@ import type { StartupMigrationLease } from "../infra/startup-migration-checkpoin
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
+import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
@@ -23,7 +24,9 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
   () => import("./doctor-state-migrations.js"),
 );
 
-const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index.js"));
+const loadLegacyCronRepair = createLazyRuntimeModule(
+  () => import("./doctor/cron/legacy-repair.js"),
+);
 const startupPreflightTraceStartedAt = performance.now();
 
 async function measureStartupPreflightStep<T>(name: string, run: () => T | Promise<T>): Promise<T> {
@@ -88,6 +91,7 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
 export type DoctorConfigPreflightResult = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   baseConfig: OpenClawConfig;
+  cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
 };
 
 function collectDoctorLegacyIssues(
@@ -221,13 +225,6 @@ export async function runDoctorConfigPreflight(
     skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
-    /**
-     * Allows legacy imports whose source lives in the DEFAULT home state dir
-     * while OPENCLAW_STATE_DIR points elsewhere. Only explicit doctor repair
-     * runs opt in; the implicit CLI/gateway preflight must never archive
-     * files that belong to another install's state dir.
-     */
-    crossStateDirImports?: boolean;
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
@@ -245,6 +242,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
+  const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
   const noteStartupStateMigrationResult = (result: {
     changes: string[];
     warnings: string[];
@@ -391,11 +389,22 @@ export async function runDoctorConfigPreflight(
             }),
           );
         } else if (stateMigrationInput.cfg) {
-          const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+          const {
+            collectCronCodexRuntimePolicyTargetsReadOnly,
+            repairLegacyCronStoreWithoutPrompt,
+          } = await loadLegacyCronRepair();
           const cronResult = await repairLegacyCronStoreWithoutPrompt({
             cfg: stateMigrationInput.cfg,
+            migrateCodexModelRefs: false,
           });
           noteStartupStateMigrationResult(cronResult);
+          if (options.repairPrefixedConfig === true) {
+            const cronCodexPlan = await collectCronCodexRuntimePolicyTargetsReadOnly({
+              cfg: stateMigrationInput.cfg,
+            });
+            cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
+            noteStartupStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
+          }
           noteStartupStateMigrationResult(
             await autoMigrateLegacyState({
               cfg: stateMigrationInput.cfg,
@@ -404,7 +413,6 @@ export async function runDoctorConfigPreflight(
                 : {}),
               env: process.env,
               recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         } else if (stateMigrationInput.pluginDoctorConfig) {
@@ -417,7 +425,6 @@ export async function runDoctorConfigPreflight(
           noteStartupStateMigrationResult(
             await autoMigrateLegacyTaskStateSidecars({
               env: process.env,
-              crossStateDirImports: options.crossStateDirImports,
             }),
           );
         }
@@ -425,7 +432,6 @@ export async function runDoctorConfigPreflight(
         noteStartupStateMigrationResult(
           await autoMigrateLegacyTaskStateSidecars({
             env: process.env,
-            crossStateDirImports: options.crossStateDirImports,
           }),
         );
       }
@@ -460,6 +466,7 @@ export async function runDoctorConfigPreflight(
     return {
       snapshot,
       baseConfig,
+      ...(cronCodexRuntimePolicyTargets.length > 0 ? { cronCodexRuntimePolicyTargets } : {}),
     };
   } finally {
     if (startupMigrationHeartbeat) {

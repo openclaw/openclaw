@@ -670,10 +670,9 @@ describe("canvas host", () => {
     const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-    const originalArgv = [...process.argv];
+    const { setA2uiRootRealForTest } = await import("../../test-api.js");
 
     try {
-      process.argv[1] = path.join(fixtureEntryDir, "openclaw.mjs");
       await fs.mkdir(nestedAssetDir, { recursive: true });
       await fs.writeFile(
         path.join(a2uiRoot, "index.html"),
@@ -684,6 +683,7 @@ describe("canvas host", () => {
       await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
       await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
       await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+      setA2uiRootRealForTest(await fs.realpath(a2uiRoot));
 
       const res = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
       const html = res.body;
@@ -717,7 +717,7 @@ describe("canvas host", () => {
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
-      process.argv.splice(0, process.argv.length, ...originalArgv);
+      setA2uiRootRealForTest(undefined);
       await fs.rm(linkPath, { force: true });
     }
   });

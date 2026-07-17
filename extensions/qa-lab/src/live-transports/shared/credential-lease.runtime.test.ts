@@ -726,4 +726,53 @@ describe("credential lease runtime", () => {
     expect(() => heartbeat.throwIfFailed()).toThrow("heartbeat-down");
     await heartbeat.stop();
   });
+
+  it("retries transient heartbeat transport failures", async () => {
+    vi.useFakeTimers();
+    const heartbeatRequest = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
+      )
+      .mockResolvedValueOnce(undefined);
+    const heartbeat = startQaCredentialLeaseHeartbeat(
+      {
+        source: "convex",
+        kind: "telegram",
+        heartbeatIntervalMs: 50,
+        heartbeat: heartbeatRequest,
+      },
+      { intervalMs: 50, retryDelaysMs: [10] },
+    );
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(1);
+    expect(heartbeat.getFailure()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(2);
+    expect(heartbeat.getFailure()).toBeNull();
+    await heartbeat.stop();
+  });
+
+  it("fails closed after transient heartbeat retries are exhausted", async () => {
+    vi.useFakeTimers();
+    const heartbeatRequest = vi.fn(async () => {
+      throw new Error("fetch failed | ETIMEDOUT");
+    });
+    const heartbeat = startQaCredentialLeaseHeartbeat(
+      {
+        source: "convex",
+        kind: "telegram",
+        heartbeatIntervalMs: 50,
+        heartbeat: heartbeatRequest,
+      },
+      { intervalMs: 50, retryDelaysMs: [10, 20] },
+    );
+
+    await vi.advanceTimersByTimeAsync(80);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(3);
+    expect(() => heartbeat.throwIfFailed()).toThrow("ETIMEDOUT");
+    await heartbeat.stop();
+  });
 });

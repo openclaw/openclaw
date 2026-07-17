@@ -17,11 +17,30 @@ import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
-  listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
   registerClaudeSessionCatalog,
 } from "./session-catalog.js";
+
+function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider {
+  let provider: SessionCatalogProvider | undefined;
+  const runtimeWithSession = {
+    ...runtime,
+    agent: runtime.agent ?? { session: { listSessionEntries: () => [] } },
+  } as PluginRuntime;
+  registerClaudeSessionCatalog({
+    id: "anthropic",
+    config: {},
+    runtime: runtimeWithSession,
+    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+      provider = candidate;
+    },
+  } as unknown as OpenClawPluginApi);
+  if (!provider) {
+    throw new Error("expected Anthropic session catalog registration");
+  }
+  return provider;
+}
 
 const homes: string[] = [];
 const originalHome = process.env.HOME;
@@ -119,6 +138,40 @@ async function writeDesktopMetadata(
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
 }
 
+async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
+  await fs.mkdir(binDir, { recursive: true });
+  const executable = path.join(binDir, process.platform === "win32" ? "claude.cmd" : "claude");
+  const packageExecutable = path.join(
+    binDir,
+    "node_modules",
+    "@anthropic-ai",
+    "claude-code",
+    "bin",
+    "claude.exe",
+  );
+  await fs.mkdir(path.dirname(packageExecutable), { recursive: true });
+  await fs.writeFile(
+    packageExecutable,
+    [
+      'echo "Error: claude native binary not installed." >&2',
+      'echo "node node_modules/@anthropic-ai/claude-code/install.cjs" >&2',
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    executable,
+    process.platform === "win32"
+      ? '@ECHO off\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n'
+      : '#!/bin/sh\nexec "$basedir/node_modules/@anthropic-ai/claude-code/bin/claude.exe" "$@"\n',
+  );
+  if (process.platform !== "win32") {
+    await fs.chmod(executable, 0o755);
+    await fs.chmod(packageExecutable, 0o755);
+  }
+  return executable;
+}
+
 function message(
   sessionId: string,
   type: "user" | "assistant",
@@ -139,7 +192,17 @@ function message(
   };
 }
 
+function sdkCliMessage(sessionId: string, text: string): Record<string, unknown> {
+  return {
+    ...message(sessionId, "user", text, 1),
+    entrypoint: "sdk-cli",
+    cwd: `/work/${sessionId}`,
+    version: "2.1.204",
+  };
+}
+
 afterEach(async () => {
+  vi.restoreAllMocks();
   nodeHostMocks.runNodePtyCommand.mockClear();
   nodeHostMocks.userShellPaths.clear();
   process.env.HOME = originalHome;
@@ -892,6 +955,118 @@ describe("Claude session catalog", () => {
     }
   });
 
+  it("reuses cached metadata for unchanged discovered transcripts", async () => {
+    const home = await createHome();
+    const sessionIds = ["cached-session-a", "cached-session-b"];
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: Object.fromEntries(
+        sessionIds.map((sessionId) => [sessionId, [sdkCliMessage(sessionId, sessionId)]]),
+      ),
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    const first = await listLocalClaudeSessionPage({}, home);
+    expect(openSpy).toHaveBeenCalledTimes(2);
+    openSpy.mockClear();
+
+    const second = await listLocalClaudeSessionPage({}, home);
+    expect(second).toEqual(first);
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("rescans only a changed transcript and refreshes a negative result", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const changedPath = path.join(projectDir, "changed-session.jsonl");
+    const unchangedPath = path.join(projectDir, "unchanged-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: {
+        "changed-session": [],
+        "unchanged-session": [sdkCliMessage("unchanged-session", "Unchanged")],
+      },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toHaveLength(1);
+    await fs.appendFile(
+      changedPath,
+      `${JSON.stringify(sdkCliMessage("changed-session", "Now discovered"))}\n`,
+    );
+    const changedTime = new Date(Date.now() + 2_000);
+    await fs.utimes(changedPath, changedTime, changedTime);
+    const resolvedChangedPath = await fs.realpath(changedPath);
+    const resolvedUnchangedPath = await fs.realpath(unchangedPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ threadId: "changed-session", name: "Now discovered" }),
+        expect.objectContaining({ threadId: "unchanged-session", name: "Unchanged" }),
+      ]),
+    );
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedChangedPath]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toContain(resolvedUnchangedPath);
+  });
+
+  it("discovers a new transcript without rereading cached siblings", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const newPath = path.join(projectDir, "new-session.jsonl");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { "existing-session": [sdkCliMessage("existing-session", "Existing")] },
+    });
+    const openSpy = vi.spyOn(fs, "open");
+    await listLocalClaudeSessionPage({}, home);
+    await fs.writeFile(newPath, `${JSON.stringify(sdkCliMessage("new-session", "New"))}\n`);
+    const resolvedNewPath = await fs.realpath(newPath);
+    openSpy.mockClear();
+
+    const refreshed = await listLocalClaudeSessionPage({}, home);
+    expect(refreshed.sessions.map((record) => record.threadId).toSorted()).toEqual([
+      "existing-session",
+      "new-session",
+    ]);
+    expect(openSpy.mock.calls.map(([filePath]) => filePath)).toEqual([resolvedNewPath]);
+  });
+
+  it("evicts a deleted transcript after a complete scan", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const sessionId = "deleted-session";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    const fixedTime = new Date("2026-07-10T12:00:00.000Z");
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Alpha")] },
+    });
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const originalStat = await fs.stat(transcriptPath);
+    await listLocalClaudeSessionPage({}, home);
+
+    await fs.rm(transcriptPath);
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([]);
+    await fs.writeFile(transcriptPath, `${JSON.stringify(sdkCliMessage(sessionId, "Bravo"))}\n`);
+    await fs.utimes(transcriptPath, fixedTime, fixedTime);
+    const recreatedStat = await fs.stat(transcriptPath);
+    expect({ mtimeMs: recreatedStat.mtimeMs, size: recreatedStat.size }).toEqual({
+      mtimeMs: originalStat.mtimeMs,
+      size: originalStat.size,
+    });
+    const openSpy = vi.spyOn(fs, "open");
+
+    expect((await listLocalClaudeSessionPage({}, home)).sessions).toEqual([
+      expect.objectContaining({ threadId: sessionId, name: "Bravo" }),
+    ]);
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("reads newest transcript messages first by page while returning each page chronologically", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
@@ -1070,7 +1245,8 @@ describe("Claude session catalog", () => {
     ).rejects.toThrow("Claude session cannot be resumed in a terminal");
   });
 
-  it("prefers the login-shell Claude binary for local terminal capability and plans", async () => {
+  it("replaces a broken npm shim with Claude Desktop's newest native binary", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-1";
@@ -1116,9 +1292,35 @@ describe("Claude session catalog", () => {
       },
     } as unknown as OpenClawPluginApi);
 
-    await fs.writeFile(path.join(shellBinDir, "claude"), "#!/bin/sh\n");
-    await fs.chmod(path.join(shellBinDir, "claude"), 0o755);
+    await writeBrokenClaudeNpmShim(shellBinDir);
     nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const desktopVersionRoot = path.join(
+      home,
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude-code",
+    );
+    for (const version of ["2.1.9", "2.1.10"]) {
+      const desktopBinDir = path.join(
+        desktopVersionRoot,
+        version,
+        "claude.app",
+        "Contents",
+        "MacOS",
+      );
+      await fs.mkdir(desktopBinDir, { recursive: true });
+      await fs.writeFile(path.join(desktopBinDir, "claude"), "#!/bin/sh\nexit 0\n");
+      await fs.chmod(path.join(desktopBinDir, "claude"), 0o755);
+    }
+    const desktopExecutable = path.join(
+      desktopVersionRoot,
+      "2.1.10",
+      "claude.app",
+      "Contents",
+      "MacOS",
+      "claude",
+    );
     await expect(provider?.list({})).resolves.toMatchObject([
       { sessions: [{ threadId: sessionId, canOpenTerminal: true }] },
     ]);
@@ -1126,13 +1328,47 @@ describe("Claude session catalog", () => {
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
     ).resolves.toMatchObject({
       kind: "local",
-      argv: [path.join(shellBinDir, "claude"), "--resume", sessionId],
+      argv: [desktopExecutable, "--resume", sessionId],
       cwd: home,
       pathEnv: shellBinDir,
     });
     await expect(
       provider?.openTerminal?.({ hostId: "gateway:local", threadId: "missing" }),
     ).rejects.toThrow("Claude session is unavailable");
+  });
+
+  it("hides terminal capability when the failed npm shim has no native replacement", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-session-broken-shim";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: home,
+          summary: "Broken shim session",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
+    });
+    const shellBinDir = path.join(home, "shell-bin");
+    await writeBrokenClaudeNpmShim(shellBinDir);
+    process.env.PATH = shellBinDir;
+    nodeHostMocks.userShellPaths.set("claude", shellBinDir);
+    const provider = captureCatalogProvider({
+      config: { current: () => ({}) },
+      nodes: { list: async () => ({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+
+    await expect(provider.list({})).resolves.toMatchObject([
+      { sessions: [{ threadId: sessionId, canOpenTerminal: false }] },
+    ]);
+    await expect(
+      provider.openTerminal?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).rejects.toThrow("Claude CLI is unavailable");
   });
 
   it("keeps one failed node isolated from healthy hosts", async () => {
@@ -1163,11 +1399,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:healthy", "node:failed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:healthy", "node:failed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:failed", error: expect.any(Object) }),
       expect.objectContaining({ hostId: "node:healthy", sessions: [] }),
     ]);
@@ -1180,12 +1414,10 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:registry"] },
-    });
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:registry"] });
 
-    expect(result.hosts).toEqual([
+    expect(hosts).toEqual([
       expect.objectContaining({
         hostId: "node:registry",
         error: {
@@ -1226,11 +1458,9 @@ describe("Claude session catalog", () => {
       },
     } as unknown as PluginRuntime;
 
-    const result = await listClaudeSessionCatalog({
-      runtime,
-      query: { hostIds: ["node:malformed"] },
-    });
-    expect(result.hosts).toEqual([
+    const provider = captureCatalogProvider(runtime);
+    const hosts = await provider.list({ hostIds: ["node:malformed"] });
+    expect(hosts).toEqual([
       expect.objectContaining({ hostId: "node:malformed", error: expect.any(Object) }),
     ]);
   });

@@ -48,7 +48,7 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
+import type { CompactionStatus, FallbackStatus, PlanStatus } from "../tool-stream.ts";
 import {
   handleChatAttachmentPaste,
   isLargePastedTextAttachment,
@@ -56,6 +56,7 @@ import {
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
 } from "./chat-attachments.ts";
+import { renderChatPlanChecklist } from "./chat-plan-checklist.ts";
 import {
   renderChatVoiceError,
   renderMicrophoneActivity,
@@ -92,6 +93,7 @@ type ChatComposerProps = {
   runStatus?: ChatRunUiStatus | null;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
+  planStatus?: PlanStatus | null;
   messages: unknown[];
   stream: string | null;
   queue: ChatQueueItem[];
@@ -2193,6 +2195,10 @@ export function renderChatComposer(props: ChatComposerProps) {
             `
           : nothing}
         <div class="agent-chat__composer-status-stack">
+          ${renderChatPlanChecklist(props.planStatus, {
+            active: showAbortableUi,
+            variant: "bar",
+          })}
           ${renderFallbackIndicator(props.fallbackStatus)}
           ${renderCompactionIndicator(props.compactionStatus)}
           ${renderChatGoal(state, activeSession?.goal, {

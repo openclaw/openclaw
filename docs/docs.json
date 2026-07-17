@@ -1143,6 +1143,7 @@
                 "group": "Mainstream messaging",
                 "pages": [
                   "channels/discord",
+                  "channels/discord-activities",
                   "channels/slack",
                   "channels/telegram",
                   "channels/whatsapp",
@@ -1526,7 +1527,6 @@
                   "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
-                  "providers/qwen-oauth",
                   "providers/runway",
                   "providers/senseaudio",
                   "providers/sglang",

@@ -355,10 +355,18 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  {
+    name: "sessions.reclaim",
+    scope: "operator.admin",
+    startup: true,
+    controlPlaneWrite: true,
+  },
   { name: "models.probe", scope: "operator.admin" },
   // Memory migration reads host assistant state and writes agent workspaces.
   { name: "migrations.memory.plan", scope: "operator.admin" },
   { name: "migrations.memory.apply", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "ui.command", scope: "operator.write" },
+  { name: "approval.history", scope: "operator.approvals" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

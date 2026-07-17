@@ -135,6 +135,24 @@ export const en = {
       sourcePathHint: "Enter a source path next",
       targetWorkspace: "Target workspace directory",
     },
+    memoryImport: {
+      applyFailed:
+        "{label} memory import failed: {reason}\nRetry from the dashboard's Memory import page (Settings → Import Memory).",
+      confirm: "Import these memories into your OpenClaw workspace?",
+      conflictSuffix: ", {count} already imported",
+      errorTitle: "Memory import failed",
+      failureLine: "{label} failed: {reason}. Retry from the Memory import page.",
+      imported: "Imported {label} memories",
+      importFailed: "Could not import {label} memories",
+      importing: "Importing {label} memories…",
+      offerLine: "{label} — {source} ({count} memories{conflictSuffix})",
+      partialFailure: "{count} memory items failed",
+      selectSources: "Choose memory sources to import",
+      skipHint: "Import later from the dashboard's Memory import page (Settings → Import Memory).",
+      summaryLine: "{label}: {migrated} migrated, {skipped} skipped → {target}",
+      summaryTitle: "Memory import summary",
+      title: "Memories found",
+    },
     plugins: {
       configureBackHint: "Return to section menu",
       configureEmpty: "No plugins with configurable fields found.",
@@ -275,6 +293,8 @@ export const en = {
       testFailed: "AI check failed.",
       testFailure: "✗ {label}: {reason}\n{detail}",
       testPassed: "AI check passed.",
+      unavailableTitle: "Detected but not auto-tested",
+      unavailableCandidate: "{label} — {detail}. {reason}",
       testingCandidate: "Testing {label} ({modelRef}) — real completion, not a ping…",
       testingManualProvider: "Testing {label} — real completion, not a ping…",
       tryCandidate: "Try {label} ({detail})",
@@ -638,6 +658,27 @@ export const en = {
       helpBotMember: "Tip: the bot must be a member of any channel you want it to monitor.",
       helpCreateBot: "2) Create a bot + copy its token",
       helpOpenConsole: "1) Mattermost System Console -> Integrations -> Bot Accounts",
+    },
+    clickclack: {
+      baseUrlPrompt: "ClickClack server URL",
+      botToken: "ClickClack bot token",
+      botTokenInput: "Enter ClickClack bot token",
+      botTokenKeep: "ClickClack bot token already configured. Keep it?",
+      botTokenTitle: "ClickClack bot token",
+      connectionFailed:
+        "Connection check failed: {error}. Setup was saved; fix the connection and rerun setup.",
+      connectionTitle: "ClickClack connection",
+      connected: "Connected as @{handle} — workspace {workspace} resolved.",
+      envPrompt: "CLICKCLACK_BOT_TOKEN detected. Use env var?",
+      helpCreateToken:
+        "In ClickClack: Workspace settings → Integrations → OpenClaw → create bot → copy token",
+      invalidToken:
+        "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
+      validationWarningTitle: "ClickClack connection check",
+      workspaceHelp: "Use a wsp_… id, workspace slug, or display name.",
+      workspaceNotFound:
+        'Workspace "{workspace}" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+      workspacePrompt: "Workspace (id, slug, or name)",
     },
     nextcloudTalk: {
       allowFromPrompt: "Nextcloud Talk allowFrom (user id)",

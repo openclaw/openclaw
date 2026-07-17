@@ -1619,10 +1619,15 @@ describe("chat composer workbench", () => {
       tasks: [],
       cancellingTaskIds: new Set<string>(),
       finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
       onToggleCollapsed: () => undefined,
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
+      onToggleTask: () => undefined,
       onOpenSession: () => undefined,
     };
 
@@ -1660,10 +1665,15 @@ describe("chat composer workbench", () => {
       ],
       cancellingTaskIds: new Set<string>(),
       finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
       onToggleCollapsed: () => undefined,
       onToggleFinished: () => undefined,
       onRefresh: () => undefined,
       onCancel: () => undefined,
+      onToggleTask: () => undefined,
       onOpenSession: () => undefined,
     };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
@@ -3933,8 +3943,26 @@ describe("chat welcome", () => {
 
     const clawd = container.querySelector(".agent-chat__welcome-clawd");
     expect(clawd).not.toBeNull();
-    expect(clawd?.querySelector(".lobster-pet__svg")).not.toBeNull();
+    expect(clawd?.querySelector("openclaw-mascot")?.getAttribute("mood")).toBe("idle");
     expect(container.querySelector(".agent-chat__badge")).toBeNull();
+  });
+
+  it("teases and catches file drags with the welcome mascot", () => {
+    const container = renderWelcome({ assistantAvatar: null, assistantAvatarUrl: null });
+    const welcome = requireElement(container, ".agent-chat__welcome", "welcome screen");
+    const mascot = requireElement(
+      container,
+      ".agent-chat__welcome-clawd openclaw-mascot",
+      "welcome mascot",
+    ) as HTMLElement & { tease: boolean; catchOnce: () => void };
+    const catchOnce = vi.spyOn(mascot, "catchOnce");
+
+    welcome.dispatchEvent(createDragEvent("dragenter"));
+    expect(mascot.tease).toBe(true);
+
+    welcome.dispatchEvent(createDragEvent("drop"));
+    expect(mascot.tease).toBe(false);
+    expect(catchOnce).toHaveBeenCalledOnce();
   });
 
   it("renders welcome text from the active locale", async () => {
@@ -4486,34 +4514,6 @@ describe("chat model controls", () => {
     await vi.waitFor(() => {
       expect(onModelSelect).toHaveBeenCalledWith("", sessionKey);
     });
-  });
-
-  it("shows canonical OpenAI names for legacy Codex model references", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "codex",
-      thinkingDefault: "high",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          alias: "codex",
-          provider: "codex",
-        },
-      ],
-    });
-    const container = document.createElement("div");
-    render(
-      renderChatModelControls({
-        ...createChatModelControlsProps(state),
-        modelOverrides: { main: "codex/gpt-5.5" },
-      }),
-      container,
-    );
-
-    expect(
-      container.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
-    ).toBe("GPT-5.5 · High");
   });
 
   it("uses the session provider for slash-containing raw model ids without metadata", () => {

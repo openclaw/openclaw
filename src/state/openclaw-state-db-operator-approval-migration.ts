@@ -1,5 +1,6 @@
 // Doctor-only repair for the operator approval kind constraint.
 import type { DatabaseSync } from "node:sqlite";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.generated.js";
 
@@ -40,7 +41,7 @@ function tableSql(db: DatabaseSync): string | undefined {
   return typeof row?.sql === "string" ? row.sql : undefined;
 }
 
-export function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
+function hasCanonicalOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (!tableExists(db, "operator_approvals")) {
     return true;
   }
@@ -76,15 +77,16 @@ function normalizeDdl(sql: string): string {
 
 function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
+  const tableTerminator = "\n) STRICT;";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
   const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "\n);\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry",
+    `${tableTerminator}\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry`,
     start,
   );
   if (start < 0 || end < 0) {
     throw new Error("canonical operator approval schema is unavailable");
   }
-  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + 3);
+  return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
 // The only legacy shape this repair may destructively replace is the exact
@@ -97,16 +99,14 @@ function hasExactLegacyOperatorApprovalSchema(db: DatabaseSync): boolean {
   if (!live) {
     return false;
   }
-  const expectedLegacy = normalizeDdl(
-    canonicalOperatorApprovalCreateSql()
-      // sqlite_master stores the CREATE statement without "IF NOT EXISTS".
-      .replace(
-        "CREATE TABLE IF NOT EXISTS operator_approvals (",
-        "CREATE TABLE operator_approvals (",
-      )
-      .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'"),
-  );
-  return normalizeDdl(live) === expectedLegacy;
+  const exactStrictLegacy = canonicalOperatorApprovalCreateSql()
+    // sqlite_master stores the CREATE statement without "IF NOT EXISTS".
+    .replace("CREATE TABLE IF NOT EXISTS operator_approvals (", "CREATE TABLE operator_approvals (")
+    .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
+  const expectedStrictLegacy = normalizeDdl(exactStrictLegacy);
+  const expectedFlexibleLegacy = normalizeDdl(exactStrictLegacy.replace(/\) STRICT;$/u, ");"));
+  const normalizedLive = normalizeDdl(live);
+  return normalizedLive === expectedStrictLegacy || normalizedLive === expectedFlexibleLegacy;
 }
 
 function canonicalCreateSql(): string {
@@ -116,7 +116,7 @@ function canonicalCreateSql(): string {
   );
 }
 
-export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
+function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
   if (
     hasCanonicalOperatorApprovalKinds(db) ||
     tableExists(db, "operator_approvals_migration_new") ||
@@ -128,8 +128,7 @@ export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
   // The copy/drop/rename must be atomic: a crash after DROP but before RENAME
   // would strand the rows in the temp table, and the next schema bootstrap would
   // recreate an empty canonical table and abandon them.
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  runSqliteImmediateTransactionSync(db, () => {
     db.exec(canonicalCreateSql());
     db.exec(`
       INSERT INTO operator_approvals_migration_new (${columns})
@@ -138,11 +137,7 @@ export function repairOperatorApprovalKinds(db: DatabaseSync): boolean {
       ALTER TABLE operator_approvals_migration_new RENAME TO operator_approvals;
     `);
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   return true;
 }
 

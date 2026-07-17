@@ -1,7 +1,13 @@
 import {
+  implicitMentionKindWhen,
+  resolveInboundMentionDecision,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveChannelImplicitMentions,
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage as sharedFormatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Tlon helper module supports utils behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -174,6 +180,37 @@ export async function resolveTlonCommandAuthorizationWithIngress(params: {
     groupPolicy: "open",
     allowFrom: normalizedOwner ? [normalizedOwner] : [],
     command: {},
+  });
+}
+
+export function resolveTlonGroupMentionDecision(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  wasMentioned: boolean;
+  botParticipatedInThread: boolean;
+}) {
+  const implicitMentions = resolveChannelImplicitMentions({
+    cfg: params.cfg,
+    channel: "tlon",
+    accountId: params.accountId,
+  });
+  return resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      implicitMentionKinds: implicitMentionKindWhen(
+        "bot_thread_participant",
+        params.botParticipatedInThread,
+      ),
+    },
+    policy: {
+      isGroup: true,
+      requireMention: true,
+      implicitMentions,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
   });
 }
 

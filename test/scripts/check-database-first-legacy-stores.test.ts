@@ -81,7 +81,10 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("ignores deeply nested type-only syntax", () => {
-    const nestedType = Array.from({ length: 600 }).reduce((type) => `Readonly<${type}>`, "string");
+    const nestedType = Array.from({ length: 600 }).reduce<string>(
+      (type) => `Readonly<${type}>`,
+      "string",
+    );
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
         type DeepRuntimeSchema = ${nestedType};
@@ -123,6 +126,25 @@ describe("check-database-first-legacy-stores", () => {
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 5 }]);
+  });
+
+  it("flags retired Diffs viewer sidecar writes", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(root, id, "viewer.html"), html);
+        await fs.writeFile(path.join(root, id, "meta.json"), metadata);
+        await fs.writeFile(path.join(root, id, "file-meta.json"), metadata);
+      `,
+      "extensions/diffs/src/legacy-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
   });
 
   it("flags writes through local variables initialized from legacy store paths", () => {
@@ -180,6 +202,135 @@ describe("check-database-first-legacy-stores", () => {
         await fs.writeFile(path.join(stateDir, "tui", "last-session.json"), "{}\\n");
       `,
       "src/tui/last-session-writer.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired commitments JSON store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "commitments", "commitments.json"), "{}\\n");
+      `,
+      "src/commitments/file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired managed-image record JSON", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "media", "outgoing", "records", \`\${id}.json\`), "{}\n");
+      `,
+      "src/gateway/managed-image-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired Web Push JSON stores", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "push", "web-push-subscriptions.json"), "{}\n");
+        await fs.writeFile(path.join(stateDir, "push", "vapid-keys.json"), "{}\n");
+      `,
+      "src/infra/push-web-file-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 6 },
+    ]);
+  });
+
+  it("flags runtime writes to the retired APNs registration store", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "push", "apns-registrations.json"), "{}\n");
+      `,
+      "src/infra/push-apns-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired node-host JSON config", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "node.json"), "{}\n");
+      `,
+      "src/node-host/config-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired workspace setup and attestation sidecars", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), "{}\\n");
+        await fs.writeFile(path.join(workspaceDir, ".openclaw", "workspace-state.json"), "{}\\n");
+        await fs.writeFile(path.join(stateDir, "workspace-attestations", \`\${workspaceKey}.attested\`), "ok\\n");
+        await fs.writeFile(\`\${workspaceDir}.attested\`, "ok\\n");
+      `,
+      "src/agents/workspace-sidecar-store.ts",
+    );
+
+    expect(violations).toEqual([
+      { kind: "legacy store filesystem write", line: 4 },
+      { kind: "legacy store filesystem write", line: 5 },
+      { kind: "legacy store filesystem write", line: 6 },
+      { kind: "legacy store filesystem write", line: 7 },
+    ]);
+  });
+
+  it("flags runtime writes to the retired native hook relay JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join("/tmp", "openclaw-native-hook-relays-501", "relay.json"), "{}\n");
+      `,
+      "src/agents/harness/native-hook-relay-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to the retired subagent JSON registry", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "subagents", "runs.json"), "{}\n");
+      `,
+      "src/agents/subagent-registry-file-store.ts",
+    );
+
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
+  });
+
+  it("flags runtime writes to retired skill-upload staging", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        import path from "node:path";
+        await fs.writeFile(path.join(stateDir, "tmp", "skill-uploads", uploadId, "metadata.json"), "{}\n");
+      `,
+      "src/skills/lifecycle/upload-file-store.ts",
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 4 }]);
@@ -8466,6 +8617,19 @@ describe("check-database-first-legacy-stores", () => {
         await fs.writeFile("sessions.json", "{}\\n", "utf8");
       `,
       "src/commands/doctor/cron/legacy-store-migration.ts",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("allows the workspace Doctor migration owner to claim legacy sidecars", () => {
+    const violations = collectDatabaseFirstLegacyStoreViolations(
+      `
+        import { promises as fs } from "node:fs";
+        await fs.rename("openclaw-workspace-state.json", "openclaw-workspace-state.json.doctor-importing");
+        await fs.rename("workspace.attested", "workspace.attested.doctor-importing");
+      `,
+      "src/infra/state-migrations.workspace-setup.ts",
     );
 
     expect(violations).toEqual([]);

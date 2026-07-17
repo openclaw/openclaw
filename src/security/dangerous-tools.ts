@@ -21,6 +21,8 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "fs_move",
   // Patch application can rewrite arbitrary files
   "apply_patch",
+  // Agent-owned host terminal — interactive RCE surface
+  "terminal",
   // Session orchestration — spawning agents remotely is RCE
   "sessions_spawn",
   // Cross-session injection — message injection across sessions
@@ -50,6 +52,8 @@ export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
 export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   ...GATEWAY_CONTROL_PLANE_TOOLS,
   "sessions",
+  "screen",
+  "terminal",
   "nodes",
   "computer",
   "openclaw",
