@@ -6,12 +6,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 
 const envKeys = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_PROFILE",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
   "GOOGLE_APPLICATION_CREDENTIALS",
   "GOOGLE_CLOUD_LOCATION",
   "GOOGLE_CLOUD_PROJECT",
   "KIMI_API_KEY",
   "KIMICODE_API_KEY",
   "MOONSHOT_API_KEY",
+  "OPENAI_API_KEY",
 ] as const;
 
 const originalEnv = captureEnv([...envKeys]);
@@ -85,6 +95,74 @@ describe("getEnvApiKey", () => {
       expect(findEnvKeys("kimi")).toEqual(["KIMICODE_API_KEY"]);
       expect(getEnvApiKey("kimi")).toBe("kimicode-key");
     });
+  });
+
+  it("skips blank API keys and trims the selected fallback", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_OAUTH_TOKEN: "  ",
+        ANTHROPIC_API_KEY: "  anthropic-key  ",
+        OPENAI_API_KEY: " \t ",
+      },
+      async () => {
+        vi.resetModules();
+        const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+        expect(findEnvKeys("anthropic")).toEqual(["ANTHROPIC_API_KEY"]);
+        expect(getEnvApiKey("anthropic")).toBe("anthropic-key");
+        expect(findEnvKeys("openai")).toBeUndefined();
+        expect(getEnvApiKey("openai")).toBeUndefined();
+      },
+    );
+  });
+
+  it("does not report blank AWS credential markers as authentication", async () => {
+    await withEnvAsync(
+      {
+        AWS_ACCESS_KEY_ID: " ",
+        AWS_SECRET_ACCESS_KEY: "\t",
+        AWS_PROFILE: "  ",
+        AWS_BEARER_TOKEN_BEDROCK: "\n",
+        AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: " ",
+        AWS_CONTAINER_CREDENTIALS_FULL_URI: " ",
+        AWS_WEB_IDENTITY_TOKEN_FILE: " ",
+      },
+      async () => {
+        vi.resetModules();
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+        expect(getEnvApiKey("amazon-bedrock")).toBeUndefined();
+      },
+    );
+  });
+
+  it("keeps non-blank AWS profile authentication available", async () => {
+    await withEnvAsync({ AWS_PROFILE: "  production  " }, async () => {
+      vi.resetModules();
+      const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+      expect(getEnvApiKey("amazon-bedrock")).toBe("<authenticated>");
+    });
+  });
+
+  it("requires non-blank Google Vertex project and location markers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-vertex-adc-"));
+    tempDirs.push(dir);
+    const credentialsPath = join(dir, "application_default_credentials.json");
+    await writeFile(credentialsPath, "{}", "utf-8");
+    await withEnvAsync(
+      {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "  ",
+        GOOGLE_CLOUD_PROJECT: "\t",
+      },
+      async () => {
+        vi.resetModules();
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
+
+        expect(getEnvApiKey("google-vertex")).toBeUndefined();
+      },
+    );
   });
 
   it("does not cache missing Google Vertex ADC credentials", async () => {
