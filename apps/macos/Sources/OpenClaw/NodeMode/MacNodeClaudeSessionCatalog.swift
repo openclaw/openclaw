@@ -194,6 +194,7 @@ enum MacNodeClaudeSessionCatalog {
     }
 
     static func list(paramsJSON: String?, homeURL: URL) throws -> String {
+        try Task.checkCancellation()
         let params = try decodeListParams(paramsJSON)
         let offset = try decodeCursor(params.cursor, label: "catalog")
         let search = params.searchTerm?.lowercased()
@@ -216,6 +217,7 @@ enum MacNodeClaudeSessionCatalog {
     }
 
     static func read(paramsJSON: String?, homeURL: URL) throws -> String {
+        try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
         guard let fileURL = try sessions(homeURL: homeURL)
             .first(where: { $0.threadId == params.threadId })?.fileURL
@@ -249,6 +251,7 @@ enum MacNodeClaudeSessionCatalog {
               scanned < self.maxTranscriptScanBytes,
               found.count <= params.limit
         {
+            try Task.checkCancellation()
             let size = min(
                 readChunkBytes,
                 Int(position),
@@ -292,6 +295,7 @@ enum MacNodeClaudeSessionCatalog {
         var selected: [(item: [String: Any], start: UInt64)] = []
         var selectedBytes = 0
         for entry in requested {
+            try Task.checkCancellation()
             guard let data = try? JSONSerialization.data(withJSONObject: entry.item) else { continue }
             if !selected.isEmpty,
                selectedBytes + data.count > self.maxTranscriptPageBytes - 64 * 1024
@@ -391,14 +395,16 @@ extension MacNodeClaudeSessionCatalog {
         return resolvedCandidate
     }
 
-    private static func desktopMetadata(homeURL: URL) -> (
+    private static func desktopMetadata(homeURL: URL) throws -> (
         active: [String: [String: Any]],
         archived: Set<String>)
     {
         var active: [String: [String: Any]] = [:]
         var archived = Set<String>()
         for accountURL in self.childDirectories(self.desktopSessionsURL(homeURL: homeURL)) {
+            try Task.checkCancellation()
             for workspaceURL in self.childDirectories(accountURL) {
+                try Task.checkCancellation()
                 let files = (try? FileManager.default.contentsOfDirectory(
                     at: workspaceURL,
                     includingPropertiesForKeys: nil,
@@ -407,6 +413,7 @@ extension MacNodeClaudeSessionCatalog {
                     where fileURL.lastPathComponent.hasPrefix("local_") &&
                     fileURL.pathExtension == "json"
                 {
+                    try Task.checkCancellation()
                     guard let metadata = self.readJSON(fileURL) as? [String: Any],
                           let sessionId = self.string(metadata["cliSessionId"], maxLength: 256)
                     else { continue }
@@ -426,7 +433,7 @@ extension MacNodeClaudeSessionCatalog {
         projectsURL: URL,
         resolvedProjectsURL: URL,
         records: inout [String: SessionRecord],
-        sidechainIds: inout Set<String>)
+        sidechainIds: inout Set<String>) throws
     {
         var discoveredFiles = 0
         var scannedBytes = 0
@@ -434,11 +441,13 @@ extension MacNodeClaudeSessionCatalog {
         var seenPaths = Set<String>()
         let rootPath = projectsURL.path
         scan: for projectURL in self.childDirectories(projectsURL) {
+            try Task.checkCancellation()
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: projectURL,
                 includingPropertiesForKeys: [.contentModificationDateKey],
                 options: [.skipsHiddenFiles])) ?? []
             for candidate in files where candidate.pathExtension == "jsonl" {
+                try Task.checkCancellation()
                 guard discoveredFiles < self.maxCatalogDiscoveryFiles else {
                     truncated = true
                     break scan
@@ -537,6 +546,7 @@ extension MacNodeClaudeSessionCatalog {
                       fileBytes < self.metadataPrefixBytes,
                       scannedBytes < self.maxCatalogMetadataScanBytes
                 {
+                    try Task.checkCancellation()
                     let size = min(
                         self.metadataReadChunkBytes,
                         self.metadataPrefixBytes - fileBytes,
@@ -595,15 +605,18 @@ extension MacNodeClaudeSessionCatalog {
     }
 
     private static func sessions(homeURL: URL) throws -> [SessionRecord] {
+        try Task.checkCancellation()
         let projectsURL = self.projectsURL(homeURL: homeURL)
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()
         for projectURL in self.childDirectories(projectsURL) {
+            try Task.checkCancellation()
             guard let index = readJSON(projectURL.appending(path: "sessions-index.json")) as? [String: Any],
                   let entries = index["entries"] as? [[String: Any]]
             else { continue }
             for entry in entries {
+                try Task.checkCancellation()
                 guard let sessionId = string(entry["sessionId"], maxLength: 256) else { continue }
                 if (entry["isSidechain"] as? Bool) == true {
                     sidechainIds.insert(sessionId)
@@ -632,17 +645,19 @@ extension MacNodeClaudeSessionCatalog {
             }
         }
 
-        self.discoverCLIRecords(
+        try self.discoverCLIRecords(
             projectsURL: projectsURL,
             resolvedProjectsURL: resolvedProjectsURL,
             records: &records,
             sidechainIds: &sidechainIds)
 
-        let desktop = self.desktopMetadata(homeURL: homeURL)
+        let desktop = try self.desktopMetadata(homeURL: homeURL)
         for sessionId in desktop.archived {
+            try Task.checkCancellation()
             records.removeValue(forKey: sessionId)
         }
         for (sessionId, metadata) in desktop.active {
+            try Task.checkCancellation()
             if sidechainIds.contains(sessionId) {
                 continue
             }
@@ -679,6 +694,7 @@ extension MacNodeClaudeSessionCatalog {
         let root = self.projectsURL(homeURL: homeURL)
         let resolvedRoot = root.resolvingSymlinksInPath()
         for projectURL in self.childDirectories(root) {
+            try Task.checkCancellation()
             let candidate = projectURL.appending(path: "\(sessionId).jsonl")
             if let fileURL = safeSessionFile(
                 root: root,
