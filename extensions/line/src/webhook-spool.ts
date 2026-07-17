@@ -12,6 +12,7 @@ import { getLineRuntime } from "./runtime.js";
 
 const LINE_WEBHOOK_SPOOL_VERSION = 1;
 const LINE_WEBHOOK_MAX_ATTEMPTS = 8;
+const LINE_WEBHOOK_PERSIST_MAX_ATTEMPTS = 8;
 const LINE_WEBHOOK_RETRY_BASE_MS = 1_000;
 const LINE_WEBHOOK_RETRY_MAX_MS = 3 * 60_000;
 const LINE_WEBHOOK_CLAIM_STALE_MS = 30_000;
@@ -145,6 +146,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       accountId: options.accountId,
     });
   const ownerId = `${process.pid}:${randomUUID()}`;
+  const stopController = new AbortController();
   const maxAttempts = Math.max(1, options.maxAttempts ?? LINE_WEBHOOK_MAX_ATTEMPTS);
   const retryBaseMs = Math.max(0, options.retryBaseMs ?? LINE_WEBHOOK_RETRY_BASE_MS);
   const retryMaxMs = Math.max(retryBaseMs, options.retryMaxMs ?? LINE_WEBHOOK_RETRY_MAX_MS);
@@ -206,7 +208,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     claim: ChannelIngressQueueClaim<LineWebhookSpoolPayload>;
     label: string;
     transition: () => Promise<boolean>;
-    abortSignal?: AbortSignal;
   }): Promise<void> => {
     let persistenceAttempt = 0;
     while (true) {
@@ -220,13 +221,23 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           throw error;
         }
         persistenceAttempt += 1;
+        if (persistenceAttempt >= LINE_WEBHOOK_PERSIST_MAX_ATTEMPTS) {
+          options.runtime.error?.(
+            danger(
+              `line: webhook event ${params.claim.id} ${params.label} persist failed after ${persistenceAttempt} attempts; holding claim for lease recovery: ${errorText(error)}`,
+            ),
+          );
+          throw error;
+        }
         const delayMs = Math.min(5_000, 250 * 2 ** Math.min(persistenceAttempt - 1, 5));
         options.runtime.error?.(
           danger(
             `line: webhook event ${params.claim.id} ${params.label} persist failed; retrying: ${errorText(error)}`,
           ),
         );
-        await sleepWithAbort(delayMs, params.abortSignal);
+        // Shutdown cuts the retry backoff, never the bounded write attempts, so
+        // a delivered turn still gets its completion persisted through stop().
+        await sleepWithAbort(delayMs, stopController.signal).catch(() => undefined);
       }
     }
   };
@@ -525,6 +536,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
     },
     stop: async () => {
       running = false;
+      stopController.abort();
       if (drainTimer) {
         clearTimeout(drainTimer);
         drainTimer = undefined;

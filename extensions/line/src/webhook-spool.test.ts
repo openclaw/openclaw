@@ -321,6 +321,35 @@ describe("LINE webhook spool", () => {
     });
   });
 
+  it("bounds terminal-persistence retries so shutdown cannot hang on a failing store", async () => {
+    await withQueue(async (queue) => {
+      let reportFirstFailure: (() => void) | undefined;
+      const firstFailure = new Promise<void>((resolve) => {
+        reportFirstFailure = resolve;
+      });
+      const complete = vi.fn(async () => {
+        reportFirstFailure?.();
+        throw new Error("database busy");
+      });
+      const deliver = vi.fn(async () => {});
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtime(),
+        queue: { ...queue, complete },
+        deliver,
+      });
+      spool.start();
+      await spool.accept(callback(createEvent("event-persist-bound")));
+      await firstFailure;
+
+      await spool.stop();
+
+      expect(complete).toHaveBeenCalledTimes(8);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(await queue.listClaims()).toHaveLength(1);
+    });
+  });
+
   it("completes at durable turn adoption without replaying later failures", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_event, _destination, control) => {
