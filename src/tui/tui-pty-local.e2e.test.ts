@@ -926,6 +926,19 @@ describe("TUI PTY real backends", () => {
           "steer the active local turn",
         );
         await fixture.run.waitForOutput("LOCAL_STEER_COMPLETE");
+        if (process.env.OPENCLAW_BEHAVIOR_EVIDENCE === "1") {
+          console.info(
+            "[behavior-evidence] local-steer",
+            JSON.stringify({
+              providerRequestCount: fixture.mockModel.requests().length,
+              secondRequestHasDynamicPrompt: (
+                JSON.stringify(fixture.mockModel.requests()[1]?.body) ?? ""
+              ).includes("steer the active local turn"),
+              renderedCompletion: fixture.run.output().includes("LOCAL_STEER_COMPLETE"),
+              secondPromptEchoedBeforeRelease: true,
+            }),
+          );
+        }
 
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
