@@ -60,7 +60,7 @@ function readJsonFile(filePath: string): JsonObject {
   try {
     return JSON.parse(raw) as JsonObject;
   } catch (err) {
-    throw new Error(`Malformed JSON in ${formatOutputPath(filePath)}`, { cause: err });
+    throw new Error(`Malformed JSON in ${filePath}`, { cause: err });
   }
 }
 
