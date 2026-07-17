@@ -20,7 +20,12 @@
   --chrome: rgba(14, 16, 21, 0.96);
   --chrome-strong: rgba(14, 16, 21, 0.98);
 
-  /* Text - Clean contrast */
+  /* Text - Clean contrast
+   * WCAG 2.1 AA (normal text ≥ 4.5:1) on dark surfaces:
+   *   --muted #8b8b94 on --bg/#0e1015 ≈ 5.6:1, --bg-elevated ≈ 5.0:1, --bg-muted ≈ 4.6:1
+   * Do not reintroduce opacity dimming on muted body text (timestamps, hints);
+   * compositing opacity < 1 drops those pairings below AA even when the token itself passes.
+   */
   --text: #d4d4d8;
   --text-strong: #f4f4f5;
   --chat-text: #d4d4d8;
