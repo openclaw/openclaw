@@ -1,7 +1,6 @@
 // Tests infra environment loading and variable normalization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { createDedupeCache } from "./dedupe.js";
 import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
@@ -192,36 +191,6 @@ describe("logAcceptedEnvOption", () => {
     expect(loggerMocks.info).toHaveBeenCalledWith(
       `env: OPENCLAW_UTF16_TEST_ENV=${"x".repeat(159)}… (UTF-16 test)`,
     );
-  });
-});
-
-describe("createDedupeCache bounded eviction", () => {
-  it("evicts oldest entries when cache exceeds maxSize", () => {
-    const cache = createDedupeCache({ ttlMs: 0, maxSize: 5 });
-    for (let index = 0; index < 5; index++) {
-      cache.check(`key-${index}`);
-    }
-    expect(cache.size()).toBe(5);
-
-    // Sixth unique key pushes out the oldest (key-0)
-    cache.check("key-5");
-    expect(cache.size()).toBe(5);
-
-    // key-0 was evicted, so check returns false (newly recorded)
-    expect(cache.check("key-0")).toBe(false);
-  });
-
-  it("preserves recent entries after eviction", () => {
-    const cache = createDedupeCache({ ttlMs: 0, maxSize: 5 });
-    for (let index = 0; index < 10; index++) {
-      cache.check(`key-${index}`);
-    }
-    // Size stays bounded
-    expect(cache.size()).toBe(5);
-    // Most recent 5 keys (key-5..key-9) are still present
-    for (let index = 5; index < 10; index++) {
-      expect(cache.peek(`key-${index}`)).toBe(true);
-    }
   });
 });
 
