@@ -15,6 +15,7 @@ import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { ExitError } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
@@ -213,6 +214,12 @@ function formatStartupPluginVerificationFailure(
     ...diagnostic.messages.map((message) => `- ${message}`),
     "Resolve the plugin verification errors above, then restart the container.",
   ].join("\n");
+}
+
+function throwStartupMigrationRefusal(message: string): never {
+  // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
+  console.error(message);
+  throw new ExitError(1, message);
 }
 
 function throwStartupMigrationGuardRejected(): never {
@@ -476,7 +483,7 @@ export async function runDoctorConfigPreflight(
           : new Error("OpenClaw startup migration lease heartbeat failed.");
       }
       if (startupMigrationWarnings.length > 0) {
-        throw new Error(
+        throwStartupMigrationRefusal(
           formatStartupMigrationFailure({
             warnings: startupMigrationWarnings,
             blockers: [],
@@ -484,7 +491,7 @@ export async function runDoctorConfigPreflight(
         );
       }
       if (!snapshot.valid) {
-        throw new Error(
+        throwStartupMigrationRefusal(
           formatStartupMigrationFailure({
             warnings: [],
             blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
@@ -496,7 +503,9 @@ export async function runDoctorConfigPreflight(
         env: process.env,
       });
       if (pluginVerificationDiagnostic) {
-        throw new Error(formatStartupPluginVerificationFailure(pluginVerificationDiagnostic));
+        throwStartupMigrationRefusal(
+          formatStartupPluginVerificationFailure(pluginVerificationDiagnostic),
+        );
       }
       startupCheckpoint?.recordSuccessfulStartupMigrations({
         env: startupMigrationEnv,
