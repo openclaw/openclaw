@@ -2519,6 +2519,19 @@ export const pt_BR: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Esta prévia ainda não tem uma URL.",
+        blockedExternal: "As prévias externas estão desativadas pela política do seu gateway.",
+        blockedScheme: "A URL desta prévia usa um esquema não compatível.",
+        toolbar: "Controles da prévia",
+        reload: "Recarregar prévia",
+        viewport: {
+          label: "Área de visualização da prévia",
+          desktop: "Computador",
+          tablet: "Tablet",
+          mobile: "Celular",
+        },
+      },
     },
   },
   workboard: {

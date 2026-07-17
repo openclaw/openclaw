@@ -48,7 +48,7 @@ describe("Workspaces document schema", () => {
     expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:chart");
   });
 
-  it("accepts the preview builtin kind", () => {
+  it("accepts the trusted builtin preview kind", () => {
     const doc = validDoc();
     doc.tabs[0]!.widgets[0]!.kind = "builtin:preview";
     expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]!.kind).toBe("builtin:preview");

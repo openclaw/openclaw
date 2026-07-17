@@ -2534,6 +2534,20 @@ export const es: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Esta vista previa aún no tiene una URL.",
+        blockedExternal:
+          "Las vistas previas externas están deshabilitadas por la política de tu Gateway.",
+        blockedScheme: "La URL de esta vista previa utiliza un esquema no compatible.",
+        toolbar: "Controles de la vista previa",
+        reload: "Recargar vista previa",
+        viewport: {
+          label: "Área de visualización de la vista previa",
+          desktop: "Escritorio",
+          tablet: "Tableta",
+          mobile: "Móvil",
+        },
+      },
     },
   },
   workboard: {

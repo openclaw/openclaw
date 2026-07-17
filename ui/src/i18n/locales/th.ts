@@ -2475,6 +2475,19 @@ export const th: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "ตัวอย่างนี้ยังไม่มี URL",
+        blockedExternal: "ตัวอย่างภายนอกถูกปิดใช้งานตามนโยบาย Gateway ของคุณ",
+        blockedScheme: "URL ของตัวอย่างนี้ใช้สกีมที่ไม่รองรับ",
+        toolbar: "ตัวควบคุมตัวอย่าง",
+        reload: "โหลดตัวอย่างใหม่",
+        viewport: {
+          label: "วิวพอร์ตของตัวอย่าง",
+          desktop: "เดสก์ท็อป",
+          tablet: "แท็บเล็ต",
+          mobile: "มือถือ",
+        },
+      },
     },
   },
   workboard: {

@@ -2523,6 +2523,19 @@ export const nl: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Deze preview heeft nog geen URL.",
+        blockedExternal: "Externe previews zijn uitgeschakeld door het beleid van je gateway.",
+        blockedScheme: "Deze preview-URL gebruikt een niet-ondersteund schema.",
+        toolbar: "Previewbediening",
+        reload: "Preview opnieuw laden",
+        viewport: {
+          label: "Previewweergave",
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobiel",
+        },
+      },
     },
   },
   workboard: {

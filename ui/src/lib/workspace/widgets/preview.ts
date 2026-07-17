@@ -3,14 +3,12 @@
 // operator-trusted chat embed must not grant this builtin same-origin access.
 
 import { html, type TemplateResult } from "lit";
-import { createRef, ref } from "lit/directives/ref.js";
+import { createRef } from "lit/directives/ref.js";
 import { t } from "../../../i18n/index.ts";
 import type { WorkspaceWidget } from "../types.ts";
-import { evaluateEmbedUrl, resolveWorkspaceEmbedSandbox } from "./iframe-embed.ts";
-import type { BuiltinWidgetContext } from "./types.ts";
+import { evaluateEmbedUrl, renderWorkspaceEmbedFrame } from "./iframe-embed.ts";
+import type { BuiltinWidgetContext, PreviewViewport } from "./types.ts";
 import { widgetProps } from "./types.ts";
-
-type PreviewViewport = "desktop" | "tablet" | "mobile";
 
 const PREVIEW_VIEWPORTS: readonly PreviewViewport[] = ["desktop", "tablet", "mobile"];
 
@@ -25,10 +23,13 @@ function viewportClass(viewport: PreviewViewport): string {
 
 export function renderPreview(
   widget: WorkspaceWidget,
-  _value: unknown,
+  value: unknown,
   ctx: BuiltinWidgetContext,
 ): TemplateResult {
-  const decision = evaluateEmbedUrl(widgetProps(widget).url, {
+  // A declared primary binding owns the preview URL, including malformed
+  // values. Falling back to props would hide broken or hostile binding data.
+  const rawUrl = value === undefined ? widgetProps(widget).url : value;
+  const decision = evaluateEmbedUrl(rawUrl, {
     allowExternalEmbedUrls: ctx.embed.allowExternalEmbedUrls,
   });
   if (decision.status === "missing") {
@@ -44,29 +45,14 @@ export function renderPreview(
     </div>`;
   }
 
-  const initialViewport = mapPreviewViewport(widget);
+  const selectedViewport = ctx.preview.getViewport(widget.id, mapPreviewViewport(widget));
   const frameRef = createRef<HTMLIFrameElement>();
-  const wrapRef = createRef<HTMLDivElement>();
-  const viewportRefs = new Map<PreviewViewport, ReturnType<typeof createRef<HTMLButtonElement>>>();
-  for (const viewport of PREVIEW_VIEWPORTS) {
-    viewportRefs.set(viewport, createRef<HTMLButtonElement>());
-  }
 
   const reload = () => {
     const frame = frameRef.value;
     const src = frame?.getAttribute("src");
     if (frame && src !== null && src !== undefined) {
       frame.setAttribute("src", src);
-    }
-  };
-  const setViewport = (selected: PreviewViewport) => {
-    if (wrapRef.value) {
-      wrapRef.value.className = viewportClass(selected);
-    }
-    for (const viewport of PREVIEW_VIEWPORTS) {
-      viewportRefs
-        .get(viewport)
-        ?.value?.setAttribute("aria-pressed", String(viewport === selected));
     }
   };
 
@@ -81,20 +67,18 @@ export function renderPreview(
         role="group"
         aria-label=${t("workspaces.widget.preview.viewport.label")}
       >
-        ${PREVIEW_VIEWPORTS.map((viewport) => {
-          const buttonRef = viewportRefs.get(viewport);
-          return html`<button
+        ${PREVIEW_VIEWPORTS.map(
+          (viewport) => html`<button
             class="workspace-preview__viewport"
             type="button"
             data-test-id=${`workspace-preview-viewport-${viewport}`}
             aria-label=${t(`workspaces.widget.preview.viewport.${viewport}`)}
-            aria-pressed=${String(viewport === initialViewport)}
-            ${buttonRef ? ref(buttonRef) : undefined}
-            @click=${() => setViewport(viewport)}
+            aria-pressed=${String(viewport === selectedViewport)}
+            @click=${() => ctx.preview.setViewport(widget.id, viewport)}
           >
             ${t(`workspaces.widget.preview.viewport.${viewport}`)}
-          </button>`;
-        })}
+          </button>`,
+        )}
       </div>
       <button
         class="workspace-preview__reload"
@@ -106,17 +90,15 @@ export function renderPreview(
         ${t("workspaces.widget.preview.reload")}
       </button>
     </div>
-    <div class=${viewportClass(initialViewport)} ${ref(wrapRef)}>
-      <iframe
-        class="workspace-embed__frame workspace-preview__frame"
-        data-test-id="workspace-preview-frame"
-        ${ref(frameRef)}
-        src=${decision.url}
-        title=${widget.title}
-        sandbox=${resolveWorkspaceEmbedSandbox(ctx.embed.embedSandboxMode)}
-        referrerpolicy="no-referrer"
-        loading="lazy"
-      ></iframe>
+    <div class=${viewportClass(selectedViewport)}>
+      ${renderWorkspaceEmbedFrame({
+        widget,
+        url: decision.url,
+        ctx,
+        className: "workspace-embed__frame workspace-preview__frame",
+        testId: "workspace-preview-frame",
+        frameRef,
+      })}
     </div>
   </div>`;
 }

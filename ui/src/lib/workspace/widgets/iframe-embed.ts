@@ -9,7 +9,8 @@
 // ceiling does the same job without a path allowlist.
 // External http(s) URLs stay blocked unless `config.allowExternalEmbedUrls`.
 
-import { html, type TemplateResult } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { ref, type Ref } from "lit/directives/ref.js";
 import { t } from "../../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../chat/tool-display.ts";
 import type { WorkspaceWidget } from "../types.ts";
@@ -39,7 +40,7 @@ export type EmbedUrlDecision =
  * different origin are external and require `allowExternalEmbedUrls`. Any other
  * scheme (javascript:, data:, file:, …) is rejected outright.
  */
-function evaluateEmbedUrl(
+export function evaluateEmbedUrl(
   rawUrl: unknown,
   policy: { allowExternalEmbedUrls: boolean },
   origin?: string,
@@ -69,6 +70,26 @@ function evaluateEmbedUrl(
   return { status: "ok", url, external };
 }
 
+export function renderWorkspaceEmbedFrame(params: {
+  widget: WorkspaceWidget;
+  url: string;
+  ctx: BuiltinWidgetContext;
+  className: string;
+  testId: string;
+  frameRef?: Ref<HTMLIFrameElement>;
+}): TemplateResult {
+  return html`<iframe
+    class=${params.className}
+    data-test-id=${params.testId}
+    ${params.frameRef ? ref(params.frameRef) : nothing}
+    src=${params.url}
+    title=${params.widget.title}
+    sandbox=${resolveWorkspaceEmbedSandbox(params.ctx.embed.embedSandboxMode)}
+    referrerpolicy="no-referrer"
+    loading="lazy"
+  ></iframe>`;
+}
+
 export function renderIframeEmbed(
   widget: WorkspaceWidget,
   _value: unknown,
@@ -89,13 +110,11 @@ export function renderIframeEmbed(
         : t("workspaces.widget.embed.blockedScheme")}
     </div>`;
   }
-  return html`<iframe
-    class="workspace-embed__frame"
-    data-test-id="workspace-embed-frame"
-    src=${decision.url}
-    title=${widget.title}
-    sandbox=${resolveWorkspaceEmbedSandbox(ctx.embed.embedSandboxMode)}
-    referrerpolicy="no-referrer"
-    loading="lazy"
-  ></iframe>`;
+  return renderWorkspaceEmbedFrame({
+    widget,
+    url: decision.url,
+    ctx,
+    className: "workspace-embed__frame",
+    testId: "workspace-embed-frame",
+  });
 }
