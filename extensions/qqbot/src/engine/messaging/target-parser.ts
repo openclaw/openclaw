@@ -15,6 +15,19 @@ interface ParsedTarget {
   id: string;
 }
 
+const TYPED_TARGET_RE = /^(c2c|group|channel):/i;
+
+function parseTypedTarget(value: string): ParsedTarget | undefined {
+  const match = TYPED_TARGET_RE.exec(value);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return {
+    type: match[1].toLowerCase() as TargetType,
+    id: value.slice(match[0].length),
+  };
+}
+
 /**
  * Parse a qqbot target string into a structured delivery target.
  *
@@ -33,33 +46,15 @@ interface ParsedTarget {
  */
 export function parseTarget(to: string): ParsedTarget {
   const id = to.replace(/^qqbot:/i, "");
-  // Case-fold for prefix matching so that mixed-case type tags such as
-  // "Group:", "C2C:", or "CHANNEL:" are handled identically. The original
-  // case of the user/group/channel ID is preserved via `id.slice`.
-  const lower = id.toLowerCase();
-
-  if (lower.startsWith("c2c:")) {
-    const userId = id.slice(4);
-    if (!userId) {
-      throw new Error(`Invalid c2c target format: ${to} - missing user ID`);
+  const typedTarget = parseTypedTarget(id);
+  if (typedTarget) {
+    if (!typedTarget.id) {
+      const idKind = typedTarget.type === "c2c" ? "user" : typedTarget.type;
+      throw new Error(
+        `Invalid ${typedTarget.type} target format: ${to} - missing ${idKind} ID`,
+      );
     }
-    return { type: "c2c", id: userId };
-  }
-
-  if (lower.startsWith("group:")) {
-    const groupId = id.slice(6);
-    if (!groupId) {
-      throw new Error(`Invalid group target format: ${to} - missing group ID`);
-    }
-    return { type: "group", id: groupId };
-  }
-
-  if (lower.startsWith("channel:")) {
-    const channelId = id.slice(8);
-    if (!channelId) {
-      throw new Error(`Invalid channel target format: ${to} - missing channel ID`);
-    }
-    return { type: "channel", id: channelId };
+    return typedTarget;
   }
 
   if (!id) {
@@ -77,11 +72,9 @@ export function parseTarget(to: string): ParsedTarget {
  */
 export function normalizeTarget(target: string): string | undefined {
   const id = target.replace(/^qqbot:/i, "");
-  // Must accept every type-prefixed shape `looksLikeQQBotTarget` accepts;
-  // canonicalize the type tag to lowercase and keep the ID's original case.
-  const typePrefix = /^(c2c|group|channel):/i.exec(id);
-  if (typePrefix?.[1]) {
-    return `qqbot:${typePrefix[1].toLowerCase()}:${id.slice(typePrefix[0].length)}`;
+  const typedTarget = parseTypedTarget(id);
+  if (typedTarget) {
+    return `qqbot:${typedTarget.type}:${typedTarget.id}`;
   }
   // 32-char hex openid
   if (/^[0-9a-fA-F]{32}$/.test(id)) {
@@ -98,10 +91,8 @@ export function normalizeTarget(target: string): string | undefined {
  * Return true when the string looks like a QQ Bot target ID.
  */
 export function looksLikeQQBotTarget(id: string): boolean {
-  if (/^qqbot:(c2c|group|channel):/i.test(id)) {
-    return true;
-  }
-  if (/^(c2c|group|channel):/i.test(id)) {
+  const unqualifiedId = id.replace(/^qqbot:/i, "");
+  if (parseTypedTarget(unqualifiedId)) {
     return true;
   }
   if (/^[0-9a-fA-F]{32}$/.test(id)) {
