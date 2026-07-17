@@ -2,9 +2,9 @@
  * JSON parser compatibility helper for persisted config, manifests, and legacy stores.
  * Strict JSON stays the fast path; JSON5 is only the authored/legacy fallback.
  *
- * When both parsers fail, the JSON parse error message is included in the
- * rethrown error so callers have diagnostic context without bypassing
- * caller-owned sanitization.
+ * When both parsers fail, the JSON5 diagnostic is preserved as the top-level
+ * error message (backward compatible), and the strict JSON.parse error is
+ * attached as `cause` so callers can access it without raw-input exposure in logs.
  */
 import JSON5 from "json5";
 
@@ -19,13 +19,12 @@ export function parseJsonWithJson5Fallback(
     try {
       return json5.parse(raw);
     } catch (json5Error) {
-      const jsonErrMsg =
-        jsonError instanceof Error ? jsonError.message : String(jsonError);
+      const json5ErrMsg =
+        json5Error instanceof Error ? json5Error.message : String(json5Error);
       throw new Error(
-        `JSON.parse failed, and JSON5 fallback also failed: ${jsonErrMsg}`,
-        { cause: json5Error },
+        `JSON5 fallback also failed: ${json5ErrMsg}`,
+        { cause: jsonError instanceof Error ? jsonError : new Error(String(jsonError)) },
       );
     }
   }
 }
-
