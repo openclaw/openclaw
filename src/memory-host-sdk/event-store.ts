@@ -46,7 +46,7 @@ function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-export function memoryHostWorkspacePrefix(workspaceDir: string): string {
+function memoryHostWorkspacePrefix(workspaceDir: string): string {
   return createHash("sha256")
     .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
     .digest("hex")

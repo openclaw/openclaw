@@ -64,7 +64,7 @@ type PreparedRegisterParams = {
   ttlMs?: number;
 };
 
-export type PluginStateImportEntry = {
+type PluginStateImportEntry = {
   key: string;
   value: unknown;
   createdAt: number;
