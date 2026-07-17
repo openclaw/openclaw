@@ -69,6 +69,7 @@ describe("model catalog normalization", () => {
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
                   requiresReasoningContentOnAssistantMessages: true,
+                  collapseRotatingMessageSnapshots: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
                   unknownFlag: true,

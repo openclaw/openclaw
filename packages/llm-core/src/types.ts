@@ -481,7 +481,7 @@ export interface OpenAIResponsesCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
-  /** Whether adjacent strict-prefix message items may be provider-emitted rotating snapshots of one output. Default: false. */
+  /** Provider-owned runtime metadata for rotating snapshot streams. Not accepted in model config. Default: false. */
   collapseRotatingMessageSnapshots?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
