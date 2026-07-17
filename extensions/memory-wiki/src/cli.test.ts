@@ -812,4 +812,67 @@ cli note
     expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
     expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
   });
+
+  it("rejects malformed ChatGPT Unix timestamp strings", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    const conversation = expectDefined(conversations[0], "first ChatGPT conversation");
+    conversation.create_time = "1712363200";
+    conversation.update_time = "1.7123668e9";
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { createdCount: number };
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
+  });
+
+  it("rejects ChatGPT timestamp strings with trailing line terminators", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    const conversation = expectDefined(conversations[0], "first ChatGPT conversation");
+    conversation.update_time = "1712366800\n";
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { createdCount: number };
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
+  });
 });

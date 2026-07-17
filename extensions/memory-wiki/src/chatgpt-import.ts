@@ -207,8 +207,13 @@ function isoFromUnix(raw: unknown): string | undefined {
   if (typeof raw !== "number" && typeof raw !== "string") {
     return undefined;
   }
-  const numeric = Number(raw);
-  if (!Number.isFinite(numeric)) {
+  const numeric =
+    typeof raw === "number"
+      ? raw
+      : /^(?:0|[1-9]\d*)(?:\.\d+)?(?![\s\S])/.test(raw)
+        ? Number(raw)
+        : undefined;
+  if (numeric === undefined || !Number.isFinite(numeric)) {
     return undefined;
   }
   return timestampMsToIsoString(numeric * 1000);
