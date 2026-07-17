@@ -4113,14 +4113,10 @@ describe("codex command", () => {
       createdAt: 1,
       updatedAt: 2,
     };
-    let goalReads = 0;
     const codexControlRequest = vi.fn(
       async (_pluginConfig: unknown, method: string): Promise<JsonValue> => {
         if (method === CODEX_CONTROL_METHODS.clearThreadGoal) {
           return { cleared: true };
-        }
-        if (method === CODEX_CONTROL_METHODS.getThreadGoal && goalReads++ > 0) {
-          return { goal: null };
         }
         return { goal };
       },
@@ -4131,12 +4127,12 @@ describe("codex command", () => {
       text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
     });
     await expect(
-      handleCodexCommand(createContext("goal start Ship native goals"), { deps }),
+      handleCodexCommand(createContext("goal set Ship native goals"), { deps }),
     ).resolves.toEqual({
       text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
     });
     await expect(
-      handleCodexCommand(createContext("goal edit Refine native goals"), { deps }),
+      handleCodexCommand(createContext("goal set Refine native goals"), { deps }),
     ).resolves.toEqual({
       text: "Codex goal: Ship native goals\n- Status: active\n- Tokens: 120",
     });
@@ -4154,53 +4150,21 @@ describe("codex command", () => {
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       2,
       undefined,
-      CODEX_CONTROL_METHODS.getThreadGoal,
-      { threadId: "thread-goal" },
+      CODEX_CONTROL_METHODS.setThreadGoal,
+      { threadId: "thread-goal", objective: "Ship native goals" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       3,
       undefined,
       CODEX_CONTROL_METHODS.setThreadGoal,
-      { threadId: "thread-goal", objective: "Ship native goals", status: "active" },
+      { threadId: "thread-goal", objective: "Refine native goals" },
       expect.any(Object),
     );
     expect(codexControlRequest).toHaveBeenNthCalledWith(
       4,
       undefined,
-      CODEX_CONTROL_METHODS.setThreadGoal,
-      { threadId: "thread-goal", objective: "Refine native goals" },
-      expect.any(Object),
-    );
-    expect(codexControlRequest).toHaveBeenNthCalledWith(
-      5,
-      undefined,
       CODEX_CONTROL_METHODS.clearThreadGoal,
-      { threadId: "thread-goal" },
-      expect.any(Object),
-    );
-  });
-
-  it("does not replace an existing native goal from the start command", async () => {
-    await writeTestBinding(
-      { kind: "session", agentId: "main", sessionId: "session-1" },
-      { threadId: "thread-goal", cwd: "/repo" },
-    );
-    const codexControlRequest = vi.fn(async () => ({
-      goal: { threadId: "thread-goal", objective: "Keep this goal", status: "active" },
-    }));
-
-    await expect(
-      handleCodexCommand(createContext("goal start Replacement"), {
-        deps: createDeps({ codexControlRequest }),
-      }),
-    ).resolves.toEqual({
-      text: "A Codex goal already exists. Use `/codex goal edit <objective>` or clear it first.",
-    });
-    expect(codexControlRequest).toHaveBeenCalledOnce();
-    expect(codexControlRequest).toHaveBeenCalledWith(
-      undefined,
-      CODEX_CONTROL_METHODS.getThreadGoal,
       { threadId: "thread-goal" },
       expect.any(Object),
     );
@@ -4218,7 +4182,7 @@ describe("codex command", () => {
         deps: createDeps({ codexControlRequest }),
       }),
     ).resolves.toEqual({
-      text: "Usage: /codex goal [status|start <objective>|edit <objective>|pause|resume|block|complete|clear]",
+      text: "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
   });

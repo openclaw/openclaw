@@ -274,11 +274,11 @@ describe("app-tool-stream native questions", () => {
         actionToken: testQuestionActionToken(),
         questions: [
           {
-            id: "mode",
+            id: " mode ",
             header: " Mode ",
             question: " Pick one ",
             isOther: true,
-            options: [{ label: "Fast", description: "Quick" }, { label: "" }],
+            options: [{ label: " Fast ", description: "Quick" }, { label: "" }],
           },
         ],
       }),
@@ -289,11 +289,11 @@ describe("app-tool-stream native questions", () => {
       actionToken: testQuestionActionToken(),
       questions: [
         {
-          id: "mode",
+          id: " mode ",
           header: "Mode",
           question: "Pick one",
           isOther: true,
-          options: [{ label: "Fast", description: "Quick" }],
+          options: [{ label: " Fast ", description: "Quick" }],
         },
       ],
     });

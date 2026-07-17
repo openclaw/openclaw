@@ -38,8 +38,8 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.apply_patch_streaming_events": true,
 };
 
-const CODEX_NATIVE_PROTOCOL_THREAD_CONFIG: JsonObject = {
-  "features.goals": true,
+const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
+  "features.goals": false,
 };
 
 const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -269,8 +269,8 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
-  // Native goals replace OpenClaw's projected goal tools for Codex turns.
-  // Keep this final in normal config merges so the model never loses both surfaces.
+  // Native goal RPCs remain available through app-server, but the Codex goals
+  // feature also starts autonomous turns. Keep it disabled until a run owner exists.
   const codeModeConfig: JsonObject = {
     ...CODEX_CODE_MODE_THREAD_CONFIG,
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
@@ -279,7 +279,7 @@ export function buildCodexRuntimeThreadConfig(
     const disabledConfig = mergeCodexThreadConfigs(
       config,
       CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
     ) ?? {
       ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
     };
@@ -292,13 +292,13 @@ export function buildCodexRuntimeThreadConfig(
     const merged = mergeCodexThreadConfigs(
       codeModeConfig,
       config,
-      CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       {
         "features.code_mode_only": true,
       },
     ) ?? {
       ...codeModeConfig,
-      ...CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+      ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
       "features.code_mode_only": true,
     };
     return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
@@ -306,10 +306,10 @@ export function buildCodexRuntimeThreadConfig(
   const merged = mergeCodexThreadConfigs(
     codeModeConfig,
     config,
-    CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+    CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
   ) ?? {
     ...codeModeConfig,
-    ...CODEX_NATIVE_PROTOCOL_THREAD_CONFIG,
+    ...CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
   };
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }

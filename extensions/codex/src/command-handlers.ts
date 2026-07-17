@@ -959,23 +959,12 @@ async function handleNativeGoal(
           : action === "complete"
             ? "complete"
             : undefined;
-  const isObjectiveUpdate = action === "start" || action === "edit";
+  const isObjectiveUpdate = action === "set";
   if ((!requestedStatus && !isObjectiveUpdate) || (isObjectiveUpdate && !objective)) {
-    return "Usage: /codex goal [status|start <objective>|edit <objective>|pause|resume|block|complete|clear]";
+    return "Usage: /codex goal [status|set <objective>|pause|resume|block|complete|clear]";
   }
   if (requestedStatus && args.length > 1) {
     return `Usage: /codex goal ${action}`;
-  }
-  if (action === "start") {
-    const current = await deps.codexControlRequest(
-      pluginConfig,
-      CODEX_CONTROL_METHODS.getThreadGoal,
-      { threadId: binding.threadId },
-      goalRequestOptions,
-    );
-    if (isJsonObject(current) && isJsonObject(current.goal)) {
-      return "A Codex goal already exists. Use `/codex goal edit <objective>` or clear it first.";
-    }
   }
   const response = await deps.codexControlRequest(
     pluginConfig,
@@ -983,13 +972,9 @@ async function handleNativeGoal(
     {
       threadId: binding.threadId,
       ...(objective ? { objective } : {}),
-      // Upstream thread/goal/set is a partial update for existing goals. Edit
-      // omits status and budget so Codex preserves both; start activates.
-      ...(requestedStatus
-        ? { status: requestedStatus }
-        : action === "start"
-          ? { status: "active" }
-          : {}),
+      // Upstream thread/goal/set creates or partially updates the native goal;
+      // omitted status and budget preserve Codex's canonical state.
+      ...(requestedStatus ? { status: requestedStatus } : {}),
     },
     goalRequestOptions,
   );

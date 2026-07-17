@@ -781,18 +781,18 @@ function parseQuestionStatus(
   }
   const questions = data.questions.flatMap((value) => {
     const question = readRecord(value);
-    const id = toTrimmedString(question?.id);
+    const id = typeof question?.id === "string" ? question.id : undefined;
     const header = toTrimmedString(question?.header);
     const prompt = toTrimmedString(question?.question);
-    if (!id || !header || !prompt) {
+    if (!id?.trim() || !header || !prompt) {
       return [];
     }
     const options = Array.isArray(question?.options)
       ? question.options.flatMap((rawOption) => {
           const option = readRecord(rawOption);
-          const label = toTrimmedString(option?.label);
+          const label = typeof option?.label === "string" ? option.label : undefined;
           const description = toTrimmedString(option?.description);
-          return label ? [{ label, ...(description ? { description } : {}) }] : [];
+          return label?.trim() ? [{ label, ...(description ? { description } : {}) }] : [];
         })
       : [];
     return [

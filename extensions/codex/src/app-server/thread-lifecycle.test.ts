@@ -79,10 +79,10 @@ describe("Codex ring-zero thread config", () => {
       cwd: "/repo",
       dynamicTools: [],
       hostSystemAgentActive: false,
-      config: { "features.goals": false },
+      config: { "features.goals": true },
     });
     expect(normal.baseInstructions).toBeUndefined();
-    expect(normal.config?.["features.goals"]).toBe(true);
+    expect(normal.config?.["features.goals"]).toBe(false);
   });
 });
 
@@ -640,7 +640,7 @@ describe("Codex app-server native code mode config", () => {
       },
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -785,7 +785,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -897,7 +897,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -919,7 +919,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -977,7 +977,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1002,7 +1002,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1022,7 +1022,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": false,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1052,7 +1052,7 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1076,7 +1076,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.goals": true,
+      "features.goals": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1229,7 +1229,7 @@ describe("Codex app-server turn params", () => {
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
-        "features.goals": true,
+        "features.goals": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",
