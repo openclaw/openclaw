@@ -2667,10 +2667,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       runtime.log(success(`Config valid: ${shortPath}`));
       if (warnings.length > 0) {
         runtime.log(warn(`${warnings.length} warning(s):`));
-        for (const line of formatConfigIssueLines(warnings, warn("!"), {
-          normalizeRoot: true,
-          displayRoot: snapshot.sourceConfig,
-        })) {
+        for (const line of formatConfigIssueLines(warnings, warn("!"), { normalizeRoot: true })) {
           runtime.log(`  ${line}`);
         }
       }

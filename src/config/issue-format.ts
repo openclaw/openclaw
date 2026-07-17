@@ -14,7 +14,7 @@ type ConfigIssueFormatOptions = {
   sourceFile?: string;
 };
 
-type ConfigIssueSummaryOptions = Pick<ConfigIssueFormatOptions, "normalizeRoot"> & {
+type ConfigIssueSummaryOptions = ConfigIssueFormatOptions & {
   maxIssues?: number;
 };
 
@@ -80,23 +80,6 @@ function resolveIssuePathForLine(
     return normalizeConfigIssuePath(path);
   }
   return typeof path === "string" ? path : "";
-}
-
-function formatIssuePathForDisplay(path: string, displayRoot: unknown): string {
-  const segments = path.split(".").filter((segment) => segment.length > 0);
-  let parent: unknown = displayRoot;
-  return segments
-    .map((segment, index) => {
-      const number = Number(segment);
-      const isArrayIndex =
-        Array.isArray(parent) && /^(0|[1-9]\d*)$/.test(segment) && Number.isSafeInteger(number);
-      parent =
-        parent && typeof parent === "object"
-          ? (parent as Record<string, unknown>)[segment]
-          : undefined;
-      return isArrayIndex ? `[${segment}]` : `${index === 0 ? "" : "."}${segment}`;
-    })
-    .join("");
 }
 
 /**
