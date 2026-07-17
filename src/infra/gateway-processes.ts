@@ -46,6 +46,8 @@ export function signalVerifiedGatewayPidSync(pid: number, signal: "SIGTERM" | "S
   try {
     process.kill(pid, signal);
   } catch (err) {
+    // The verified process can exit between argv inspection and signaling;
+    // ESRCH already satisfies the requested stop or restart handoff.
     if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
       throw err;
     }
