@@ -219,21 +219,21 @@ async function mountControlUiHost(page: Page): Promise<void> {
   await page.route(`${controlUiServer.baseUrl}mcp-conformance`, async (route) => {
     await route.fulfill({
       contentType: "text/html",
-      body: "<!doctype html><main id=mount></main>",
+      body: `<!doctype html><main id="mount"></main>
+<script type="module">
+import { GatewayBrowserClient } from "/src/api/gateway.ts";
+import "/src/components/mcp-app-view-registration.ts";
+window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
+</script>`,
     });
   });
   await page.goto(`${controlUiServer.baseUrl}mcp-conformance`);
   await page.evaluate(
     async (params) => {
-      const importModule = async (specifier: string): Promise<Record<string, unknown>> =>
-        await import(/* @vite-ignore */ specifier);
-      const [gatewayModule] = await Promise.all([
-        importModule("/src/api/gateway.ts"),
-        importModule("/src/components/mcp-app-view-registration.ts"),
-      ]);
-      const GatewayBrowserClient = gatewayModule.GatewayBrowserClient as new (
-        options: Record<string, unknown>,
-      ) => {
+      const GatewayBrowserClient = Reflect.get(
+        window,
+        "mcpConformanceGatewayBrowserClient",
+      ) as new (options: Record<string, unknown>) => {
         start(): void;
         request(method: string, params: unknown): Promise<unknown>;
       };
