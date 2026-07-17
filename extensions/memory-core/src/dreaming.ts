@@ -13,7 +13,7 @@ import {
   MANAGED_MEMORY_DREAMING_CRON_NAME as MANAGED_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG as MANAGED_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT as DREAMING_SYSTEM_EVENT_TEXT,
-  resolveMemoryCorePluginConfig,
+  resolveMemoryDreamingPluginConfig,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -550,7 +550,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   let totalCandidates = 0;
   let totalApplied = 0;
   let failedWorkspaces = 0;
-  const pluginConfig = params.cfg ? resolveMemoryCorePluginConfig(params.cfg) : undefined;
+  const pluginConfig = params.cfg ? resolveMemoryDreamingPluginConfig(params.cfg) : undefined;
   const detachNarratives = params.trigger === "cron";
   const [
     { writeDeepDreamingReport },
@@ -793,10 +793,10 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const pluginConfig =
       params.reason === "startup"
-        ? (resolveMemoryCorePluginConfig(startupCfg) ??
-          resolveMemoryCorePluginConfig(api.config) ??
+        ? (resolveMemoryDreamingPluginConfig(startupCfg) ??
+          resolveMemoryDreamingPluginConfig(api.config) ??
           api.pluginConfig)
-        : resolveMemoryCorePluginConfig(startupCfg);
+        : resolveMemoryDreamingPluginConfig(startupCfg);
     const config = resolveShortTermPromotionDreamingConfig({
       pluginConfig,
       cfg: startupCfg,

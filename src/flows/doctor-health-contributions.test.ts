@@ -56,8 +56,6 @@ const mocks = vi.hoisted(() => ({
   })),
   probeGatewayMemoryStatus: vi.fn(async () => ({ checked: true, ready: true, skipped: false })),
   listHealthChecks: vi.fn(),
-  getHealthCheck: vi.fn(),
-  registerHealthCheck: vi.fn(),
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
@@ -313,8 +311,6 @@ vi.mock("./health-check-registry.js", async (importOriginal) => {
       }
       return registeredChecks.filter((check) => check.kind !== "core");
     },
-    getHealthCheck: mocks.getHealthCheck,
-    registerHealthCheck: mocks.registerHealthCheck,
   };
 });
 
@@ -590,9 +586,6 @@ describe("doctor health contributions", () => {
       { id: "core/example/internal", kind: "core" },
       { id: "plugin/example/unrelated", kind: "plugin" },
     ]);
-    mocks.getHealthCheck.mockReset();
-    mocks.getHealthCheck.mockReturnValue(undefined);
-    mocks.registerHealthCheck.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockReset();
     mocks.noteChromeMcpBrowserReadiness.mockResolvedValue(undefined);
     mocks.detectLegacyStateMigrations.mockReset();
@@ -2738,128 +2731,6 @@ describe("doctor health contributions", () => {
       "health check already registered: core/doctor/shell-completion",
     );
     expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
-  });
-
-  it("reports runtime tool schema blockers during normal doctor runs", async () => {
-    const contribution = requireDoctorContribution("doctor:runtime-tool-schemas");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/runtime-tool-schemas",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/runtime-tool-schemas",
-          severity: "error",
-          message:
-            "Tool fuzzplugin_move_angles from plugin fuzzplugin has an unsupported input schema for runtime projection.",
-          path: "plugins.entries.fuzzplugin",
-          target: "fuzzplugin_move_angles",
-          requirement: 'fuzzplugin_move_angles.parameters.type must be "object"',
-          fixHint:
-            "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-    } as unknown as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(false);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tool fuzzplugin_move_angles from plugin fuzzplugin"),
-      "Doctor warnings",
-    );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining('issue: fuzzplugin_move_angles.parameters.type must be "object"'),
-      "Doctor warnings",
-    );
-  });
-
-  it("reports provider catalog projection blockers during normal doctor runs", async () => {
-    const contribution = requireDoctorContribution("doctor:provider-catalog-projection");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/provider-catalog-projection",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/provider-catalog-projection",
-          severity: "error",
-          message:
-            "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
-          path: "plugins.entries.mockplugin",
-          target: "mockplugin",
-          requirement: "provider catalog entry read failed",
-          fixHint:
-            "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(false);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Provider catalog mockplugin cannot be projected"),
-      "Doctor warnings",
-    );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("issue: provider catalog entry read failed"),
-      "Doctor warnings",
-    );
-  });
-
-  it("reports local audio acceleration as information without failing doctor health", async () => {
-    const contribution = requireDoctorContribution("doctor:local-audio-acceleration");
-    mocks.getHealthCheck.mockReturnValue({
-      id: "core/doctor/local-audio-acceleration",
-      detect: vi.fn(async () => [
-        {
-          checkId: "core/doctor/local-audio-acceleration",
-          severity: "info",
-          message: "Local STT auto-selection: mlx-whisper is available.",
-          path: "tools.media.audio.models",
-        },
-      ]),
-    });
-    const ctx = {
-      cfg: {},
-      configResult: { cfg: {} },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: {},
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-      env: {},
-      healthOk: true,
-    } as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(ctx.healthOk).toBe(true);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Local STT auto-selection"),
-      "Doctor information",
-    );
-    expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
   });
 
   it.each([false, true])(

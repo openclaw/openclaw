@@ -133,9 +133,10 @@ export type AgentHarnessResultClassification =
   | NonNullable<AgentHarnessAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarnessDeliveryDefaults = {
+  /** Default visible-reply policy when config does not override the harness. */
+  visibleReplies?: "automatic" | "message_tool";
   /**
-   * @deprecated Prefer `messages.visibleReplies` / `messages.groupChat.visibleReplies`
-   * config. Kept for existing harness plugins.
+   * @deprecated Use visibleReplies. Kept for existing harness plugins.
    */
   sourceVisibleReplies?: "automatic" | "message_tool";
 };

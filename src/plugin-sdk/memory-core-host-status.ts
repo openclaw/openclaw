@@ -31,6 +31,7 @@ export {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
   MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+  resolveMemoryDreamingPluginConfig,
   resolveMemoryCorePluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 export type {

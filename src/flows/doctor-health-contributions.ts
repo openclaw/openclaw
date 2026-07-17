@@ -1502,13 +1502,11 @@ async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
 ): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { CORE_HEALTH_CHECKS } = await loadDoctorCoreChecksModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck(checkId);
+  const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
   }
