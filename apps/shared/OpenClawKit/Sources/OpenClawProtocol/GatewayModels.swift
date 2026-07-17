@@ -178,6 +178,13 @@ public enum ApprovalTerminalReason: String, Codable, Sendable {
     case storageCorrupt = "storage-corrupt"
 }
 
+public enum QuestionStatus: String, Codable, Sendable {
+    case pending = "pending"
+    case answered = "answered"
+    case cancelled = "cancelled"
+    case expired = "expired"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -12613,6 +12620,224 @@ public struct ExecApprovalResolveParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case decision
+    }
+}
+
+public struct QuestionOption: Codable, Sendable {
+    public let label: String
+    public let description: String?
+
+    public init(
+        label: String,
+        description: String? = nil)
+    {
+        self.label = label
+        self.description = description
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case label
+        case description
+    }
+}
+
+public struct Question: Codable, Sendable {
+    public let id: String
+    public let header: String
+    public let question: String
+    public let options: [QuestionOption]
+    public let multiselect: Bool?
+    public let isother: Bool?
+    public let issecret: Bool?
+
+    public init(
+        id: String,
+        header: String,
+        question: String,
+        options: [QuestionOption],
+        multiselect: Bool? = nil,
+        isother: Bool? = nil,
+        issecret: Bool? = nil)
+    {
+        self.id = id
+        self.header = header
+        self.question = question
+        self.options = options
+        self.multiselect = multiselect
+        self.isother = isother
+        self.issecret = issecret
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case header
+        case question
+        case options
+        case multiselect = "multiSelect"
+        case isother = "isOther"
+        case issecret = "isSecret"
+    }
+}
+
+public struct QuestionRequestQuestion: Codable, Sendable {
+    public let id: String
+    public let header: String
+    public let question: String
+    public let options: [QuestionOption]
+    public let multiselect: Bool?
+    public let isother: Bool?
+    public let issecret: Bool?
+
+    public init(
+        id: String,
+        header: String,
+        question: String,
+        options: [QuestionOption],
+        multiselect: Bool? = nil,
+        isother: Bool? = nil,
+        issecret: Bool? = nil)
+    {
+        self.id = id
+        self.header = header
+        self.question = question
+        self.options = options
+        self.multiselect = multiselect
+        self.isother = isother
+        self.issecret = issecret
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case header
+        case question
+        case options
+        case multiselect = "multiSelect"
+        case isother = "isOther"
+        case issecret = "isSecret"
+    }
+}
+
+public struct QuestionAnswers: Codable, Sendable {
+    public let answers: [String: AnyCodable]
+
+    public init(
+        answers: [String: AnyCodable])
+    {
+        self.answers = answers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case answers
+    }
+}
+
+public struct QuestionRequestParams: Codable, Sendable {
+    public let id: String?
+    public let questions: [QuestionRequestQuestion]
+    public let agentid: String?
+    public let sessionkey: String?
+    public let timeoutms: Int?
+
+    public init(
+        id: String? = nil,
+        questions: [QuestionRequestQuestion],
+        agentid: String? = nil,
+        sessionkey: String? = nil,
+        timeoutms: Int? = nil)
+    {
+        self.id = id
+        self.questions = questions
+        self.agentid = agentid
+        self.sessionkey = sessionkey
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case questions
+        case agentid = "agentId"
+        case sessionkey = "sessionKey"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct QuestionRequestResult: Codable, Sendable {
+    public let id: String
+    public let expiresatms: Int
+
+    public init(
+        id: String,
+        expiresatms: Int)
+    {
+        self.id = id
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case expiresatms = "expiresAtMs"
+    }
+}
+
+public struct QuestionWaitAnswerParams: Codable, Sendable {
+    public let id: String
+    public let timeoutms: Int?
+
+    public init(
+        id: String,
+        timeoutms: Int? = nil)
+    {
+        self.id = id
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct QuestionGetParams: Codable, Sendable {
+    public let id: String
+
+    public init(
+        id: String)
+    {
+        self.id = id
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct QuestionGetResult: Codable, Sendable {
+    public let question: QuestionRequestedEvent
+
+    public init(
+        question: QuestionRequestedEvent)
+    {
+        self.question = question
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case question
+    }
+}
+
+public struct QuestionListParams: Codable, Sendable {}
+
+public struct QuestionListResult: Codable, Sendable {
+    public let questions: [QuestionRequestedEvent]
+
+    public init(
+        questions: [QuestionRequestedEvent])
+    {
+        self.questions = questions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case questions
     }
 }
 

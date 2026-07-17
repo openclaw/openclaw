@@ -9488,6 +9488,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Example
   - H2: Related
 
+## tools/ask-user.md
+
+- Route: /tools/ask-user
+- Headings:
+  - H2: Answer a question
+  - H2: Timeout and no answer
+  - H2: Tool schema
+  - H2: Model guidance
+
 ## tools/brave-search.md
 
 - Route: /tools/brave-search

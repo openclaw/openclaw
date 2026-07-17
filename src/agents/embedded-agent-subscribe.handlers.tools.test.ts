@@ -49,6 +49,9 @@ async function activateAskUserPrompt(toolCallId: string, args: unknown) {
     sessionKey: "agent:unit-session",
     gatewayCall: async (method, _opts, params) => {
       if (method === "question.request") {
+        if (!params || typeof params !== "object" || !("id" in params)) {
+          throw new Error("question.request params missing id");
+        }
         questionId = String(params.id);
         return { id: questionId };
       }
