@@ -95,6 +95,15 @@ export const getSlackHandlers = () => ensureSlackTestRuntime().handlers;
 
 export const getSlackClient = () => ensureSlackTestRuntime().client;
 
+export function disposeSlackTestRuntime(): void {
+  const globalState = globalThis as {
+    __slackHandlers?: Map<string, SlackHandler>;
+    __slackClient?: SlackClient;
+  };
+  Reflect.deleteProperty(globalState, "__slackHandlers");
+  Reflect.deleteProperty(globalState, "__slackClient");
+}
+
 function ensureSlackTestRuntime(): {
   handlers: Map<string, SlackHandler>;
   client: SlackClient;

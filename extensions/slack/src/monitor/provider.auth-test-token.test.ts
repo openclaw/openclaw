@@ -1,20 +1,47 @@
 // Slack tests cover auth.test token handling during provider boot.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  disposeSlackTestRuntime,
   flush,
   getSlackClient,
   getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
-  runSlackMessageOnce,
-  startSlackMonitor,
+  startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
   useRealSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 
 const { monitorSlackProvider } = await import("./provider.js");
+
+type StartedSlackMonitor = ReturnType<typeof startSlackMonitorUntracked>;
+
+const startedMonitors: StartedSlackMonitor[] = [];
+
+function trackSlackMonitor<T extends StartedSlackMonitor>(monitor: T): T {
+  startedMonitors.push(monitor);
+  return monitor;
+}
+
+function startSlackMonitor(...args: Parameters<typeof startSlackMonitorUntracked>) {
+  return trackSlackMonitor(startSlackMonitorUntracked(...args));
+}
+
+async function runTrackedSlackMessageOnce(
+  provider: Parameters<typeof startSlackMonitorUntracked>[0],
+  args: unknown,
+  opts?: Parameters<typeof startSlackMonitorUntracked>[1],
+) {
+  const monitor = startSlackMonitor(provider, opts);
+  try {
+    const handler = await getSlackHandlerOrThrow("message");
+    await handler(args);
+  } finally {
+    await stopSlackMonitor(monitor);
+  }
+}
 
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
@@ -64,8 +91,19 @@ beforeEach(() => {
   resetSlackTestState();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const monitors = startedMonitors.splice(0);
+  for (const monitor of monitors) {
+    monitor.controller.abort();
+  }
+  await Promise.allSettled(monitors.map((monitor) => monitor.run));
+  getSlackClient().auth.test.mockReset();
+  resetSlackTestState();
   vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  disposeSlackTestRuntime();
 });
 
 describe("auth.test boot call", () => {
@@ -141,7 +179,7 @@ describe("auth.test boot call", () => {
     const { replyMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "unexpected" });
 
-    await runSlackMessageOnce(
+    await runTrackedSlackMessageOnce(
       monitorSlackProvider,
       {
         event: {
@@ -318,8 +356,9 @@ describe("user identity provider transport", () => {
       config: config as never,
       abortSignal: controller.signal,
     });
+    const monitor = trackSlackMonitor({ controller, run });
     await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
-    return { controller, run };
+    return monitor;
   }
 
   it("starts socket transport with the user token and no bot token", async () => {
@@ -339,6 +378,7 @@ describe("user identity provider transport", () => {
       abortSignal: controller.signal,
       runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
     });
+    const monitor = trackSlackMonitor({ controller, run });
     await vi.waitFor(() => expect(getSlackTestState().appConstructorArgs).toBeDefined());
 
     expect(getSlackTestState().appConstructorArgs).toMatchObject({
@@ -354,7 +394,7 @@ describe("user identity provider transport", () => {
       expect.stringContaining("replace it with a Bot User OAuth Token"),
     );
 
-    await stopSlackMonitor({ controller, run });
+    await stopSlackMonitor(monitor);
   });
 
   it("uses the authenticated human id as the mention target", async () => {
