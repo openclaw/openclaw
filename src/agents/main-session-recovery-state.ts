@@ -187,6 +187,24 @@ function inspectMainSessionRecovery(params: {
   };
 }
 
+function inspectMainSessionRecoveryForAdmission(params: {
+  entry: SessionEntry;
+  lifecycleGeneration: string;
+  sessionKey: string;
+}): MainSessionRecoveryView {
+  if (
+    params.entry.status === "running" &&
+    params.entry.abortedLastRun === true &&
+    isMainRestartRecoveryCandidate(params.entry, params.sessionKey) &&
+    !params.entry.mainRestartRecovery
+  ) {
+    // Older interrupted rows still quarantine foreground work, but only the
+    // Gateway startup owner may assign their durable recovery cycle.
+    return { status: "blocked" };
+  }
+  return inspectMainSessionRecovery(params);
+}
+
 export function transitionMainSessionRecovery(
   entry: SessionEntry,
   command: MainSessionRecoveryCommand,
@@ -208,6 +226,16 @@ export function transitionMainSessionRecovery(
       }
       entry.updatedAt = command.now;
       return { kind: "applied" };
+    }
+    case "inspect": {
+      return {
+        kind: "observed",
+        view: inspectMainSessionRecoveryForAdmission({
+          entry,
+          lifecycleGeneration: command.lifecycleGeneration,
+          sessionKey: command.sessionKey,
+        }),
+      };
     }
     case "observe": {
       if (

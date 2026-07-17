@@ -69,6 +69,29 @@ describe("main session recovery state", () => {
     expect(entry.mainRestartRecovery).toEqual(recoveryState({ cycleId: "legacy-cycle" }));
   });
 
+  it("inspects a live reservation without adopting or releasing it", () => {
+    const entry = interruptedEntry({
+      mainRestartRecovery: recoveryState({
+        chargedAttempts: 1,
+        reservation: {
+          attempt: 1,
+          lifecycleGeneration: "gateway-generation",
+          runId: "recovery-1",
+        },
+      }),
+    });
+    const before = structuredClone(entry);
+
+    expect(
+      transitionMainSessionRecovery(entry, {
+        kind: "inspect",
+        lifecycleGeneration: "standalone-generation",
+        sessionKey,
+      }),
+    ).toEqual({ kind: "observed", view: { status: "blocked" } });
+    expect(entry).toEqual(before);
+  });
+
   it("marks without charging and preserves generation-scoped lifecycle fences", () => {
     const entry = interruptedEntry({
       restartRecoveryRuns: [

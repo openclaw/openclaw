@@ -86,6 +86,7 @@ function currentGenerationRequiredBy(command: MainSessionRecoveryCommand): strin
   switch (command.kind) {
     case "admit_recovery":
     case "claim_foreground":
+    case "inspect":
     case "mark_admitted_recovery_interrupted":
     case "observe":
     case "prepare_attempt":
@@ -177,7 +178,7 @@ export async function commitMainSessionRecovery(params: {
             ? ownerClaim
             : { ...ownerClaim, sessionKey: candidate.sessionKey };
       } else if (
-        params.command.kind === "observe" &&
+        (params.command.kind === "observe" || params.command.kind === "inspect") &&
         params.command.sessionKey !== candidate.sessionKey
       ) {
         command = { ...params.command, sessionKey: candidate.sessionKey };
@@ -284,8 +285,7 @@ export async function inspectMainSessionRecoveryRequired(params: {
   target: MainSessionRecoveryStoreTarget;
 }): Promise<MainSessionRecoveryInspectionResult> {
   const command = {
-    kind: "observe" as const,
-    cycleId: randomUUID(),
+    kind: "inspect" as const,
     lifecycleGeneration: params.lifecycleGeneration,
     sessionKey: params.target.sessionKey,
   };

@@ -66,6 +66,11 @@ export type MainSessionRecoveryCommand =
       sessionKey: string;
     }
   | {
+      kind: "inspect";
+      lifecycleGeneration: string;
+      sessionKey: string;
+    }
+  | {
       kind: "prepare_attempt";
       attempt: number;
       lifecycleGeneration: string;

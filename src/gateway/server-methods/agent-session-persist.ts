@@ -172,6 +172,15 @@ export async function persistAgentSessionPhase(params: {
               archivedDuringStoreUpdateError = archivedError;
               throw new Error(archivedError);
             }
+            if (
+              !params.isRestartRecoveryResumeRun &&
+              (freshEntry as InternalSessionEntry | undefined)?.mainRestartRecovery?.tombstone
+            ) {
+              restartRecoveryReservationConflict =
+                `Session "${params.canonicalSessionKey}" is quarantined after restart recovery ` +
+                "exhaustion; use /new or /reset before starting new work.";
+              throw new Error(restartRecoveryReservationConflict);
+            }
             let entryForPatch = freshEntry;
             if (params.restoredCronContinuationIdentity) {
               const marker = freshEntry?.cronRunContinuation;
