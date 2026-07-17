@@ -1,3 +1,7 @@
+// The detached watchdog has no parent SSH deadline. Bound and retry its process
+// identity probe so a transient stall cannot leave a quiescence lease frozen forever.
+const REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS = 1_000;
+
 const REMOTE_QUIESCENCE_PS_JS = String.raw`function processes() {
   const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
     encoding: "utf8",
@@ -217,7 +221,7 @@ try {
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
-  const check = () => {
+  const check = async () => {
     try {
       const watchdogFs = require("node:fs");
       const lease = JSON.parse(watchdogFs.readFileSync(watchedLeasePath, "utf8"));
@@ -246,22 +250,38 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
         setTimeout(check, Math.min(latest.expiresAtMs - Date.now(), 60 * 1000));
         return;
       }
+      const watchdogChildProcess = require("node:child_process");
+      const identity = (pid) => new Promise((resolve, reject) => {
+        let settled = false; let deadline; const child = watchdogChildProcess.execFile("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }, (error, stdout) => {
+          if (settled) return; settled = true; clearTimeout(deadline);
+          if (!error) resolve(stdout.trim() || null); else if (error.code === 1) resolve(null); else reject(error);
+        });
+        deadline = setTimeout(() => {
+          if (settled) return; settled = true; child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
+          try { child.kill("SIGKILL"); } catch {} reject(Object.assign(new Error("process identity probe timed out"), { code: "ETIMEDOUT" }));
+        }, ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS});
+      });
       for (const entry of lease.processes) {
         if (
           !entry ||
           !Number.isSafeInteger(entry.pid) ||
           entry.pid < 1 ||
           typeof entry.start !== "string" ||
-          processIdentity(entry.pid) !== entry.start
+          (await identity(entry.pid)) !== entry.start
         ) continue;
         try { process.kill(entry.pid, "SIGCONT"); } catch (error) { if (!error || error.code !== "ESRCH") throw error; }
       }
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
-      if (!error || error.code !== "ENOENT") process.exitCode = 1;
+      if (error && error.code === "ENOENT") return;
+      if (error && error.code === "ETIMEDOUT") {
+        setTimeout(check, ${REMOTE_WATCHDOG_PROCESS_PROBE_TIMEOUT_MS});
+        return;
+      }
+      process.exitCode = 1;
     }
   };
-  check();
+  void check();
 }
 process.stdout.write("quiesced " + nonce + "\n");
 `;
