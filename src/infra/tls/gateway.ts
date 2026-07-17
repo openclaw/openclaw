@@ -1,6 +1,6 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +20,7 @@ const GATEWAY_TLS_LINK_RETRY_DELAY_MS = 25;
 const TRANSIENT_LINK_ERROR_CODES = new Set(["EBUSY", "EINTR", "EIO"]);
 
 type GeneratedTlsOutput = {
+  contentDigest: string;
   finalPath: string;
   identity: Stats;
   published: boolean;
@@ -31,6 +32,8 @@ type GeneratedTlsRecovery = {
   error?: unknown;
   preserveStageDir: boolean;
 };
+
+type GeneratedTlsOutputState = "changed" | "generated" | "missing" | "replaced";
 
 class TlsPublicationError extends Error {
   readonly preserveStageDirs: ReadonlySet<string>;
@@ -45,10 +48,17 @@ class TlsPublicationError extends Error {
   }
 }
 
-async function linkGeneratedTlsOutput(output: GeneratedTlsOutput): Promise<void> {
+function digestTlsContent(content: Buffer): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+async function publishGeneratedTlsOutput(output: GeneratedTlsOutput): Promise<void> {
+  // Hard links provide atomic no-replace publication without exposing partial key bytes.
+  // Filesystems without that guarantee fail closed instead of using a writable fallback.
   for (let attempt = 1; attempt <= GATEWAY_TLS_LINK_ATTEMPTS; attempt += 1) {
     try {
       await fs.link(output.stagedPath, output.finalPath);
+      output.published = true;
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -58,6 +68,47 @@ async function linkGeneratedTlsOutput(output: GeneratedTlsOutput): Promise<void>
       await delay(GATEWAY_TLS_LINK_RETRY_DELAY_MS);
     }
   }
+}
+
+async function inspectGeneratedTlsOutput(
+  output: GeneratedTlsOutput,
+  filePath: string,
+): Promise<GeneratedTlsOutputState> {
+  let currentIdentity: Stats;
+  try {
+    currentIdentity = await fs.lstat(filePath);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "changed";
+  }
+  if (!currentIdentity.isFile() || !sameFileIdentity(output.identity, currentIdentity)) {
+    return "replaced";
+  }
+
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ELOOP" ? "replaced" : "changed";
+  }
+  let state: GeneratedTlsOutputState;
+  try {
+    const openedIdentity = await handle.stat();
+    if (!sameFileIdentity(output.identity, openedIdentity)) {
+      state = "replaced";
+    } else {
+      const contents = await handle.readFile();
+      state = digestTlsContent(contents) === output.contentDigest ? "generated" : "changed";
+    }
+  } catch {
+    state = "changed";
+  }
+  try {
+    await handle.close();
+  } catch {
+    return "changed";
+  }
+  return state;
 }
 
 async function restoreRecoveredOutput(
@@ -81,11 +132,13 @@ async function restoreRecoveredOutput(
   }
   try {
     await fs.link(recoveryPath, finalPath);
-  } catch (linkError) {
+  } catch {
     try {
       await fs.copyFile(recoveryPath, finalPath, fsConstants.COPYFILE_EXCL);
     } catch (copyError) {
-      throw new AggregateError([linkError, copyError], "failed to restore recovered tls output");
+      throw new Error("failed to restore recovered tls output after hard-link failure", {
+        cause: copyError,
+      });
     }
   }
 }
@@ -97,17 +150,14 @@ async function recoverPublishedTlsOutput(
     return { preserveStageDir: false };
   }
   const recoveryPath = path.join(output.stageDir, `published-${path.basename(output.finalPath)}`);
-  let currentIdentity: Stats;
-  try {
-    currentIdentity = await fs.lstat(output.finalPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { preserveStageDir: false };
-    }
-    return { error, preserveStageDir: false };
-  }
-  if (!sameFileIdentity(output.identity, currentIdentity)) {
+  const currentState = await inspectGeneratedTlsOutput(output, output.finalPath);
+  if (currentState === "missing" || currentState === "replaced") {
     return { preserveStageDir: false };
+  }
+  // Identity alone cannot detect in-place writes to a hard-linked output.
+  // Keep both paths when content changed so rollback never deletes operator data.
+  if (currentState === "changed") {
+    return { preserveStageDir: true };
   }
   try {
     await fs.rename(output.finalPath, recoveryPath);
@@ -118,14 +168,18 @@ async function recoverPublishedTlsOutput(
     return { error, preserveStageDir: true };
   }
 
+  const recoveredState = await inspectGeneratedTlsOutput(output, recoveryPath);
+  if (recoveredState === "generated") {
+    // An already-open writer can still mutate this inode after the final check.
+    // Keep the recovery pathname so rollback never discards those late writes.
+    return { preserveStageDir: true };
+  }
+
   let recoveredIdentity: Stats;
   try {
     recoveredIdentity = await fs.lstat(recoveryPath);
   } catch (error) {
     return { error, preserveStageDir: true };
-  }
-  if (sameFileIdentity(output.identity, recoveredIdentity)) {
-    return { preserveStageDir: false };
   }
   try {
     await restoreRecoveredOutput(recoveryPath, output.finalPath, recoveredIdentity);
@@ -138,8 +192,7 @@ async function recoverPublishedTlsOutput(
 async function publishGeneratedTlsOutputs(outputs: GeneratedTlsOutput[]): Promise<void> {
   try {
     for (const output of outputs) {
-      await linkGeneratedTlsOutput(output);
-      output.published = true;
+      await publishGeneratedTlsOutput(output);
     }
   } catch (error) {
     const preserveStageDirs = new Set<string>();
@@ -239,6 +292,7 @@ async function generateSelfSignedCert(params: {
     tls.createSecureContext({ cert, key, minVersion: "TLSv1.3" });
     await publishGeneratedTlsOutputs([
       {
+        contentDigest: digestTlsContent(Buffer.from(cert, "utf8")),
         finalPath: params.certPath,
         identity: certIdentity,
         published: false,
@@ -246,6 +300,7 @@ async function generateSelfSignedCert(params: {
         stagedPath: stagedCertPath,
       },
       {
+        contentDigest: digestTlsContent(Buffer.from(key, "utf8")),
         finalPath: params.keyPath,
         identity: keyIdentity,
         published: false,

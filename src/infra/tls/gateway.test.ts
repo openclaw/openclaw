@@ -225,6 +225,31 @@ describe("loadGatewayTlsRuntime", () => {
     }
   });
 
+  it("fails closed when atomic hard-link publication is unsupported", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const linkSpy = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("publication failed");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readdir(dir)).resolves.toEqual([]);
+  });
+
   it("preserves a file replaced during publication", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
@@ -260,6 +285,130 @@ describe("loadGatewayTlsRuntime", () => {
       "gateway-cert.pem",
       "gateway-key.pem",
     ]);
+  });
+
+  it("preserves a published file modified in place during publication", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(certPath, "operator-owned-cert\n");
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe("operator-owned-cert\n");
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    const entries = await fs.readdir(dir);
+    const recoveryDir = requireSingleRecoveryDir(entries);
+    await expect(fs.readFile(path.join(dir, recoveryDir, "cert.pem"), "utf8")).resolves.toBe(
+      "operator-owned-cert\n",
+    );
+  });
+
+  it("contains output-inspection close failures during rollback", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        await fs.writeFile(keyPath, "operator-owned-key\n", { flag: "wx" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+    const realOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      if (path.resolve(String(filePath)) === certPath && typeof flags === "number") {
+        vi.spyOn(handle, "close").mockRejectedValueOnce(
+          Object.assign(new Error("close failed"), { code: "EIO" }),
+        );
+      }
+      return handle;
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      openSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.readFile(certPath, "utf8")).resolves.toBe(CERT_PEM);
+    await expect(fs.readFile(keyPath, "utf8")).resolves.toBe("operator-owned-key\n");
+    expect(requireSingleRecoveryDir(await fs.readdir(dir))).toContain("gateway-tls-cert");
+  });
+
+  it("preserves writes through an open descriptor after rollback inspection", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+    runExecMock.mockImplementation(async (_command: string, args: string[]) => {
+      await writeGeneratedTlsPair(args);
+    });
+    const realOpen = fs.open.bind(fs);
+    let writerHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const handle = await realOpen(filePath, flags, mode);
+      if (path.basename(String(filePath)).startsWith("published-gateway-cert")) {
+        const realClose = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementationOnce(async () => {
+          await realClose();
+          await writerHandle?.truncate(0);
+          await writerHandle?.writeFile("operator-after-check\n");
+          await writerHandle?.sync();
+        });
+      }
+      return handle;
+    });
+    const realLink = fs.link.bind(fs);
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (existingPath, newPath) => {
+      if (path.resolve(String(newPath)) === keyPath) {
+        writerHandle = await fs.open(certPath, "r+");
+        throw Object.assign(new Error("key publication failed"), { code: "EEXIST" });
+      }
+      return await realLink(existingPath, newPath);
+    });
+
+    let result: Awaited<ReturnType<typeof loadGatewayTlsRuntime>> | undefined;
+    try {
+      result = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
+    } finally {
+      await writerHandle?.close();
+      linkSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+
+    expect(result?.enabled).toBe(false);
+    expect(result?.error).toContain("concurrent output backup preserved under");
+    await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const recoveryDir = requireSingleRecoveryDir(await fs.readdir(dir));
+    await expect(
+      fs.readFile(path.join(dir, recoveryDir, "published-gateway-cert.pem"), "utf8"),
+    ).resolves.toBe("operator-after-check\n");
   });
 
   it("restores a protected file replaced after the rollback ownership check", async () => {
@@ -417,9 +566,13 @@ describe("loadGatewayTlsRuntime", () => {
     expect(linkCount).toBe(4);
     expect(failedResult.enabled).toBe(false);
     expect(failedResult.error).toContain("publication failed");
+    expect(failedResult.error).toContain("concurrent output backup preserved under");
     await expect(fs.access(certPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(keyPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.readdir(dir)).resolves.toEqual([]);
+    const recoveryDir = requireSingleRecoveryDir(await fs.readdir(dir));
+    await expect(
+      fs.readdir(path.join(dir, recoveryDir)).then((items) => items.toSorted()),
+    ).resolves.toEqual(["cert.pem", "published-gateway-cert.pem"]);
 
     const retryResult = await loadGatewayTlsRuntime({ enabled: true, certPath, keyPath });
 
