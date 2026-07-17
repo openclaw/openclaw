@@ -2,13 +2,28 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
-import {
-  createOpenAICompatibleEmbeddingProvider,
-  openAICompatibleEmbeddingProviderAdapter,
-} from "./openai-compatible-embedding-provider.js";
+import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
+
+async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProviderCreateOptions) {
+  const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
+  if (!result.provider) {
+    throw new Error("expected OpenAI-compatible embedding provider");
+  }
+  const cacheKeyData = result.runtime?.cacheKeyData as
+    | { baseUrl?: string; headers?: Record<string, string> }
+    | undefined;
+  return {
+    provider: result.provider,
+    client: {
+      baseUrl: cacheKeyData?.baseUrl,
+      headers: cacheKeyData?.headers ?? {},
+    },
+  };
+}
 
 type CapturedRequest = {
   method: string | undefined;
@@ -453,7 +468,6 @@ describe("openai-compatible generic embedding provider", () => {
     expect(provider.model).toBe("text-embedding-bge-m3");
     expect(provider.dimensions).toBe(1024);
     expect(client.baseUrl).toBe(server.baseUrl);
-    expect(client.headers.authorization).toBe(`Bearer ${token}`);
     expect(server.requests).toHaveLength(0);
 
     await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 1]);
@@ -493,15 +507,14 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
 
-    const outcome = await Promise.race([
+    const outcome = await withTestTimeout(
       provider.embed("hello").then(
         () => ({ type: "resolved" as const }),
         (error: unknown) => ({ type: "rejected" as const, error }),
       ),
-      new Promise<{ type: "timed-out" }>((resolve) => {
-        setTimeout(() => resolve({ type: "timed-out" }), 1_000);
-      }),
-    ]);
+      1_000,
+      "timed out waiting for bounded embedding error",
+    );
 
     if (outcome.type !== "rejected") {
       throw new Error(`expected embedding request to reject, got ${outcome.type}`);
@@ -511,12 +524,11 @@ describe("openai-compatible generic embedding provider", () => {
       `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
-      Promise.race([
+      withTestTimeout(
         server.closed.then(() => "closed" as const),
-        new Promise<"open">((resolve) => {
-          setTimeout(() => resolve("open"), 1_000);
-        }),
-      ]),
+        1_000,
+        "timed out waiting for embedding error server to close",
+      ),
     ).resolves.toBe("closed");
   });
 
@@ -557,12 +569,11 @@ describe("openai-compatible generic embedding provider", () => {
       "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
     );
     await expect(
-      Promise.race([
+      withTestTimeout(
         server.closed.then(() => "closed" as const),
-        new Promise<"open">((resolve) => {
-          setTimeout(() => resolve("open"), 1_000);
-        }),
-      ]),
+        1_000,
+        "timed out waiting for oversized response server to close",
+      ),
     ).resolves.toBe("closed");
     expect(server.getBodyBytesSent()).toBeLessThan(server.getPlannedBodyBytes() / 2);
   });

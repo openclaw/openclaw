@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
   configureSqliteWalMaintenance,
@@ -24,7 +24,7 @@ function createMockDb(): DatabaseSync {
       get: vi.fn(() =>
         sql.includes("wal_checkpoint")
           ? { busy: 0, log: 0, checkpointed: 0 }
-          : { journal_mode: "delete" },
+          : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
       ),
     })),
   } as unknown as DatabaseSync;
@@ -47,52 +47,6 @@ describe("sqlite WAL maintenance", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("enables WAL mode and explicit autocheckpointing", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      2,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-  });
-
-  it("enables fullfsync barriers for WAL checkpoints on macOS", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-  });
-
-  it("continues WAL setup if macOS checkpoint fullfsync is unavailable", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.mocked(db["exec"]).mockImplementation((sql) => {
-      if (sql.includes("checkpoint_fullfsync")) {
-        throw new Error("unsupported pragma");
-      }
-    });
-
-    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
   });
 
   it("uses rollback journaling for databases on NFS-backed volumes", () => {
@@ -188,7 +142,7 @@ describe("sqlite WAL maintenance", () => {
     });
 
     expect(realpath).toHaveBeenCalledWith(databasePath);
-    expect(db["prepare"]).not.toHaveBeenCalled();
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
     expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
   });
 
@@ -228,6 +182,45 @@ describe("sqlite WAL maintenance", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("accepts SQLite's memory journal for an in-memory database", () => {
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(":memory:");
+    try {
+      const maintenance = configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databaseLabel: "in-memory-test-db",
+      });
+
+      expect(db.prepare("PRAGMA journal_mode;").get()).toEqual({ journal_mode: "memory" });
+      expect(maintenance.checkpoint()).toBe(true);
+      expect(maintenance.close()).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a memory journal for a file-backed database", () => {
+    const db = createMockDb();
+    vi.mocked(db["prepare"]).mockImplementation(
+      (sql) =>
+        ({
+          all: vi.fn(() =>
+            sql === "PRAGMA database_list;"
+              ? [{ seq: 0, name: "main", file: "/tmp/file-backed.sqlite" }]
+              : [],
+          ),
+          get: vi.fn(() => ({ journal_mode: "memory" })),
+        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+    );
+
+    expect(() =>
+      configureSqliteWalMaintenance(db, {
+        checkpointIntervalMs: 0,
+        databaseLabel: "file-backed-test-db",
+      }),
+    ).toThrow("file-backed-test-db could not enable WAL; SQLite kept journal_mode=memory");
   });
 
   it("uses mountinfo filesystem names when statfs magic is not enough", () => {
@@ -520,7 +513,7 @@ describe("sqlite WAL maintenance", () => {
           get: vi.fn(() =>
             sql.includes("wal_checkpoint")
               ? { busy: 1, log: 4, checkpointed: 3 }
-              : { journal_mode: "delete" },
+              : { journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" },
           ),
         }) as unknown as ReturnType<DatabaseSync["prepare"]>,
     );
@@ -584,7 +577,7 @@ describe("sqlite WAL maintenance", () => {
         throw error;
       }
       return {
-        get: vi.fn(() => ({ journal_mode: "delete" })),
+        get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "wal" : "delete" })),
       } as unknown as ReturnType<DatabaseSync["prepare"]>;
     });
 
@@ -595,27 +588,6 @@ describe("sqlite WAL maintenance", () => {
 
     expect(maintenance.checkpoint()).toBe(false);
     expect(onCheckpointError).toHaveBeenCalledWith(error);
-  });
-
-  it("configures connection pragmas before WAL maintenance", () => {
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-
-    configureSqliteConnectionPragmas(db, {
-      busyTimeoutMs: 30_000,
-      checkpointIntervalMs: 0,
-      foreignKeys: true,
-      synchronous: "NORMAL",
-    });
-
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 30000;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA journal_mode = WAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(
-      3,
-      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
-    );
-    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA synchronous = NORMAL;");
-    expect(db["exec"]).toHaveBeenNthCalledWith(5, "PRAGMA foreign_keys = ON;");
   });
 
   it("retries the WAL transition when SQLite bypasses the busy handler", () => {
@@ -646,6 +618,26 @@ describe("sqlite WAL maintenance", () => {
     ]);
   });
 
+  it("rejects a WAL transition that SQLite silently declines", () => {
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.mocked(db["prepare"]).mockImplementation(
+      (sql) =>
+        ({
+          get: vi.fn(() => ({ journal_mode: sql === "PRAGMA journal_mode;" ? "delete" : "wal" })),
+        }) as unknown as ReturnType<DatabaseSync["prepare"]>,
+    );
+
+    expect(() =>
+      configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: 50,
+        checkpointIntervalMs: 0,
+        databaseLabel: "test-db",
+      }),
+    ).toThrow("test-db could not enable WAL; SQLite kept journal_mode=delete");
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode;");
+  });
+
   it("configures lock retry before inspecting a fresh database header", () => {
     const db = createMockDb();
     vi.mocked(db["prepare"]).mockImplementation(
@@ -661,7 +653,10 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA page_count");
     expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA auto_vacuum = INCREMENTAL;");
     expect(vi.mocked(db["exec"]).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+        'vi.mocked(db["prepare"]).mock.invocationCallOrder[0] test invariant',
+      ),
     );
   });
 

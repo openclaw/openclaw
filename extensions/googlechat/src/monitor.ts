@@ -448,13 +448,6 @@ async function processMessageWithPipeline(params: {
   });
 }
 
-export const testing = {
-  processMessageWithPipeline,
-  resolveGoogleChatBotLoopProtection,
-  resolveGoogleChatBotLoopProtectionConfig,
-  shouldSuppressGoogleChatBotLoop,
-};
-
 async function downloadAttachment(
   attachment: GoogleChatAttachment,
   account: ResolvedGoogleChatAccount,
@@ -534,4 +527,3 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
-export { testing as __testing };

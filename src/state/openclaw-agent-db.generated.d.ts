@@ -61,7 +61,7 @@ export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
-  id: string | null;
+  id: string;
   model: string;
   path: string;
   source: Generated<string>;
@@ -71,7 +71,7 @@ export interface MemoryIndexChunks {
 }
 
 export interface MemoryIndexMeta {
-  key: string | null;
+  key: string;
   value: string;
 }
 
@@ -111,6 +111,7 @@ export interface SessionEntries {
   entry_json: string;
   session_id: string;
   session_key: string;
+  status: string | null;
   updated_at: number;
 }
 
@@ -118,6 +119,13 @@ export interface SessionRoutes {
   session_id: string;
   session_key: string;
   updated_at: number;
+}
+
+export interface SessionTranscriptActiveEvents {
+  active_position: number;
+  event_seq: number;
+  message_position: number | null;
+  session_id: string;
 }
 
 export interface SessionTranscriptFts {
@@ -159,6 +167,8 @@ export interface SessionTranscriptFtsIdx {
 }
 
 export interface SessionTranscriptIndexState {
+  active_event_count: Generated<number>;
+  active_message_count: Generated<number>;
   indexed_seq: number;
   leaf_event_id: string | null;
   needs_rebuild: Generated<number>;
@@ -168,16 +178,20 @@ export interface SessionTranscriptIndexState {
 
 export interface Sessions {
   account_id: string | null;
+  acp_owned: Generated<number>;
   agent_harness_id: string | null;
   channel: string | null;
   chat_type: string | null;
   created_at: number;
   display_name: string | null;
   ended_at: number | null;
+  hook_external_content_source: string | null;
   model: string | null;
   model_provider: string | null;
   parent_session_key: string | null;
+  plugin_owner_id: string | null;
   primary_conversation_id: string | null;
+  session_entry_provenance: Generated<number>;
   session_id: string;
   session_key: string;
   session_scope: Generated<string>;
@@ -228,6 +242,7 @@ export interface DB {
   session_conversations: SessionConversations;
   session_entries: SessionEntries;
   session_routes: SessionRoutes;
+  session_transcript_active_events: SessionTranscriptActiveEvents;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

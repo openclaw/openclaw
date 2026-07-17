@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 struct GatewaySessionDefaultsRecord: Codable {
@@ -47,15 +48,6 @@ struct SessionTokenStats {
     var percentUsed: Int? {
         guard self.contextTokens > 0, self.total > 0 else { return nil }
         return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
-    }
-
-    var summary: String {
-        let parts = ["in \(input)", "out \(output)", "total \(total)"]
-        var text = parts.joined(separator: " | ")
-        if let percentUsed {
-            text += " (\(percentUsed)% of \(self.contextTokens))"
-        }
-        return text
     }
 
     static func formatKTokens(_ value: Int) -> String {
@@ -201,15 +193,6 @@ extension SessionRow {
     }
 }
 
-extension String? {
-    var isNilOrEmpty: Bool {
-        switch self {
-        case .none: true
-        case let .some(value): value.isEmpty
-        }
-    }
-}
-
 enum SessionLoadError: LocalizedError {
     case gatewayUnavailable(String)
     case decodeFailed(String)
@@ -246,16 +229,16 @@ enum SessionLoader {
         includeGlobal: Bool = true,
         includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
     {
-        var params: [String: AnyHashable] = [
-            "includeGlobal": AnyHashable(includeGlobal),
-            "includeUnknown": AnyHashable(includeUnknown),
-        ]
-        if let activeMinutes { params["activeMinutes"] = AnyHashable(activeMinutes) }
-        if let limit { params["limit"] = AnyHashable(limit) }
-
         let data: Data
         do {
-            data = try await ControlChannel.shared.request(method: "sessions.list", params: params)
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: limit,
+                search: nil,
+                archived: false,
+                includeGlobal: includeGlobal,
+                includeUnknown: includeUnknown,
+                activeMinutes: activeMinutes)
+            data = try await ControlChannel.shared.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
@@ -308,10 +291,6 @@ enum SessionLoader {
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
         return SessionStoreSnapshot(storePath: decoded.path, defaults: defaults, rows: rows)
-    }
-
-    static func loadRows() async throws -> [SessionRow] {
-        try await self.loadSnapshot().rows
     }
 
     private static func standardize(_ path: String) -> String {

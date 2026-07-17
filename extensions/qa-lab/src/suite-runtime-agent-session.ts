@@ -3,9 +3,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  formatSqliteSessionFileMarker,
   listSessionEntries,
   loadTranscriptEventsSync,
+  resolveStorePath,
+  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
@@ -26,12 +30,20 @@ type QaGatewayCallEnv = Pick<
   "gateway" | "primaryModel" | "alternateModel" | "providerMode"
 >;
 
-const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
-let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
+type QaSessionTranscriptSeedParams = {
+  label?: string;
+  messages: readonly {
+    role: "assistant" | "user";
+    text: string;
+    timestamp: number;
+  }[];
+  sessionId: string;
+  sessionKey: string;
+  updatedAt: number;
+};
 
-function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
-  return sessionStoreLockRetryDelaysMsForTests ?? SESSION_STORE_LOCK_RETRY_DELAYS_MS;
-}
+const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 type QaSessionTranscriptSummary = {
   assistantToolCallCounts: Record<string, number>;
@@ -53,6 +65,15 @@ function isSessionStoreLockTimeout(error: unknown) {
     text.includes("SessionWriteLockStaleError") ||
     text.includes("session file locked") ||
     text.includes("session file lock stale")
+  );
+}
+
+function isSessionStoreFtsSettleRace(error: unknown) {
+  const text = formatErrorMessage(error);
+  return (
+    text.includes("SQLite integrity_check failed") &&
+    text.includes("fts5: checksum mismatch") &&
+    text.includes("session_transcript_fts")
   );
 }
 
@@ -140,7 +161,7 @@ async function callGatewayWithSessionStoreLockRetry<T>(
   params: Record<string, unknown>,
   options: { timeoutMs: number },
 ) {
-  const retryDelaysMs = resolveSessionStoreLockRetryDelaysMs();
+  const retryDelaysMs = SESSION_STORE_LOCK_RETRY_DELAYS_MS;
   for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
       return (await env.gateway.call(method, params, options)) as T;
@@ -220,12 +241,89 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
   };
 }
 
-async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  return Object.fromEntries(
-    listSessionEntries({ agentId: "qa", env: qaSessionRuntimeEnv(env.gateway.tempRoot) }).map(
-      ({ sessionKey, entry }) => [sessionKey, entry as QaRawSessionStoreEntry],
-    ),
-  );
+async function seedQaSessionTranscript(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: QaSessionTranscriptSeedParams,
+): Promise<void> {
+  const sessionId = params.sessionId.trim();
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionId || !sessionKey) {
+    throw new Error("seedQaSessionTranscript requires sessionId and sessionKey");
+  }
+  if (params.messages.length === 0) {
+    throw new Error("seedQaSessionTranscript requires at least one message");
+  }
+
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "qa",
+    env: runtimeEnv,
+  });
+  const label = params.label?.trim();
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: runtimeEnv,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "qa",
+        sessionId,
+        storePath,
+      }),
+      sessionId,
+      updatedAt: params.updatedAt,
+      ...(label ? { origin: { label } } : {}),
+    },
+  });
+
+  for (const seed of params.messages) {
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: runtimeEnv,
+      sessionId,
+      sessionKey,
+      storePath,
+      now: seed.timestamp,
+      message: {
+        role: seed.role,
+        timestamp: seed.timestamp,
+        content: [{ type: "text", text: seed.text }],
+      },
+    });
+    if (!appended?.appended) {
+      throw new Error(`failed to seed QA session transcript for ${sessionKey}`);
+    }
+  }
+}
+
+async function readRawQaSessionStore(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  options: {
+    readEntries?: typeof listSessionEntries;
+    retryDelaysMs?: readonly number[];
+  } = {},
+) {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const readEntries = options.readEntries ?? listSessionEntries;
+  const retryDelaysMs = options.retryDelaysMs ?? SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return Object.fromEntries(
+        readEntries({ agentId: "qa", env: runtimeEnv }).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry as QaRawSessionStoreEntry,
+        ]),
+      );
+    } catch (error) {
+      if (!isSessionStoreFtsSettleRace(error) || attempt === retryDelaysMs.length) {
+        throw error;
+      }
+      // Child completion can publish before its transcript writer has settled the FTS state.
+      await sleep(retryDelaysMs[attempt]);
+    }
+  }
+  throw new Error("QA session store read failed after FTS settle retries");
 }
 
 async function readSessionTranscriptSummary(
@@ -259,9 +357,5 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
-  setSessionStoreLockRetryDelaysMsForTests,
+  seedQaSessionTranscript,
 };
-
-function setSessionStoreLockRetryDelaysMsForTests(delays?: readonly number[]): void {
-  sessionStoreLockRetryDelaysMsForTests = delays;
-}

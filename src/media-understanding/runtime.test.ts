@@ -1,5 +1,6 @@
 // Media-understanding runtime tests cover file APIs, provider dispatch, disabled
 // state, cleanup, remote references, and direct model-backed image calls.
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -37,6 +38,11 @@ const mocks = vi.hoisted(() => {
     getBuffer,
   };
 });
+
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
+  "base64",
+);
 
 vi.mock("./runner.js", () => ({
   buildProviderRegistry: mocks.buildProviderRegistry,
@@ -521,6 +527,28 @@ describe("media-understanding runtime", () => {
     });
   });
 
+  it("prefers local image bytes over conflicting explicit MIME metadata", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: PNG_1X1 });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: PNG_1X1,
+        fileName: "sample.jpg",
+        mime: "image/png",
+      }),
+    );
+  });
+
   it("normalizes local HEIC explicit image descriptions before provider execution", async () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
 
@@ -564,6 +592,34 @@ describe("media-understanding runtime", () => {
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefers fetched image MIME over conflicting explicit metadata", async () => {
+    mocks.getBuffer.mockResolvedValue({
+      buffer: PNG_1X1,
+      fileName: "photo.jpg",
+      mime: "image/png",
+      size: PNG_1X1.length,
+    });
+
+    await describeImageFileWithModel({
+      filePath: "https://example.com/photo.jpg",
+      mediaUrl: "https://example.com/photo.jpg",
+      mime: "application/pdf",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: PNG_1X1,
+        fileName: "photo.jpg",
+        mime: "image/png",
+      }),
+    );
   });
 
   it("fetches remote explicit image descriptions through the media attachment cache", async () => {
@@ -668,19 +724,24 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaProviderId).toHaveBeenCalledWith("gemini");
-    const [[describeImageOptions]] = describeImage.mock.calls as unknown as Array<
-      [
-        {
-          buffer?: Buffer;
-          fileName?: string;
-          mime?: string;
-          provider?: string;
-          model?: string;
-          prompt?: string;
-          agentDir?: string;
-        },
-      ]
-    >;
+    const [describeImageOptions] = expectDefined(
+      (
+        describeImage.mock.calls as unknown as Array<
+          [
+            {
+              buffer?: Buffer;
+              fileName?: string;
+              mime?: string;
+              provider?: string;
+              model?: string;
+              prompt?: string;
+              agentDir?: string;
+            },
+          ]
+        >
+      )[0],
+      "(describeImage.mock.calls as unknown as Array<\n        [\n          {\n            buffer?: Buffer;\n            fileName?: string;\n            mime?: string;\n            provider?: string;\n            model?: string;\n            prompt?: string;\n            agentDir?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(describeImageOptions?.buffer).toEqual(Buffer.from("image-bytes"));
     expect(describeImageOptions?.fileName).toBe("sample.jpg");
     expect(describeImageOptions?.mime).toBe("image/jpeg");
@@ -737,21 +798,26 @@ describe("media-understanding runtime", () => {
       "Vision-Plugin",
       providerRegistry,
     );
-    const [[extractOptions]] = extractStructured.mock.calls as unknown as Array<
-      [
-        {
-          input?: unknown;
-          instructions?: string;
-          provider?: string;
-          model?: string;
-          profile?: string;
-          preferredProfile?: string;
-          authStore?: AuthProfileStore;
-          timeoutMs?: number;
-          agentDir?: string;
-        },
-      ]
-    >;
+    const [extractOptions] = expectDefined(
+      (
+        extractStructured.mock.calls as unknown as Array<
+          [
+            {
+              input?: unknown;
+              instructions?: string;
+              provider?: string;
+              model?: string;
+              profile?: string;
+              preferredProfile?: string;
+              authStore?: AuthProfileStore;
+              timeoutMs?: number;
+              agentDir?: string;
+            },
+          ]
+        >
+      )[0],
+      "(extractStructured.mock.calls as unknown as Array<\n        [\n          {\n            input?: unknown;\n            instructions?: string;\n            provider?: string;\n            model?: string;\n            profile?: string;\n            preferredProfile?: string;\n            authStore?: AuthProfileStore;\n            timeoutMs?: number;\n            agentDir?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(extractOptions?.input).toEqual([
       { type: "text", text: "Extract the fact." },
       {

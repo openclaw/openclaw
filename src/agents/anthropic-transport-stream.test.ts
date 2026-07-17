@@ -3,6 +3,7 @@
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
  * provider transport hooks.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -3159,9 +3160,10 @@ describe("anthropic transport stream", () => {
           ],
         },
       ]);
-      const [[url, fetchOptions]] = guardedFetchMock.mock.calls as unknown as Array<
-        [string, { method?: string }]
-      >;
+      const [url, fetchOptions] = expectDefined(
+        (guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0],
+        "(guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0] test invariant",
+      );
       expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
       expect(fetchOptions.method).toBe("POST");
     },
@@ -3208,6 +3210,45 @@ describe("anthropic transport stream", () => {
     );
     expect(toolResult.content).toBe("(no output)");
     expect(toolResult.is_error).toBe(false);
+  });
+
+  it("replays payload-less tool images as no output without Anthropic image blocks", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", data: "", mimeType: "image/png" }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      { apiKey: "fake" } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_husk",
+    );
+    expect(toolResult.content).toBe("(no output)");
+    expect(JSON.stringify(toolResult)).not.toContain('"source"');
+    expect(JSON.stringify(toolResult)).not.toContain("see attached image");
   });
 
   it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
@@ -4062,3 +4103,4 @@ describe("anthropic transport stream", () => {
     expect(eventTypes).not.toContain("start");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

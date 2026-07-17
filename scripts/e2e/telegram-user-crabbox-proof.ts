@@ -156,7 +156,7 @@ const COMMAND_STDOUT_MAX_CHARS = 1024 * 1024;
 const COMMAND_STDERR_TAIL_CHARS = 256 * 1024;
 const COMMAND_FAILURE_STDOUT_TAIL_CHARS = 64 * 1024;
 export const COMMAND_TIMEOUT_MS = 30 * 60 * 1000;
-export const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
+const COMMAND_TIMEOUT_KILL_GRACE_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 25;
 export const REMOTE_SETUP_COMMAND_TIMEOUT_MS = 90 * 60 * 1000;
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
@@ -240,7 +240,7 @@ function trimToValue(value: string | undefined) {
 const positiveIntegerPattern = /^[1-9]\d*$/u;
 const SHORT_OPTION_TOKENS = new Set(["-h"]);
 
-function isMissingOptionValue(value: string | undefined) {
+function isMissingOptionValue(value: string) {
   return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
 }
 
@@ -330,9 +330,12 @@ export function parseArgs(argvInput: string[]): Options {
   const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      usage();
+    }
     const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (isMissingOptionValue(value)) {
+      if (value === undefined || isMissingOptionValue(value)) {
         usage();
       }
       if (!options.repeatable) {

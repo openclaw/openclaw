@@ -13,12 +13,9 @@ import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/re
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin, { testing as googleMeetPluginTesting } from "./index.js";
-import {
-  extractGoogleMeetUriFromCalendarEvent,
-  findGoogleMeetCalendarEvent,
-  listGoogleMeetCalendarEvents,
-} from "./src/calendar.js";
-import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/config.js";
+import { findGoogleMeetCalendarEvent, listGoogleMeetCalendarEvents } from "./src/calendar.js";
+import { resolveGoogleMeetConfig } from "./src/config.js";
+import { normalizeMeetUrl } from "./src/meet-url.js";
 import {
   buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
@@ -26,21 +23,14 @@ import {
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
   fetchGoogleMeetSpace,
-  normalizeGoogleMeetSpaceName,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
-import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
-import {
-  convertGoogleMeetTtsAudioForBridge,
-  extendGoogleMeetOutputEchoSuppression,
-  isGoogleMeetLikelyAssistantEchoTranscript,
-  GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  resolveGoogleMeetRealtimeProvider,
-  resolveGoogleMeetRealtimeTranscriptionProvider,
-  startCommandAgentAudioBridge,
-  startCommandRealtimeAudioBridge,
-} from "./src/realtime.js";
-import { GoogleMeetRuntime, normalizeMeetUrl } from "./src/runtime.js";
+import { convertGoogleMeetTtsAudioForBridge } from "./src/realtime-audio-format.js";
+import type { MeetRealtimeAudioTransport } from "./src/realtime-audio-transport.js";
+import { createLocalMeetRealtimeAudioTransport } from "./src/realtime-local-audio-transport.js";
+import { createNodeMeetRealtimeAudioTransport } from "./src/realtime-node-audio-transport.js";
+import { startMeetAgentRealtimeEngine, startMeetRealtimeEngine } from "./src/realtime.js";
+import { GoogleMeetRuntime } from "./src/runtime.js";
 import {
   invokeGoogleMeetGatewayMethodForTest,
   noopLogger,
@@ -48,7 +38,6 @@ import {
 } from "./src/test-support/plugin-harness.js";
 import * as chromeCreateTransport from "./src/transports/chrome-create.js";
 import * as chromeTransport from "./src/transports/chrome.js";
-import { testing as chromeTransportTesting } from "./src/transports/chrome.js";
 import {
   buildMeetDtmfSequence,
   normalizeDialInNumber,
@@ -59,6 +48,117 @@ import type { GoogleMeetSession } from "./src/transports/types.js";
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
 };
+
+const TEST_TALKBACK_DEBOUNCE_MS = 900;
+
+type MeetRealtimeAudioSpawn = NonNullable<
+  Parameters<typeof createLocalMeetRealtimeAudioTransport>[0]["spawn"]
+>;
+
+function createTestMeetRealtimeAudioTransport(): {
+  transport: MeetRealtimeAudioTransport;
+  deliverInput: (audio: Buffer) => void;
+} {
+  let inputHandler: ((audio: Buffer) => void) | undefined;
+  const transport: MeetRealtimeAudioTransport = {
+    onFatal: vi.fn(),
+    startInput: vi.fn((handler) => {
+      inputHandler = handler;
+    }),
+    stop: vi.fn(async () => {}),
+    writeOutput: vi.fn(async () => {}),
+    clearOutput: vi.fn(async () => {}),
+    dispose: vi.fn(async () => {}),
+  };
+  return {
+    transport,
+    deliverInput: (audio) => {
+      if (!inputHandler) {
+        throw new Error("Expected Google Meet realtime input to be started");
+      }
+      inputHandler(audio);
+    },
+  };
+}
+
+type TestLocalAgentEngineParams = Omit<
+  Parameters<typeof startMeetAgentRealtimeEngine>[0],
+  "transport"
+> & {
+  inputCommand: string[];
+  outputCommand: string[];
+  spawn?: MeetRealtimeAudioSpawn;
+};
+
+async function startTestLocalAgentAudioBridge(params: TestLocalAgentEngineParams) {
+  const { inputCommand, outputCommand, spawn, ...engineParams } = params;
+  const transport = createLocalMeetRealtimeAudioTransport({
+    inputCommand,
+    outputCommand,
+    bargeInInputCommand: params.config.chrome.bargeInInputCommand,
+    bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
+    bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
+    bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
+    logger: params.logger,
+    spawn,
+  });
+  return await startMeetAgentRealtimeEngine({ ...engineParams, transport });
+}
+
+type TestLocalRealtimeEngineParams = Omit<
+  Parameters<typeof startMeetRealtimeEngine>[0],
+  "transport"
+> & {
+  inputCommand: string[];
+  outputCommand: string[];
+  spawn?: MeetRealtimeAudioSpawn;
+};
+
+async function startTestLocalRealtimeAudioBridge(params: TestLocalRealtimeEngineParams) {
+  const { inputCommand, outputCommand, spawn, ...engineParams } = params;
+  const transport = createLocalMeetRealtimeAudioTransport({
+    inputCommand,
+    outputCommand,
+    bargeInInputCommand: params.config.chrome.bargeInInputCommand,
+    bargeInRmsThreshold: params.config.chrome.bargeInRmsThreshold,
+    bargeInPeakThreshold: params.config.chrome.bargeInPeakThreshold,
+    bargeInCooldownMs: params.config.chrome.bargeInCooldownMs,
+    logger: params.logger,
+    spawn,
+  });
+  return await startMeetRealtimeEngine({ ...engineParams, transport });
+}
+
+type TestNodeRealtimeEngineParams = Omit<
+  Parameters<typeof startMeetRealtimeEngine>[0],
+  "transport"
+> & {
+  nodeId: string;
+  bridgeId: string;
+};
+
+async function startTestNodeRealtimeAudioBridge(params: TestNodeRealtimeEngineParams) {
+  const { nodeId, bridgeId, ...engineParams } = params;
+  const transport = createNodeMeetRealtimeAudioTransport({
+    runtime: params.runtime,
+    nodeId,
+    bridgeId,
+    logger: params.logger,
+    logPrefix: "node",
+  });
+  return {
+    type: "node-command-pair" as const,
+    nodeId,
+    bridgeId,
+    ...(await startMeetRealtimeEngine({
+      ...engineParams,
+      logPrefix: "node",
+      talkSessionId: `google-meet:${params.meetingSessionId}:${bridgeId}:node-realtime`,
+      talkContext: { nodeId, bridgeId },
+      transport,
+    })),
+  };
+}
 
 const voiceCallMocks = vi.hoisted(() => ({
   createVoiceCallGateway: vi.fn(
@@ -112,11 +212,23 @@ vi.mock("./src/voice-call-gateway.js", () => ({
   speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
 
+let localBrowserGatewayRequestHandler: NonNullable<
+  Parameters<typeof setupGoogleMeetPlugin>[2]
+>["gatewayRequestHandler"];
+
 function setup(
   config?: Parameters<typeof setupGoogleMeetPlugin>[1],
   options?: Parameters<typeof setupGoogleMeetPlugin>[2],
 ) {
-  const harness = setupGoogleMeetPlugin(plugin, config, options);
+  const harness = setupGoogleMeetPlugin(plugin, config, {
+    ...options,
+    ...(localBrowserGatewayRequestHandler
+      ? {
+          gatewayAvailable: true,
+          gatewayRequestHandler: localBrowserGatewayRequestHandler,
+        }
+      : {}),
+  });
   googleMeetPluginTesting.setCallGatewayFromCliForTests(
     async (method, _opts, params) =>
       (await invokeGoogleMeetGatewayMethodForTest(harness.methods, method, params)) as Record<
@@ -126,6 +238,33 @@ function setup(
   );
   googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
+}
+
+const GOOGLE_MEET_ENV_KEYS = [
+  "OPENCLAW_GOOGLE_MEET_CLIENT_ID",
+  "GOOGLE_MEET_CLIENT_ID",
+  "OPENCLAW_GOOGLE_MEET_CLIENT_SECRET",
+  "GOOGLE_MEET_CLIENT_SECRET",
+  "OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN",
+  "GOOGLE_MEET_REFRESH_TOKEN",
+  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN",
+  "GOOGLE_MEET_ACCESS_TOKEN",
+  "OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
+  "GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT",
+  "OPENCLAW_GOOGLE_MEET_DEFAULT_MEETING",
+  "GOOGLE_MEET_DEFAULT_MEETING",
+  "OPENCLAW_GOOGLE_MEET_PREVIEW_ACK",
+  "GOOGLE_MEET_PREVIEW_ACK",
+] as const;
+
+function resolveGoogleMeetConfigFromTestEnv(env: Record<string, string>) {
+  for (const key of GOOGLE_MEET_ENV_KEYS) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    vi.stubEnv(key, value);
+  }
+  return resolveGoogleMeetConfig({});
 }
 
 function jsonResponse(value: unknown): Response {
@@ -313,8 +452,146 @@ function mockLocalMeetBrowserRequest(
       throw new Error(`unexpected browser request path ${request.path}`);
     },
   );
-  chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+  localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+    await callGatewayFromCli(method, {}, params, requestOptions);
   return callGatewayFromCli;
+}
+
+function createCapturedBrowserRuntime(
+  request: (params: Record<string, unknown>) => Promise<unknown>,
+) {
+  return {
+    gateway: {
+      isAvailable: async () => true,
+      request: async (_method: string, params: Record<string, unknown>) => await request(params),
+    },
+    system: {
+      runCommandWithTimeout: async () => ({ code: 0, stdout: "BlackHole 2ch", stderr: "" }),
+    },
+  } as never;
+}
+
+async function captureMeetStatusScript(params: {
+  autoJoin: boolean;
+  captionSessionId?: string;
+  mode: "agent" | "transcribe";
+}) {
+  let script: string | undefined;
+  const baseConfig = resolveGoogleMeetConfig({});
+  const config = {
+    ...baseConfig,
+    chrome: {
+      ...baseConfig.chrome,
+      autoJoin: params.autoJoin,
+      reuseExistingTab: false,
+      waitForInCallMs: 0,
+    },
+  };
+  const runtime = createCapturedBrowserRuntime(async (request) => {
+    if (request.path === "/tabs" || request.path === "/tabs/open") {
+      const tab = {
+        targetId: "local-meet-tab",
+        title: "Meet",
+        url: "https://meet.google.com/abc-defg-hij?hl=en",
+      };
+      return request.path === "/tabs" ? { tabs: [tab] } : tab;
+    }
+    if (request.path === "/tabs/focus" || request.path === "/permissions/grant") {
+      return { ok: true };
+    }
+    if (request.path === "/act") {
+      script = requireRecord(request.body, "Meet status request body").fn as string;
+      return {
+        result: JSON.stringify({
+          manualActionRequired: true,
+          manualActionReason: "meet-admission-required",
+        }),
+      };
+    }
+    throw new Error(`unexpected browser request path ${String(request.path)}`);
+  });
+  if (params.mode === "agent") {
+    await chromeTransport.recoverCurrentMeetTab({
+      runtime,
+      config,
+      mode: "agent",
+      readOnly: false,
+      url: "https://meet.google.com/abc-defg-hij",
+    });
+  } else {
+    await chromeTransport.launchChromeMeet({
+      runtime,
+      config,
+      fullConfig: {},
+      meetingSessionId: params.captionSessionId ?? "session-1",
+      mode: params.mode,
+      url: "https://meet.google.com/abc-defg-hij",
+      logger: noopLogger,
+    });
+  }
+  if (!script) {
+    throw new Error("Google Meet status script was not sent through browser control");
+  }
+  return script;
+}
+
+async function captureMeetTranscriptScript(sessionId: string, finalize: boolean) {
+  let script: string | undefined;
+  const config = resolveGoogleMeetConfig({});
+  await chromeTransport.readChromeMeetTranscript({
+    runtime: createCapturedBrowserRuntime(async (request) => {
+      script = requireRecord(request.body, "Meet transcript request body").fn as string;
+      return {
+        result: JSON.stringify({
+          droppedLines: 0,
+          lines: [],
+          sessionMatched: true,
+          urlMatched: true,
+        }),
+      };
+    }),
+    config,
+    finalize,
+    meetingUrl: "https://meet.google.com/abc-defg-hij",
+    meetingSessionId: sessionId,
+    tab: { targetId: "local-meet-tab", openedByPlugin: true },
+  });
+  if (!script) {
+    throw new Error("Google Meet transcript script was not sent through browser control");
+  }
+  return script;
+}
+
+async function captureMeetLeaveScript() {
+  let script: string | undefined;
+  const config = resolveGoogleMeetConfig({});
+  await chromeTransport.leaveChromeMeet({
+    runtime: createCapturedBrowserRuntime(async (request) => {
+      if (request.path === "/tabs") {
+        return {
+          tabs: [
+            {
+              targetId: "local-meet-tab",
+              title: "Meet",
+              url: "https://meet.google.com/abc-defg-hij?hl=en",
+            },
+          ],
+        };
+      }
+      if (request.path === "/act") {
+        script = requireRecord(request.body, "Meet leave request body").fn as string;
+        return { result: JSON.stringify({ departed: true, urlMatched: true }) };
+      }
+      throw new Error(`unexpected browser request path ${String(request.path)}`);
+    }),
+    config,
+    meetingUrl: "https://meet.google.com/abc-defg-hij",
+    tab: { targetId: "local-meet-tab", openedByPlugin: false },
+  });
+  if (!script) {
+    throw new Error("Google Meet leave script was not sent through browser control");
+  }
+  return script;
 }
 
 function stubMeetArtifactsApi() {
@@ -478,7 +755,7 @@ describe("google-meet plugin", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
-    chromeTransportTesting.setDepsForTest(null);
+    localBrowserGatewayRequestHandler = undefined;
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
     googleMeetPluginTesting.setPlatformForTests();
   });
@@ -607,7 +884,19 @@ describe("google-meet plugin", () => {
     expect(google.realtime.transcriptionProvider).toBe("openai");
   });
 
-  it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", () => {
+  it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", async () => {
+    let voiceRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const voiceBridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
     const voiceProviders: RealtimeVoiceProviderPlugin[] = [
       {
         id: "openai",
@@ -624,19 +913,30 @@ describe("google-meet plugin", () => {
         autoSelectOrder: 2,
         resolveConfig: ({ rawConfig }) => rawConfig,
         isConfigured: () => true,
-        createBridge: () => {
-          throw new Error("unused");
+        createBridge: (request) => {
+          voiceRequest = request;
+          return voiceBridge;
         },
       },
     ];
+    let transcriptionRequest:
+      | Parameters<RealtimeTranscriptionProviderPlugin["createSession"]>[0]
+      | undefined;
+    const transcriptionSession = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
     const transcriptionProviders: RealtimeTranscriptionProviderPlugin[] = [
       {
         id: "openai",
         label: "OpenAI",
         autoSelectOrder: 1,
         isConfigured: () => true,
-        createSession: () => {
-          throw new Error("unused");
+        createSession: (request) => {
+          transcriptionRequest = request;
+          return transcriptionSession;
         },
       },
     ];
@@ -649,21 +949,35 @@ describe("google-meet plugin", () => {
       },
     });
 
-    const voiceProvider = resolveGoogleMeetRealtimeProvider({
+    const voiceTransport = createTestMeetRealtimeAudioTransport();
+    const voiceHandle = await startMeetRealtimeEngine({
       config,
       fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "provider-resolution-voice",
+      logger: noopLogger,
       providers: voiceProviders,
+      transport: voiceTransport.transport,
     });
-    expect(voiceProvider.provider.id).toBe("google");
-    expect(voiceProvider.providerConfig).toEqual({
+    expect(voiceHandle.providerId).toBe("google");
+    expect(voiceRequest?.providerConfig).toEqual({
       model: "gemini-2.5-flash-native-audio-preview-12-2025",
     });
-    const transcriptionProvider = resolveGoogleMeetRealtimeTranscriptionProvider({
+    await voiceHandle.stop();
+
+    const transcriptionTransport = createTestMeetRealtimeAudioTransport();
+    const transcriptionHandle = await startMeetAgentRealtimeEngine({
       config,
       fullConfig: {} as never,
+      runtime: {} as never,
+      meetingSessionId: "provider-resolution-transcription",
+      logger: noopLogger,
       providers: transcriptionProviders,
+      transport: transcriptionTransport.transport,
     });
-    expect(transcriptionProvider.provider.id).toBe("openai");
+    expect(transcriptionHandle.providerId).toBe("openai");
+    expect(transcriptionRequest).toBeDefined();
+    await transcriptionHandle.stop();
   });
 
   it("declares advanced config metadata in the plugin entry and manifest", () => {
@@ -816,18 +1130,15 @@ describe("google-meet plugin", () => {
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {
-    const config = resolveGoogleMeetConfigWithEnv(
-      {},
-      {
-        OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
-        GOOGLE_MEET_CLIENT_SECRET: "client-secret",
-        OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
-        GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
-        GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
-        OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
-      },
-    );
+    const config = resolveGoogleMeetConfigFromTestEnv({
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: "client-id",
+      GOOGLE_MEET_CLIENT_SECRET: "client-secret",
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: "refresh-token",
+      GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: "123456",
+      GOOGLE_MEET_DEFAULT_MEETING: "https://meet.google.com/abc-defg-hij",
+      OPENCLAW_GOOGLE_MEET_PREVIEW_ACK: "true",
+    });
     expect(config.defaults).toEqual({ meeting: "https://meet.google.com/abc-defg-hij" });
     expect(config.preview).toEqual({ enrollmentAcknowledged: true });
     expect(config.oauth).toEqual({
@@ -840,13 +1151,10 @@ describe("google-meet plugin", () => {
   });
 
   it.each(["0x10", "1e3"])("ignores non-decimal env numeric fallbacks: %s", (expiresAt) => {
-    const config = resolveGoogleMeetConfigWithEnv(
-      {},
-      {
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
-        OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
-      },
-    );
+    const config = resolveGoogleMeetConfigFromTestEnv({
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN: "access-token",
+      OPENCLAW_GOOGLE_MEET_ACCESS_TOKEN_EXPIRES_AT: expiresAt,
+    });
 
     expect(config.oauth).toEqual({ accessToken: "access-token" });
   });
@@ -1010,32 +1318,31 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it("normalizes Meet URLs, codes, and space names for the Meet API", () => {
-    expect(normalizeGoogleMeetSpaceName("spaces/abc-defg-hij")).toBe("spaces/abc-defg-hij");
-    expect(normalizeGoogleMeetSpaceName("abc-defg-hij")).toBe("spaces/abc-defg-hij");
-    expect(normalizeGoogleMeetSpaceName("https://meet.google.com/abc-defg-hij")).toBe(
-      "spaces/abc-defg-hij",
-    );
-    expect(() => normalizeGoogleMeetSpaceName("https://example.com/abc-defg-hij")).toThrow(
-      "meet.google.com",
-    );
+  it("normalizes Meet URLs, codes, and space names for the Meet API", async () => {
+    stubMeetArtifactsApi();
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "token", meeting: "spaces/abc-defg-hij" }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({ accessToken: "token", meeting: "abc-defg-hij" }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({
+        accessToken: "token",
+        meeting: "https://meet.google.com/abc-defg-hij",
+      }),
+    ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    await expect(
+      fetchGoogleMeetSpace({
+        accessToken: "token",
+        meeting: "https://example.com/abc-defg-hij",
+      }),
+    ).rejects.toThrow("meet.google.com");
   });
 
   it("finds Google Meet links from Calendar events", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        conferenceData: {
-          entryPoints: [
-            {
-              entryPointType: "video",
-              uri: "https://meet.google.com/abc-defg-hij",
-            },
-          ],
-        },
-      }),
-    ).toBe("https://meet.google.com/abc-defg-hij");
     const event = await findGoogleMeetCalendarEvent({
       accessToken: "token",
       now: new Date("2026-04-25T09:50:00Z"),
@@ -2485,12 +2792,6 @@ describe("google-meet plugin", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      const { methods, runCommandWithTimeout } = setup({
-        defaultMode: "transcribe",
-        chrome: {
-          browserProfile: "meet-devtools",
-        },
-      });
       const callGatewayFromCli = mockLocalMeetBrowserRequest({
         inCall: true,
         micMuted: true,
@@ -2509,6 +2810,12 @@ describe("google-meet plugin", () => {
         ],
         title: "Meet call",
         url: "https://meet.google.com/abc-defg-hij",
+      });
+      const { methods, runCommandWithTimeout } = setup({
+        defaultMode: "transcribe",
+        chrome: {
+          browserProfile: "meet-devtools",
+        },
       });
       const handler = methods.get("googlemeet.join") as
         | ((ctx: {
@@ -2538,7 +2845,7 @@ describe("google-meet plugin", () => {
         timeoutMs: 30000,
         body: { url: "https://meet.google.com/abc-defg-hij?hl=en" },
       });
-      expect(openCall[3]).toEqual({ progress: false });
+      expect(openCall[3]).toEqual({ timeoutMs: 35_000, scopes: ["operator.admin"] });
       expect(
         callGatewayFromCli.mock.calls.some(
           (call) => (call[2] as { path?: string }).path === "/permissions/grant",
@@ -2618,7 +2925,7 @@ describe("google-meet plugin", () => {
       expect(body.origin).toBe("https://meet.google.com");
       expect(body.permissions).toEqual(["audioCapture", "videoCapture"]);
       expect(body.targetId).toBe("local-meet-tab");
-      expect(grantCall[3]).toEqual({ progress: false });
+      expect(grantCall[3]).toEqual({ timeoutMs: 10_000, scopes: ["operator.admin"] });
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -2764,7 +3071,8 @@ describe("google-meet plugin", () => {
         throw new Error(`unexpected browser request path ${request.path}`);
       },
     );
-    chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+    localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+      await callGatewayFromCli(method, {}, params, requestOptions);
     return callGatewayFromCli;
   }
 
@@ -3190,7 +3498,7 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("meet leave script clicks the enabled Leave call button", () => {
+  it("meet leave script clicks the enabled Leave call button", async () => {
     const makeButton = (label: string, disabled = false, iconText?: string) => ({
       disabled,
       innerText: "",
@@ -3214,9 +3522,7 @@ describe("google-meet plugin", () => {
       location: { href: "https://meet.google.com/abc-defg-hij?hl=en" },
       document,
     });
-    const leaveScript = chromeTransportTesting.meetLeaveScriptForTest(
-      "https://meet.google.com/abc-defg-hij",
-    );
+    const leaveScript = await captureMeetLeaveScript();
     const run = new Script(`(${leaveScript})()`).runInContext(context) as string;
 
     expect(leaveButton.click).toHaveBeenCalledTimes(1);
@@ -3319,7 +3625,8 @@ describe("google-meet plugin", () => {
           throw new Error(`unexpected browser request path ${request.path}`);
         },
       );
-      chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+      localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+        await callGatewayFromCli(method, {}, params, requestOptions);
       const { methods } = setup(
         {
           defaultMode: "bidi",
@@ -3404,7 +3711,8 @@ describe("google-meet plugin", () => {
           throw new Error(`unexpected browser request path ${request.path}`);
         },
       );
-      chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+      localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+        await callGatewayFromCli(method, {}, params, requestOptions);
       const { methods } = setup(
         {
           defaultMode: "bidi",
@@ -3526,7 +3834,8 @@ describe("google-meet plugin", () => {
         throw new Error(`unexpected browser request path ${request.path}`);
       },
     );
-    chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+    localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+      await callGatewayFromCli(method, {}, params, requestOptions);
     const { methods } = setup({
       defaultMode: "transcribe",
       defaultTransport: "chrome",
@@ -3567,7 +3876,7 @@ describe("google-meet plugin", () => {
       timeoutMs: 5000,
       body: { targetId: "local-meet-tab" },
     });
-    expect(focusCall[3]).toEqual({ progress: false });
+    expect(focusCall[3]).toEqual({ timeoutMs: 10_000, scopes: ["operator.admin"] });
   });
 
   it("refreshes blocked realtime browser health read-only when status is requested", async () => {
@@ -3716,6 +4025,7 @@ describe("google-meet plugin", () => {
       Date,
       JSON,
       String,
+      crypto: { randomUUID: () => "caption-epoch" },
       document,
       location: {
         href: "https://meet.google.com/abc-defg-hij",
@@ -3727,12 +4037,10 @@ describe("google-meet plugin", () => {
       window: windowState,
     });
     const inspect = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: false,
+      `(${await captureMeetStatusScript({
         autoJoin: false,
         captionSessionId: "session-1",
-        captureCaptions: true,
-        guestName: "OpenClaw Agent",
+        mode: "transcribe",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
 
@@ -3777,6 +4085,11 @@ describe("google-meet plugin", () => {
     const disconnectObserver = vi.fn();
     const clearCaptionTimer = vi.fn();
     let settleCaption: (() => void) | undefined;
+    const randomUUID = vi
+      .fn()
+      .mockReturnValueOnce("epoch-1")
+      .mockReturnValueOnce("epoch-2")
+      .mockReturnValueOnce("epoch-3");
     const document = {
       body: { innerText: "meeting ended", textContent: "meeting ended" },
       title: "Meet",
@@ -3806,6 +4119,7 @@ describe("google-meet plugin", () => {
       },
       String,
       URL,
+      crypto: { randomUUID },
       document,
       location: { href: "https://meet.google.com/abc-defg-hij", hostname: "meet.google.com" },
       MutationObserver: class {
@@ -3815,12 +4129,10 @@ describe("google-meet plugin", () => {
       window: windowState,
     });
     const inspect = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: false,
+      `(${await captureMeetStatusScript({
         autoJoin: false,
         captionSessionId: "session-1",
-        captureCaptions: true,
-        guestName: "OpenClaw Agent",
+        mode: "transcribe",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
 
@@ -3829,6 +4141,7 @@ describe("google-meet plugin", () => {
     page.caption = "Alice\nmeeting ended after the recap";
     await inspect();
     const state = windowState["__openclawMeetCaptions"] as {
+      epoch: string;
       lines: Array<{ text: string }>;
       visible: Array<{ text: string }>;
     };
@@ -3852,40 +4165,45 @@ describe("google-meet plugin", () => {
     await inspect();
     expect(state.lines.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
     expect(state.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
-    const readTranscript = (sessionId: string, finalize: boolean) =>
-      new Script(
-        `(${chromeTransportTesting.meetTranscriptScriptForTest(
-          "https://meet.google.com/abc-defg-hij",
-          sessionId,
-          finalize,
-        )})`,
-      ).runInContext(context) as () => string;
-    const beforeFinalize = JSON.parse(readTranscript("session-1", false)()) as { lines: unknown[] };
+    const readTranscript = async (sessionId: string, finalize: boolean) =>
+      new Script(`(${await captureMeetTranscriptScript(sessionId, finalize)})`).runInContext(
+        context,
+      ) as () => string;
+    const beforeFinalize = JSON.parse((await readTranscript("session-1", false))()) as {
+      lines: unknown[];
+    };
     expect(beforeFinalize.lines).toHaveLength(1);
-    const afterFinalize = JSON.parse(readTranscript("session-1", true)()) as { lines: unknown[] };
+    const afterFinalize = JSON.parse((await readTranscript("session-1", true))()) as {
+      lines: unknown[];
+    };
     expect(afterFinalize.lines).toHaveLength(2);
 
+    delete windowState["__openclawMeetCaptions"];
+    await inspect();
+    const reloadedState = windowState["__openclawMeetCaptions"] as { epoch: string };
+    expect(reloadedState.epoch).not.toBe(state.epoch);
+
     const inspectNextSession = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: false,
+      `(${await captureMeetStatusScript({
         autoJoin: false,
         captionSessionId: "session-2",
-        captureCaptions: true,
-        guestName: "OpenClaw Agent",
+        mode: "transcribe",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
     await inspectNextSession();
     const nextState = windowState["__openclawMeetCaptions"] as {
       droppedLines: number;
+      epoch: string;
       sessionId?: string;
       lines: Array<{ text: string }>;
       visible: Array<{ text: string }>;
     };
     expect(nextState.sessionId).toBe("session-2");
+    expect(nextState.epoch).not.toBe(state.epoch);
     expect(nextState.lines).toEqual([]);
     expect(nextState.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
     expect(disconnectObserver).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(readTranscript("session-1", false)())).toMatchObject({
+    expect(JSON.parse((await readTranscript("session-1", false))())).toMatchObject({
       sessionMatched: false,
     });
 
@@ -3893,7 +4211,7 @@ describe("google-meet plugin", () => {
     nextState.visible = [];
     page.caption = "Alice\nline-2000";
     await inspectNextSession();
-    readTranscript("session-2", true)();
+    (await readTranscript("session-2", true))();
     expect(nextState.lines).toHaveLength(2_000);
     expect(nextState.lines[0]?.text).toBe("line-1");
     expect(nextState.lines.at(-1)?.text).toBe("line-2000");
@@ -3937,11 +4255,9 @@ describe("google-meet plugin", () => {
       window: {},
     });
     const inspect = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: true,
+      `(${await captureMeetStatusScript({
         autoJoin: false,
-        captureCaptions: false,
-        guestName: "OpenClaw Agent",
+        mode: "agent",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
 
@@ -3987,11 +4303,9 @@ describe("google-meet plugin", () => {
       window: {},
     });
     const inspect = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: false,
+      `(${await captureMeetStatusScript({
         autoJoin: true,
-        captureCaptions: false,
-        guestName: "OpenClaw Agent",
+        mode: "transcribe",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
 
@@ -4039,11 +4353,9 @@ describe("google-meet plugin", () => {
       window: {},
     });
     const inspect = new Script(
-      `(${chromeTransportTesting.meetStatusScriptForTest({
-        allowMicrophone: true,
+      `(${await captureMeetStatusScript({
         autoJoin: false,
-        captureCaptions: false,
-        guestName: "OpenClaw Agent",
+        mode: "agent",
       })})`,
     ).runInContext(context) as () => string | Promise<string>;
 
@@ -4826,7 +5138,8 @@ describe("google-meet plugin", () => {
         throw new Error(`unexpected browser request path ${request.path}`);
       },
     );
-    chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+    localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+      await callGatewayFromCli(method, {}, params, requestOptions);
     const { tools, nodesInvoke } = setup({
       defaultTransport: "chrome",
       chrome: {
@@ -4864,7 +5177,7 @@ describe("google-meet plugin", () => {
     expect(requireRecord(focusCall[2], "focus request").method).toBe("POST");
     expect(requireRecord(focusCall[2], "focus request").path).toBe("/tabs/focus");
     expect(requireRecord(focusCall[2], "focus request").query).toBeUndefined();
-    expect(focusCall[3]).toEqual({ progress: false });
+    expect(focusCall[3]).toEqual({ timeoutMs: 10_000, scopes: ["operator.admin"] });
     expect(
       callGatewayFromCli.mock.calls.some((call) => {
         const requestPath = requireRecord(call[2], "browser request").path;
@@ -4966,7 +5279,8 @@ describe("google-meet plugin", () => {
           throw new Error(`unexpected browser request path ${request.path}`);
         },
       );
-      chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
+      localBrowserGatewayRequestHandler = async (method, params, requestOptions) =>
+        await callGatewayFromCli(method, {}, params, requestOptions);
       const { methods } = setup({
         chrome: {
           audioBridgeCommand: ["bridge", "start"],
@@ -6417,6 +6731,7 @@ describe("google-meet plugin", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
+      const callGatewayFromCli = mockLocalMeetBrowserRequest();
       const { methods, runCommandWithTimeout } = setup({
         defaultMode: "bidi",
         chrome: {
@@ -6425,7 +6740,6 @@ describe("google-meet plugin", () => {
           audioBridgeCommand: ["bridge", "start"],
         },
       });
-      const callGatewayFromCli = mockLocalMeetBrowserRequest();
       const handler = methods.get("googlemeet.join") as
         | ((ctx: {
             params: Record<string, unknown>;
@@ -6458,7 +6772,7 @@ describe("google-meet plugin", () => {
       expect(request.method).toBe("POST");
       expect(request.path).toBe("/tabs/open");
       expect(request.body).toStrictEqual({ url: "https://meet.google.com/abc-defg-hij?hl=en" });
-      expect(extra).toStrictEqual({ progress: false });
+      expect(extra).toStrictEqual({ timeoutMs: 35_000, scopes: ["operator.admin"] });
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
@@ -6538,7 +6852,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startCommandAgentAudioBridge({
+    const handle = await startTestLocalAgentAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", agentId: "jay", introMessage: "" },
       }),
@@ -6557,7 +6871,7 @@ describe("google-meet plugin", () => {
     );
     inputStdout.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
     callbacks?.onTranscript?.("Please summarize the launch.");
-    await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+    await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
 
     expect(sendAudio).toHaveBeenCalledTimes(1);
     const audioChunk = mockCallArg(sendAudio, 0) as Buffer;
@@ -6596,6 +6910,43 @@ describe("google-meet plugin", () => {
       talkEventTypes.indexOf("output.audio.started"),
     );
     await handle.stop();
+  });
+
+  it("aborts agent engine startup when the transport already failed", async () => {
+    const createSession = vi.fn();
+    const provider: RealtimeTranscriptionProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "gpt-4o-transcribe",
+      autoSelectOrder: 1,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: () => true,
+      createSession,
+    };
+    const stop = vi.fn(async () => {});
+    await expect(
+      startMeetAgentRealtimeEngine({
+        config: resolveGoogleMeetConfig({
+          realtime: { provider: "openai", agentId: "jay", introMessage: "" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        meetingSessionId: "meet-fatal",
+        logger: noopLogger,
+        providers: [provider],
+        transport: {
+          // Pre-registration fatal replays synchronously; startup must abort before createSession.
+          onFatal: (handler) => handler(),
+          startInput: vi.fn(),
+          stop,
+          writeOutput: vi.fn(async () => {}),
+          clearOutput: vi.fn(async () => {}),
+          dispose: vi.fn(async () => {}),
+        },
+      }),
+    ).rejects.toThrow("transport failed before transcription provider setup");
+    expect(createSession).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalled();
   });
 
   it("stops the Chrome agent audio bridge when child stdio streams error", async () => {
@@ -6650,7 +7001,7 @@ describe("google-meet plugin", () => {
     });
     const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
 
-    const handle = await startCommandAgentAudioBridge({
+    const handle = await startTestLocalAgentAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { provider: "openai", agentId: "jay", introMessage: "" },
       }),
@@ -6785,7 +7136,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
@@ -6982,7 +7333,7 @@ describe("google-meet plugin", () => {
     const inputProcess = makeProcess({ stdin: null, stdout: inputStdout });
     const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
@@ -7078,7 +7429,7 @@ describe("google-meet plugin", () => {
         },
       };
 
-      const handle = await startCommandRealtimeAudioBridge({
+      const handle = await startTestLocalRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({ realtime: { provider: "openai", agentId: "jay" } }),
         fullConfig: {} as never,
         runtime: runtime as never,
@@ -7095,10 +7446,24 @@ describe("google-meet plugin", () => {
       }
       expect(callbacks.autoRespondToAudio).toBe(false);
       expect(callbacks.tools).toStrictEqual([]);
+      callbacks.onTranscript?.(
+        "assistant",
+        "Hi Molty, glad to have you here. Let me know if there's anything specific you'd like to cover or if you need any support during the meeting.",
+        true,
+      );
+      callbacks.onTranscript?.(
+        "user",
+        "Let me know if there's anything specific you'd like to cover or if you need any support during the",
+        true,
+      );
+      await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
+      expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
+
+      callbacks.onTranscript?.("user", "yes yes yes yes", true);
       callbacks?.onTranscript?.("user", "Are we still on track?", true);
       callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
 
-      await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(TEST_TALKBACK_DEBOUNCE_MS);
       await vi.waitFor(() => {
         expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
       });
@@ -7110,6 +7475,7 @@ describe("google-meet plugin", () => {
       expect(consultArgs.spawnedBy).toBe("agent:jay:main");
       expect(consultArgs.sessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
       expect(consultArgs.sandboxSessionKey).toBe("agent:jay:subagent:google-meet:meet-1");
+      expect(JSON.stringify(consultArgs)).toContain("yes yes yes yes");
       expect(JSON.stringify(consultArgs)).toContain(
         "Are we still on track?\\nPlease include launch blockers.",
       );
@@ -7125,61 +7491,68 @@ describe("google-meet plugin", () => {
     }
   });
 
-  it("tracks queued playback time when suppressing realtime input echo", () => {
-    const first = extendGoogleMeetOutputEchoSuppression({
-      audio: Buffer.alloc(48_000),
-      audioFormat: "pcm16-24khz",
-      nowMs: 1_000,
-      lastOutputPlayableUntilMs: 0,
-      suppressInputUntilMs: 0,
-    });
-    const second = extendGoogleMeetOutputEchoSuppression({
-      audio: Buffer.alloc(48_000),
-      audioFormat: "pcm16-24khz",
-      nowMs: 1_100,
-      lastOutputPlayableUntilMs: first.lastOutputPlayableUntilMs,
-      suppressInputUntilMs: first.suppressInputUntilMs,
-    });
+  it("extends realtime input suppression across queued playback", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+      const bridge = {
+        connect: vi.fn(async () => {}),
+        sendAudio: vi.fn(),
+        sendUserMessage: vi.fn(),
+        setMediaTimestamp: vi.fn(),
+        submitToolResult: vi.fn(),
+        acknowledgeMark: vi.fn(),
+        close: vi.fn(),
+        triggerGreeting: vi.fn(),
+        isConnected: vi.fn(() => true),
+      };
+      const provider: RealtimeVoiceProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        autoSelectOrder: 1,
+        resolveConfig: ({ rawConfig }) => rawConfig,
+        isConfigured: () => true,
+        createBridge: (request) => {
+          callbacks = request;
+          return bridge;
+        },
+      };
+      const audioTransport = createTestMeetRealtimeAudioTransport();
+      const handle = await startMeetRealtimeEngine({
+        config: resolveGoogleMeetConfig({
+          realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
+        }),
+        fullConfig: {} as never,
+        runtime: {} as never,
+        meetingSessionId: "queued-playback",
+        logger: noopLogger,
+        providers: [provider],
+        transport: audioTransport.transport,
+      });
+      if (!callbacks) {
+        throw new Error("Expected realtime bridge callbacks");
+      }
 
-    expect(first.durationMs).toBe(1_000);
-    expect(first.lastOutputPlayableUntilMs).toBe(2_000);
-    expect(first.suppressInputUntilMs).toBe(5_000);
-    expect(second.durationMs).toBe(1_000);
-    expect(second.lastOutputPlayableUntilMs).toBe(3_000);
-    expect(second.suppressInputUntilMs).toBe(6_000);
-  });
+      callbacks.onAudio(Buffer.alloc(48_000));
+      vi.setSystemTime(1_100);
+      callbacks.onAudio(Buffer.alloc(48_000));
+      vi.setSystemTime(5_500);
+      audioTransport.deliverInput(Buffer.from([1, 2, 3, 4]));
+      expect(bridge.sendAudio).not.toHaveBeenCalled();
 
-  it("detects assistant transcript echoes before agent consult", () => {
-    const nowMs = Date.parse("2026-05-04T01:00:00.000Z");
-    const transcript = [
-      {
-        at: new Date(nowMs - 1_000).toISOString(),
-        role: "assistant" as const,
-        text: "Hi Molty, glad to have you here. Let me know if there's anything specific you'd like to cover or if you need any support during the meeting.",
-      },
-    ];
-
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "Let me know if there's anything specific you'd like to cover or if you need any support during the",
-        nowMs,
-      }),
-    ).toBe(true);
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "Tell me a story.",
-        nowMs,
-      }),
-    ).toBe(false);
-    expect(
-      isGoogleMeetLikelyAssistantEchoTranscript({
-        transcript,
-        text: "yes yes yes yes",
-        nowMs,
-      }),
-    ).toBe(false);
+      vi.setSystemTime(6_001);
+      audioTransport.deliverInput(Buffer.from([5, 6, 7]));
+      expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from([5, 6, 7]));
+      expect(handle.getHealth()).toMatchObject({
+        lastInputBytes: 3,
+        lastOutputBytes: 96_000,
+        suppressedInputBytes: 4,
+      });
+      await handle.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses a local barge-in input command to clear active Chrome playback", async () => {
@@ -7248,7 +7621,7 @@ describe("google-meet plugin", () => {
       .mockReturnValueOnce(bargeInProcess)
       .mockReturnValueOnce(replacementOutputProcess);
 
-    const handle = await startCommandRealtimeAudioBridge({
+    const handle = await startTestLocalRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         chrome: {
           bargeInInputCommand: ["capture-human"],
@@ -7350,7 +7723,7 @@ describe("google-meet plugin", () => {
       },
     };
 
-    const handle = await startNodeRealtimeAudioBridge({
+    const handle = await startTestNodeRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
         realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
@@ -7534,10 +7907,10 @@ describe("google-meet plugin", () => {
         }),
       },
     };
-    let handle: Awaited<ReturnType<typeof startNodeRealtimeAudioBridge>> | undefined;
+    let handle: Awaited<ReturnType<typeof startTestNodeRealtimeAudioBridge>> | undefined;
 
     try {
-      handle = await startNodeRealtimeAudioBridge({
+      handle = await startTestNodeRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({
           realtime: { provider: "openai", model: "gpt-realtime" },
         }),
@@ -7602,7 +7975,7 @@ describe("google-meet plugin", () => {
     };
 
     try {
-      const handle = await startNodeRealtimeAudioBridge({
+      const handle = await startTestNodeRealtimeAudioBridge({
         config: resolveGoogleMeetConfig({
           realtime: { provider: "openai", model: "gpt-realtime" },
         }),
@@ -7652,3 +8025,4 @@ describe("google-meet plugin", () => {
     ).rejects.toThrow("url required");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

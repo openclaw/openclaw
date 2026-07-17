@@ -210,7 +210,7 @@ only for behavior that really belongs to the backend.
 | ---------------------------------- | --------------------------------------------------------------------------- |
 | `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
 | `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
-| `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch                       |
+| `prepareExecution(ctx)`            | Create temporary auth, config, or environment bridges before launch         |
 | `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
 | `textTransforms`                   | Bidirectional prompt/output replacements                                    |
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
@@ -219,10 +219,15 @@ only for behavior that really belongs to the backend.
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
+limit selected for the run. Backends that own native compaction can map that
+budget into their CLI-specific launch contract.
 
 `runtimeArtifact` is plugin-owned and is not user-overridable. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;

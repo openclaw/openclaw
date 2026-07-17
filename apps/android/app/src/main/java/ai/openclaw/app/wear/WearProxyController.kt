@@ -1,0 +1,385 @@
+package ai.openclaw.app.wear
+
+import ai.openclaw.wear.shared.WearMessage
+import ai.openclaw.wear.shared.WearRpcError
+import ai.openclaw.wear.shared.WearRpcMethod
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+
+internal class WearProxyGatewayException(
+  val code: String,
+  override val message: String,
+) : IllegalStateException(message)
+
+internal class WearProxyController(
+  private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
+  private val isGatewayConnected: () -> Boolean,
+  private val gatewayStatusText: () -> String,
+) {
+  suspend fun handle(request: WearMessage.Request): WearMessage.Response =
+    try {
+      val result =
+        when (request.method) {
+          WearRpcMethod.ProxyStatus -> proxyStatus(request.params)
+          WearRpcMethod.SessionsList -> listSessions(request.params)
+          WearRpcMethod.ChatHistory -> chatHistory(request.params)
+          WearRpcMethod.ChatSend -> sendChat(request.params)
+          WearRpcMethod.ChatAbort -> abortChat(request.params)
+        }
+      WearMessage.Response(requestId = request.requestId, ok = true, result = result)
+    } catch (err: WearProxyInvalidRequest) {
+      failure(request.requestId, code = "invalid_request", message = err.message ?: "Invalid Wear request")
+    } catch (err: WearProxyGatewayException) {
+      failure(request.requestId, code = err.code, message = err.message)
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      failure(request.requestId, code = "unavailable", message = "Phone gateway request failed")
+    }
+
+  private fun proxyStatus(params: JsonObject): JsonObject {
+    params.requireOnly()
+    return buildJsonObject {
+      put("connected", isGatewayConnected())
+      put("status", gatewayStatusText().takeCodePoints(MAX_STATUS_CHARS))
+    }
+  }
+
+  private suspend fun listSessions(params: JsonObject): JsonObject {
+    params.requireOnly("limit")
+    val limit = params.intParam("limit", default = DEFAULT_SESSION_LIMIT, range = 1..MAX_SESSION_LIMIT)
+    val gatewayResult =
+      requestGateway(
+        "sessions.list",
+        buildJsonObject {
+          put("limit", limit)
+          put("includeGlobal", false)
+          put("includeUnknown", false)
+        },
+      ).asObject("sessions.list")
+    val sessions =
+      gatewayResult["sessions"]
+        .asArrayOrNull()
+        ?.mapNotNull(::projectSession)
+        .orEmpty()
+    return buildJsonObject {
+      put("sessions", JsonArray(sessions))
+      gatewayResult["hasMore"].booleanPrimitiveOrNull()?.let { put("hasMore", it) }
+      gatewayResult["totalCount"].longPrimitiveOrNull()?.let { put("totalCount", it) }
+    }
+  }
+
+  private suspend fun chatHistory(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "limit", "maxChars", "offset")
+    val sessionKey = params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS)
+    val limit = params.intParam("limit", default = DEFAULT_HISTORY_LIMIT, range = 1..MAX_HISTORY_LIMIT)
+    val maxChars = params.intParam("maxChars", default = DEFAULT_HISTORY_CHARS, range = 1..MAX_HISTORY_CHARS)
+    val offset = params.optionalIntParam("offset", range = 0..MAX_HISTORY_OFFSET)
+    val result =
+      requestGateway(
+        "chat.history",
+        buildJsonObject {
+          put("sessionKey", sessionKey)
+          put("limit", limit)
+          put("maxChars", maxChars)
+          offset?.let { put("offset", it) }
+        },
+      ).asObject("chat.history")
+    return projectHistory(result)
+  }
+
+  private suspend fun sendChat(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "message", "idempotencyKey")
+    val result =
+      requestGateway(
+        "chat.send",
+        buildJsonObject {
+          put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
+          put("message", params.stringParam("message", MAX_MESSAGE_CHARS))
+          put("idempotencyKey", params.stringParam("idempotencyKey", MAX_IDEMPOTENCY_KEY_CHARS))
+          put("deliver", false)
+        },
+      ).asObject("chat.send")
+    return projectAck(result)
+  }
+
+  private suspend fun abortChat(params: JsonObject): JsonObject {
+    params.requireOnly("sessionKey", "runId")
+    val result =
+      requestGateway(
+        "chat.abort",
+        buildJsonObject {
+          put("sessionKey", params.stringParam("sessionKey", MAX_SESSION_KEY_CHARS))
+          params.optionalStringParam("runId", MAX_RUN_ID_CHARS)?.let { put("runId", it) }
+        },
+      ).asObject("chat.abort")
+    return projectAck(result)
+  }
+
+  private fun failure(
+    requestId: String,
+    code: String,
+    message: String,
+  ): WearMessage.Response =
+    WearMessage.Response(
+      requestId = requestId,
+      ok = false,
+      error = WearRpcError(code = code.takeCodePoints(MAX_ERROR_CODE_CHARS), message = message.takeCodePoints(MAX_ERROR_MESSAGE_CHARS)),
+    )
+
+  private companion object {
+    const val DEFAULT_SESSION_LIMIT = 20
+    const val MAX_SESSION_LIMIT = 50
+    const val DEFAULT_HISTORY_LIMIT = 20
+    const val MAX_HISTORY_LIMIT = 20
+    const val DEFAULT_HISTORY_CHARS = 2_000
+    const val MAX_HISTORY_CHARS = 2_000
+    const val MAX_HISTORY_OFFSET = 100_000
+    const val MAX_SESSION_KEY_CHARS = 512
+    const val MAX_MESSAGE_CHARS = 4_000
+    const val MAX_IDEMPOTENCY_KEY_CHARS = 128
+    const val MAX_RUN_ID_CHARS = 128
+    const val MAX_STATUS_CHARS = 200
+    const val MAX_SESSION_LABEL_CHARS = 200
+    const val MAX_EVENT_TEXT_CHARS = 2_000
+    const val MAX_ERROR_CODE_CHARS = 64
+    const val MAX_ERROR_MESSAGE_CHARS = 300
+  }
+}
+
+internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
+  val source = payload as? JsonObject ?: return null
+  return buildJsonObject {
+    copyString(source, "runId", MAX_RUN_ID_CHARS)
+    copyString(source, "sessionKey", MAX_SESSION_KEY_CHARS)
+    copyString(source, "agentId", MAX_SESSION_KEY_CHARS)
+    copyLong(source, "seq")
+    copyString(source, "state", 32)
+    copyString(source, "deltaText", MAX_EVENT_TEXT_CHARS)
+    copyBoolean(source, "replace")
+    copyString(source, "errorMessage", MAX_ERROR_MESSAGE_CHARS)
+    copyString(source, "stopReason", 100)
+    projectMessage(source["message"])?.let { put("message", it) }
+  }
+}
+
+private fun projectHistory(source: JsonObject): JsonObject =
+  buildJsonObject {
+    copyString(source, "sessionKey", MAX_SESSION_KEY_CHARS)
+    copyString(source, "sessionId", MAX_SESSION_KEY_CHARS)
+    val messages = source["messages"].asArrayOrNull()?.mapNotNull(::projectMessage).orEmpty()
+    put("messages", JsonArray(messages))
+    copyLong(source, "offset")
+    copyLong(source, "nextOffset")
+    copyLong(source, "totalMessages")
+    copyBoolean(source, "hasMore")
+    val inFlight = source["inFlightRun"] as? JsonObject
+    if (inFlight != null) {
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          copyString(inFlight, "runId", MAX_RUN_ID_CHARS)
+          copyString(inFlight, "text", MAX_EVENT_TEXT_CHARS)
+        },
+      )
+    }
+  }
+
+private fun projectSession(element: JsonElement): JsonObject? {
+  val source = element as? JsonObject ?: return null
+  val key = source.stringOrNull("key") ?: source.stringOrNull("sessionKey") ?: return null
+  return buildJsonObject {
+    put("key", key.takeCodePoints(MAX_SESSION_KEY_CHARS))
+    copyString(source, "displayName", MAX_SESSION_LABEL_CHARS)
+    copyString(source, "label", MAX_SESSION_LABEL_CHARS)
+    copyLong(source, "updatedAt")
+    copyLong(source, "lastActivityAt")
+    copyBoolean(source, "pinned")
+    copyBoolean(source, "unread")
+    copyBoolean(source, "hasActiveRun")
+  }
+}
+
+private fun projectMessage(element: JsonElement?): JsonObject? {
+  val source = element as? JsonObject ?: return null
+  val role = source.stringOrNull("role") ?: return null
+  return buildJsonObject {
+    copyString(source, "id", MAX_RUN_ID_CHARS)
+    put("role", role.takeCodePoints(32))
+    copyLong(source, "timestamp")
+    copyString(source, "idempotencyKey", MAX_IDEMPOTENCY_KEY_CHARS)
+    projectContent(source["content"])?.let { put("content", it) }
+  }
+}
+
+private fun projectContent(content: JsonElement?): JsonElement? =
+  when (content) {
+    is JsonPrimitive -> content.contentOrNull?.let { JsonPrimitive(it.takeUtf8Bytes(MAX_PROJECTED_CONTENT_BYTES)) }
+    is JsonArray ->
+      buildJsonArray {
+        var remainingBytes = MAX_PROJECTED_CONTENT_BYTES
+        var partCount = 0
+        for (part in content) {
+          if (remainingBytes == 0 || partCount == MAX_PROJECTED_CONTENT_PARTS) break
+          val text =
+            when (part) {
+              is JsonPrimitive -> part.contentOrNull
+              is JsonObject -> {
+                val type = part.stringOrNull("type")
+                if (type != null && type != "text") continue
+                part.stringOrNull("text")
+              }
+              else -> null
+            } ?: continue
+          val projectedText = text.takeUtf8Bytes(remainingBytes)
+          if (projectedText.isEmpty() && text.isNotEmpty()) break
+
+          // The Wear transport has one byte ceiling for the complete event. Bound text across
+          // all parts so a terminal event remains encodable and can still carry its final state.
+          if (part is JsonObject) {
+            add(
+              buildJsonObject {
+                put("type", "text")
+                put("text", projectedText)
+              },
+            )
+          } else {
+            add(JsonPrimitive(projectedText))
+          }
+          remainingBytes -= projectedText.toByteArray(Charsets.UTF_8).size
+          partCount += 1
+        }
+      }
+    else -> null
+  }
+
+private fun projectAck(source: JsonObject): JsonObject =
+  buildJsonObject {
+    copyString(source, "runId", MAX_RUN_ID_CHARS)
+    copyString(source, "status", 64)
+    copyBoolean(source, "aborted")
+  }
+
+private class WearProxyInvalidRequest(
+  message: String,
+) : IllegalArgumentException(message)
+
+private fun JsonObject.requireOnly(vararg allowed: String) {
+  val allowedNames = allowed.toSet()
+  if (keys.any { it !in allowedNames }) throw WearProxyInvalidRequest("Unsupported Wear request field")
+}
+
+private fun JsonObject.stringParam(
+  name: String,
+  maxChars: Int,
+): String {
+  val value = stringOrNull(name) ?: throw WearProxyInvalidRequest("Missing $name")
+  if (value.isBlank() || value.codePointCount() > maxChars) {
+    throw WearProxyInvalidRequest("Invalid $name")
+  }
+  return value
+}
+
+private fun JsonObject.optionalStringParam(
+  name: String,
+  maxChars: Int,
+): String? {
+  if (name !in this) return null
+  return stringParam(name, maxChars)
+}
+
+private fun JsonObject.intParam(
+  name: String,
+  default: Int,
+  range: IntRange,
+): Int = optionalIntParam(name, range) ?: default
+
+private fun JsonObject.optionalIntParam(
+  name: String,
+  range: IntRange,
+): Int? {
+  if (name !in this) return null
+  val primitive = this[name] as? JsonPrimitive
+  val value = primitive?.takeUnless { it.isString }?.intOrNull
+  if (value == null || value !in range) throw WearProxyInvalidRequest("Invalid $name")
+  return value
+}
+
+private fun JsonElement.asObject(method: String): JsonObject = this as? JsonObject ?: throw WearProxyGatewayException("invalid_response", "$method returned an invalid response")
+
+private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
+
+private fun JsonObject.stringOrNull(name: String): String? = (this[name] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+
+private fun JsonElement?.booleanPrimitiveOrNull(): Boolean? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+
+private fun JsonElement?.longPrimitiveOrNull(): Long? = (this as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+
+private fun kotlinx.serialization.json.JsonObjectBuilder.copyString(
+  source: JsonObject,
+  name: String,
+  maxChars: Int,
+) {
+  source.stringOrNull(name)?.let { put(name, it.takeCodePoints(maxChars)) }
+}
+
+private fun kotlinx.serialization.json.JsonObjectBuilder.copyLong(
+  source: JsonObject,
+  name: String,
+) {
+  source[name].longPrimitiveOrNull()?.let { put(name, it) }
+}
+
+private fun kotlinx.serialization.json.JsonObjectBuilder.copyBoolean(
+  source: JsonObject,
+  name: String,
+) {
+  source[name].booleanPrimitiveOrNull()?.let { put(name, it) }
+}
+
+private fun String.codePointCount(): Int = codePointCount(0, length)
+
+private fun String.takeCodePoints(maxCodePoints: Int): String {
+  if (codePointCount() <= maxCodePoints) return this
+  return substring(0, offsetByCodePoints(0, maxCodePoints))
+}
+
+private fun String.takeUtf8Bytes(maxBytes: Int): String {
+  var end = 0
+  var usedBytes = 0
+  while (end < length) {
+    val codePoint = codePointAt(end)
+    val charCount = Character.charCount(codePoint)
+    val byteCount =
+      when {
+        codePoint <= 0x7f -> 1
+        codePoint <= 0x7ff -> 2
+        codePoint <= 0xffff -> 3
+        else -> 4
+      }
+    if (usedBytes + byteCount > maxBytes) break
+    usedBytes += byteCount
+    end += charCount
+  }
+  if (end == length) return this
+  return substring(0, end)
+}
+
+private const val MAX_SESSION_KEY_CHARS = 512
+private const val MAX_RUN_ID_CHARS = 128
+private const val MAX_IDEMPOTENCY_KEY_CHARS = 128
+private const val MAX_SESSION_LABEL_CHARS = 200
+private const val MAX_EVENT_TEXT_CHARS = 2_000
+private const val MAX_PROJECTED_CONTENT_BYTES = 1_024
+private const val MAX_PROJECTED_CONTENT_PARTS = 20
+private const val MAX_ERROR_MESSAGE_CHARS = 300

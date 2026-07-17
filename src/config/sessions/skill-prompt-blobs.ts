@@ -24,7 +24,7 @@ export type SessionSkillPromptBlobProjection = {
   prompt: string;
 };
 
-export type SessionStorePersistenceProjection = PersistedSessionStore & {
+type SessionStorePersistenceProjection = PersistedSessionStore & {
   promptBlobs: Map<string, SessionSkillPromptBlobProjection>;
 };
 
@@ -39,32 +39,11 @@ export function clearSessionSkillPromptRefCache(): void {
   promptRefCache.clear();
   validPromptBlobCache.clear();
 }
-
-export function getSessionSkillPromptRefCacheStatsForTest(): {
-  entries: number;
-  maxEntries: number;
-} {
-  return {
-    entries: promptRefCache.size,
-    maxEntries: PROMPT_REF_CACHE_MAX_ENTRIES,
-  };
-}
-
-export function getValidSessionSkillPromptBlobCacheStatsForTest(): {
-  entries: number;
-  maxEntries: number;
-} {
-  return {
-    entries: validPromptBlobCache.size,
-    maxEntries: VALID_PROMPT_BLOB_CACHE_MAX_ENTRIES,
-  };
-}
-
 function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
-export function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
+function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
   if (!isSha256Hex(hash)) {
     return null;
   }
