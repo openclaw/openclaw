@@ -24,7 +24,7 @@ describe("outbound session persistence", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
-  it("binds a discovered peer after replacing a shared-main delivery route", async () => {
+  it("binds a discovered canonical peer through a different delivery alias", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
       { agentId: "main", sessionKey, storePath },
@@ -41,7 +41,7 @@ describe("outbound session persistence", () => {
       accountId: "default",
       kind: "direct",
       peerId: "reef:peer-agent",
-      deliveryTarget: "reef:peer-agent",
+      deliveryTarget: "@molty",
       nativeDirectUserId: "peer-agent",
     });
     expect(identity).toBeDefined();
@@ -60,7 +60,7 @@ describe("outbound session persistence", () => {
         peer: { kind: "direct", id: "peer-agent" },
         chatType: "direct",
         from: "reef:peer-agent",
-        to: "reef:peer-agent",
+        to: "@molty",
       },
     });
 
@@ -70,7 +70,7 @@ describe("outbound session persistence", () => {
       sessionId: "shared-main-session",
       sessionKey,
       role: "participant",
-      target: "reef:peer-agent",
+      target: "@molty",
     });
   });
 

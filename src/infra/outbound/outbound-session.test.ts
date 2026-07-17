@@ -605,6 +605,7 @@ describe("ensureOutboundSessionEntry", () => {
       NativeDirectUserId: "peer-agent",
       OriginatingTo: "reef:peer-agent",
     });
+    expect(metadata.createIfMissing).toBe(true);
   });
 
   it("keeps ordinary outbound sends best-effort when route persistence fails", async () => {
