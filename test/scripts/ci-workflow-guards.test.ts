@@ -2080,6 +2080,20 @@ describe("ci workflow guards", () => {
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
+    // pnpm 11 auto-installs when pre-run verification sees stale restored
+    // state. Prime that state once before shard fanout, then forbid concurrent
+    // pnpm run/exec processes from mutating the shared node_modules tree.
+    const primeCommand = 'pnpm_config_verify_deps_before_run=install pnpm exec node -e ""';
+    const failClosedExport = 'echo "pnpm_config_verify_deps_before_run=error" >> "$GITHUB_ENV"';
+    expect(installStep.run).toContain('if [ "$STICKY_DISK" = "true" ]; then');
+    expect(installStep.run).toContain(primeCommand);
+    expect(installStep.run).toContain(failClosedExport);
+    expect(installStep.run.indexOf('sticky-importers.sh" restore')).toBeLessThan(
+      installStep.run.indexOf(primeCommand),
+    );
+    expect(installStep.run.indexOf(primeCommand)).toBeLessThan(
+      installStep.run.indexOf(failClosedExport),
+    );
     const cleanupAction = parse(
       readFileSync(".github/actions/register-bind-mount-cleanup/action.yml", "utf8"),
     );

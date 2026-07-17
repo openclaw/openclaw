@@ -407,6 +407,16 @@ runs:
           fi
         fi
 
+        if [ "$STICKY_DISK" = "true" ]; then
+          # pnpm 11 defaults to installing when its pre-run dependency check
+          # finds restored workspace state stale. Reconcile once here, before
+          # later CI steps can fan out concurrent pnpm processes over the same
+          # node_modules tree, then make every later check fail closed.
+          pnpm_config_verify_deps_before_run=install pnpm exec node -e ""
+          # zizmor: ignore[github-env] static pnpm policy owned by this action.
+          echo "pnpm_config_verify_deps_before_run=error" >> "$GITHUB_ENV"
+        fi
+
     - name: Restore and save build-all cache
       if: inputs.build-all-cache-scope != ''
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
