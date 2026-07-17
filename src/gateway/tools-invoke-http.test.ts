@@ -9,10 +9,14 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import type { runAuthorizationPolicies as runAuthorizationPoliciesType } from "../plugins/authorization-policy.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
+type RunAuthorizationPolicies = typeof runAuthorizationPoliciesType;
+type RunAuthorizationPoliciesArgs = Parameters<RunAuthorizationPolicies>[0];
+type RunAuthorizationPoliciesResult = Awaited<ReturnType<RunAuthorizationPolicies>>;
 
 const pluginToolMetaState = vi.hoisted(
   () => new Map<string, { pluginId: string; optional: boolean }>(),
@@ -26,6 +30,16 @@ const hookMocks = vi.hoisted(() => ({
       params: args.params,
     }),
   ),
+}));
+
+const runAuthorizationPoliciesMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params: RunAuthorizationPoliciesArgs): Promise<RunAuthorizationPoliciesResult> =>
+      undefined,
+  ),
+);
+const toolExecutionMocks = vi.hoisted(() => ({
+  agentsList: vi.fn(async (_toolCallId: string, _params: unknown) => ({ ok: true, result: [] })),
 }));
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
@@ -114,7 +128,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
     {
       name: "agents_list",
       parameters: { type: "object", properties: { action: { type: "string" } } },
-      execute: async () => ({ ok: true, result: [] }),
+      execute: toolExecutionMocks.agentsList,
     },
     {
       name: "sessions_spawn",
@@ -236,6 +250,11 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
+vi.mock("../plugins/authorization-policy.js", () => ({
+  AUTHORIZATION_POLICY_DENIED_MESSAGE: "Operation blocked by authorization policy.",
+  runAuthorizationPolicies: runAuthorizationPoliciesMock,
+}));
+
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
@@ -306,6 +325,9 @@ beforeEach(() => {
       params: args.params,
     }),
   );
+  runAuthorizationPoliciesMock.mockClear();
+  runAuthorizationPoliciesMock.mockResolvedValue(undefined);
+  toolExecutionMocks.agentsList.mockClear();
   vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true });
 });
 
@@ -430,7 +452,7 @@ const firstHookCallArg = () => {
 const invokeToolsRpc = async (
   params: Record<string, unknown>,
   scopes = ["operator.write"],
-  clientInfo?: { id: string; mode: string },
+  clientInfo?: { id: string; mode: string; deviceId?: string },
   caps?: string[],
 ) => {
   const respond = vi.fn();
@@ -446,6 +468,17 @@ const invokeToolsRpc = async (
         role: "operator",
         scopes,
         ...(clientInfo ? { client: clientInfo } : {}),
+        ...(clientInfo?.deviceId
+          ? {
+              device: {
+                id: clientInfo.deviceId,
+                publicKey: "test-public-key",
+                signature: "test-signature",
+                signedAt: 1,
+                nonce: "test-nonce",
+              },
+            }
+          : {}),
         ...(caps ? { caps } : {}),
       },
     } as never,
@@ -481,6 +514,153 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("uses authenticated HTTP scopes as operator identity, never routing headers", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        ...gatewayAuthHeaders(),
+        "x-openclaw-message-channel": "discord",
+        "x-openclaw-account-id": "route-account",
+        "x-openclaw-message-to": "route-channel",
+        "x-openclaw-thread-id": "route-thread",
+      },
+      tool: "agents_list",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    const call = runAuthorizationPoliciesMock.mock.calls[0]?.[0];
+    expect(call?.context).toMatchObject({
+      principal: {
+        kind: "operator",
+        scopes: ["operator.write"],
+        isOwner: false,
+      },
+      conversationId: "route-channel",
+      threadId: "route-thread",
+    });
+    expect(call?.context?.principal).not.toHaveProperty("provider");
+    expect(call?.context?.principal).not.toHaveProperty("accountId");
+  });
+
+  it("binds the authenticated operator into tools that perform nested effects", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        ...gatewayAuthHeaders(),
+        "x-openclaw-message-to": "route-channel",
+        "x-openclaw-thread-id": "route-thread",
+      },
+      tool: "agents_list",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.beforeToolCallHookContext).toMatchObject({
+      authorization: {
+        principal: {
+          kind: "operator",
+          scopes: ["operator.write"],
+          isOwner: false,
+        },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        conversationId: "route-channel",
+        threadId: "route-thread",
+      },
+    });
+  });
+
+  it("authorizes the final args action instead of a conflicting outer action", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeToolAuthed({
+      tool: "agents_list",
+      action: "outer-safe",
+      args: { action: "inner-dangerous" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.request).toMatchObject({
+      operation: "tool.call",
+      phase: "final",
+      action: "inner-dangerous",
+      input: { action: "inner-dangerous" },
+    });
+  });
+
+  it("authorizes hook-rewritten action immediately before execution", async () => {
+    allowAgentsListForMain();
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: { action: "hook-final" },
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "agents_list",
+      action: "outer-safe",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(200);
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.request).toMatchObject({
+      action: "hook-final",
+      input: { action: "hook-final" },
+    });
+  });
+
+  it("passes the exact finalized input to policy and execution", async () => {
+    allowAgentsListForMain();
+    const finalizedInput = ["hidden-final-input"];
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: finalizedInput as never,
+    });
+
+    const res = await invokeAgentsListAuthed();
+
+    expect(res.status).toBe(200);
+    const request = runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.request;
+    expect(request?.operation).toBe("tool.call");
+    if (request?.operation !== "tool.call") {
+      throw new Error("expected tool.call authorization request");
+    }
+    expect(request.input).toBe(finalizedInput);
+    expect(toolExecutionMocks.agentsList.mock.calls[0]?.[1]).toBe(finalizedInput);
+  });
+
+  it("returns a generic denial and never executes a policy-blocked tool", async () => {
+    allowAgentsListForMain();
+    runAuthorizationPoliciesMock.mockResolvedValueOnce({
+      denied: true,
+      kind: "deny",
+      pluginId: "test-plugin",
+      policyId: "maintainer-control",
+      code: "dangerous-action",
+    });
+
+    const res = await invokeToolAuthed({
+      tool: "agents_list",
+      args: { action: "delete" },
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: {
+        type: "tool_call_blocked",
+        message: "Operation blocked by authorization policy.",
+      },
+    });
+    expect(toolExecutionMocks.agentsList).not.toHaveBeenCalled();
+  });
+
   it("rejects reserved harness session contexts before tool resolution", async () => {
     allowAgentsListForMain();
     const res = await invokeAgentsListAuthed({
@@ -1116,6 +1296,50 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
+  it("uses authenticated scopes and device identity, never client feature caps", async () => {
+    allowAgentsListForMain();
+
+    const call = await invokeToolsRpc(
+      {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+        conversationId: "discord:maintenance",
+        threadId: "thread-1",
+      },
+      ["operator.write"],
+      {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        deviceId: "device-1",
+      },
+      ["operator.admin", "inline-widgets"],
+    );
+
+    expect(call?.[1]?.ok).toBe(true);
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context?.principal).toEqual({
+      kind: "operator",
+      scopes: ["operator.write"],
+      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceId: "device-1",
+      isOwner: false,
+    });
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context).toMatchObject({
+      conversationId: "discord:maintenance",
+      threadId: "thread-1",
+    });
+    expect(lastCreateOpenClawToolsContext).toMatchObject({
+      agentTo: "discord:maintenance",
+      agentThreadId: "thread-1",
+      currentChannelId: "discord:maintenance",
+      currentThreadTs: "thread-1",
+    });
+    expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual([
+      "operator.admin",
+      "inline-widgets",
+    ]);
+  });
+
   it("rejects reserved harness session contexts", async () => {
     allowAgentsListForMain();
     const call = await invokeToolsRpc({

@@ -810,6 +810,82 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
   });
 
+  it("keeps native authorization active when the optional relay is disabled", async () => {
+    const authorizationHandler = vi.fn(
+      (_request: unknown, _context: unknown, _signal: AbortSignal) => ({ effect: "pass" as const }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: { "tool.call": authorizationHandler },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const attempt = {
+      ...createParams(sessionFile, workspaceDir),
+      config: {},
+      sessionKey: "agent:main:discord:channel:maintenance",
+      messageProvider: "discord",
+      agentAccountId: "molty",
+      senderId: "maintainer-1",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      memberRoleIds: ["maintainers", "write"],
+      currentThreadTs: "thread-1",
+    };
+
+    const run = runCodexAppServerAttempt(attempt, {
+      nativeHookRelay: { enabled: false, events: ["post_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).toBe(true);
+    expect(startConfig?.["hooks.PreToolUse"]).not.toEqual([]);
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "pwd" },
+      },
+    });
+
+    expect(authorizationHandler.mock.calls[0]?.[0]).toMatchObject({
+      operation: "tool.call",
+      toolName: "exec",
+      phase: "pre-execution",
+      input: { command: "pwd" },
+    });
+    expect(authorizationHandler.mock.calls[0]?.[1]).toMatchObject({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "molty",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      conversationId: "maintenance",
+      threadId: "thread-1",
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("cleans up native hook relay state when turn/start fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

@@ -122,6 +122,8 @@ describe("handleBtwCommand", () => {
     const params = buildParams("/btw what changed?");
     params.command.senderId = "sender-1";
     params.command.senderIsOwner = true;
+    params.command.isAuthorizedSender = true;
+    params.command.memberRoleIds = ["write", "maintainers"];
     params.ctx.AccountId = "account-1";
     params.ctx.RuntimePolicySessionKey = "agent:main:runtime-policy";
     params.ctx.GroupChannel = "#ops";
@@ -131,6 +133,7 @@ describe("handleBtwCommand", () => {
     params.ctx.SenderUsername = "rosita";
     params.ctx.SenderE164 = "+15550001";
     params.ctx.MessageThreadId = "thread-1";
+    params.ctx.MemberRoleIds = ["stale-role"];
     params.agentDir = "/tmp/agent";
     params.sessionEntry = {
       sessionId: "session-1",
@@ -176,6 +179,8 @@ describe("handleBtwCommand", () => {
       senderUsername: "rosita",
       senderE164: "+15550001",
       senderIsOwner: true,
+      isAuthorizedSender: true,
+      memberRoleIds: ["write", "maintainers"],
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(runnerArgs.messageActionTurnCapability).toEqual(expect.any(String));
@@ -183,6 +188,7 @@ describe("handleBtwCommand", () => {
     expect(resolvedTurnContext).toMatchObject({
       requesterAccountId: "account-1",
       requesterSenderId: "sender-1",
+      requesterRoleIds: ["maintainers", "write"],
       toolContext: {
         currentChannelProvider: "whatsapp",
       },

@@ -22,6 +22,10 @@ import {
   takeCommandSessionMetadataChangesFromTargets,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import {
+  authorizeCoreCommand,
+  resolveCommandAuthorizationDenialText,
+} from "./commands-authorization.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -138,6 +142,35 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     commandAuthorized: params.commandAuthorized,
     workspaceDir: params.workspaceDir,
   });
+  const command = buildCommandContext({
+    ctx: params.ctx,
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: sessionState.sessionKey,
+    isGroup: sessionState.isGroup,
+    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    commandAuthorized: params.commandAuthorized,
+  });
+  if (command.isAuthorizedSender) {
+    const authorization = await authorizeCoreCommand({
+      command,
+      ctx: params.ctx,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: sessionState.sessionKey,
+      sessionId: sessionState.sessionId,
+      signal: params.opts?.abortSignal,
+    });
+    if (authorization.matched && !authorization.allowed) {
+      params.typing.cleanup();
+      return {
+        handled: true,
+        reply: markCommandReplyForDelivery({
+          text: resolveCommandAuthorizationDenialText(authorization.denial),
+        }),
+      };
+    }
+  }
   if (params.commandAuthorized) {
     const creatingSession = sessionState.initialSessionEntry === undefined;
     const initializationEntry = sessionState.initialSessionEntry ?? sessionState.sessionEntry;
@@ -166,15 +199,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionState.sessionStore[sessionState.sessionKey] = persistedInitialEntry;
     sessionState.sessionId = persistedInitialEntry.sessionId;
   }
-  const command = buildCommandContext({
-    ctx: params.ctx,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: sessionState.sessionKey,
-    isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
-    commandAuthorized: params.commandAuthorized,
-  });
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;

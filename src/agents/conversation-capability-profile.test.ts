@@ -25,6 +25,7 @@ describe("resolveConversationCapabilityProfile", () => {
       messageProvider: "discord",
       chatType: "direct",
       senderId: "guest",
+      isAuthorizedSender: true,
       modelProvider: "openai",
       modelId: "gpt-5.5",
       modelApi: "responses",
@@ -38,6 +39,7 @@ describe("resolveConversationCapabilityProfile", () => {
     });
 
     expect(profile.conversation.scope).toBe("direct");
+    expect(profile.sender).toMatchObject({ id: "guest", isAuthorized: true });
     expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
     expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
     expect(profile.model).toMatchObject({

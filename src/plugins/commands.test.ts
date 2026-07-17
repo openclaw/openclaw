@@ -11,6 +11,8 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { resetGlobalHookRunner } from "./hook-runner-global.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -747,6 +749,114 @@ describe("registerPluginCommand", () => {
     expect(observedArgs).toBe("a".repeat(4094));
   });
 
+  it("runs final authorization after core command auth and before the plugin handler", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({ acceptsArgs: true, handler });
+    const match = requirePluginCommandMatch("/voice hello");
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer commands",
+        handlers: {
+          "command.invoke": (request, context) => {
+            seen.push({ request, context });
+            return { effect: "deny", code: "plugin-command-denied" };
+          },
+        },
+      },
+    });
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+
+    const result = await executePluginCommand({
+      command: match.command,
+      args: match.args,
+      senderId: "maintainer-1",
+      memberRoleIds: ["maintainers"],
+      channel: "discord",
+      channelId: "maintenance",
+      isAuthorizedSender: true,
+      senderIsOwner: false,
+      commandBody: "/voice hello",
+      commandSource: "native",
+      config: {},
+      messageThreadId: "thread-1",
+      conversationId: "discord:channel:maintenance",
+      parentConversationId: "discord:channel:maintenance",
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "⚠️ Command blocked by authorization policy." });
+    expect(seen).toEqual([
+      {
+        request: {
+          operation: "command.invoke",
+          phase: "final",
+          commandName: "voice",
+          owner: { kind: "plugin", pluginId: "demo-plugin" },
+          source: "native",
+          arguments: { raw: "hello" },
+        },
+        context: {
+          principal: {
+            kind: "sender",
+            provider: "discord",
+            senderId: "maintainer-1",
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+            roleIds: ["maintainers"],
+          },
+          conversationId: "discord:channel:maintenance",
+          parentConversationId: "discord:channel:maintenance",
+          threadId: "thread-1",
+          trigger: "command",
+        },
+      },
+    ]);
+  });
+
+  it("propagates cancellation during plugin command authorization", async () => {
+    const handler = vi.fn(async () => ({ text: "executed" }));
+    registerVoiceCommandForTest({ handler });
+    const match = requirePluginCommandMatch("/voice");
+    const controller = new AbortController();
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Cancel command authorization",
+        handlers: {
+          "command.invoke": () => {
+            controller.abort();
+            return { effect: "deny", code: "cancelled-command" };
+          },
+        },
+      },
+    });
+    resetGlobalHookRunner();
+    setActivePluginRegistry(registry);
+
+    await expect(
+      executePluginCommand({
+        command: match.command,
+        args: match.args,
+        channel: "discord",
+        channelId: "maintenance",
+        isAuthorizedSender: true,
+        commandBody: "/voice",
+        config: {},
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("ignores owner status opt-in from direct plugin command registration", async () => {
     let observedOwnerStatus: boolean | undefined;
     registerPluginCommand("demo-plugin", {
@@ -1351,44 +1461,58 @@ describe("registerPluginCommand", () => {
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "line",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "line",
-              label: "LINE",
-              config: {
-                listAccountIds: () => ["default", "work"],
-                defaultAccountId: () => "work",
-                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
-              },
-            }),
-            bindings: {
-              resolveCommandConversation: ({
-                originatingTo,
-                commandTo,
-                fallbackTo,
-              }: {
-                originatingTo?: string;
-                commandTo?: string;
-                fallbackTo?: string;
-              }) => {
-                const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
-                if (!rawTarget) {
-                  return null;
-                }
-                return {
-                  conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
-                };
-              },
+    let seenPolicyContext: unknown;
+    const registry = createTestRegistry([
+      {
+        pluginId: "line",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "line",
+            label: "LINE",
+            config: {
+              listAccountIds: () => ["default", "work"],
+              defaultAccountId: () => "work",
+              resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
+            },
+          }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const rawTarget = [originatingTo, commandTo, fallbackTo].find(Boolean)?.trim();
+              if (!rawTarget) {
+                return null;
+              }
+              return {
+                conversationId: rawTarget.replace(/^line:/i, "").replace(/^user:/i, ""),
+              };
             },
           },
         },
-      ]),
-    );
+      },
+    ]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "sender-access",
+        description: "Inspect ingress account identity",
+        handlers: {
+          "command.invoke": (_request, context) => {
+            seenPolicyContext = context;
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry);
 
     let receivedCtx:
       | {
@@ -1418,6 +1542,15 @@ describe("registerPluginCommand", () => {
 
     expect(result).toEqual({ text: "ok" });
     expect(receivedCtx?.accountId).toBe("work");
+    expect(seenPolicyContext).toMatchObject({
+      principal: {
+        kind: "sender",
+        provider: "line",
+        senderId: "U123",
+        isAuthorizedSender: true,
+      },
+    });
+    expect(seenPolicyContext).not.toHaveProperty("principal.accountId");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

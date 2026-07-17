@@ -16,6 +16,7 @@ import {
   type DeliverOutboundPayloadsParams,
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
+import { isOutboundEffectAuthorizationError } from "../../infra/outbound/effect-authorization.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
@@ -319,6 +320,9 @@ export async function withDurableMessageSendContext<T>(
           ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
         };
       } catch (error: unknown) {
+        if (isOutboundEffectAuthorizationError(error)) {
+          throw error;
+        }
         if (isOutboundDeliveryError(error)) {
           if (error.results.length > 0) {
             const receipt = createMessageReceiptFromOutboundResults({

@@ -19,7 +19,9 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import type { OutboundEffectAuthorizationInput } from "./effect-authorization.js";
 import { runMessageAction } from "./message-action-runner.js";
+import type { ExecuteSendActionParams, PreparedSendAction } from "./outbound-send-service.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -94,6 +96,7 @@ function expectRecordFields(
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
+  executePreparedSendAction: vi.fn(),
   executePollAction: vi.fn(),
   hasCorePresentationDelivery: vi.fn(),
   materializeMessagePresentationFallback: vi.fn(),
@@ -116,7 +119,28 @@ vi.mock("./channel-resolution.js", () => ({
 
 vi.mock("./outbound-send-service.js", () => ({
   executeSendAction: mocks.executeSendAction,
+  prepareSendAction: vi.fn(async (params: ExecuteSendActionParams) => ({
+    kind: "core",
+    params,
+    message: params.message,
+    payload: params.payload ?? { text: params.message },
+    queuePolicy: "best_effort",
+  })),
+  executePreparedSendAction: mocks.executePreparedSendAction,
+  preparePollAction: vi.fn((params) => ({ kind: "plugin", ctx: params.ctx })),
+  executePreparedPollAction: vi.fn(async (prepared) =>
+    mocks.executePollAction({ ctx: prepared.ctx }),
+  ),
   executePollAction: mocks.executePollAction,
+  waitForPreparedSendEffectAuthorization: vi.fn(
+    async (input?: OutboundEffectAuthorizationInput) => {
+      await input?.waitForAuthorizationBarrier?.({
+        status: "sealed",
+        digest: `sha256:${"0".repeat(64)}`,
+        handle: null,
+      });
+    },
+  ),
   hasCorePresentationDelivery: mocks.hasCorePresentationDelivery,
   materializeMessagePresentationFallback: mocks.materializeMessagePresentationFallback,
 }));
@@ -299,6 +323,10 @@ describe("runMessageAction plugin dispatch", () => {
     mocks.executeSendAction.mockImplementation(
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "send", ctx }),
+    );
+    mocks.executePreparedSendAction.mockReset();
+    mocks.executePreparedSendAction.mockImplementation(
+      async (prepared: PreparedSendAction) => await mocks.executeSendAction(prepared.params),
     );
     mocks.executePollAction.mockReset();
     mocks.executePollAction.mockImplementation(
@@ -825,6 +853,70 @@ describe("runMessageAction plugin dispatch", () => {
       );
 
       handleDiscordAction.mockClear();
+      await runMessageAction({
+        cfg,
+        action: "channel-delete",
+        params: {
+          channel: "discord",
+          channelId: "channel-1",
+        },
+        senderIsOwner: true,
+        messageActionAuthorization: {},
+        dryRun: false,
+      });
+      expectRecordFields(
+        readFirstPluginCall(handleDiscordAction),
+        { senderIsOwner: true },
+        "owner action with empty capability context",
+      );
+
+      handleDiscordAction.mockClear();
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "channel-delete",
+          params: {
+            channel: "discord",
+            channelId: "channel-1",
+          },
+          senderIsOwner: true,
+          messageActionAuthorization: { requesterSenderIsOwner: false },
+          dryRun: false,
+        }),
+      ).rejects.toThrow("trusted Discord sender identity");
+      expectRecordFields(
+        readFirstPluginCall(handleDiscordAction),
+        { senderIsOwner: false },
+        "non-owner capability action call",
+      );
+
+      for (const authorization of [
+        { principal: { kind: "service" as const, serviceId: "scheduler" } },
+        { principal: { kind: "unknown" as const } },
+      ]) {
+        handleDiscordAction.mockClear();
+        await expect(
+          runMessageAction({
+            cfg,
+            action: "channel-delete",
+            params: {
+              channel: "discord",
+              channelId: "channel-1",
+            },
+            senderIsOwner: true,
+            messageActionAuthorization: { requesterSenderIsOwner: true },
+            authorization,
+            dryRun: false,
+          }),
+        ).rejects.toThrow("trusted Discord sender identity");
+        expectRecordFields(
+          readFirstPluginCall(handleDiscordAction),
+          { senderIsOwner: false },
+          `${authorization.principal.kind} action call`,
+        );
+      }
+
+      handleDiscordAction.mockClear();
       await expect(
         runMessageAction({
           cfg,
@@ -919,6 +1011,15 @@ describe("runMessageAction plugin dispatch", () => {
         sessionId: "session-123",
         agentId: "alpha",
         inboundEventKind: "room_event",
+        authorization: {
+          principal: {
+            kind: "sender",
+            provider: "gatewaychat",
+            senderId: "trusted-user",
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+          },
+        },
         toolContext: {
           currentChannelProvider: "gatewaychat",
           currentMessageId: "wamid.1",
@@ -975,6 +1076,71 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("requires signed sender and service identity for gateway-executed actions", async () => {
+      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat identity test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: handleActionEntry,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
+      );
+
+      const authorizations = [
+        {
+          principal: {
+            kind: "sender" as const,
+            provider: "gatewaychat",
+            senderId: "trusted-user",
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+          },
+        },
+        { principal: { kind: "service" as const, serviceId: "scheduler" } },
+      ];
+      for (const authorization of authorizations) {
+        for (const gateway of [
+          {
+            resolveAgentRuntimeIdentityToken: vi.fn(async () => undefined),
+            clientName: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
+          { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI },
+        ]) {
+          await expect(
+            runMessageAction({
+              cfg: {
+                channels: {
+                  gatewaychat: {
+                    enabled: true,
+                  },
+                },
+              } as OpenClawConfig,
+              action: "react",
+              params: {
+                channel: "gatewaychat",
+                to: "+15551234567",
+                chatJid: "+15551234567",
+                messageId: "wamid.1",
+                emoji: "✅",
+              },
+              authorization,
+              gateway,
+              dryRun: false,
+            }),
+          ).rejects.toThrow("Message action blocked by authorization policy.");
+        }
+      }
+
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      expect(handleActionEntry).not.toHaveBeenCalled();
+      expect(mocks.beginTerminalSourceReplyDelivery).not.toHaveBeenCalled();
     });
 
     it("keeps blank backend requester provenance least-privileged", async () => {
@@ -1352,6 +1518,9 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "execute send context",
       );
+      expect(mocks.executePreparedSendAction.mock.calls[0]?.[1]).toEqual({
+        effectAuthorizationScope: "message-action",
+      });
       expectRecordFields(result, { handledBy: "core" }, "result");
     });
 
@@ -2023,8 +2192,14 @@ describe("runMessageAction plugin dispatch", () => {
         ]),
       );
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        ok: true,
-        messageId: "gw-broadcast-1",
+        results: [
+          {
+            channel: "gatewaychat",
+            to: "user-123",
+            ok: true,
+            payload: { ok: true, messageId: "gw-broadcast-1" },
+          },
+        ],
       });
 
       const result = await runMessageAction({
@@ -2088,9 +2263,17 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockRejectedValue(
-        Object.assign(new Error("second payload failed"), { sentBeforeError: true }),
-      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        results: [
+          {
+            channel: "gatewaychat",
+            to: "user-123",
+            ok: false,
+            sentBeforeError: true,
+            error: "second payload failed",
+          },
+        ],
+      });
 
       const result = await runMessageAction({
         cfg: {

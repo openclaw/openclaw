@@ -241,6 +241,59 @@ describe("global hook runner composition (#91918, #107933)", () => {
     ]);
   });
 
+  it("drops a retired authorization policy registry and selects the live owner", () => {
+    const retired = createMockPluginRegistry([]);
+    retired.plugins = [createPluginRecord({ id: "sender-access", origin: "workspace" })];
+    retired.authorizationPolicies = [
+      {
+        pluginId: "sender-access",
+        pluginName: "Sender Access",
+        origin: "workspace",
+        source: "retired",
+        policy: {
+          id: "maintainer-actions",
+          description: "Retired registration",
+          handlers: { "tool.call": () => ({ effect: "deny", code: "stale" }) },
+        },
+      },
+    ];
+    const live = createMockPluginRegistry([]);
+    live.plugins = [createPluginRecord({ id: "sender-access", origin: "workspace" })];
+    live.authorizationPolicies = [
+      {
+        pluginId: "sender-access",
+        pluginName: "Sender Access",
+        origin: "workspace",
+        source: "live",
+        policy: {
+          id: "maintainer-actions",
+          description: "Live registration",
+          handlers: { "tool.call": () => ({ effect: "pass" }) },
+        },
+      },
+    ];
+
+    setActivePluginRegistry(retired);
+    initializeGlobalHookRunner(retired);
+    // Replacing the active registry retires the initialized registry. The
+    // composed facade must resolve the live plugin registration immediately.
+    setActivePluginRegistry(live);
+
+    expect(
+      getGlobalHookRunnerRegistry()?.authorizationPolicies?.map((registration) => ({
+        pluginId: registration.pluginId,
+        source: registration.source,
+        description: registration.policy.description,
+      })),
+    ).toEqual([
+      {
+        pluginId: "sender-access",
+        source: "live",
+        description: "Live registration",
+      },
+    ]);
+  });
+
   it("lets an explicitly initialized registry win ownership over the active registry", () => {
     const activeRegistry = createMockPluginRegistry([
       { hookName: "message_received", handler: vi.fn(), pluginId: "foo" },

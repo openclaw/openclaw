@@ -3321,6 +3321,20 @@ describe("prepareCliRunContext", () => {
       });
       expect(mintMcpLoopbackClientGrant).toHaveBeenCalledWith({
         context: {
+          authorization: {
+            principal: {
+              kind: "sender",
+              provider: "discord",
+              senderId: "canonical-sender",
+            },
+            agentId: "worker",
+            sessionKey: "agent:main:telegram:group:chat123",
+            sessionId: "session-test",
+            runId: "run-test-room-event-tools",
+            conversationId: "telegram:-100123:topic:42",
+            threadId: "42",
+            trigger: "user",
+          },
           sessionKey: "agent:main:telegram:group:chat123",
           runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
           agentId: "worker",

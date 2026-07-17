@@ -8,6 +8,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
+import type { AuthorizationPolicyRegistration } from "./authorization-policy.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -334,6 +335,15 @@ export type PluginTrustedToolPolicyRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginAuthorizationPolicyRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: AuthorizationPolicyRegistration;
+  origin?: PluginRecord["origin"];
+  source: string;
+  rootDir?: string;
+};
+
 type PluginToolMetadataRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -499,6 +509,7 @@ export type PluginRegistry = {
   interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
   sessionExtensions: PluginSessionExtensionRegistryRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
+  authorizationPolicies: PluginAuthorizationPolicyRegistryRegistration[];
   toolMetadata: PluginToolMetadataRegistryRegistration[];
   controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];

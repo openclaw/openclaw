@@ -33,6 +33,10 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../../plugins/authorization-policy-context.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import type { SkillCommandSpec } from "../types.js";
@@ -45,10 +49,13 @@ type SkillDispatchMessageContext = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
+  senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
   originatingTo?: string;
   to?: string;
   nativeChannelId?: string;
   messageThreadId?: string | number;
+  threadParentId?: string;
   memberRoleIds?: string[];
 };
 
@@ -163,22 +170,45 @@ export function resolveSkillDispatchTools(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const shouldCaptureCronCreatorToolAllowlist =
     explicitPolicyList.some(hasRestrictiveAllowPolicy) || explicitDenylist.length > 0;
-  const beforeToolCallHookContext = params.skillCommand
-    ? {
-        cwd: params.workspaceDir,
-        workspaceDir: params.workspaceDir,
-        ...(params.sessionEntry?.skillsSnapshot
-          ? { skillsSnapshot: params.sessionEntry.skillsSnapshot }
-          : {}),
-        skillCommand: {
-          commandName: params.skillCommand.name,
-          ...(params.skillCommand.skillFile ? { skillFile: params.skillCommand.skillFile } : {}),
-          skillName: params.skillCommand.skillName,
-          skillSource: params.skillCommand.skillSource ?? "unknown",
-          ...(params.skillCommand.toolName ? { toolName: params.skillCommand.toolName } : {}),
-        },
-      }
-    : undefined;
+  const beforeToolCallHookContext = {
+    cwd: params.workspaceDir,
+    workspaceDir: params.workspaceDir,
+    authorization: createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        provider: channel,
+        accountId: params.message.accountId,
+        senderId: params.message.senderId ?? params.senderId,
+        senderIsOwner: params.message.senderIsOwner,
+        isAuthorizedSender: params.message.isAuthorizedSender,
+        roleIds: params.message.memberRoleIds,
+      }),
+      agentId: resolvedAgentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+      conversationId:
+        params.currentChannelId ??
+        params.message.nativeChannelId ??
+        params.message.originatingTo ??
+        params.message.to,
+      parentConversationId: params.message.threadParentId,
+      threadId: params.message.messageThreadId,
+      trigger: "user",
+    }),
+    ...(params.sessionEntry?.skillsSnapshot
+      ? { skillsSnapshot: params.sessionEntry.skillsSnapshot }
+      : {}),
+    ...(params.skillCommand
+      ? {
+          skillCommand: {
+            commandName: params.skillCommand.name,
+            ...(params.skillCommand.skillFile ? { skillFile: params.skillCommand.skillFile } : {}),
+            skillName: params.skillCommand.skillName,
+            skillSource: params.skillCommand.skillSource ?? "unknown",
+            ...(params.skillCommand.toolName ? { toolName: params.skillCommand.toolName } : {}),
+          },
+        }
+      : {}),
+  };
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -190,16 +220,17 @@ export function resolveSkillDispatchTools(params: {
     agentGroupChannel: params.sessionEntry?.groupChannel,
     agentGroupSpace: params.sessionEntry?.space,
     agentMemberRoleIds: params.message.memberRoleIds,
+    senderIsOwner: params.message.senderIsOwner,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     allowGatewaySubagentBinding: true,
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
-    requesterSenderId: params.senderId,
+    requesterSenderId: params.message.senderId ?? params.senderId,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
-    ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
+    beforeToolCallHookContext,
     modelProvider: params.provider,
     modelId: params.model,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),

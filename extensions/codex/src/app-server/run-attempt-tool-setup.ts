@@ -28,6 +28,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     hookChannelId,
+    authorization,
   } = runtime;
   const {
     params,
@@ -227,6 +228,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       isHostScopedAgentToolActive("openclaw"),
     ),
     hookContext: {
+      authorization,
       agentId: sessionAgentId,
       config: params.config,
       workspaceDir: effectiveWorkspace,

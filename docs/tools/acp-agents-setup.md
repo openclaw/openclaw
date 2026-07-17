@@ -266,6 +266,22 @@ What this does:
 - Exposes selected built-in OpenClaw tools. The initial server exposes `cron`.
 - Keeps core-tool exposure explicit and default-off.
 
+<Warning>
+  The two OpenClaw-managed ACPX MCP bridges are disabled whenever a live or
+  required authorization policy covers `tool.call`. The current pinned `acpx`
+  runtime captures MCP servers for a persistent session, so it cannot attach a
+  fresh authenticated sender and immutable Gateway grant to each turn. Reusing
+  or rebinding a session credential could give a late call the next sender's
+  authority, so OpenClaw fails closed and logs a warning instead.
+
+Full policy support requires upstream `acpx` to accept per-turn MCP server
+overrides and start that turn without reusing a client created under an older
+caller, while still resuming the backend conversation. Until then, use a
+native or embedded OpenClaw runtime for sender-specific tool authorization.
+User-configured `mcpServers` are left unchanged; calls to those external
+servers are outside OpenClaw's `tool.call` policy boundary.
+</Warning>
+
 ### Runtime operation timeout configuration
 
 The `acpx` plugin gives embedded runtime startup and control operations 120

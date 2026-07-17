@@ -575,6 +575,67 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("keeps pre-tool relays active for registered authorization policies", () => {
+    const registry = createMockPluginRegistry([]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: { "tool.call": () => ({ effect: "pass" }) },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      config: {},
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+  });
+
+  it("keeps pre-tool relays active when a required authorization policy is missing", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      preToolUseLoopDetection: false,
+      config: {
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: {
+                requiredPolicies: [{ id: "maintainer-actions", operations: ["tool.call"] }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "message",
+        tool_input: { action: "reply" },
+      },
+    });
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: "Operation blocked by authorization policy.",
+      },
+    });
+  });
+
   it("keeps pre-tool relays active when native loop detection is not disabled", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -1743,6 +1804,119 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("authorizes rewritten native input with the pinned sender context", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      params: { action: "react", emoji: "lobster" },
+    }));
+    const authorizationHandler = vi.fn(() => ({ effect: "pass" as const }));
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: beforeToolCall },
+    ]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: { "tool.call": authorizationHandler },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const authorization = {
+      principal: {
+        kind: "sender" as const,
+        provider: "discord",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        roleIds: ["maintainers"],
+      },
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      conversationId: "maintenance",
+      parentConversationId: "guild-1",
+      threadId: "thread-1",
+    };
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      config: {},
+      authorization,
+      preToolUseLoopDetection: false,
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "message",
+        tool_input: { action: "reply", text: "hello" },
+      },
+    });
+
+    expect(getMockCallArg(authorizationHandler, 0, 0, "authorization request")).toEqual({
+      operation: "tool.call",
+      toolName: "message",
+      phase: "pre-execution",
+      action: "react",
+      input: { action: "react", emoji: "lobster", text: "hello" },
+    });
+    expect(getMockCallArg(authorizationHandler, 0, 1, "authorization context")).toEqual(
+      authorization,
+    );
+    expect(getMockCallArg(authorizationHandler, 0, 2, "authorization signal")).toMatchObject({
+      aborted: false,
+    });
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason:
+          "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+      },
+    });
+  });
+
+  it("does not expose native authorization policy codes in hook output", async () => {
+    const registry = createMockPluginRegistry([]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: {
+          "tool.call": () => ({ effect: "deny", code: "private-maintainer-rule" }),
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      config: {},
+      preToolUseLoopDetection: false,
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "message",
+        tool_input: { action: "reply" },
+      },
+    });
+
+    expect(response.stdout).toContain("Operation blocked by authorization policy.");
+    expect(response.stdout).not.toContain("private-maintainer-rule");
+  });
+
   it("keeps a native pre-tool hook timeout distinct from a policy denial", async () => {
     const onPreToolUseFailure = vi.fn();
     const beforeToolCall = vi.fn(async () => {
@@ -2204,6 +2378,57 @@ describe("native hook relay registry", () => {
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("authorizes before storing deferred native approvals", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        title: "Needs approval",
+        description: "native command needs approval",
+      },
+    }));
+    const registry = createMockPluginRegistry([
+      { hookName: "before_tool_call", handler: beforeToolCall },
+    ]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: {
+          "tool.call": () => ({ effect: "deny", code: "native-command-denied" }),
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      config: {},
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        tool_name: "exec_command",
+        tool_use_id: "native-approval-auth-denied",
+        tool_input: { cmd: "cat /tmp/private_key" },
+      },
+    });
+
+    expect(response.stdout).toContain("Operation blocked by authorization policy.");
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({
+        relayId: relay.relayId,
+        toolUseId: "native-approval-auth-denied",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("shares in-flight deferred PreToolUse approvals for duplicate app-server requests", async () => {

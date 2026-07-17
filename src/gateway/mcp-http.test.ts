@@ -3,8 +3,13 @@
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { runAuthorizationPolicies as runAuthorizationPoliciesType } from "../plugins/authorization-policy.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
+
+type RunAuthorizationPolicies = typeof runAuthorizationPoliciesType;
+type RunAuthorizationPoliciesArgs = Parameters<RunAuthorizationPolicies>[0];
+type RunAuthorizationPoliciesResult = Awaited<ReturnType<RunAuthorizationPolicies>>;
 
 type MockGatewayTool = {
   name: string;
@@ -153,6 +158,12 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
 
 const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+const runAuthorizationPoliciesMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params: RunAuthorizationPoliciesArgs): Promise<RunAuthorizationPoliciesResult> =>
+      undefined,
+  ),
+);
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
@@ -183,6 +194,11 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
     runBeforeToolCallHookMock(...args),
+}));
+
+vi.mock("../plugins/authorization-policy.js", () => ({
+  AUTHORIZATION_POLICY_DENIED_MESSAGE: "Operation blocked by authorization policy.",
+  runAuthorizationPolicies: runAuthorizationPoliciesMock,
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -678,6 +694,8 @@ beforeEach(() => {
       params: args.params,
     }),
   );
+  runAuthorizationPoliciesMock.mockClear();
+  runAuthorizationPoliciesMock.mockResolvedValue(undefined);
   mockScopedTools([makeMessageTool()]);
 });
 
@@ -1191,6 +1209,24 @@ describe("mcp loopback server", () => {
     const { port, runtime } = await startLoopbackServerForTest();
     const grant = mintMcpLoopbackClientGrant({
       context: {
+        authorization: {
+          principal: {
+            kind: "sender",
+            provider: "discord",
+            accountId: "bound-account",
+            senderId: "bound-user-id",
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+            roleIds: ["maintainers", "reviewers"],
+          },
+          agentId: "worker",
+          sessionKey: "agent:main:discord:channel:bound",
+          sessionId: "session-bound",
+          runId: "run-bound",
+          conversationId: "discord:bound",
+          threadId: "bound-thread",
+          trigger: "user",
+        },
         sessionKey: "agent:main:discord:channel:bound",
         runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
         agentId: "worker",
@@ -1330,8 +1366,38 @@ describe("mcp loopback server", () => {
       turnSourceTo: "discord:bound",
       turnSourceAccountId: "bound-account",
       turnSourceThreadId: "bound-thread",
+      authorization: {
+        principal: {
+          kind: "sender",
+          provider: "discord",
+          accountId: "bound-account",
+          senderId: "bound-user-id",
+          roleIds: ["maintainers", "reviewers"],
+        },
+        conversationId: "discord:bound",
+        threadId: "bound-thread",
+        trigger: "user",
+      },
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context).toEqual({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "bound-account",
+        senderId: "bound-user-id",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "reviewers"],
+      },
+      agentId: "worker",
+      sessionKey: "agent:main:discord:channel:bound",
+      sessionId: "session-bound",
+      runId: "run-bound",
+      conversationId: "discord:bound",
+      threadId: "bound-thread",
+      trigger: "user",
+    });
   });
 
   it("revalidates a CLI grant after async preparation before tool execution", async () => {
@@ -1892,6 +1958,32 @@ describe("mcp loopback server", () => {
       expect(getScopedToolsCall(index).includeNodeExecTool).toBe(false);
       expect(Array.from(getScopedToolsCall(index).excludeToolNames ?? [])).toContain("exec");
     }
+  });
+
+  it("maps direct loopback tokens to explicit operator and service principals", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+
+    const ownerResponse = await sendMainSessionToolCall({ token: runtime.ownerToken });
+    const nonOwnerResponse = await sendMainSessionToolCall({ token: runtime.nonOwnerToken });
+
+    expect(ownerResponse.status).toBe(200);
+    expect(nonOwnerResponse.status).toBe(200);
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.context?.principal).toEqual({
+      kind: "operator",
+      scopes: [
+        "operator.admin",
+        "operator.approvals",
+        "operator.pairing",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
+      isOwner: true,
+    });
+    expect(runAuthorizationPoliciesMock.mock.calls[1]?.[0]?.context?.principal).toEqual({
+      kind: "service",
+      serviceId: "mcp-loopback",
+    });
   });
 
   it("ignores spoofed owner headers on loopback requests", async () => {
@@ -2677,6 +2769,7 @@ describe("mcp loopback server", () => {
     const prepareBeforeToolCallParams = vi.fn(async () => preparedObject);
     const finalizeBeforeToolCallParams = vi.fn((hookParams: unknown, preparedParams: unknown) => ({
       ...(hookParams as Record<string, unknown>),
+      action: "finalized-action",
       privateState: (preparedParams as Record<string, unknown>).privateState,
       stage: "finalized",
     }));
@@ -2722,6 +2815,7 @@ describe("mcp loopback server", () => {
     );
     expect(finalizeBeforeToolCallParams.mock.calls[0]?.[1]).toBe(preparedObject);
     const finalArgs = {
+      action: "finalized-action",
       stage: "finalized",
       privateState: "preserved",
     };
@@ -2730,7 +2824,55 @@ describe("mcp loopback server", () => {
     expect(onToolCallResult).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "message", args: finalArgs, outcome: "completed" }),
     );
+    expect(runAuthorizationPoliciesMock.mock.calls[0]?.[0]?.request).toEqual({
+      operation: "tool.call",
+      toolName: "message",
+      phase: "final",
+      action: "finalized-action",
+      input: finalArgs,
+    });
     expect(payload).toMatchObject({ result: { isError: false } });
+  });
+
+  it("blocks a denied finalized call before capture or execution", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    const onToolCallPrepared = vi.fn();
+    const onToolCallResult = vi.fn();
+    runAuthorizationPoliciesMock.mockResolvedValueOnce({
+      denied: true,
+      kind: "deny",
+      pluginId: "test-plugin",
+      policyId: "maintainer-control",
+      code: "dangerous-action",
+    });
+    const tool = makeMessageTool({ execute });
+
+    const payload = (await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { action: "delete" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      onToolCallPrepared,
+      onToolCallResult,
+    })) as McpToolResultPayload;
+
+    expectMcpResultText(payload, "Operation blocked by authorization policy.", true);
+    expect(onToolCallPrepared).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(onToolCallResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "message",
+        args: { action: "delete" },
+        outcome: "blocked",
+        deniedReason: "authorization-policy",
+      }),
+    );
   });
 
   it("forwards the request abort signal to loopback tool execution", async () => {
@@ -2749,7 +2891,6 @@ describe("mcp loopback server", () => {
 
   it("preserves request-disconnect evidence without classifying a tool failure", async () => {
     const controller = new AbortController();
-    controller.abort();
     const onToolCallResult = vi.fn();
     const partialDelivery = Object.assign(new Error("request disconnected"), {
       name: "AbortError",
@@ -2757,6 +2898,7 @@ describe("mcp loopback server", () => {
     });
     const tool = makeMessageTool({
       execute: async () => {
+        controller.abort();
         throw partialDelivery;
       },
     });
@@ -2779,6 +2921,40 @@ describe("mcp loopback server", () => {
       args: { body: "hello" },
       outcome: "unknown",
       result: partialDelivery,
+    });
+  });
+
+  it("does not start tool execution after the request disconnects", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    const onToolCallPrepared = vi.fn();
+    const onToolCallResult = vi.fn();
+    const tool = makeMessageTool({ execute });
+
+    await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      },
+      tools: [tool as unknown as AnyAgentTool],
+      toolSchema: buildMockMcpToolSchema([tool]),
+      signal: controller.signal,
+      onToolCallPrepared,
+      onToolCallResult,
+    });
+
+    expect(onToolCallPrepared).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(onToolCallResult).toHaveBeenCalledWith({
+      toolName: "message",
+      args: { body: "hello" },
+      outcome: "unknown",
+      result: controller.signal.reason,
     });
   });
 

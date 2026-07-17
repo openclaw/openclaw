@@ -8,7 +8,12 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import {
+  finalizeToolCallParams,
+  prepareToolCallParams,
+  ToolInputError,
+  type AnyAgentTool,
+} from "../agents/tools/common.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -16,8 +21,15 @@ import {
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPlainObject } from "../infra/plain-object.js";
 import { logWarn } from "../logger.js";
+import {
+  AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  runAuthorizationPolicies,
+} from "../plugins/authorization-policy.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import type { PluginJsonValue } from "../plugins/host-hook-json.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -166,6 +178,8 @@ export async function invokeGatewayTool(params: {
   agentThreadId?: string;
   senderIsOwner?: boolean;
   clientCaps?: string[];
+  /** Authenticated actor identity. Routing hints and client feature caps never populate it. */
+  authorization: AuthorizationInvocationContext;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
@@ -211,6 +225,14 @@ export async function invokeGatewayTool(params: {
       ? (argsRaw as Record<string, unknown>)
       : {};
   const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const conversationId = params.authorization.conversationId ?? params.agentTo;
+  const threadId = params.authorization.threadId ?? params.agentThreadId;
+  const authorizationBase = {
+    ...params.authorization,
+    sessionKey,
+    ...(conversationId ? { conversationId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  } satisfies AuthorizationInvocationContext;
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
     ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey }).entry
     : undefined;
@@ -244,6 +266,7 @@ export async function invokeGatewayTool(params: {
       surface: "http",
       disablePluginTools,
       gatewayRequestedTools,
+      authorization: authorizationBase,
     });
 
   let { agentId, tools, workspaceDir } = resolveTools(knownCoreTool);
@@ -283,17 +306,27 @@ export async function invokeGatewayTool(params: {
       action,
       args,
     });
+    const authorization = {
+      ...authorizationBase,
+      agentId,
+    } satisfies AuthorizationInvocationContext;
+    const hookContext = {
+      agentId,
+      config: params.cfg,
+      sessionKey,
+      workspaceDir,
+      authorization,
+      loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
+    };
+    const preparedArgs = await prepareToolCallParams(gatewayTool, toolArgs, {
+      toolCallId,
+      hookContext,
+    });
     const hookResult = await runBeforeToolCallHook({
       toolName,
-      params: toolArgs,
+      params: preparedArgs,
       toolCallId,
-      ctx: {
-        agentId,
-        config: params.cfg,
-        sessionKey,
-        workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
-      },
+      ctx: hookContext,
       approvalMode: params.approvalMode,
     });
     if (hookResult.blocked) {
@@ -308,12 +341,42 @@ export async function invokeGatewayTool(params: {
         },
       };
     }
+    const finalizedArgs = await finalizeToolCallParams(
+      gatewayTool,
+      hookResult.params,
+      preparedArgs,
+    );
+    const finalAction = isPlainObject(finalizedArgs)
+      ? normalizeOptionalString(finalizedArgs.action)
+      : undefined;
+    const authorizationDenial = await runAuthorizationPolicies({
+      request: {
+        operation: "tool.call",
+        toolName,
+        phase: "final",
+        ...(finalAction ? { action: finalAction } : {}),
+        input: finalizedArgs as Record<string, PluginJsonValue>,
+      },
+      context: authorization,
+      config: params.cfg,
+    });
+    if (authorizationDenial) {
+      return {
+        ok: false,
+        status: 403,
+        toolName,
+        error: {
+          type: "tool_call_blocked",
+          message: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+        },
+      };
+    }
     return {
       ok: true,
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params),
+      result: await gatewayTool.execute?.(toolCallId, finalizedArgs),
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);

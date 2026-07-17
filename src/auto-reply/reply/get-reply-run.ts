@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -1608,6 +1609,11 @@ export async function runPreparedReply(
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
+      isAuthorizedSender: command.isAuthorizedSender,
+      memberRoleIds:
+        Array.isArray(sessionCtx.MemberRoleIds) && sessionCtx.MemberRoleIds.length > 0
+          ? normalizeSortedUniqueStringEntries(sessionCtx.MemberRoleIds)
+          : undefined,
       channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),

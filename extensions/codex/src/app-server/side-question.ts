@@ -3,6 +3,7 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
+  hasAuthorizationPolicies,
   resolveAgentDir,
   resolveAttemptSpawnWorkspaceDir,
   resolveModelAuthMode,
@@ -11,6 +12,7 @@ import {
   registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
+  type AuthorizationInvocationContext,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParams,
@@ -21,6 +23,7 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
+import { buildCodexAuthorizationContext } from "./authorization-context.js";
 import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
@@ -270,6 +273,20 @@ export async function runCodexAppServerSideQuestion(
       }
     : params;
   const sideRunParams = buildSideRunAttemptParams(effectiveParams, { cwd, authProfileId, runId });
+  const sideHookChannelFields = buildAgentHookContextChannelFields({
+    sessionKey: params.sessionKey,
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+    currentChannelId: params.currentChannelId,
+  });
+  const authorization = buildCodexAuthorizationContext({
+    ...effectiveParams,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    runId,
+    conversationId: sideHookChannelFields.channelId,
+  });
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
@@ -407,6 +424,7 @@ export async function runCodexAppServerSideQuestion(
       sessionAgentId,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
+      authorization,
       runId,
       signal: runAbortController.signal,
     });
@@ -532,46 +550,43 @@ export async function runCodexAppServerSideQuestion(
       configuredEvents: options.nativeHookRelay?.events,
       approvalPolicy,
     });
-    nativeHookRelay = options.nativeHookRelay
-      ? registerCodexSideNativeHookRelay({
-          options: options.nativeHookRelay,
-          events: nativeHookRelayEvents,
-          agentId: sessionAgentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          config: params.cfg,
-          runId: sideRunParams.runId,
-          channelId: buildAgentHookContextChannelFields({
+    nativeHookRelay =
+      options.nativeHookRelay || hasAuthorizationPolicies(undefined, params.cfg)
+        ? registerCodexSideNativeHookRelay({
+            options: options.nativeHookRelay,
+            events: nativeHookRelayEvents,
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
             sessionKey: params.sessionKey,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            currentChannelId: params.currentChannelId,
-          }).channelId,
-          requestTimeoutMs: appServer.requestTimeoutMs,
-          completionTimeoutMs: Math.max(
-            appServer.turnCompletionIdleTimeoutMs,
-            SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-          ),
-          loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
-          signal: runAbortController.signal,
-          onPreToolUseFailure: (failure) => {
-            if (nativePreToolUseFailureFallbackActive) {
-              emitNativePreToolUseFailure(failure);
-            } else if (nativeToolLifecycleProjector) {
-              nativeToolLifecycleProjector.recordPreToolUseFailure(
-                failure,
-                nativeToolRunWasAbortedBeforeCleanup,
-              );
-            } else {
-              pendingNativePreToolUseFailures.push(failure);
-            }
-          },
-        })
-      : undefined;
+            config: params.cfg,
+            authorization,
+            runId: sideRunParams.runId,
+            channelId: sideHookChannelFields.channelId,
+            requestTimeoutMs: appServer.requestTimeoutMs,
+            completionTimeoutMs: Math.max(
+              appServer.turnCompletionIdleTimeoutMs,
+              SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
+            ),
+            loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
+            signal: runAbortController.signal,
+            onPreToolUseFailure: (failure) => {
+              if (nativePreToolUseFailureFallbackActive) {
+                emitNativePreToolUseFailure(failure);
+              } else if (nativeToolLifecycleProjector) {
+                nativeToolLifecycleProjector.recordPreToolUseFailure(
+                  failure,
+                  nativeToolRunWasAbortedBeforeCleanup,
+                );
+              } else {
+                pendingNativePreToolUseFailures.push(failure);
+              }
+            },
+          })
+        : undefined;
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
-          events: nativeHookRelayEvents,
+          events: nativeHookRelay.allowedEvents,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
@@ -768,16 +783,19 @@ function resolveCodexSideNativeHookRelayEvents(params: {
 }
 
 function registerCodexSideNativeHookRelay(params: {
-  options: {
-    enabled?: boolean;
-    ttlMs?: number;
-    gatewayTimeoutMs?: number;
-  };
+  options:
+    | {
+        enabled?: boolean;
+        ttlMs?: number;
+        gatewayTimeoutMs?: number;
+      }
+    | undefined;
   events: readonly NativeHookRelayEvent[];
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
+  authorization: AuthorizationInvocationContext;
   runId: string;
   channelId?: string;
   requestTimeoutMs: number;
@@ -786,28 +804,34 @@ function registerCodexSideNativeHookRelay(params: {
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
-  if (params.options.enabled === false) {
+  const authorizationActive = hasAuthorizationPolicies(undefined, params.config);
+  if (params.options?.enabled === false && !authorizationActive) {
     return undefined;
   }
+  const allowedEvents =
+    authorizationActive && !params.events.includes("pre_tool_use")
+      ? (["pre_tool_use", ...params.events] satisfies readonly NativeHookRelayEvent[])
+      : params.events;
   return registerNativeHookRelay({
     provider: "codex",
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    authorization: params.authorization,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
-    allowedEvents: params.events,
+    allowedEvents,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexSideNativeHookRelayTtlMs({
-      explicitTtlMs: params.options.ttlMs,
+      explicitTtlMs: params.options?.ttlMs,
       requestTimeoutMs: params.requestTimeoutMs,
       completionTimeoutMs: params.completionTimeoutMs,
     }),
     signal: params.signal,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
-      timeoutMs: params.options.gatewayTimeoutMs,
+      timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
 }
@@ -863,6 +887,9 @@ function buildSideRunAttemptParams(
     ...(params.senderUsername !== undefined ? { senderUsername: params.senderUsername } : {}),
     ...(params.senderE164 !== undefined ? { senderE164: params.senderE164 } : {}),
     ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+    ...(params.isAuthorizedSender !== undefined
+      ? { isAuthorizedSender: params.isAuthorizedSender }
+      : {}),
     ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     workspaceDir: options.cwd,
@@ -898,6 +925,7 @@ async function createCodexSideToolBridge(input: {
   sessionAgentId: string;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
+  authorization: AuthorizationInvocationContext;
   runId: string;
   signal: AbortSignal;
 }): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
@@ -981,6 +1009,9 @@ async function createCodexSideToolBridge(input: {
       ...(input.params.senderIsOwner !== undefined
         ? { senderIsOwner: input.params.senderIsOwner }
         : {}),
+      ...(input.params.isAuthorizedSender !== undefined
+        ? { isAuthorizedSender: input.params.isAuthorizedSender }
+        : {}),
       ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
       hookChannelId: buildAgentHookContextChannelFields({
         sessionKey: input.params.sessionKey,
@@ -1031,6 +1062,7 @@ async function createCodexSideToolBridge(input: {
       signal: input.signal,
       loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
       hookContext: {
+        authorization: input.authorization,
         agentId: input.sessionAgentId,
         config: input.params.cfg,
         sessionId: input.params.sessionId,

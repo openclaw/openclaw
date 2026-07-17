@@ -36,6 +36,14 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
+  "plugins.entries.*.authorization":
+    "Use this group to require host-enforced authorization policies from this plugin. Required policies activate the plugin and fail closed for their listed operations when registration or a handler is missing.",
+  "plugins.entries.*.authorization.requiredPolicies":
+    "Defines the policy IDs and operation families that this plugin must register. This deny-only safety layer does not grant access rejected by channel, sender, tool, or action allowlists.",
+  "plugins.entries.*.authorization.requiredPolicies.*.id":
+    "Sets the manifest-declared authorization policy ID required from this plugin. Keep the ID aligned with the policy registered by the plugin at startup.",
+  "plugins.entries.*.authorization.requiredPolicies.*.operations":
+    "Selects the host operation families the required policy must handle: tool.call, message.action, or command.invoke. Use only the families that need this fail-closed policy.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":

@@ -413,6 +413,7 @@ export function createOpenClawTools(
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
         conversationReadOrigin: options?.conversationReadOrigin,
+        authorization: options?.beforeToolCallHookContext?.authorization,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");

@@ -56,6 +56,7 @@ import {
   type DiagnosticMessageDeliveryKind,
 } from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
+import { generateSecureUuid } from "../secure-random.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
@@ -82,6 +83,8 @@ import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-
 import { cancelDeliveryQueueMediaStage } from "./delivery-queue-media-staging.js";
 import {
   ackDelivery,
+  assertDeliveryEffectAuthorized,
+  authorizeSealedDeliveryEffects,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
@@ -90,10 +93,23 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  sealDeliveryEffectAuthorization,
   type QueuedReplyPayloadSendingHook,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
 } from "./delivery-queue.js";
+import {
+  createPendingOutboundEffectAuthorization,
+  digestOutboundEffectPayload,
+  isOutboundEffectAuthorizationError,
+  OutboundEffectAuthorizationError,
+  parseQueuedOutboundEffectAuthorization,
+  type OutboundEffectAuthorizationInput,
+  type OutboundEffectAuthorizationMediaAlias,
+  type OutboundEffectAuthorizationSealHandle,
+  type OutboundEffectAuthorizationScope,
+  type QueuedOutboundEffectAuthorization,
+} from "./effect-authorization.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import {
@@ -122,6 +138,7 @@ import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { OutboundDeliveryResult } from "./deliver-types.js";
+export type { OutboundEffectAuthorizationInput } from "./effect-authorization.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export type { OutboundSendDeps } from "./send-deps.js";
 
@@ -793,7 +810,22 @@ type DeliverOutboundPayloadsCoreParams = {
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
   conversationReadOrigin?: "delegated" | "direct-operator";
+  /** @internal Final semantic-effect policy state prepared by the queue owner. */
+  effectAuthorizationRuntime?: OutboundEffectAuthorizationRuntime;
 };
+
+type OutboundEffectAuthorizationRuntime =
+  | {
+      kind: "live";
+      input: OutboundEffectAuthorizationInput;
+      initialDigest: string;
+      mediaAliases: readonly OutboundEffectAuthorizationMediaAlias[];
+      queue?: { id: string; stateDir?: string };
+    }
+  | {
+      kind: "recovery";
+      authorization: QueuedOutboundEffectAuthorization;
+    };
 
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
@@ -803,6 +835,12 @@ type DeliverOutboundPayloadsCoreParams = {
  * outbound substrate, recovery, and compatibility paths.
  */
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
+  /** Policy decision for the source payload plus callbacks for final-payload changes. */
+  effectAuthorization?: OutboundEffectAuthorizationInput;
+  /** @internal Durable provenance for recovery-time message-action policy activation. */
+  effectAuthorizationScope?: OutboundEffectAuthorizationScope;
+  /** @internal Serialized authorization seal loaded from a recovery queue row. */
+  recoveredEffectAuthorization?: unknown;
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
   skipQueue?: boolean;
   /** @internal Recovery already ran provider admission after its pending-row re-read. */
@@ -1443,6 +1481,95 @@ function materializeQueueCustodyMedia(
   });
 }
 
+function effectAuthorizationFailure(message: string, cause?: unknown) {
+  return new OutboundEffectAuthorizationError(message, cause ?? new Error(message));
+}
+
+async function authorizeFinalOutboundEffect(params: {
+  payload?: ReplyPayload;
+  runtime: OutboundEffectAuthorizationRuntime;
+}): Promise<void> {
+  if (params.runtime.kind === "recovery") {
+    if (!params.payload) {
+      return;
+    }
+    const finalDigest = digestOutboundEffectPayload(
+      params.payload,
+      params.runtime.authorization.mediaAliases,
+    );
+    if (finalDigest !== params.runtime.authorization.digest) {
+      throw effectAuthorizationFailure(
+        "Recovered outbound payload no longer matches its authorized effect",
+      );
+    }
+    return;
+  }
+
+  const enforceFinalPayloadAuthorization =
+    params.runtime.input.enforceFinalPayloadAuthorization !== false;
+  let finalDigest: string | undefined;
+  let authorizationError: unknown;
+  let sealHandle: OutboundEffectAuthorizationSealHandle | null = null;
+  try {
+    const finalPayload = params.payload;
+    finalDigest = finalPayload
+      ? digestOutboundEffectPayload(finalPayload, params.runtime.mediaAliases)
+      : params.runtime.initialDigest;
+    if (enforceFinalPayloadAuthorization && finalDigest !== params.runtime.initialDigest) {
+      if (!finalPayload || !params.runtime.input.authorizeChangedPayload) {
+        throw new Error(
+          "Outbound payload changed after authorization without a changed-payload authorizer",
+        );
+      }
+      await params.runtime.input.authorizeChangedPayload(finalPayload);
+    }
+    // Seal before joining a multi-leaf barrier. A CAS failure then becomes a
+    // denied outcome and prevents any sibling from crossing into transport I/O.
+    if (params.runtime.queue) {
+      sealHandle = await sealDeliveryEffectAuthorization({
+        id: params.runtime.queue.id,
+        expectedDigest: params.runtime.initialDigest,
+        finalDigest,
+        stateDir: params.runtime.queue.stateDir,
+      });
+    }
+  } catch (error) {
+    authorizationError = error;
+  }
+
+  if (params.runtime.input.waitForAuthorizationBarrier) {
+    try {
+      await params.runtime.input.waitForAuthorizationBarrier(
+        authorizationError
+          ? { status: "denied", error: authorizationError }
+          : { status: "sealed", digest: finalDigest!, handle: sealHandle },
+      );
+    } catch (error) {
+      throw effectAuthorizationFailure("Outbound effect authorization barrier rejected", error);
+    }
+  }
+  if (!authorizationError && params.runtime.input.waitForAuthorizationBarrier && sealHandle) {
+    try {
+      await assertDeliveryEffectAuthorized(sealHandle, params.runtime.queue?.stateDir);
+    } catch (error) {
+      throw effectAuthorizationFailure(
+        "Outbound effect authorization barrier did not promote the sealed delivery",
+        error,
+      );
+    }
+  }
+  if (authorizationError) {
+    throw effectAuthorizationFailure("Outbound effect authorization rejected", authorizationError);
+  }
+  if (!params.runtime.input.waitForAuthorizationBarrier && sealHandle) {
+    try {
+      authorizeSealedDeliveryEffects([sealHandle], params.runtime.queue?.stateDir);
+    } catch (error) {
+      throw effectAuthorizationFailure("Failed to authorize sealed outbound effect", error);
+    }
+  }
+}
+
 /**
  * @deprecated Direct outbound delivery is compatibility/runtime substrate.
  * New message lifecycle code should use `sendDurableMessageBatch` from
@@ -1476,6 +1603,32 @@ export async function deliverOutboundPayloadsInternal(
       startedAt: auditStartedAt,
     });
   };
+  const hasRecoveredEffectAuthorization = params.recoveredEffectAuthorization !== undefined;
+  if (params.effectAuthorization && hasRecoveredEffectAuthorization) {
+    emitPreQueueFailure();
+    throw effectAuthorizationFailure(
+      "Outbound delivery cannot combine live and recovered effect authorization",
+    );
+  }
+  if ((params.effectAuthorization || hasRecoveredEffectAuthorization) && payloads.length !== 1) {
+    emitPreQueueFailure();
+    throw effectAuthorizationFailure(
+      "Outbound effect authorization requires exactly one source payload",
+    );
+  }
+  const recoveredEffectAuthorization = hasRecoveredEffectAuthorization
+    ? parseQueuedOutboundEffectAuthorization(params.recoveredEffectAuthorization)
+    : undefined;
+  if (hasRecoveredEffectAuthorization && recoveredEffectAuthorization?.state !== "authorized") {
+    emitPreQueueFailure();
+    throw effectAuthorizationFailure(
+      recoveredEffectAuthorization?.state === "pending"
+        ? "Recovered outbound effect authorization is still pending"
+        : recoveredEffectAuthorization?.state === "sealed"
+          ? "Recovered outbound effect authorization was not batch-authorized"
+          : "Recovered outbound effect authorization is malformed",
+    );
+  }
   if (params.requireUnknownSendReconciliation === true && payloads.length !== 1) {
     emitPreQueueFailure();
     throw new Error(
@@ -1496,11 +1649,27 @@ export async function deliverOutboundPayloadsInternal(
     }
   }
   const queuePolicy = params.queuePolicy ?? "best_effort";
+  const requiresLiveEffectClaim = Boolean(params.effectAuthorization);
+  // Reserve and claim every live effect/barrier row before publication. An
+  // ordering-only broadcast barrier still owns the row until every leaf seals.
+  const liveEffectClaimId =
+    !params.skipQueue && requiresLiveEffectClaim
+      ? params.deliveryIntentId || generateSecureUuid()
+      : undefined;
+  const stableDeliveryIntentId = liveEffectClaimId ?? params.deliveryIntentId;
   const strippedQueuePayloads = payloads.map(stripInternalRuntimeScaffoldingFromPayload);
   const renderedBatchPlan =
     params.renderedBatchPlan ?? createRenderedMessageBatchPlan(params.payloads);
 
-  const stageAndEnqueueDelivery = async (): Promise<{ id: string; created: boolean } | null> => {
+  type EnqueuedDelivery = {
+    id: string;
+    created: boolean;
+    effectAuthorization?: {
+      pending: QueuedOutboundEffectAuthorization;
+      liveMediaAliases: readonly OutboundEffectAuthorizationMediaAlias[];
+    };
+  };
+  const stageAndEnqueueDelivery = async (): Promise<EnqueuedDelivery | null> => {
     // Legacy `MEDIA:` text directives carry local media that only materializes
     // into structured fields at send time, so the spool (which reads structured
     // media) would skip it and a retry would read the vanished producer path.
@@ -1569,12 +1738,25 @@ export async function deliverOutboundPayloadsInternal(
       return null;
     }
     try {
+      // Persist ordering-only broadcast barriers too. Until every leaf reaches
+      // the barrier, recovery must not replay one row ahead of its siblings.
+      const pendingEffectAuthorization = params.effectAuthorization
+        ? createPendingOutboundEffectAuthorization({
+            authorizedPayload: params.effectAuthorization.authorizedPayload,
+            liveMediaAliases: staged.effectAuthorizationMediaAliases.live,
+            queuedMediaAliases: staged.effectAuthorizationMediaAliases.queued,
+          })
+        : undefined;
       const delivery = {
         channel,
         to,
         accountId: params.accountId,
         queuePolicy,
         requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+        effectAuthorizationScope:
+          params.effectAuthorizationScope ??
+          (params.effectAuthorization ? "message-action" : "not-applicable"),
+        ...(pendingEffectAuthorization ? { effectAuthorization: pendingEffectAuthorization } : {}),
         payloads: staged.payloads,
         renderedBatchPlan: queueRenderedBatchPlan,
         threadId: params.threadId,
@@ -1593,10 +1775,10 @@ export async function deliverOutboundPayloadsInternal(
         preparedMessageId: params.preparedMessageId,
         deliveryCompletion: params.deliveryCompletion,
       };
-      if (params.deliveryIntentId) {
+      if (stableDeliveryIntentId) {
         const queued = await enqueueDeliveryOnce(
           delivery,
-          params.deliveryIntentId,
+          stableDeliveryIntentId,
           undefined,
           staged.mediaStageId,
         );
@@ -1604,12 +1786,33 @@ export async function deliverOutboundPayloadsInternal(
           cancelDeliveryQueueMediaStage(staged.mediaStageId);
           await releaseSpoolArtifacts(staged.artifacts);
         }
-        return queued;
+        return {
+          ...queued,
+          ...(pendingEffectAuthorization
+            ? {
+                effectAuthorization: {
+                  pending: pendingEffectAuthorization,
+                  liveMediaAliases: staged.effectAuthorizationMediaAliases.live,
+                },
+              }
+            : {}),
+        };
       }
       const id = staged.mediaStageId
         ? await enqueueDelivery(delivery, undefined, staged.mediaStageId)
         : await enqueueDelivery(delivery);
-      return { id, created: true };
+      return {
+        id,
+        created: true,
+        ...(pendingEffectAuthorization
+          ? {
+              effectAuthorization: {
+                pending: pendingEffectAuthorization,
+                liveMediaAliases: staged.effectAuthorizationMediaAliases.live,
+              },
+            }
+          : {}),
+      };
     } catch (err) {
       cancelDeliveryQueueMediaStage(staged.mediaStageId);
       await releaseSpoolArtifacts(staged.artifacts);
@@ -1617,46 +1820,81 @@ export async function deliverOutboundPayloadsInternal(
     }
   };
 
-  // Invocation authority is not queued; recovery must re-enter delegated after restart.
-  // Write-ahead delivery queue: persist before sending, remove after success.
-  const queued = params.skipQueue
-    ? null
-    : await stageAndEnqueueDelivery().catch((err: unknown) => {
-        if (queuePolicy === "required") {
-          emitPreQueueFailure();
-          throw err;
-        }
-        return null;
-      }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
+  const runDelivery = async (): Promise<OutboundDeliveryResult[]> => {
+    // Invocation authority is not queued; recovery must re-enter delegated after restart.
+    // Write-ahead delivery queue: persist before sending, remove after success.
+    const queued = params.skipQueue
+      ? null
+      : await stageAndEnqueueDelivery().catch((err: unknown) => {
+          if (queuePolicy === "required") {
+            emitPreQueueFailure();
+            throw err;
+          }
+          return null;
+        }); // Best-effort delivery falls back to direct send if staging or the queue write fails.
 
-  const queueId = queued?.id ?? null;
-  if (queueId) {
-    params.onDeliveryIntent?.({
-      id: queueId,
-      channel,
-      to,
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-      queuePolicy,
-    });
+    const queueId = queued?.id ?? null;
+    if (queueId) {
+      params.onDeliveryIntent?.({
+        id: queueId,
+        channel,
+        to,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        queuePolicy,
+      });
+    }
+
+    // A prior producer already owns this stable intent. Recovery or the original
+    // live sender will finish it; a replay must not cross platform I/O again.
+    if (queued && !queued.created) {
+      throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
+    }
+
+    const effectAuthorizationRuntime: OutboundEffectAuthorizationRuntime | undefined =
+      params.effectAuthorization
+        ? {
+            kind: "live",
+            input: params.effectAuthorization,
+            initialDigest:
+              queued?.effectAuthorization?.pending.digest ??
+              digestOutboundEffectPayload(params.effectAuthorization.authorizedPayload),
+            mediaAliases: queued?.effectAuthorization?.liveMediaAliases ?? [],
+            ...(queued?.effectAuthorization && queueId ? { queue: { id: queueId } } : {}),
+          }
+        : recoveredEffectAuthorization
+          ? { kind: "recovery", authorization: recoveredEffectAuthorization }
+          : undefined;
+    const deliveryParams = effectAuthorizationRuntime
+      ? { ...params, effectAuthorizationRuntime }
+      : params;
+
+    if (!queueId) {
+      return await deliverOutboundPayloadsWithQueueCleanup(deliveryParams, null, auditStartedAt);
+    }
+    if (liveEffectClaimId) {
+      if (queueId !== liveEffectClaimId) {
+        throw new Error("Live effect delivery queue claim changed during enqueue");
+      }
+      return await deliverOutboundPayloadsWithQueueCleanup(deliveryParams, queueId, auditStartedAt);
+    }
+
+    // Hold the same in-process claim used by recovery/drain while the live send
+    // owns this queue entry.
+    const claimResult = await withActiveDeliveryClaim(queueId, () =>
+      deliverOutboundPayloadsWithQueueCleanup(deliveryParams, queueId, auditStartedAt),
+    );
+    if (claimResult.status === "claimed-by-other-owner") {
+      return [];
+    }
+    return claimResult.value;
+  };
+
+  if (!liveEffectClaimId) {
+    return await runDelivery();
   }
-
-  // A prior producer already owns this stable intent. Recovery or the original
-  // live sender will finish it; a replay must not cross platform I/O again.
-  if (queued && !queued.created) {
-    throw new Error(`Stable delivery intent is already queued: ${queued.id}`);
-  }
-
-  if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(params, null, auditStartedAt);
-  }
-
-  // Hold the same in-process claim used by recovery/drain while the live send
-  // owns this queue entry.
-  const claimResult = await withActiveDeliveryClaim(queueId, () =>
-    deliverOutboundPayloadsWithQueueCleanup(params, queueId, auditStartedAt),
-  );
+  const claimResult = await withActiveDeliveryClaim(liveEffectClaimId, runDelivery);
   if (claimResult.status === "claimed-by-other-owner") {
-    return [];
+    throw new Error(`Stable delivery intent is already queued: ${liveEffectClaimId}`);
   }
   return claimResult.value;
 }
@@ -2296,7 +2534,29 @@ async function deliverOutboundPayloadsCore(
       await recordIdentifiedDeliveryResult(await sendHandler.sendText(unit.text, unit.overrides));
     }
   };
+  // Effect-authorized calls admit one source payload above. The outbound plan
+  // and channel normalizer are one-to-zero-or-one; text/media transport fan-out
+  // is derived only after this one complete semantic payload is authorized.
+  let effectAuthorizationCompleted = false;
+  const completeEffectAuthorization = async (payload?: ReplyPayload): Promise<void> => {
+    if (!params.effectAuthorizationRuntime) {
+      return;
+    }
+    if (effectAuthorizationCompleted) {
+      throw effectAuthorizationFailure("Outbound effect authorization completed more than once");
+    }
+    await authorizeFinalOutboundEffect({
+      runtime: params.effectAuthorizationRuntime,
+      ...(payload ? { payload } : {}),
+    });
+    effectAuthorizationCompleted = true;
+  };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
+  if (params.effectAuthorizationRuntime && normalizedPayloads.length > 1) {
+    throw effectAuthorizationFailure(
+      "Outbound effect authorization cannot span multiple normalized payloads",
+    );
+  }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
   const effectiveDeliveryKinds = new Map<number, OutboundPayloadDeliveryKind>();
   const recordPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
@@ -2310,6 +2570,7 @@ async function deliverOutboundPayloadsCore(
     for (const [index] of payloads.entries()) {
       recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
     }
+    await completeEffectAuthorization();
   } else {
     const normalizedPayloadIndexes = new Set(normalizedPayloads.map((entry) => entry.index));
     for (const [index] of payloads.entries()) {
@@ -2428,6 +2689,7 @@ async function deliverOutboundPayloadsCore(
         payload,
       });
       if (replyHookResult.cancelled) {
+        await completeEffectAuthorization();
         recordPayloadOutcome(
           suppressedPayloadOutcome({
             index: payloadIndex,
@@ -2453,6 +2715,7 @@ async function deliverOutboundPayloadsCore(
         sessionKey: sessionKeyForInternalHooks,
       });
       if (hookResult.cancelled) {
+        await completeEffectAuthorization();
         const hookEffect =
           hookResult.cancelReason || hookResult.hookMetadata
             ? {
@@ -2488,6 +2751,7 @@ async function deliverOutboundPayloadsCore(
           )
         : null;
       if (!effectivePayload) {
+        await completeEffectAuthorization();
         recordPayloadOutcome(
           suppressedPayloadOutcome({
             index: payloadIndex,
@@ -2502,6 +2766,7 @@ async function deliverOutboundPayloadsCore(
       }
       const effectivePayloadSummary = buildPayloadSummary(effectivePayload);
       assertStableMediaFanout(params, payloadIndex, originalMediaCount, effectivePayloadSummary);
+      await completeEffectAuthorization(effectivePayload);
       payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
@@ -2778,6 +3043,9 @@ async function deliverOutboundPayloadsCore(
         content: payloadSummary.hookContent ?? payloadSummary.text,
         error: formatErrorMessage(err),
       });
+      if (isOutboundEffectAuthorizationError(err)) {
+        throw err;
+      }
       if (!params.bestEffort) {
         throw toOutboundDeliveryError({
           error: err,

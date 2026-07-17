@@ -66,6 +66,7 @@ import {
 } from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
@@ -1060,6 +1061,8 @@ type MessageToolOptions = {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  /** Host-authenticated principal and source-conversation facts for message effects. */
+  authorization?: AuthorizationInvocationContext;
 };
 
 type MessageToolDiscoveryParams = {
@@ -1697,8 +1700,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           messageActionAuthorization: {
             requesterAccountId: trustedTurnContext?.requesterAccountId,
             requesterSenderId: trustedTurnContext?.requesterSenderId,
+            requesterSenderIsOwner: trustedTurnContext?.requesterSenderIsOwner,
+            requesterIsAuthorizedSender: trustedTurnContext?.requesterIsAuthorizedSender,
+            requesterRoleIds: trustedTurnContext?.requesterRoleIds,
             toolContext: trustedTurnContext?.toolContext,
           },
+          authorization: options?.authorization,
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
           gateway,

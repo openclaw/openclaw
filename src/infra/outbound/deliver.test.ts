@@ -69,6 +69,14 @@ const queueMocks = vi.hoisted(() => ({
   failDelivery: vi.fn(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn(async () => {}),
   failDeliveryBeforePlatformSend: vi.fn(async () => {}),
+  sealDeliveryEffectAuthorization: vi.fn(async (_params: { id: string; finalDigest: string }) => ({
+    kind: "outbound-effect-authorization" as const,
+    version: 1 as const,
+    id: _params.id,
+    digest: _params.finalDigest,
+  })),
+  authorizeSealedDeliveryEffects: vi.fn(() => {}),
+  assertDeliveryEffectAuthorized: vi.fn(async () => {}),
   markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {}),
   markDeliveryPlatformSendDispatched: vi.fn(async () => {}),
   markDeliveryPlatformSendAttemptStarted: vi.fn(async () => {}),
@@ -120,6 +128,9 @@ vi.mock("./delivery-queue.js", () => ({
   failDelivery: queueMocks.failDelivery,
   failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend: queueMocks.failDeliveryBeforePlatformSend,
+  sealDeliveryEffectAuthorization: queueMocks.sealDeliveryEffectAuthorization,
+  authorizeSealedDeliveryEffects: queueMocks.authorizeSealedDeliveryEffects,
+  assertDeliveryEffectAuthorized: queueMocks.assertDeliveryEffectAuthorized,
   markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
@@ -360,6 +371,17 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.failDeliveryAfterPlatformSend.mockResolvedValue(undefined);
     queueMocks.failDeliveryBeforePlatformSend.mockClear();
     queueMocks.failDeliveryBeforePlatformSend.mockResolvedValue(undefined);
+    queueMocks.sealDeliveryEffectAuthorization.mockClear();
+    queueMocks.sealDeliveryEffectAuthorization.mockImplementation(async ({ id, finalDigest }) => ({
+      kind: "outbound-effect-authorization",
+      version: 1,
+      id,
+      digest: finalDigest,
+    }));
+    queueMocks.authorizeSealedDeliveryEffects.mockClear();
+    queueMocks.authorizeSealedDeliveryEffects.mockReturnValue(undefined);
+    queueMocks.assertDeliveryEffectAuthorized.mockClear();
+    queueMocks.assertDeliveryEffectAuthorized.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockClear();
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformSendAttemptStarted.mockClear();
@@ -3052,6 +3074,276 @@ describe("deliverOutboundPayloads", () => {
 
     expect(results).toStrictEqual([]);
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does not let bestEffort swallow a denied post-hook payload", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "rewritten" });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+    const authorizeChangedPayload = vi.fn().mockRejectedValue(new Error("policy denied"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "original" }],
+        deps: { matrix: sendMatrix },
+        bestEffort: true,
+        effectAuthorization: {
+          authorizedPayload: { text: "original" },
+          authorizeChangedPayload,
+        },
+      }),
+    ).rejects.toThrow("Outbound effect authorization rejected");
+
+    expect(authorizeChangedPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "rewritten" }),
+    );
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("reauthorizes removal of a false-valued final payload field", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValue({
+      payload: { text: "hello" },
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+    const authorizeChangedPayload = vi.fn().mockRejectedValue(new Error("policy denied"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello", isError: false }],
+        deps: { matrix: sendMatrix },
+        replyPayloadSendingHook: {
+          kind: "final",
+          channel: "matrix",
+          context: { channelId: "matrix", conversationId: "!room:example" },
+        },
+        effectAuthorization: {
+          authorizedPayload: { text: "hello", isError: false },
+          authorizeChangedPayload,
+        },
+      }),
+    ).rejects.toThrow("Outbound effect authorization rejected");
+
+    expect(authorizeChangedPayload).toHaveBeenCalledWith(
+      expect.not.objectContaining({ isError: false }),
+    );
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("seals and authorizes the final payload before platform I/O", async () => {
+    const order: string[] = [];
+    queueMocks.sealDeliveryEffectAuthorization.mockImplementation(async ({ id, finalDigest }) => {
+      order.push("seal");
+      return {
+        kind: "outbound-effect-authorization",
+        version: 1,
+        id,
+        digest: finalDigest,
+      };
+    });
+    queueMocks.authorizeSealedDeliveryEffects.mockImplementation(() => {
+      order.push("authorize");
+    });
+    const sendMatrix = vi.fn().mockImplementation(async () => {
+      order.push("send");
+      return { messageId: "sent" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      effectAuthorization: { authorizedPayload: { text: "hello" } },
+    });
+
+    expect(order).toEqual(["seal", "authorize", "send"]);
+  });
+
+  it("authorizes one semantic payload before all derived media effects", async () => {
+    const order: string[] = [];
+    queueMocks.sealDeliveryEffectAuthorization.mockImplementation(async ({ id, finalDigest }) => {
+      order.push("seal");
+      return {
+        kind: "outbound-effect-authorization",
+        version: 1,
+        id,
+        digest: finalDigest,
+      };
+    });
+    queueMocks.authorizeSealedDeliveryEffects.mockImplementation(() => {
+      order.push("authorize");
+    });
+    const sendMatrix = vi.fn(
+      async (_to: string, _text: string, options?: { mediaUrl?: string }) => {
+        order.push(`send:${options?.mediaUrl}`);
+        return { messageId: options?.mediaUrl ?? "missing-media" };
+      },
+    );
+    const mediaUrls = ["https://example.com/a.png", "https://example.com/b.png"];
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "caption", mediaUrls }],
+      deps: { matrix: sendMatrix },
+      effectAuthorization: { authorizedPayload: { text: "caption", mediaUrls } },
+    });
+
+    expect(order).toEqual([
+      "seal",
+      "authorize",
+      "send:https://example.com/a.png",
+      "send:https://example.com/b.png",
+    ]);
+  });
+
+  it("rejects multiple source payloads before an authorized effect can send", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+        deps: { matrix: sendMatrix },
+        effectAuthorization: { authorizedPayload: { text: "first" } },
+      }),
+    ).rejects.toThrow("Outbound effect authorization requires exactly one source payload");
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("claims a policy-protected queue id before publishing its pending seal", async () => {
+    const order: string[] = [];
+    queueMocks.withActiveDeliveryClaim.mockImplementationOnce(async (_id, run) => {
+      order.push("claim");
+      return { status: "claimed", value: await run() };
+    });
+    queueMocks.enqueueDeliveryOnce.mockImplementationOnce(async (_delivery, id) => {
+      order.push("enqueue");
+      return { id, created: true };
+    });
+    const sendMatrix = vi.fn().mockImplementation(async () => {
+      order.push("send");
+      return { messageId: "sent" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      effectAuthorization: { authorizedPayload: { text: "hello" } },
+    });
+
+    expect(order).toEqual(["claim", "enqueue", "send"]);
+    expect(queueMocks.withActiveDeliveryClaim).toHaveBeenCalledOnce();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+  });
+
+  it("reports a stable policy-protected intent already owned by another delivery", async () => {
+    queueMocks.withActiveDeliveryClaim.mockResolvedValueOnce({
+      status: "claimed-by-other-owner",
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "must-not-send" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryIntentId: "operation-active",
+        effectAuthorization: { authorizedPayload: { text: "hello" } },
+      }),
+    ).rejects.toThrow("Stable delivery intent is already queued: operation-active");
+
+    expect(queueMocks.enqueueDeliveryOnce).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("persists an ordering-only barrier seal before broadcast release", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "rewritten" });
+    const order: string[] = [];
+    queueMocks.withActiveDeliveryClaim.mockImplementationOnce(async (_id, run) => {
+      order.push("claim");
+      return { status: "claimed", value: await run() };
+    });
+    queueMocks.enqueueDeliveryOnce.mockImplementationOnce(async (_delivery, id) => {
+      order.push("enqueue");
+      return { id, created: true };
+    });
+    const barrier = vi.fn(async () => {
+      order.push("barrier");
+    });
+    const sendMatrix = vi.fn().mockImplementation(async () => {
+      order.push("send");
+      return { messageId: "sent" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "original" }],
+      deps: { matrix: sendMatrix },
+      effectAuthorization: {
+        authorizedPayload: { text: "original" },
+        enforceFinalPayloadAuthorization: false,
+        waitForAuthorizationBarrier: barrier,
+      },
+    });
+
+    expect(order).toEqual(["claim", "enqueue", "barrier", "send"]);
+    const expectedDigest = expect.stringMatching(/^sha256:/u);
+    expect(barrier).toHaveBeenCalledWith({
+      status: "sealed",
+      digest: expectedDigest,
+      handle: {
+        kind: "outbound-effect-authorization",
+        version: 1,
+        id: expect.any(String),
+        digest: expectedDigest,
+      },
+    });
+    const [queuedDelivery] = requireMockCall(queueMocks.enqueueDeliveryOnce, "enqueueDeliveryOnce");
+    expect(queuedDelivery).toMatchObject({
+      effectAuthorization: {
+        version: 1,
+        state: "pending",
+        digest: expectedDigest,
+      },
+    });
+    expect(queueMocks.sealDeliveryEffectAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: expect.any(String),
+        expectedDigest,
+        finalDigest: expectedDigest,
+      }),
+    );
+    expect(queueMocks.assertDeliveryEffectAuthorized).toHaveBeenCalledOnce();
+    expect(queueMocks.authorizeSealedDeliveryEffects).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
   });
 
   it("keeps payload outcome indexes tied to original input payload positions", async () => {

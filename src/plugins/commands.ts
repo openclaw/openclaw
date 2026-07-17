@@ -13,6 +13,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+  normalizeAuthorizationCommandSource,
+} from "./authorization-policy-context.js";
+import { runAuthorizationPolicies } from "./authorization-policy.js";
+import {
   clearPluginCommands,
   isReservedCommandName,
   listPluginInvocationKeys,
@@ -215,6 +221,7 @@ export async function executePluginCommand(params: {
   command: RegisteredPluginCommand;
   args?: string;
   senderId?: string;
+  memberRoleIds?: string[];
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
@@ -227,12 +234,19 @@ export async function executePluginCommand(params: {
   sessionFile?: PluginCommandContext["sessionFile"];
   authProfileId?: string;
   commandBody: string;
+  commandSource?: unknown;
+  abortSignal?: AbortSignal;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
+  /** Host-resolved conversation identity; never derived from a provider id. */
+  conversationId?: string;
+  parentConversationId?: string;
+  /** Internal channel callback run after authorization and before the command handler. */
+  onAuthorized?: () => Promise<void> | void;
   diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
   diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
@@ -293,6 +307,53 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const policyDenial = await runAuthorizationPolicies({
+    request: {
+      operation: "command.invoke",
+      phase: "final",
+      commandName: command.name,
+      owner: {
+        kind: "plugin",
+        pluginId: command.pluginId,
+        ...(command.pluginName ? { pluginName: command.pluginName } : {}),
+      },
+      source: normalizeAuthorizationCommandSource(params.commandSource),
+      ...(sanitizedArgs ? { arguments: { raw: sanitizedArgs } } : {}),
+    },
+    context: createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        provider: channel,
+        // The resolved account selects the handler binding; only ingress may authenticate a sender.
+        accountId: params.accountId,
+        senderId,
+        senderIsOwner: params.senderIsOwner,
+        isAuthorizedSender,
+        roleIds: params.memberRoleIds,
+      }),
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      conversationId:
+        bindingConversation?.conversationId ?? params.conversationId ?? params.to ?? params.from,
+      parentConversationId:
+        bindingConversation?.parentConversationId ??
+        params.parentConversationId ??
+        params.threadParentId,
+      threadId: params.messageThreadId,
+      trigger: "command",
+    }),
+    config,
+    signal: params.abortSignal,
+  });
+  params.abortSignal?.throwIfAborted();
+  if (policyDenial) {
+    logVerbose(
+      `Plugin command /${command.name} blocked by authorization policy ${policyDenial.policyId}`,
+    );
+    return { text: "⚠️ Command blocked by authorization policy." };
+  }
+  await params.onAuthorized?.();
+  params.abortSignal?.throwIfAborted();
   const senderIsOwnerForCommand =
     canExposeSenderIsOwner(command) ||
     (isTrustedReservedCommandOwner(command) &&

@@ -1,12 +1,25 @@
+import type { AuthorizationPolicyRegistration } from "./authorization-policy.types.js";
 // Builds plugin API facades exposed to bundled and external plugins.
 import type { OpenClawPluginApi } from "./types.js";
 
+export const registerAuthorizationPolicySymbol = Symbol("registerAuthorizationPolicy");
+
+export type AuthorizationPolicyRegistrar = (policy: AuthorizationPolicyRegistration) => void;
+
+type PluginApiAuthorizationRegistrar = {
+  [registerAuthorizationPolicySymbol]: AuthorizationPolicyRegistrar;
+};
+
+/** Host-only API shape carrying registration plumbing hidden from plugins. */
+export type HostOpenClawPluginApi = OpenClawPluginApi & PluginApiAuthorizationRegistrar;
+
 type PluginApiFacadeFields = Pick<
   OpenClawPluginApi,
-  "agent" | "lifecycle" | "runContext" | "session"
+  "agent" | "authorization" | "lifecycle" | "runContext" | "session"
 >;
 /** Plugin API shape without nested facade namespaces attached. */
-export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields>;
+export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof PluginApiFacadeFields> &
+  PluginApiAuthorizationRegistrar;
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
   | "clearRunContext"
@@ -23,7 +36,8 @@ type PluginApiFacadeSource = Pick<
   | "sendSessionAttachment"
   | "setRunContext"
   | "unscheduleSessionTurnsByTag"
->;
+> &
+  PluginApiAuthorizationRegistrar;
 
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
@@ -58,6 +72,9 @@ export function attachPluginApiFacades<T extends object>(
   };
   api.lifecycle = {
     registerRuntimeLifecycle: (...args) => api.registerRuntimeLifecycle(...args),
+  };
+  api.authorization = {
+    registerPolicy: (...args) => api[registerAuthorizationPolicySymbol](...args),
   };
   return api as T & PluginApiFacadeFields;
 }

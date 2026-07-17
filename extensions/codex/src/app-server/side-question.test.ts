@@ -1431,6 +1431,79 @@ describe("runCodexAppServerSideQuestion", () => {
     ).toBeUndefined();
   });
 
+  it("forces side-thread PreToolUse authorization when the optional relay is disabled", async () => {
+    const registry = createMockPluginRegistry([]);
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Limit maintainer actions",
+        handlers: { "tool.call": () => ({ effect: "pass" }) },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string, requestParams: unknown) => {
+      if (method === "thread/fork") {
+        const config = (requestParams as { config?: Record<string, unknown> }).config;
+        expect(config?.["hooks.PreToolUse"]).not.toEqual([]);
+        const relayId = extractRelayIdFromThreadConfig(config);
+        expect(
+          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+        ).toMatchObject({
+          allowedEvents: ["pre_tool_use", "post_tool_use"],
+          authorization: {
+            principal: {
+              kind: "sender",
+              provider: "discord",
+              accountId: "molty",
+              senderId: "maintainer-1",
+              senderIsOwner: false,
+              isAuthorizedSender: true,
+              roleIds: ["maintainers", "write"],
+            },
+            conversationId: "maintenance",
+            threadId: "thread-1",
+          },
+        });
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          sessionKey: "agent:main:discord:channel:maintenance",
+          messageProvider: "discord",
+          currentChannelId: "maintenance",
+          messageThreadId: "thread-1",
+          agentAccountId: "molty",
+          senderId: "maintainer-1",
+          senderIsOwner: false,
+          isAuthorizedSender: true,
+          memberRoleIds: ["write", "maintainers"],
+        }),
+        { nativeHookRelay: { enabled: false, events: ["post_tool_use"] } },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+  });
+
   it("omits the loop-detection PreToolUse subprocess for side threads when disabled", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);

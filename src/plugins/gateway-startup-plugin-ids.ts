@@ -1756,7 +1756,7 @@ function canStartExplicitHookPlugin(params: {
   return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
 }
 
-function canStartTrustedToolPolicyPlugin(params: {
+function canStartHostPolicyPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
@@ -1767,7 +1767,10 @@ function canStartTrustedToolPolicyPlugin(params: {
   };
   platform?: NodeJS.Platform;
 }): boolean {
-  if ((params.manifest?.contracts?.trustedToolPolicies?.length ?? 0) === 0) {
+  if (
+    (params.manifest?.contracts?.trustedToolPolicies?.length ?? 0) === 0 &&
+    (params.manifest?.contracts?.authorizationPolicies?.length ?? 0) === 0
+  ) {
     return false;
   }
   if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
@@ -2194,7 +2197,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       continue;
     }
     if (
-      canStartTrustedToolPolicyPlugin({
+      canStartHostPolicyPlugin({
         plugin,
         manifest,
         config: params.config,

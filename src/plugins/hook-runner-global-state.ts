@@ -5,6 +5,7 @@ import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import type { HookRunner } from "./hooks.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
+  PluginAuthorizationPolicyRegistryRegistration,
   PluginRegistry,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
@@ -13,6 +14,7 @@ import { collectLivePluginRegistries } from "./runtime.js";
 
 type TrustedPolicyHookRunnerRegistry = GlobalHookRunnerRegistry & {
   trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
+  authorizationPolicies?: PluginAuthorizationPolicyRegistryRegistration[];
 };
 
 type HookRunnerGlobalState = {
@@ -170,6 +172,9 @@ function composeLiveHookRegistry(
     for (const registration of registry.trustedToolPolicies ?? []) {
       ids.add(registration.pluginId);
     }
+    for (const registration of registry.authorizationPolicies ?? []) {
+      ids.add(registration.pluginId);
+    }
     return ids;
   });
   sources.forEach((registry, index) => {
@@ -201,6 +206,9 @@ function composeLiveHookRegistry(
     for (const registration of registry.trustedToolPolicies ?? []) {
       claimPolicyOwner(registration.pluginId, index);
     }
+    for (const registration of registry.authorizationPolicies ?? []) {
+      claimPolicyOwner(registration.pluginId, index);
+    }
   });
   const trustedToolPolicies = sources
     .flatMap((registry, index) =>
@@ -211,6 +219,17 @@ function composeLiveHookRegistry(
     // Preserve the trusted-policy tier contract across composed registries:
     // bundled policies run before installed policies, and same-tier entries
     // keep the source/plugin-load order selected above.
+    .toSorted((left, right) => {
+      const leftRank = left.origin === "bundled" ? 0 : 1;
+      const rightRank = right.origin === "bundled" ? 0 : 1;
+      return leftRank - rightRank;
+    });
+  const authorizationPolicies = sources
+    .flatMap((registry, index) =>
+      (registry.authorizationPolicies ?? []).filter(
+        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
+      ),
+    )
     .toSorted((left, right) => {
       const leftRank = left.origin === "bundled" ? 0 : 1;
       const rightRank = right.origin === "bundled" ? 0 : 1;
@@ -227,6 +246,7 @@ function composeLiveHookRegistry(
       registry.plugins.filter((plugin) => ownerSourceIndexByPluginId.get(plugin.id) === index),
     ),
     trustedToolPolicies,
+    authorizationPolicies,
   };
 }
 
@@ -249,6 +269,9 @@ export function createComposedHookRegistryFacade(
     },
     get trustedToolPolicies() {
       return composeLiveHookRegistry(state.registry).trustedToolPolicies;
+    },
+    get authorizationPolicies() {
+      return composeLiveHookRegistry(state.registry).authorizationPolicies;
     },
   };
 }

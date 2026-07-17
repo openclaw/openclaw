@@ -6,6 +6,15 @@
 import { createHash } from "node:crypto";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
+import {
+  AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  runAuthorizationPolicies,
+} from "../plugins/authorization-policy.js";
+import type { PluginJsonValue } from "../plugins/host-hook-json.js";
 import { isPlainObject } from "../utils.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -308,6 +317,42 @@ function finalizeToolParamsBeforeExecute(params: {
   return finalize ? finalize(params.executeParams, params.preparedParams) : params.executeParams;
 }
 
+async function authorizeFinalToolCall(params: {
+  toolName: string;
+  input: unknown;
+  hookContext?: HookContext;
+  signal?: AbortSignal;
+  toolKind?: string;
+  toolInputKind?: string;
+}) {
+  const input = params.input as Record<string, PluginJsonValue>;
+  return await runAuthorizationPolicies({
+    request: {
+      operation: "tool.call",
+      toolName: normalizeToolName(params.toolName),
+      phase: "final",
+      ...(params.toolKind ? { toolKind: params.toolKind } : {}),
+      ...(params.toolInputKind ? { toolInputKind: params.toolInputKind } : {}),
+      ...(isPlainObject(input) && typeof input.action === "string" && input.action.trim()
+        ? { action: input.action.trim() }
+        : {}),
+      input,
+    },
+    context:
+      params.hookContext?.authorization ??
+      createAuthorizationInvocationContext({
+        principal: createAuthorizationPrincipal({}),
+        agentId: params.hookContext?.agentId,
+        sessionKey: params.hookContext?.sessionKey,
+        sessionId: params.hookContext?.sessionId,
+        runId: params.hookContext?.runId,
+        conversationId: params.hookContext?.channelId,
+      }),
+    config: params.hookContext?.config,
+    signal: params.signal,
+  });
+}
+
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 /** Find client-hosted tool names that collide with runtime or sibling tools. */
@@ -422,6 +467,22 @@ export function toToolDefinitions(
               executeParams,
               preparedParams,
             });
+            const authorizationDenial = await authorizeFinalToolCall({
+              toolName: name,
+              input: executeParams,
+              hookContext,
+              signal,
+              ...hookMetadata,
+            });
+            if (authorizationDenial) {
+              return buildBlockedToolResult({
+                reason: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+                deniedReason: "authorization-policy",
+                toolCallId,
+                runId: hookContext?.runId,
+              });
+            }
+            signal?.throwIfAborted();
             recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
@@ -509,7 +570,7 @@ export function toClientToolDefinitions(
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
-        const { toolCallId, params } = splitToolExecuteArgs(args);
+        const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -537,6 +598,24 @@ export function toClientToolDefinitions(
           }
           const adjustedParams = outcome.params;
           const paramsRecord = coerceParamsRecord(adjustedParams);
+          const authorizationDenial = await authorizeFinalToolCall({
+            toolName: func.name,
+            input: paramsRecord,
+            hookContext,
+            signal,
+          });
+          if (authorizationDenial) {
+            if (onClientToolCall && typeof onClientToolCall !== "function") {
+              onClientToolCall.discard?.(toolCallId, func.name);
+            }
+            return buildBlockedToolResult({
+              reason: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+              deniedReason: "authorization-policy",
+              toolCallId,
+              runId: hookContext?.runId,
+            });
+          }
+          signal?.throwIfAborted();
           // Notify handler that a client tool was called.
           if (onClientToolCall) {
             if (typeof onClientToolCall === "function") {

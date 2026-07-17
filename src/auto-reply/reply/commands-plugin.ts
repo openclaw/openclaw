@@ -36,6 +36,7 @@ export const handlePluginCommand: CommandHandler = async (
     command: match.command,
     args: match.args,
     senderId: command.senderId,
+    memberRoleIds: command.memberRoleIds,
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
@@ -47,6 +48,8 @@ export const handlePluginCommand: CommandHandler = async (
     sessionFile: targetSessionEntry?.sessionFile,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
+    commandSource: params.ctx.CommandSource,
+    abortSignal: params.opts?.abortSignal,
     config: cfg,
     from: command.from,
     to: command.to,
@@ -57,6 +60,12 @@ export const handlePluginCommand: CommandHandler = async (
         ? params.ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
+    conversationId:
+      normalizeOptionalString(params.ctx.OriginatingTo) ??
+      normalizeOptionalString(params.ctx.NativeChannelId) ??
+      command.to ??
+      command.from,
+    parentConversationId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
   const shouldContinue = result.continueAgent === true;
   const { continueAgent: _continueAgent, ...reply } = result;

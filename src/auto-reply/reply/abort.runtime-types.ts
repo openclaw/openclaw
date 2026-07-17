@@ -6,7 +6,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 type FastAbortResult = {
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
+  rejectionReason?: "finalizing" | "policy-denied";
   stoppedSubagents?: number;
 };
 

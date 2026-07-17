@@ -12,11 +12,17 @@ import {
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import {
+  authorizeSealedDeliveryEffects,
+  drainPendingDeliveries,
+  enqueueDelivery,
+  type DeliverFn,
+} from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
+import { digestOutboundEffectPayload } from "./effect-authorization.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
@@ -132,6 +138,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(entries).toHaveLength(1);
     const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.recoveryState).toBe("unknown_after_send");
+    expect(entry.effectAuthorizationScope).toBe("not-applicable");
     expect(entry.retryCount).toBe(1);
     expect(entry.lastError).toContain("second payload send failed");
     expect(sendMatrix).toHaveBeenCalledTimes(2);
@@ -307,6 +314,117 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
 
     expect(deliver).toHaveBeenCalledOnce();
     expect(recoverySendMatrix).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+  });
+
+  it("recovers only queue rows whose final effect digest was authorized", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const matchingDigest = digestOutboundEffectPayload({ text: "authorized" });
+    const mismatchedDigest = digestOutboundEffectPayload({ text: "different" });
+    for (const [text, state, digest] of [
+      ["pending", "pending", digestOutboundEffectPayload({ text: "pending" })],
+      ["sealed", "sealed", digestOutboundEffectPayload({ text: "sealed" })],
+      ["mismatch", "authorized", mismatchedDigest],
+      ["authorized", "authorized", matchingDigest],
+    ] as const) {
+      await enqueueDelivery(
+        {
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text }],
+          effectAuthorization: {
+            version: 1,
+            state,
+            digest,
+            mediaAliases: [],
+          },
+        },
+        tmpDir,
+      );
+    }
+    const recoverySendMatrix = vi.fn().mockResolvedValue({ messageId: "recovered" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({
+        ...params,
+        deps: { matrix: recoverySendMatrix },
+      }),
+    );
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(recoverySendMatrix).toHaveBeenCalledOnce();
+    expect(recoverySendMatrix.mock.calls[0]?.[1]).toBe("authorized");
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+  });
+
+  it("keeps a reconnect drain from claiming a live pending authorization seal", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const recoveryDeliver = vi.fn<DeliverFn>(async () => {});
+    let drainPromise: Promise<void> | undefined;
+    const sendMatrix = vi.fn(async () => {
+      await drainPromise;
+      return { messageId: "live-send" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "live" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required",
+      effectAuthorization: { authorizedPayload: { text: "live" } },
+      onDeliveryIntent: () => {
+        drainPromise = drainMatrixReconnect({ deliver: recoveryDeliver, stateDir: tmpDir });
+      },
+    });
+    await drainPromise;
+
+    expect(recoveryDeliver).not.toHaveBeenCalled();
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+  });
+
+  it("keeps a reconnect drain from claiming an ordering-only broadcast barrier row", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const recoveryDeliver = vi.fn<DeliverFn>(async () => {});
+    let drainPromise: Promise<void> | undefined;
+    const sendMatrix = vi.fn(async () => {
+      expect((await loadPendingDeliveries(tmpDir))[0]?.effectAuthorization?.state).toBe(
+        "authorized",
+      );
+      await drainPromise;
+      return { messageId: "live-send" };
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {} as OpenClawConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "live" }],
+      deps: { matrix: sendMatrix },
+      queuePolicy: "required",
+      effectAuthorization: {
+        authorizedPayload: { text: "live" },
+        enforceFinalPayloadAuthorization: false,
+        waitForAuthorizationBarrier: async (outcome) => {
+          if (outcome.status !== "sealed" || !outcome.handle) {
+            throw new Error("expected durable ordering-only barrier seal");
+          }
+          expect((await loadPendingDeliveries(tmpDir))[0]?.effectAuthorization).toMatchObject({
+            state: "sealed",
+            digest: outcome.digest,
+          });
+          drainPromise = drainMatrixReconnect({ deliver: recoveryDeliver, stateDir: tmpDir });
+          await drainPromise;
+          authorizeSealedDeliveryEffects([outcome.handle], tmpDir);
+        },
+      },
+    });
+    await expectDefined(drainPromise, "drainPromise test invariant");
+
+    expect(recoveryDeliver).not.toHaveBeenCalled();
+    expect(sendMatrix).toHaveBeenCalledOnce();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 });

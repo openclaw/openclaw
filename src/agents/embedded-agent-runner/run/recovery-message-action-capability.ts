@@ -19,15 +19,18 @@ type RecoveryMessageActionCapabilityParams = Pick<
   | "currentChannelId"
   | "currentThreadTs"
   | "hasRepliedRef"
+  | "isAuthorizedSender"
   | "messageActionTurnCapability"
   | "messageChannel"
   | "messageProvider"
   | "messageTo"
+  | "memberRoleIds"
   | "replyToMode"
   | "runId"
   | "sessionId"
   | "sessionKey"
   | "senderId"
+  | "senderIsOwner"
   | "timeoutMs"
 >;
 
@@ -55,6 +58,9 @@ export function createRecoveryMessageActionTurnCapability(
     sessionId: params.sessionId,
     requesterAccountId: params.agentAccountId,
     requesterSenderId: params.senderId ?? undefined,
+    requesterSenderIsOwner: params.senderIsOwner,
+    requesterIsAuthorizedSender: params.isAuthorizedSender,
+    requesterRoleIds: params.memberRoleIds,
     toolContext: {
       currentChannelId: params.currentChannelId,
       currentChatType: params.chatType,

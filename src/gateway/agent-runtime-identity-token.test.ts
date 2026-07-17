@@ -122,6 +122,9 @@ describe("agent runtime identity token", () => {
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
+        requesterSenderIsOwner: false,
+        requesterIsAuthorizedSender: true,
+        requesterRoleIds: ["maintainers", "contributors", "maintainers"],
         toolContext: {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",
@@ -142,6 +145,9 @@ describe("agent runtime identity token", () => {
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
+        requesterSenderIsOwner: false,
+        requesterIsAuthorizedSender: true,
+        requesterRoleIds: ["contributors", "maintainers"],
         toolContext: {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",

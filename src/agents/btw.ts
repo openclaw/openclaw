@@ -609,6 +609,7 @@ type RunBtwSideQuestionParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
   currentChannelId?: string;
 };
 

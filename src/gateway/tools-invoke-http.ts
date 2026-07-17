@@ -1,6 +1,10 @@
 // HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -60,7 +64,7 @@ export async function handleToolsInvokeHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth } = authResult;
+  const { cfg, requestAuth, operatorScopes } = authResult;
 
   const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
   if (bodyUnknown === undefined) {
@@ -84,6 +88,15 @@ export async function handleToolsInvokeHttpRequest(
     agentTo,
     agentThreadId,
     senderIsOwner,
+    authorization: createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        operatorScopes,
+        operatorIsOwner: senderIsOwner,
+      }),
+      conversationId: agentTo,
+      threadId: agentThreadId,
+      trigger: "gateway",
+    }),
     conversationReadOrigin: "direct-operator",
     toolCallIdPrefix: "http",
   });

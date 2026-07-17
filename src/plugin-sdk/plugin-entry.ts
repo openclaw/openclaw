@@ -7,6 +7,8 @@ import type {
   AgentPromptGuidanceEntry as _AgentPromptGuidanceEntry,
   AgentPromptSurfaceKind as _AgentPromptSurfaceKind,
   AnyAgentTool as _AnyAgentTool,
+  AuthorizationInvocationContext as _AuthorizationInvocationContext,
+  AuthorizationPolicyRegistration as _AuthorizationPolicyRegistration,
   MediaUnderstandingProviderPlugin as _MediaUnderstandingProviderPlugin,
   MigrationApplyResult as _MigrationApplyResult,
   MigrationDetection as _MigrationDetection,
@@ -142,6 +144,8 @@ export type AgentPromptGuidance = _AgentPromptGuidance;
 export type AgentPromptGuidanceEntry = _AgentPromptGuidanceEntry;
 export type AgentPromptSurfaceKind = _AgentPromptSurfaceKind;
 export type AnyAgentTool = _AnyAgentTool;
+export type AuthorizationInvocationContext = _AuthorizationInvocationContext;
+export type AuthorizationPolicyRegistration = _AuthorizationPolicyRegistration;
 export type MediaUnderstandingProviderPlugin = _MediaUnderstandingProviderPlugin;
 export type MigrationApplyResult = _MigrationApplyResult;
 export type MigrationDetection = _MigrationDetection;

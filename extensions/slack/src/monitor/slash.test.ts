@@ -1,10 +1,17 @@
+import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 // Slack tests cover slash plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackPlugin } from "../channel.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "./slash.test-harness.js";
 
 const slashCommandMenuMocks = vi.hoisted(() => ({
@@ -317,14 +324,35 @@ const { registerSlackMonitorSlashCommands } = (await import("./slash.js")) as {
 const { dispatchMock } = getSlackSlashMocks();
 
 beforeEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
   clearRuntimeConfigSnapshot();
   resetSlackSlashMocks();
   slashCommandMenuMocks.resolveCommandArgMenu.mockClear();
 });
 
 afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
   clearRuntimeConfigSnapshot();
 });
+
+function installCommandDenialPolicy() {
+  const handler = vi.fn((_request: unknown, _context: unknown) => ({
+    effect: "deny" as const,
+    code: "native-command-denied",
+  }));
+  const registry = createEmptyPluginRegistry();
+  registry.authorizationPolicies.push({
+    pluginId: "sender-access",
+    source: "test",
+    policy: {
+      id: "maintainer-actions",
+      description: "Deny native command shortcuts",
+      handlers: { "command.invoke": handler },
+    },
+  });
+  setActivePluginRegistry(registry);
+  return handler;
+}
 
 async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
   return await registerSlackMonitorSlashCommands({
@@ -659,6 +687,51 @@ describe("Slack native command argument menus", () => {
 
   beforeEach(() => {
     harness.postEphemeral.mockClear();
+  });
+
+  it("does not treat a native argument menu as command execution", async () => {
+    const authorizationHandler = installCommandDenialPolicy();
+
+    const { ack, respond } = await runCommandHandler(usageHandler);
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(authorizationHandler).not.toHaveBeenCalled();
+    expect(slashCommandMenuMocks.resolveCommandArgMenu).toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expectArgMenuLayout(respond);
+  });
+
+  it("preserves explicit owner identity for final native-command dispatch", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackPlugin }]),
+    );
+    const ownerHarness = createArgMenusHarness({
+      commands: { native: true, nativeSkills: false, ownerAllowFrom: ["slack:U1"] },
+    });
+    await registerCommands(ownerHarness.ctx, ownerHarness.account);
+    const ownerStatusHandler = requireHandler(
+      ownerHarness.commands,
+      "/agentstatus",
+      "/agentstatus",
+    );
+    let commandAuthorization: ReturnType<typeof resolveCommandAuthorization> | undefined;
+    dispatchMock.mockImplementation((params: unknown) => {
+      const { cfg, ctx } = params as { cfg: OpenClawConfig; ctx: Record<string, unknown> };
+      commandAuthorization = resolveCommandAuthorization({
+        ctx,
+        cfg,
+        commandAuthorized: ctx.CommandAuthorized === true,
+      });
+      return { counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    await runCommandHandler(ownerStatusHandler);
+
+    expect(commandAuthorization).toMatchObject({
+      ownerList: ["u1"],
+      senderId: "u1",
+      senderIsOwner: true,
+    });
   });
 
   it("prefers the configured slash command over native commands", async () => {

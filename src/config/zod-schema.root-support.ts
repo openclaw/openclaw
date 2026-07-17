@@ -205,6 +205,18 @@ export const SkillEntrySchema = z.strictObject({
 
 export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
+  authorization: z
+    .strictObject({
+      requiredPolicies: z
+        .array(
+          z.strictObject({
+            id: z.string().trim().min(1),
+            operations: z.array(z.enum(["tool.call", "message.action", "command.invoke"])).min(1),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   hooks: z
     .strictObject({
       allowPromptInjection: z.boolean().optional(),

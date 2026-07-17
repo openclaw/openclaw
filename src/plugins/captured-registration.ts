@@ -7,6 +7,7 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { AuthorizationPolicyRegistration } from "./authorization-policy.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
@@ -79,6 +80,7 @@ export type CapturedPluginRegistration = {
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
+  authorizationPolicies: AuthorizationPolicyRegistration[];
   toolMetadata: PluginToolMetadataRegistration[];
   controlUiDescriptors: PluginControlUiDescriptor[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
@@ -120,6 +122,7 @@ export function createCapturedPluginRegistration(params?: {
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
   const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
+  const authorizationPolicies: AuthorizationPolicyRegistration[] = [];
   const toolMetadata: PluginToolMetadataRegistration[] = [];
   const controlUiDescriptors: PluginControlUiDescriptor[] = [];
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
@@ -164,6 +167,7 @@ export function createCapturedPluginRegistration(params?: {
     memoryEmbeddingProviders,
     sessionExtensions,
     trustedToolPolicies,
+    authorizationPolicies,
     toolMetadata,
     controlUiDescriptors,
     runtimeLifecycles,
@@ -288,6 +292,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
           trustedToolPolicies.push(policy);
+        },
+        registerAuthorizationPolicy(policy: AuthorizationPolicyRegistration) {
+          authorizationPolicies.push(policy);
         },
         registerToolMetadata(metadata: PluginToolMetadataRegistration) {
           toolMetadata.push(metadata);

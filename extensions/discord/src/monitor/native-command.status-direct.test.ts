@@ -1,7 +1,11 @@
 // Discord tests cover native command.status direct plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import { createMockCommandInteraction as createInteraction } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -101,6 +105,22 @@ function setDefaultRouteState() {
   });
 }
 
+function installCommandDenialPolicy() {
+  const handler = vi.fn(() => ({ effect: "deny" as const, code: "native-command-denied" }));
+  const registry = createEmptyPluginRegistry();
+  registry.authorizationPolicies.push({
+    pluginId: "sender-access",
+    source: "test",
+    policy: {
+      id: "maintainer-actions",
+      description: "Deny native command shortcuts",
+      handlers: { "command.invoke": handler },
+    },
+  });
+  setActivePluginRegistry(registry);
+  return handler;
+}
+
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
@@ -141,6 +161,7 @@ describe("discord native /status", () => {
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.clearAllMocks();
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
@@ -162,6 +183,27 @@ describe("discord native /status", () => {
     nativeCommandRuntime.matchPluginCommand = (() =>
       null) as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
     setDefaultRouteState();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("blocks direct status before resolving or dispatching the shortcut", async () => {
+    const authorizationHandler = installCommandDenialPolicy();
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction();
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(authorizationHandler).toHaveBeenCalledTimes(1);
+    expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).not.toHaveBeenCalled();
+    expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Command blocked by authorization policy.",
+      ephemeral: true,
+    });
   });
 
   it("returns a direct status reply without falling through the generic dispatcher", async () => {

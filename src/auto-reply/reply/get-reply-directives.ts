@@ -6,7 +6,7 @@ import {
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -29,6 +29,7 @@ import {
 } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
+import { resolveCommandAuthorizationDenialText } from "./commands-authorization.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
 import {
@@ -36,6 +37,11 @@ import {
   resolveConfiguredDirectiveAliases,
 } from "./get-reply-directive-aliases.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { authorizeReplyDirectiveCommands } from "./get-reply-directives-authorization.js";
+import {
+  canUseFastExplicitModelDirective,
+  resolveDirectiveCommandText,
+} from "./get-reply-directives-input.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
@@ -66,48 +72,6 @@ function loadCommandsRegistry() {
 
 function loadSkillCommands() {
   return skillCommandsLoader.load();
-}
-
-function canUseFastExplicitModelDirective(params: {
-  directives: InlineDirectives;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): boolean {
-  const raw = normalizeOptionalString(params.directives.rawModelDirective);
-  if (!raw || /^[0-9]+$/.test(raw)) {
-    return false;
-  }
-  return Boolean(
-    resolveModelRefFromString({
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    }),
-  );
-}
-
-function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: TemplateContext }) {
-  const commandSource =
-    params.sessionCtx.BodyForCommands ??
-    params.sessionCtx.CommandBody ??
-    params.sessionCtx.RawBody ??
-    params.sessionCtx.Transcript ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    params.ctx.BodyForCommands ??
-    params.ctx.CommandBody ??
-    params.ctx.RawBody ??
-    "";
-  const promptSource =
-    params.sessionCtx.BodyForAgent ??
-    params.sessionCtx.BodyStripped ??
-    params.sessionCtx.Body ??
-    "";
-  return {
-    commandSource,
-    promptSource,
-    commandText: commandSource || promptSource,
-  };
 }
 
 type ReplyDirectiveContinuation = {
@@ -345,6 +309,26 @@ export async function resolveReplyDirectives(params: {
           : clearInlineDirectives(parsedDirectives.cleaned);
       }
     }
+  }
+  const directiveAuthorizationDenial = await authorizeReplyDirectiveCommands({
+    command,
+    ctx,
+    directives: parsedDirectives,
+    config: cfg,
+    allowTextCommands,
+    agentId,
+    sessionKey,
+    sessionId: sessionEntry.sessionId,
+    signal: opts?.abortSignal,
+  });
+  if (directiveAuthorizationDenial) {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: markCommandReplyForDelivery({
+        text: resolveCommandAuthorizationDenialText(directiveAuthorizationDenial),
+      }),
+    };
   }
   // Use command.isAuthorizedSender (resolved authorization) instead of raw commandAuthorized
   // to ensure inline directives work when commands.allowFrom grants access (e.g., LINE).

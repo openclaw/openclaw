@@ -1,5 +1,5 @@
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { attachPluginApiFacades } from "./api-facades.js";
+import { attachPluginApiFacades, type HostOpenClawPluginApi } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { withProfile } from "./plugin-load-profile.js";
@@ -48,7 +48,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
+function createGuardedPluginRegistrationApi(api: HostOpenClawPluginApi): {
   api: OpenClawPluginApi;
   close: () => void;
 } {
@@ -82,7 +82,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
 
 export function runPluginRegisterSync(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
-  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  api: HostOpenClawPluginApi,
 ): void {
   const guarded = createGuardedPluginRegistrationApi(api);
   try {

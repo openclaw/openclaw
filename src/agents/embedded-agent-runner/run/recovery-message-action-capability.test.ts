@@ -14,6 +14,7 @@ function createParams() {
     agentId: "main",
     agentAccountId: "work",
     currentChannelId: "chat-1",
+    isAuthorizedSender: true,
     messageProvider: "telegram",
     messageTo: "chat-1",
     runId: "recovery-run-1",
@@ -42,6 +43,7 @@ describe("createRecoveryMessageActionTurnCapability", () => {
     ).toMatchObject({
       requesterAccountId: "work",
       requesterSenderId: "user-1",
+      requesterIsAuthorizedSender: true,
       toolContext: {
         currentChannelId: "chat-1",
         currentChannelProvider: "telegram",

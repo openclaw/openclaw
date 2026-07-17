@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -18,6 +19,9 @@ type AgentRuntimeMessageActionContextBase = {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderIsOwner?: boolean;
+  requesterIsAuthorizedSender?: boolean;
+  requesterRoleIds?: string[];
   toolContext?: InternalChannelThreadingToolContext;
 };
 
@@ -115,6 +119,9 @@ export function mintMessageActionTurnCapability(params: {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderIsOwner?: boolean;
+  requesterIsAuthorizedSender?: boolean;
+  requesterRoleIds?: readonly string[];
   toolContext?: InternalChannelThreadingToolContext;
   expiresWithRun?: boolean;
   ttlMs?: number;
@@ -134,6 +141,7 @@ export function mintMessageActionTurnCapability(params: {
     evictOldestCapability();
   }
   const token = randomBytes(32).toString("base64url");
+  const requesterRoleIds = normalizeSortedUniqueStringEntries(params.requesterRoleIds ?? []);
   capabilitiesByToken.set(token, {
     agentId,
     runId,
@@ -144,6 +152,13 @@ export function mintMessageActionTurnCapability(params: {
     sessionId: normalizeOptionalString(params.sessionId),
     requesterAccountId: normalizeOptionalString(params.requesterAccountId),
     requesterSenderId: normalizeOptionalString(params.requesterSenderId),
+    ...(params.requesterSenderIsOwner !== undefined
+      ? { requesterSenderIsOwner: params.requesterSenderIsOwner }
+      : {}),
+    ...(params.requesterIsAuthorizedSender !== undefined
+      ? { requesterIsAuthorizedSender: params.requesterIsAuthorizedSender }
+      : {}),
+    ...(requesterRoleIds.length > 0 ? { requesterRoleIds } : {}),
     toolContext: copyToolContext(params.toolContext),
   });
   return token;
@@ -183,6 +198,9 @@ export function resolveMessageActionTurnCapability(params: {
     sessionId: capability.sessionId,
     requesterAccountId: capability.requesterAccountId,
     requesterSenderId: capability.requesterSenderId,
+    requesterSenderIsOwner: capability.requesterSenderIsOwner,
+    requesterIsAuthorizedSender: capability.requesterIsAuthorizedSender,
+    requesterRoleIds: capability.requesterRoleIds ? [...capability.requesterRoleIds] : undefined,
     toolContext: copyToolContext(capability.toolContext),
   };
 }

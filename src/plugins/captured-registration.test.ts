@@ -107,6 +107,11 @@ describe("captured plugin registration", () => {
         api.registerAgentToolResultMiddleware(() => undefined, {
           runtimes: ["codex"],
         });
+        api.authorization.registerPolicy({
+          id: "captured-policy",
+          description: "Captured policy",
+          handlers: { "tool.call": () => ({ effect: "pass" }) },
+        });
       },
     });
 
@@ -127,6 +132,7 @@ describe("captured plugin registration", () => {
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
+    expect(captured.authorizationPolicies.map((policy) => policy.id)).toEqual(["captured-policy"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 

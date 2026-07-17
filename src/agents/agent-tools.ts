@@ -17,6 +17,10 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { logWarn } from "../logger.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -436,6 +440,8 @@ type OpenClawCodingToolsOptions = {
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Trusted sender identity bit for command/channel-action auth and owner-gated plugin tools. */
   senderIsOwner?: boolean;
+  /** Host command admission result for the authenticated sender. */
+  isAuthorizedSender?: boolean;
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
@@ -500,6 +506,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       senderUsername: options?.senderUsername,
       senderE164: options?.senderE164,
       senderIsOwner: options?.senderIsOwner,
+      isAuthorizedSender: options?.isAuthorizedSender,
       modelProvider: options?.modelProvider,
       modelId: options?.modelId,
       modelApi: options?.modelApi,
@@ -1155,6 +1162,31 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,
     runId: options?.runId,
+    authorization: createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        provider:
+          capabilityProfile.conversation.messageProvider ??
+          capabilityProfile.conversation.messageChannel,
+        accountId: capabilityProfile.serviceIdentity.accountId,
+        senderId: capabilityProfile.sender.id,
+        senderIsOwner: capabilityProfile.sender.isOwner,
+        isAuthorizedSender: capabilityProfile.sender.isAuthorized,
+        roleIds: capabilityProfile.conversation.memberRoleIds,
+      }),
+      agentId,
+      sessionKey: options?.sessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
+      conversationId:
+        options?.hookChannelId ??
+        capabilityProfile.conversation.currentChannelId ??
+        capabilityProfile.conversation.currentMessagingTarget ??
+        capabilityProfile.conversation.messageTo,
+      threadId:
+        capabilityProfile.conversation.currentThreadTs ??
+        capabilityProfile.conversation.messageThreadId,
+      trigger: options?.trigger,
+    }),
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(turnSourceChannel ? { turnSourceChannel } : {}),

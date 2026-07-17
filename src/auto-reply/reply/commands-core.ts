@@ -1,6 +1,11 @@
 // Dispatches chat commands to registered handlers and formats their results.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import {
+  authorizeCoreCommand,
+  resolveCommandAuthorizationDenialText,
+  shouldAuthorizeCoreCommandTurn,
+} from "./commands-authorization.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandHandler,
@@ -48,16 +53,38 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     initialSessionEntry,
     allowCreateSessionEntry,
   };
-  const resetResult = await maybeHandleResetCommand(commandParams);
-  if (resetResult) {
-    return normalizeCommandHandlerResult(resetResult);
-  }
-
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
+  if (
+    shouldAuthorizeCoreCommandTurn({
+      allowTextCommands,
+      commandBodyNormalized: params.command.commandBodyNormalized,
+    }) &&
+    (params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true)
+  ) {
+    const authorization = await authorizeCoreCommand({
+      command: params.command,
+      ctx: params.rootCtx ?? params.ctx,
+      config: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionEntry?.sessionId,
+      signal: params.opts?.abortSignal,
+    });
+    if (authorization.matched && !authorization.allowed) {
+      return normalizeCommandHandlerResult({
+        shouldContinue: false,
+        reply: { text: resolveCommandAuthorizationDenialText(authorization.denial) },
+      });
+    }
+  }
+  const resetResult = await maybeHandleResetCommand(commandParams);
+  if (resetResult) {
+    return normalizeCommandHandlerResult(resetResult);
+  }
 
   for (const handler of HANDLERS) {
     const result = await handler(commandParams, allowTextCommands);

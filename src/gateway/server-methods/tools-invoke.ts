@@ -8,6 +8,10 @@ import {
   validateToolsInvokeParams,
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../../plugins/authorization-policy-context.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -59,11 +63,28 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const operatorScopes = client?.connect?.scopes ?? [];
+    const operatorIsOwner = operatorScopes.includes("operator.admin");
+    const conversationId = normalizeOptionalString(params.conversationId);
+    const threadId = normalizeOptionalString(params.threadId);
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
-      senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
+      agentTo: conversationId,
+      agentThreadId: threadId,
+      senderIsOwner: operatorIsOwner,
       clientCaps: client?.connect?.caps,
+      authorization: createAuthorizationInvocationContext({
+        principal: createAuthorizationPrincipal({
+          operatorScopes,
+          operatorClientId: client?.connect?.client?.id,
+          operatorDeviceId: client?.connect?.device?.id,
+          operatorIsOwner,
+        }),
+        conversationId,
+        threadId,
+        trigger: "gateway",
+      }),
       conversationReadOrigin: resolveGatewayConversationReadOrigin({
         client,
         requestedOrigin: params.conversationReadOrigin,

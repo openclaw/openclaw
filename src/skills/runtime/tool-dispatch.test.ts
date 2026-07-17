@@ -4,10 +4,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
   beforeToolCallHookContext?: {
+    authorization?: unknown;
     skillCommand?: { skillFile?: string };
   };
   cronCreatorToolAllowlist?: Array<string | { name: string; pluginId?: string }>;
   nativeChannelId?: string;
+  requesterSenderId?: string;
+  senderIsOwner?: boolean;
 };
 
 const hoisted = vi.hoisted(() => {
@@ -80,5 +83,57 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.beforeToolCallHookContext?.skillCommand?.skillFile).toBe(
       "/workspace/skills/daily-brief/SKILL.md",
     );
+  });
+
+  it("pins sender authorization to skill-dispatched tool calls", () => {
+    resolveSkillDispatchTools({
+      message: {
+        surface: "discord",
+        accountId: "molty",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        memberRoleIds: ["write", "maintainers"],
+        nativeChannelId: "maintenance",
+        messageThreadId: "thread-1",
+        threadParentId: "maintenance-parent",
+      },
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      sessionEntry: { sessionId: "session-1" } as never,
+      sessionKey: "agent:main:discord:channel:maintenance",
+      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+      provider: "openai",
+      model: "gpt-5.5",
+      currentChannelId: "maintenance",
+      skillCommand: {
+        name: "fix",
+        skillName: "Fix",
+        skillSource: "workspace",
+        toolName: "exec",
+      },
+    });
+
+    const args = hoisted.createOpenClawToolsMock.mock.calls.at(-1)?.[0];
+    expect(args?.requesterSenderId).toBe("maintainer-1");
+    expect(args?.senderIsOwner).toBe(false);
+    expect(args?.beforeToolCallHookContext?.authorization).toEqual({
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "molty",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers", "write"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:discord:channel:maintenance",
+      sessionId: "session-1",
+      conversationId: "maintenance",
+      parentConversationId: "maintenance-parent",
+      threadId: "thread-1",
+      trigger: "user",
+    });
   });
 });

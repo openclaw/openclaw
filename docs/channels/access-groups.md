@@ -183,6 +183,7 @@ The result reports referenced, matched, missing, unsupported, and failed groups.
 - `dmPolicy: "open"` still requires `"*"` in the effective DM allowlist. Referencing an access group is not the same as public access.
 - Missing group names fail closed. If `allowFrom` contains `accessGroup:operators` and `accessGroups.operators` is absent, that entry authorizes nobody.
 - Keep channel ids stable. Prefer numeric/user ids over display names when the channel supports both.
+- Use an [authorization policy](/plugins/authorization-policies) when an allowed sender should receive a narrower, caller-aware set of tools, message actions, or commands. The policy only adds vetoes; this access-group gate still runs first.
 
 ## Troubleshooting
 

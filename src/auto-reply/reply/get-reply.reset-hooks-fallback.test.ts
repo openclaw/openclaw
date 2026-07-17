@@ -1,6 +1,10 @@
 // Tests reset hook fallback behavior inside the get-reply directive pipeline.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { AuthorizationPolicyHandler } from "../../plugins/types.js";
 import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
@@ -15,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   handleInlineActions: vi.fn(),
   emitResetCommandHooks: vi.fn(),
   initSessionState: vi.fn(),
+  resolveReplySessionPreprocessingState: vi.fn(),
 }));
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: (...args: unknown[]) => mocks.emitResetCommandHooks(...args),
@@ -54,6 +59,9 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     mocks.handleInlineActions.mockReset();
     mocks.emitResetCommandHooks.mockReset();
     mocks.initSessionState.mockReset();
+    mocks.resolveReplySessionPreprocessingState.mockReset();
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
 
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
@@ -68,6 +76,11 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     );
 
     mocks.resolveReplyDirectives.mockResolvedValue(createContinueDirectivesResult(false));
+    mocks.resolveReplySessionPreprocessingState.mockReturnValue({
+      sessionEntry: { sessionId: "existing-session" },
+      sessionKey: "agent:main:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+    });
   });
 
   afterEach(() => {
@@ -99,5 +112,85 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("denies reset session mutation before session initialization", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((request) =>
+      request.phase === "session-mutation"
+        ? { effect: "deny", code: "reset-denied" }
+        : { effect: "pass" },
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect session rollover",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const reply = await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "command.invoke",
+        phase: "session-mutation",
+        commandName: "new",
+      }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123",
+        sessionId: "existing-session",
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(reply).toMatchObject({ text: "Command blocked by authorization policy." });
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
+  });
+
+  it("does not use the session-mutation phase for soft reset", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionCtx: buildNativeResetContext(),
+        sessionKey: "agent:main:telegram:direct:123",
+        isNewSession: false,
+        resetTriggered: false,
+        sessionScope: "per-sender",
+        triggerBodyNormalized: "/reset soft",
+        bodyStripped: "/reset soft",
+      }),
+    );
+    const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>(() => ({
+      effect: "deny",
+      code: "mutation-only",
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect session rollover",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = {
+      ...buildNativeResetContext(),
+      Body: "/reset soft",
+      RawBody: "/reset soft",
+      CommandBody: "/reset soft",
+    };
+
+    await getReplyFromConfig(ctx, undefined, {});
+
+    expect(policy).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).toHaveBeenCalledTimes(1);
   });
 });

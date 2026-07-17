@@ -618,4 +618,36 @@ describe("runMessageAction context isolation", () => {
     }
     expect((rejection as { name?: unknown }).name).toBe("AbortError");
   });
+
+  it("rejects terminal source-reply metadata on broadcast actions", async () => {
+    await expect(
+      runMessageAction({
+        cfg: workspaceConfig,
+        action: "broadcast",
+        params: {
+          targets: ["channel:C12345678"],
+          channel: "workspace",
+          message: "hi",
+        },
+        sourceReplyFinal: true,
+        sourceReplyToolCallId: "tool-call-1",
+      }),
+    ).rejects.toThrow("Terminal source reply metadata requires action send.");
+  });
+
+  it("ignores an explicit false terminal flag on broadcast actions", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "broadcast",
+      params: {
+        targets: ["channel:C12345678"],
+        channel: "workspace",
+        message: "hi",
+      },
+      sourceReplyFinal: false,
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({ kind: "broadcast", channel: "workspace" });
+  });
 });

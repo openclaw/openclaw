@@ -22,7 +22,18 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../../plugins/authorization-policy-context.js";
+import {
+  AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  hasAuthorizationPolicies,
+  runAuthorizationPolicies,
+} from "../../plugins/authorization-policy.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import type { PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
@@ -103,6 +114,7 @@ type NativeHookRelayRegistration = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  authorization?: AuthorizationInvocationContext;
   runId: string;
   channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
@@ -136,6 +148,8 @@ type RegisterNativeHookRelayParams = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  /** Host-authenticated requester and conversation facts pinned to this native turn. */
+  authorization?: AuthorizationInvocationContext;
   runId: string;
   channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
@@ -443,6 +457,7 @@ export function registerNativeHookRelay(
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    ...(params.authorization ? { authorization: params.authorization } : {}),
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
@@ -652,7 +667,11 @@ function nativeHookRelayEventHasLocalWork(
   if (event === "pre_tool_use") {
     // Avoid spawning a native hook relay for every Codex tool call when there
     // is no before_tool_call hook, trusted-tool policy, or loop detector work.
-    return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
+    return (
+      hasBeforeToolCallPolicy() ||
+      hasAuthorizationPolicies(undefined, registration.config) ||
+      nativePreToolUseMayRunLoopDetection(registration)
+    );
   }
   if (event === "post_tool_use") {
     return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
@@ -1435,6 +1454,9 @@ async function runNativeHookRelayPreToolUse(params: {
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
       ...(params.registration.config ? { config: params.registration.config } : {}),
+      ...(params.registration.authorization
+        ? { authorization: params.registration.authorization }
+        : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.invocation.cwd
@@ -1449,6 +1471,53 @@ async function runNativeHookRelayPreToolUse(params: {
         ? outcome.disposition
         : undefined,
     );
+  }
+  const authorizationInput = outcome.params;
+  if (
+    !isJsonValue(authorizationInput) ||
+    authorizationInput === null ||
+    Array.isArray(authorizationInput) ||
+    typeof authorizationInput !== "object"
+  ) {
+    if (outcome.deferredApproval) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+    }
+    return params.adapter.renderPreToolUseBlockResponse(AUTHORIZATION_POLICY_DENIED_MESSAGE);
+  }
+  const authorizationDenial = await runAuthorizationPolicies({
+    request: {
+      operation: "tool.call",
+      toolName,
+      phase: "pre-execution",
+      ...(typeof authorizationInput.action === "string" && authorizationInput.action.trim()
+        ? { action: authorizationInput.action.trim() }
+        : {}),
+      input: authorizationInput as Record<string, PluginJsonValue>,
+    },
+    context:
+      params.registration.authorization ??
+      createAuthorizationInvocationContext({
+        principal: createAuthorizationPrincipal({}),
+        agentId: params.registration.agentId,
+        sessionKey: params.registration.sessionKey,
+        sessionId: params.registration.sessionId,
+        runId: params.registration.runId,
+        conversationId: params.registration.channelId,
+      }),
+    config: params.registration.config,
+    signal: params.registration.signal,
+  });
+  if (authorizationDenial) {
+    if (outcome.deferredApproval) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+    }
+    return params.adapter.renderPreToolUseBlockResponse(AUTHORIZATION_POLICY_DENIED_MESSAGE);
+  }
+  if (params.registration.signal?.aborted) {
+    if (outcome.deferredApproval) {
+      cancelDeferredPluginToolApproval(outcome.deferredApproval);
+    }
+    return params.adapter.renderPreToolUseBlockResponse(AUTHORIZATION_POLICY_DENIED_MESSAGE);
   }
   if (outcome.deferredApproval) {
     if (

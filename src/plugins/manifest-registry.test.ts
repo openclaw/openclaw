@@ -2443,6 +2443,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         agentToolResultMiddleware: ["openclaw", "codex"],
         trustedToolPolicies: ["workflow-budget"],
+        authorizationPolicies: ["maintainer-control"],
       },
       configSchema: { type: "object" },
     });
@@ -2456,6 +2457,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.contracts).toEqual({
       agentToolResultMiddleware: ["openclaw", "codex"],
       trustedToolPolicies: ["workflow-budget"],
+      authorizationPolicies: ["maintainer-control"],
     });
   });
 

@@ -6,6 +6,7 @@
  */
 export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
+export type * from "./authorization-policy.types.js";
 export type {
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,

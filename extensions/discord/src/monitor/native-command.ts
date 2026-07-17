@@ -1,7 +1,10 @@
 // Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
+import {
+  authorizeNativeCoreCommand,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -24,6 +27,7 @@ import {
   resolveDiscordAccountDmPolicy,
   resolveDiscordMaxLinesPerMessage,
 } from "../accounts.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import {
   Button,
   Command,
@@ -470,6 +474,41 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: false };
   }
 
+  if (commandName === "status") {
+    const policyRouteState = await getNativeRouteState();
+    const policyRoute = policyRouteState.effectiveRoute;
+    const policySessionEntry = nativeCommandRuntime.getSessionEntry({
+      agentId: policyRoute.agentId,
+      sessionKey: policyRoute.sessionKey,
+    });
+    const authorizationDenial = await authorizeNativeCoreCommand({
+      commandName: command.key,
+      config: cfg,
+      provider: "discord",
+      accountId,
+      senderId: sender.id,
+      senderIsOwner: senderIsCommandOwner,
+      isAuthorizedSender: commandAuthorized,
+      roleIds: memberRoleIds,
+      agentId: policyRoute.agentId,
+      sessionKey: policyRoute.sessionKey,
+      sessionId: policySessionEntry?.sessionId,
+      conversationId:
+        resolveDiscordConversationIdentity({
+          isDirectMessage,
+          userId: user.id,
+          channelId: rawChannelId || "unknown",
+        }) ?? undefined,
+      parentConversationId: isThreadChannel ? threadParentId : undefined,
+      threadId: isThreadChannel ? rawChannelId : undefined,
+      rawArguments: commandArgs?.raw,
+    });
+    if (authorizationDenial) {
+      await respond("Command blocked by authorization policy.", { ephemeral: true });
+      return { accepted: false };
+    }
+  }
+
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
   const menuNeedsModelContext =
@@ -554,14 +593,18 @@ async function dispatchDiscordCommandInteraction(params: {
       command: pluginMatch.command,
       args: pluginMatch.args,
       senderId: sender.id,
+      memberRoleIds,
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
       senderIsOwner: senderIsCommandOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
+      sessionId: targetSessionEntry?.sessionId,
+      sessionFile: targetSessionEntry?.sessionFile,
       authProfileId: targetSessionEntry?.authProfileOverride,
       commandBody: prompt,
+      commandSource: "native",
       config: cfg,
       from: isDirectMessage
         ? `discord:${user.id}`
@@ -572,6 +615,12 @@ async function dispatchDiscordCommandInteraction(params: {
       accountId,
       messageThreadId,
       threadParentId: pluginThreadParentId,
+      conversationId: isDirectMessage
+        ? `discord:${user.id}`
+        : isGroupDm
+          ? `discord:group:${channelId}`
+          : `discord:channel:${channelId}`,
+      parentConversationId: pluginThreadParentId,
     });
     if (pluginReply.suppressReply === true) {
       return { accepted: true, effectiveRoute };

@@ -556,6 +556,19 @@ describe("plugins cli list", () => {
         allowedModels: [],
         hasAllowedModelsConfig: false,
       },
+      authorizationPolicies: {
+        inspection: "metadata",
+        declaredPolicyIds: ["maintainer-access"],
+        registeredPolicies: [],
+        requiredPolicies: [
+          {
+            id: "maintainer-access",
+            operations: ["tool.call", "command.invoke"],
+            status: "not-runtime-inspected",
+            missingOperations: [],
+          },
+        ],
+      },
       usesLegacyBeforeAgentStart: false,
       compatibility: [],
     });
@@ -565,6 +578,11 @@ describe("plugins cli list", () => {
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
+    expect(runtimeLogs.join("\n")).toContain("Authorization policies");
+    expect(runtimeLogs.join("\n")).toContain("declared: maintainer-access");
+    expect(runtimeLogs.join("\n")).toContain(
+      "required: maintainer-access [tool.call, command.invoke] (not-runtime-inspected)",
+    );
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");
     expect(runtimeLogs.join("\n")).toContain("Npm integrity: sha512-clawpack");

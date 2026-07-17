@@ -1185,12 +1185,14 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("turn-capability-1");
   });
 
-  it("passes owner identity into Codex dynamic tool construction", async () => {
+  it("passes sender identity into Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.senderIsOwner = true;
+    params.isAuthorizedSender = true;
+    params.memberRoleIds = ["maintainers"];
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
@@ -1200,7 +1202,11 @@ describe("Codex app-server dynamic tool build", () => {
 
     await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
-    expect(factoryOptions[0]).toMatchObject({ senderIsOwner: true });
+    expect(factoryOptions[0]).toMatchObject({
+      senderIsOwner: true,
+      isAuthorizedSender: true,
+      memberRoleIds: ["maintainers"],
+    });
   });
 
   it("passes native and routable channel targets into Codex dynamic tools", async () => {

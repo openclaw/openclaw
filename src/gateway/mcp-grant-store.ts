@@ -6,9 +6,12 @@ import type {
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 
 export type McpLoopbackRequestContext = {
+  /** Immutable authenticated actor and resource context minted by the Gateway. */
+  authorization?: AuthorizationInvocationContext;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   agentId?: string;

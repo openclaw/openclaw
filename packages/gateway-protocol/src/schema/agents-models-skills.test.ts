@@ -191,10 +191,12 @@ describe("ToolsEffectiveResultSchema", () => {
 });
 
 describe("ToolsInvokeParamsSchema", () => {
-  it("accepts only the operation-local direct-operator marker", () => {
+  it("accepts route context and only the operation-local direct-operator marker", () => {
     expect(
       Value.Check(ToolsInvokeParamsSchema, {
         name: "message",
+        conversationId: "discord:maintenance",
+        threadId: "thread-1",
         conversationReadOrigin: "direct-operator",
       }),
     ).toBe(true);
@@ -204,6 +206,10 @@ describe("ToolsInvokeParamsSchema", () => {
         conversationReadOrigin: "delegated",
       }),
     ).toBe(false);
+    expect(Value.Check(ToolsInvokeParamsSchema, { name: "message", conversationId: "" })).toBe(
+      false,
+    );
+    expect(Value.Check(ToolsInvokeParamsSchema, { name: "message", threadId: "" })).toBe(false);
   });
 });
 

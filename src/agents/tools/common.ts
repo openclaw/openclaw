@@ -25,6 +25,19 @@ import { textResult } from "./tool-results.js";
 
 export { jsonResult, textResult } from "./tool-results.js";
 
+export type ToolCallParamPreparationContext = {
+  toolCallId?: string;
+  hookContext?: unknown;
+  signal?: AbortSignal;
+};
+
+export type ToolCallParamPreparer = (
+  params: unknown,
+  ctx: ToolCallParamPreparationContext,
+) => unknown;
+
+export type ToolCallParamFinalizer = (params: unknown, preparedParams: unknown) => unknown;
+
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
@@ -34,11 +47,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
-  prepareBeforeToolCallParams?: (
-    params: unknown,
-    ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
-  ) => unknown;
-  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
+  prepareBeforeToolCallParams?: ToolCallParamPreparer;
+  finalizeBeforeToolCallParams?: ToolCallParamFinalizer;
 };
 
 type ErasedAgentToolExecute = {
@@ -67,6 +77,26 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
       unknown
     >["finalizeBeforeToolCallParams"];
   };
+
+/** Prepare raw input before OpenClaw-managed hooks inspect or rewrite it. */
+export async function prepareToolCallParams(
+  tool: AnyAgentTool,
+  params: unknown,
+  ctx: ToolCallParamPreparationContext = {},
+): Promise<unknown> {
+  return tool.prepareBeforeToolCallParams
+    ? await tool.prepareBeforeToolCallParams(params, ctx)
+    : params;
+}
+
+/** Finalize hook-adjusted input immediately before authorization and execution. */
+export async function finalizeToolCallParams(
+  tool: AnyAgentTool,
+  params: unknown,
+  preparedParams: unknown,
+): Promise<unknown> {
+  return (await tool.finalizeBeforeToolCallParams?.(params, preparedParams)) ?? params;
+}
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)

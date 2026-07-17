@@ -6,12 +6,10 @@ import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 import {
   formatCommandArgMenuTitle,
   resolveEffectiveAgentRuntime,
+  resolveNativeCommandSessionTargets,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth-native";
-import {
   type CommandArgs,
-  resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";

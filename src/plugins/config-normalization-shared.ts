@@ -22,6 +22,12 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
+      authorization?: {
+        requiredPolicies?: Array<{
+          id: string;
+          operations: Array<"tool.call" | "message.action" | "command.invoke">;
+        }>;
+      };
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
@@ -97,6 +103,44 @@ function normalizeHookTimeouts(value: unknown): Record<string, number> | undefin
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+const AUTHORIZATION_OPERATIONS = new Set(["tool.call", "message.action", "command.invoke"]);
+
+function normalizeRequiredAuthorizationPolicies(value: unknown) {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: Array<{
+    id: string;
+    operations: Array<"tool.call" | "message.action" | "command.invoke">;
+  }> = [];
+  const byId = new Map<string, (typeof normalized)[number]>();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const id = normalizeOptionalString((entry as { id?: unknown }).id);
+    const rawOperations = (entry as { operations?: unknown }).operations;
+    if (!id || !Array.isArray(rawOperations)) {
+      continue;
+    }
+    const operations = [...new Set(rawOperations)].filter(
+      (operation): operation is "tool.call" | "message.action" | "command.invoke" =>
+        typeof operation === "string" && AUTHORIZATION_OPERATIONS.has(operation),
+    );
+    if (operations.length > 0) {
+      const existing = byId.get(id);
+      if (existing) {
+        existing.operations = [...new Set([...existing.operations, ...operations])];
+      } else {
+        const policy = { id, operations };
+        normalized.push(policy);
+        byId.set(id, policy);
+      }
+    }
+  }
+  return normalized;
+}
+
 function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
@@ -115,6 +159,20 @@ function normalizePluginEntries(
       continue;
     }
     const entry = value as Record<string, unknown>;
+    const authorizationRaw = entry.authorization;
+    const authorizationRecord =
+      authorizationRaw && typeof authorizationRaw === "object" && !Array.isArray(authorizationRaw)
+        ? (authorizationRaw as Record<string, unknown>)
+        : undefined;
+    const hasRequiredAuthorizationPoliciesConfig = Array.isArray(
+      authorizationRecord?.requiredPolicies,
+    );
+    const requiredAuthorizationPolicies = normalizeRequiredAuthorizationPolicies(
+      authorizationRecord?.requiredPolicies,
+    );
+    const authorization = hasRequiredAuthorizationPoliciesConfig
+      ? { requiredPolicies: requiredAuthorizationPolicies ?? [] }
+      : undefined;
     const hooksRaw = entry.hooks;
     const hooks =
       hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
@@ -215,6 +273,7 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      authorization: authorization ?? normalized[normalizedKey]?.authorization,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       llm: normalizedLlm ?? normalized[normalizedKey]?.llm,

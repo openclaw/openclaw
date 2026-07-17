@@ -12,6 +12,7 @@ import {
   resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
+import { buildCodexAuthorizationContext } from "./authorization-context.js";
 import { isCodexSandboxExecServerEnabled } from "./config.js";
 import {
   resolveCodexAppServerHookChannelId,
@@ -185,6 +186,12 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     });
   }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
+  const authorization = buildCodexAuthorizationContext({
+    ...runtimeParams,
+    agentId: sessionAgentId,
+    sessionKey: sandboxSessionKey,
+    conversationId: hookChannelId,
+  });
   preDynamicStartupStages.mark("context-engine-support");
   return {
     connection,
@@ -205,6 +212,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     hookChannelId,
+    authorization,
   };
 }
 

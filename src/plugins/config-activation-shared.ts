@@ -12,6 +12,7 @@ export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default
 
 type PluginExplicitSelectionCause =
   | "enabled-in-config"
+  | "authorization-policy-required"
   | "bundled-channel-enabled-in-config"
   | "selected-memory-slot"
   | "selected-context-engine-slot"
@@ -49,7 +50,14 @@ type PluginActivationConfigLike = {
     memory?: string | null;
     contextEngine?: string | null;
   };
-  entries: Record<string, { enabled?: boolean } | undefined>;
+  entries: Record<
+    string,
+    | {
+        enabled?: boolean;
+        authorization?: { requiredPolicies?: readonly unknown[] };
+      }
+    | undefined
+  >;
 };
 
 export type PluginActivationConfigSourceLike<TRootConfig> = {
@@ -59,6 +67,7 @@ export type PluginActivationConfigSourceLike<TRootConfig> = {
 
 const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
   "enabled-in-config": "enabled in config",
+  "authorization-policy-required": "required authorization policy",
   "bundled-channel-enabled-in-config": "channel enabled in config",
   "selected-memory-slot": "selected memory slot",
   "selected-context-engine-slot": "selected context engine slot",
@@ -109,6 +118,9 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   const policyId = normalizePluginPolicyId(params.id);
   if (params.config.entries[policyId]?.enabled === true) {
     return { explicitlyEnabled: true, cause: "enabled-in-config" };
+  }
+  if ((params.config.entries[policyId]?.authorization?.requiredPolicies?.length ?? 0) > 0) {
+    return { explicitlyEnabled: true, cause: "authorization-policy-required" };
   }
   if (
     params.origin === "bundled" &&
@@ -188,6 +200,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     params.origin === "workspace" &&
     !explicitlyAllowed &&
     entry?.enabled !== true &&
+    explicitSelection.cause !== "authorization-policy-required" &&
     explicitSelection.cause !== "selected-context-engine-slot"
   ) {
     return {
@@ -228,7 +241,11 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       cause: explicitSelection.cause,
     };
   }
-  if (params.config.allow.length > 0 && !explicitlyAllowed) {
+  if (
+    params.config.allow.length > 0 &&
+    !explicitlyAllowed &&
+    explicitSelection.cause !== "authorization-policy-required"
+  ) {
     return {
       enabled: false,
       activated: false,

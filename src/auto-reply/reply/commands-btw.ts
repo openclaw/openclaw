@@ -38,6 +38,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const memberRoleIds = params.command.memberRoleIds;
 
   if (!targetSessionEntry?.sessionId) {
     return {
@@ -86,6 +87,9 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
             sessionId: targetSessionEntry.sessionId,
             requesterAccountId: params.ctx.AccountId,
             requesterSenderId: params.ctx.SenderId ?? params.command.senderId,
+            requesterSenderIsOwner: params.command.senderIsOwner,
+            requesterIsAuthorizedSender: params.command.isAuthorizedSender,
+            requesterRoleIds: memberRoleIds,
             toolContext: {
               currentChannelId,
               currentChatType: chatType,
@@ -142,7 +146,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
         ...(params.ctx.GroupSpace || targetSessionEntry.space
           ? { groupSpace: params.ctx.GroupSpace ?? targetSessionEntry.space }
           : {}),
-        ...(params.ctx.MemberRoleIds ? { memberRoleIds: params.ctx.MemberRoleIds } : {}),
+        ...(memberRoleIds ? { memberRoleIds } : {}),
         ...(targetSessionEntry.parentSessionKey
           ? { spawnedBy: targetSessionEntry.parentSessionKey }
           : {}),
@@ -153,6 +157,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
         ...(params.ctx.SenderUsername ? { senderUsername: params.ctx.SenderUsername } : {}),
         ...(params.ctx.SenderE164 ? { senderE164: params.ctx.SenderE164 } : {}),
         senderIsOwner: params.command.senderIsOwner,
+        isAuthorizedSender: params.command.isAuthorizedSender,
         ...(currentChannelId ? { currentChannelId } : {}),
       });
     } finally {

@@ -146,6 +146,7 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      isAuthorizedSender: true,
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -184,6 +185,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
     expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(resolved.isAuthorizedSender).toBe(true);
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {

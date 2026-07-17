@@ -9819,6 +9819,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
     public let agentid: String?
     public let confirm: Bool?
     public let idempotencykey: String?
+    public let conversationid: String?
+    public let threadid: String?
     public let conversationreadorigin: String?
 
     public init(
@@ -9828,6 +9830,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
         agentid: String? = nil,
         confirm: Bool? = nil,
         idempotencykey: String? = nil,
+        conversationid: String? = nil,
+        threadid: String? = nil,
         conversationreadorigin: String? = nil)
     {
         self.name = name
@@ -9836,6 +9840,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
         self.agentid = agentid
         self.confirm = confirm
         self.idempotencykey = idempotencykey
+        self.conversationid = conversationid
+        self.threadid = threadid
         self.conversationreadorigin = conversationreadorigin
     }
 
@@ -9846,6 +9852,8 @@ public struct ToolsInvokeParams: Codable, Sendable {
         case agentid = "agentId"
         case confirm
         case idempotencykey = "idempotencyKey"
+        case conversationid = "conversationId"
+        case threadid = "threadId"
         case conversationreadorigin = "conversationReadOrigin"
     }
 }

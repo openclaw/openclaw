@@ -116,6 +116,8 @@ export type RunEmbeddedAgentParams = {
   senderE164?: string | null;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
+  /** Host-resolved sender authorization result for this turn. */
+  isAuthorizedSender?: boolean;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   /** Current channel ID for auto-threading (Slack). */

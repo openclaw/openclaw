@@ -956,6 +956,9 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   }
   return (
     entry.enabled === true ||
+    (isRecord(entry.authorization) &&
+      Array.isArray(entry.authorization.requiredPolicies) &&
+      entry.authorization.requiredPolicies.length > 0) ||
     isRecord(entry.config) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||

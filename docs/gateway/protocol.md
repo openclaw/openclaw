@@ -823,8 +823,11 @@ context.
     `source="channel"`, or `source="mcp"`.
 - `tools.invoke` (`operator.write`) invokes one available tool through the
   same gateway policy path as `/tools/invoke`.
-  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
-    `idempotencyKey` are optional.
+  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`,
+    `idempotencyKey`, `conversationId`, and `threadId` are optional.
+  - `conversationId` and `threadId` scope the requested routed resource. They
+    become authorization context and tool routing facts, never operator
+    identity claims.
   - If both `sessionKey` and `agentId` are present, the resolved session agent
     must match `agentId`.
   - Owner-only core wrappers such as `cron`, `gateway`, and `nodes` require

@@ -8,7 +8,10 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
+import {
+  authorizeNativeCoreCommand,
+  resolveNativeCommandSessionTargets,
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -1266,6 +1269,53 @@ export const registerTelegramNativeCommands = ({
             : `/${command.name}`;
 
         if (commandDefinition?.key === "login") {
+          const policyRuntime = await loadTelegramNativeCommandRuntime();
+          const policySessionKey = resolveCommandTargetSessionKey({
+            runtimeCfg,
+            route,
+            chatId,
+            isGroup,
+            senderId,
+            threadSpec,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+            resolveThreadSessionKeys: policyRuntime.resolveThreadSessionKeys,
+          });
+          const policySessionEntry = policyRuntime.getSessionEntry({
+            agentId: route.agentId,
+            sessionKey: policySessionKey,
+          });
+          const authorizationDenial = await authorizeNativeCoreCommand({
+            commandName: commandDefinition.key,
+            config: runtimeCfg,
+            provider: "telegram",
+            accountId: route.accountId,
+            senderId,
+            senderIsOwner,
+            isAuthorizedSender: commandAuthorized,
+            agentId: route.agentId,
+            sessionKey: policySessionKey,
+            sessionId: policySessionEntry?.sessionId,
+            conversationId: originatingTo,
+            parentConversationId: `telegram:${chatId}`,
+            threadId: threadSpec.id,
+            rawArguments: commandArgs?.raw,
+          });
+          if (authorizationDenial) {
+            await withTelegramApiErrorLogging({
+              operation: "sendMessage",
+              runtime,
+              fn: () =>
+                bot.api.sendMessage(
+                  chatId,
+                  "Command blocked by authorization policy.",
+                  threadParams,
+                ),
+            });
+            return;
+          }
+        }
+
+        if (commandDefinition?.key === "login") {
           const sendLoginMessage = async (text: string) => {
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
@@ -1638,6 +1688,7 @@ export const registerTelegramNativeCommands = ({
           AccountId: route.accountId,
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
+          ThreadParentId: `telegram:${chatId}`,
           IsForum: isForum,
           TopicName: isForum && topicName ? topicName : undefined,
           // Originating context for sub-agent announce routing
@@ -1826,7 +1877,10 @@ export const registerTelegramNativeCommands = ({
         let progressMessageId: number | undefined;
         const progressPlaceholder = resolveTelegramProgressPlaceholder(match.command);
 
-        if (progressPlaceholder) {
+        const sendProgressPlaceholder = async () => {
+          if (!progressPlaceholder) {
+            return;
+          }
           try {
             const sent = await withTelegramApiErrorLogging({
               operation: "sendMessage",
@@ -1845,7 +1899,7 @@ export const registerTelegramNativeCommands = ({
           } catch {
             // Fall back to the normal final reply path if the placeholder send fails.
           }
-        }
+        };
 
         const transcriptContext = await resolveTelegramCommandTranscriptContext({
           cfg: runtimeCfg,
@@ -1869,11 +1923,15 @@ export const registerTelegramNativeCommands = ({
             authProfileId:
               transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
             commandBody,
+            commandSource: "native",
             config: runtimeCfg,
             from,
             to,
             accountId,
             messageThreadId: threadSpec.id,
+            conversationId: buildTelegramRoutingTarget(chatId, threadSpec),
+            parentConversationId: `telegram:${chatId}`,
+            onAuthorized: sendProgressPlaceholder,
           }),
         );
 

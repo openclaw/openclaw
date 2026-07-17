@@ -147,6 +147,9 @@ export async function runEmbeddedFallbackCandidate(params: {
           sessionId: embeddedContext.sessionId,
           requesterAccountId: embeddedContext.agentAccountId,
           requesterSenderId: senderContext.senderId,
+          requesterSenderIsOwner: params.candidateRun.senderIsOwner,
+          requesterIsAuthorizedSender: params.candidateRun.isAuthorizedSender,
+          requesterRoleIds: embeddedContext.memberRoleIds,
           toolContext: {
             currentChannelId: embeddedContext.currentChannelId,
             currentChatType: embeddedContext.chatType,

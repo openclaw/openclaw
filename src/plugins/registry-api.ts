@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { emitPluginAgentEvent } from "./agent-event-emission.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { HostOpenClawPluginApi } from "./api-facades.js";
 import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
@@ -93,6 +94,7 @@ export function createPluginApiFactory(
     registerAgentToolResultMiddleware,
     registerSessionExtension,
     registerTrustedToolPolicy,
+    registerAuthorizationPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
     registerRuntimeLifecycle,
@@ -140,7 +142,7 @@ export function createPluginApiFactory(
       hookPolicy?: PluginTypedHookPolicy;
       registrationMode?: PluginRegistrationMode;
     },
-  ): OpenClawPluginApi => {
+  ): HostOpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     setPluginRuntimeRecord(record);
@@ -264,6 +266,7 @@ export function createPluginApiFactory(
                 });
               },
               registerTrustedToolPolicy: (policy) => registerTrustedToolPolicy(record, policy),
+              registerAuthorizationPolicy: (policy) => registerAuthorizationPolicy(record, policy),
               registerToolMetadata: (metadata) => registerToolMetadata(record, metadata),
               registerControlUiDescriptor: (descriptor) =>
                 registerControlUiDescriptor(record, descriptor),

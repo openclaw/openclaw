@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
+import { hasAuthorizationPolicies } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
@@ -24,6 +25,7 @@ import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runti
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { DEFAULT_ACPX_TIMEOUT_SECONDS } from "./config-schema.js";
 import {
+  disableManagedMcpBridges,
   resolveAcpxPluginConfig,
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
@@ -73,6 +75,7 @@ type CreateAcpxRuntimeServiceParams = {
   openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
   processCleanupDeps?: AcpxProcessCleanupDeps;
+  hasToolCallAuthorizationPolicies?: (config: OpenClawPluginServiceContext["config"]) => boolean;
 };
 
 const loadRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
@@ -146,6 +149,33 @@ function warnOnIgnoredLegacyCompatibilityConfig(params: {
   params.logger?.warn(
     `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
   );
+}
+
+function resolveAuthorizationSafePluginConfig(params: {
+  pluginConfig: ResolvedAcpxPluginConfig;
+  hostConfig: OpenClawPluginServiceContext["config"];
+  logger?: PluginLogger;
+  detectToolCallPolicies?: CreateAcpxRuntimeServiceParams["hasToolCallAuthorizationPolicies"];
+}): ResolvedAcpxPluginConfig {
+  if (!params.pluginConfig.pluginToolsMcpBridge && !params.pluginConfig.openClawToolsMcpBridge) {
+    return params.pluginConfig;
+  }
+  let authorizationActive = true;
+  try {
+    authorizationActive = (
+      params.detectToolCallPolicies ??
+      ((config) => hasAuthorizationPolicies(undefined, config, "tool.call"))
+    )(params.hostConfig);
+  } catch {
+    // Policy discovery is itself part of the security boundary. Unreadable state fails closed.
+  }
+  if (!authorizationActive) {
+    return params.pluginConfig;
+  }
+  params.logger?.warn(
+    "ACPX managed MCP tool bridges disabled: tool.call authorization policies require authenticated per-turn caller context, but the current acpx runtime captures MCP servers per persistent session",
+  );
+  return disableManagedMcpBridges(params.pluginConfig);
 }
 
 function formatDoctorDetail(detail: unknown): string | null {
@@ -347,13 +377,19 @@ export function createAcpxRuntimeService(
         ...basePluginConfig,
         probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
       };
-      const pluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
+      const preparedPluginConfig = await measureAcpxStartup(ctx, "config.prepare-codex-auth", () =>
         prepareAcpxCodexAuthConfig({
           pluginConfig: effectiveBasePluginConfig,
           stateDir: ctx.stateDir,
           logger: ctx.logger,
         }),
       );
+      const pluginConfig = resolveAuthorizationSafePluginConfig({
+        pluginConfig: preparedPluginConfig,
+        hostConfig: ctx.config,
+        logger: ctx.logger,
+        detectToolCallPolicies: params.hasToolCallAuthorizationPolicies,
+      });
       const wrapperRoot = path.join(ctx.stateDir, "acpx");
       await measureAcpxStartup(ctx, "filesystem.prepare", async () => {
         await fs.mkdir(pluginConfig.stateDir, { recursive: true });

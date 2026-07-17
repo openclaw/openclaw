@@ -4,7 +4,9 @@
  */
 import { createHash } from "node:crypto";
 import {
+  hasAuthorizationPolicies,
   registerNativeHookRelay,
+  type AuthorizationInvocationContext,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
@@ -134,6 +136,7 @@ export function createCodexNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
+  authorization: AuthorizationInvocationContext;
   runId: string;
   channelId?: string;
   attemptTimeoutMs: number;
@@ -143,9 +146,14 @@ export function createCodexNativeHookRelay(params: {
   signal: AbortSignal;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): NativeHookRelayRegistrationHandle | undefined {
-  if (params.options?.enabled === false) {
+  const authorizationActive = hasAuthorizationPolicies(undefined, params.config);
+  if (params.options?.enabled === false && !authorizationActive) {
     return undefined;
   }
+  const allowedEvents =
+    authorizationActive && !params.events.includes("pre_tool_use")
+      ? (["pre_tool_use", ...params.events] satisfies readonly NativeHookRelayEvent[])
+      : params.events;
   return registerNativeHookRelay({
     provider: "codex",
     relayId: buildCodexNativeHookRelayId({
@@ -161,9 +169,10 @@ export function createCodexNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    authorization: params.authorization,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
-    allowedEvents: params.events,
+    allowedEvents,
     preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,

@@ -1,6 +1,12 @@
 // Builds plugin API objects from config, registries, and runtime helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import {
+  attachPluginApiFacades,
+  registerAuthorizationPolicySymbol,
+  type AuthorizationPolicyRegistrar,
+  type HostOpenClawPluginApi,
+  type OpenClawPluginApiWithoutFacades,
+} from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
@@ -89,7 +95,9 @@ type BuildPluginApiParams = {
       | "registerMemoryEmbeddingProvider"
       | "on"
     >
-  >;
+  > & {
+    registerAuthorizationPolicy?: AuthorizationPolicyRegistrar;
+  };
 };
 
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
@@ -153,6 +161,7 @@ const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"
   injection,
 ) => ({ enqueued: false, id: "", sessionKey: injection.sessionKey });
 const noopRegisterTrustedToolPolicy: OpenClawPluginApi["registerTrustedToolPolicy"] = () => {};
+const noopRegisterAuthorizationPolicy: AuthorizationPolicyRegistrar = () => {};
 const noopRegisterToolMetadata: OpenClawPluginApi["registerToolMetadata"] = () => {};
 const noopRegisterControlUiDescriptor: OpenClawPluginApi["registerControlUiDescriptor"] = () => {};
 const noopRegisterRuntimeLifecycle: OpenClawPluginApi["registerRuntimeLifecycle"] = () => {};
@@ -190,7 +199,7 @@ const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbe
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
-export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
+export function buildPluginApi(params: BuildPluginApiParams): HostOpenClawPluginApi {
   const handlers = params.handlers ?? {};
   const registerCli = handlers.registerCli ?? noopRegisterCli;
   const api: OpenClawPluginApiWithoutFacades = {
@@ -272,6 +281,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
     enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
     registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,
+    [registerAuthorizationPolicySymbol]:
+      handlers.registerAuthorizationPolicy ?? noopRegisterAuthorizationPolicy,
     registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,
     registerControlUiDescriptor:
       handlers.registerControlUiDescriptor ?? noopRegisterControlUiDescriptor,
@@ -307,5 +318,5 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };
-  return attachPluginApiFacades(api);
+  return attachPluginApiFacades<OpenClawPluginApiWithoutFacades>(api);
 }

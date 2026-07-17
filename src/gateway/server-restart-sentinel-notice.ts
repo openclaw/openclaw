@@ -53,6 +53,7 @@ export async function enqueueRestartSentinelNotice(
       replyToId: params.replyToId,
       threadId: params.threadId,
       payloads: [{ text: params.message }],
+      effectAuthorizationScope: "not-applicable",
       bestEffort: false,
       completionRetention: "permanent",
       maxRetries: RESTART_NOTICE_MAX_ATTEMPTS,

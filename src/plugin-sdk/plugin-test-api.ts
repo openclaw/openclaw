@@ -1,6 +1,7 @@
 // Plugin test API helpers construct SDK-shaped host APIs for plugin unit tests.
 import {
   attachPluginApiFacades,
+  registerAuthorizationPolicySymbol,
   type OpenClawPluginApiWithoutFacades,
 } from "../plugins/api-facades.js";
 import type { OpenClawPluginApi } from "./plugin-runtime.js";
@@ -10,7 +11,7 @@ export type TestPluginApiInput = Partial<OpenClawPluginApi>;
 
 /** Create a minimal plugin API object for plugin-sdk contract and unit tests. */
 export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPluginApi {
-  const { agent, lifecycle, runContext, session, ...flatApi } = api;
+  const { agent, authorization, lifecycle, runContext, session, ...flatApi } = api;
   const mergedApi = {
     id: "test-plugin",
     name: "test-plugin",
@@ -70,6 +71,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
       sessionKey: injection.sessionKey,
     }),
     registerTrustedToolPolicy() {},
+    [registerAuthorizationPolicySymbol]() {},
     registerToolMetadata() {},
     registerControlUiDescriptor() {},
     registerRuntimeLifecycle() {},
@@ -97,13 +99,14 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     on() {},
     ...flatApi,
   } satisfies OpenClawPluginApiWithoutFacades;
-  // Facades derive nested `agent`, `lifecycle`, `runContext`, and `session`
+  // Facades derive nested `agent`, `authorization`, `lifecycle`, `runContext`, and `session`
   // views from the flat API; explicit overrides below let tests replace only
   // the nested surface under test without rebuilding every no-op method.
   const withFacades = attachPluginApiFacades(mergedApi);
   return {
     ...withFacades,
     ...(agent ? { agent } : {}),
+    ...(authorization ? { authorization } : {}),
     ...(lifecycle ? { lifecycle } : {}),
     ...(runContext ? { runContext } : {}),
     ...(session ? { session } : {}),

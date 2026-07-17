@@ -13,14 +13,10 @@ import {
   type PluginSessionSchedulerJobRegistration,
   type PluginSessionExtensionRegistration,
   type PluginToolMetadataRegistration,
-  type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import { createPolicyRegistrars } from "./registry-registrars-policy.js";
 import type { PluginRegistryState } from "./registry-state.js";
-import type {
-  PluginRecord,
-  PluginSessionActionRegistryRegistration,
-  PluginTrustedToolPolicyRegistryRegistration,
-} from "./registry-types.js";
+import type { PluginRecord, PluginSessionActionRegistryRegistration } from "./registry-types.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import {
@@ -67,6 +63,7 @@ function normalizeHostHookStringList(value: unknown): string[] | undefined | nul
 
 export function createHostRegistrars(state: PluginRegistryState) {
   const { registry, registryParams, pushDiagnostic } = state;
+  const { registerTrustedToolPolicy, registerAuthorizationPolicy } = createPolicyRegistrars(state);
 
   const validateSessionActionSchema = (
     record: PluginRecord,
@@ -198,84 +195,6 @@ export function createHostRegistrars(state: PluginRegistryState) {
       source: record.source,
       rootDir: record.rootDir,
     });
-  };
-
-  const registerTrustedToolPolicy = (
-    record: PluginRecord,
-    policy: PluginTrustedToolPolicyRegistration,
-  ) => {
-    if (!policy || typeof policy !== "object") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "trusted tool policy registration requires id, description, and evaluate()",
-      });
-      return;
-    }
-    const id = normalizeHostHookString(policy.id);
-    const description = normalizeHostHookString(policy.description);
-    if (!id || !description || typeof policy.evaluate !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "trusted tool policy registration requires id, description, and evaluate()",
-      });
-      return;
-    }
-    if (
-      record.origin !== "bundled" &&
-      !(record.contracts?.trustedToolPolicies ?? []).includes(id)
-    ) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.trustedToolPolicies for: ${id}`,
-      });
-      return;
-    }
-    if (record.origin !== "bundled" && !(record.enabled && record.explicitlyEnabled === true)) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must be explicitly enabled to register trusted tool policy: ${id}`,
-      });
-      return;
-    }
-    const policies = registry.trustedToolPolicies;
-    const existing = policies.find(
-      (entry) => entry.pluginId === record.id && entry.policy.id === id,
-    );
-    if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `trusted tool policy already registered: ${id} (${existing.pluginId})`,
-      });
-      return;
-    }
-    const registration: PluginTrustedToolPolicyRegistryRegistration = {
-      pluginId: record.id,
-      pluginName: record.name,
-      policy: { ...policy, id, description },
-      origin: record.origin,
-      source: record.source,
-      rootDir: record.rootDir,
-    };
-    if (record.origin === "bundled") {
-      const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
-      if (firstInstalledPolicyIndex === -1) {
-        policies.push(registration);
-      } else {
-        policies.splice(firstInstalledPolicyIndex, 0, registration);
-      }
-      return;
-    }
-    policies.push(registration);
   };
 
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {
@@ -699,6 +618,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
   return {
     registerSessionExtension,
     registerTrustedToolPolicy,
+    registerAuthorizationPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
     registerRuntimeLifecycle,

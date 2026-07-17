@@ -294,6 +294,13 @@ plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
 reserved workflow safety.
 
+Use [authorization policies](/plugins/authorization-policies) when the decision
+depends on the authenticated sender, Gateway operator, internal service, or
+unknown caller and must also cover canonical message actions or command
+invocations. Authorization policies are deny-only and cannot rewrite params;
+trusted tool policies and `before_tool_call` remain the parameter-rewrite
+surfaces.
+
 ### Exec environment hook
 
 `resolve_exec_env` lets plugins contribute environment variables to `exec`

@@ -432,6 +432,7 @@ async function executeCodexDiagnosticsAddon(
     command: match.command,
     args: match.args,
     senderId: params.command.senderId,
+    memberRoleIds: params.command.memberRoleIds,
     channel: params.command.channel,
     channelId: params.command.channelId,
     isAuthorizedSender: params.command.isAuthorizedSender,
@@ -443,6 +444,8 @@ async function executeCodexDiagnosticsAddon(
     sessionFile: targetSessionEntry?.sessionFile,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
+    commandSource: params.ctx.CommandSource,
+    abortSignal: params.opts?.abortSignal,
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
@@ -453,6 +456,12 @@ async function executeCodexDiagnosticsAddon(
         ? params.ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
+    conversationId:
+      normalizeOptionalString(params.ctx.OriginatingTo) ??
+      normalizeOptionalString(params.ctx.NativeChannelId) ??
+      params.command.to ??
+      params.command.from,
+    parentConversationId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
     ...(options.diagnosticsUploadApproved === undefined
       ? {}

@@ -6,6 +6,8 @@ import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
+  compareAndSwapPendingDeliveryQueueEntries,
+  compareAndSwapPendingDeliveryQueueEntry,
   completeDeliveryQueueEntry,
   commitStagedDeliveryQueueEntry,
   commitStagedDeliveryQueueEntryOnce,
@@ -27,6 +29,12 @@ import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
+import {
+  parseQueuedOutboundEffectAuthorization,
+  type OutboundEffectAuthorizationSealHandle,
+  type OutboundEffectAuthorizationScope,
+  type QueuedOutboundEffectAuthorization,
+} from "./effect-authorization.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
@@ -60,6 +68,10 @@ export type QueuedDeliveryPayload = {
   queuePolicy?: "required" | "best_effort";
   /** Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
+  /** Final-effect policy or broadcast-ordering seal. Absent on ordinary deliveries. */
+  effectAuthorization?: QueuedOutboundEffectAuthorization;
+  /** Whether this queued intent originated at the message-action authorization boundary. */
+  effectAuthorizationScope?: OutboundEffectAuthorizationScope;
   /**
    * Original payloads before plugin hooks. On recovery, hooks re-run on these
    * payloads — this is intentional since hooks are stateless transforms and
@@ -126,6 +138,8 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     accountId: params.accountId,
     queuePolicy: params.queuePolicy,
     requireUnknownSendReconciliation: params.requireUnknownSendReconciliation,
+    effectAuthorization: params.effectAuthorization,
+    effectAuthorizationScope: params.effectAuthorizationScope,
     payloads: params.payloads,
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
@@ -359,6 +373,120 @@ export async function markDeliveryPlatformOutcomeUnknown(
     platformSendStartedAt: entry.platformSendStartedAt ?? Date.now(),
     recoveryState: "unknown_after_send",
   }));
+}
+
+/** Seal the exact final semantic payload while the row still has its pending digest. */
+export async function sealDeliveryEffectAuthorization(params: {
+  id: string;
+  expectedDigest: string;
+  finalDigest: string;
+  stateDir?: string;
+}): Promise<OutboundEffectAuthorizationSealHandle> {
+  const result = compareAndSwapPendingDeliveryQueueEntry({
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    id: params.id,
+    stateDir: params.stateDir,
+    compare: (entry) => {
+      const authorization = parseQueuedOutboundEffectAuthorization(
+        (entry as QueuedDelivery).effectAuthorization,
+      );
+      return authorization?.state === "pending" && authorization.digest === params.expectedDigest;
+    },
+    update: (entry) => {
+      const queued = entry as QueuedDelivery;
+      const authorization = parseQueuedOutboundEffectAuthorization(queued.effectAuthorization);
+      if (!authorization || authorization.state !== "pending") {
+        return queued;
+      }
+      return {
+        ...queued,
+        effectAuthorization: {
+          ...authorization,
+          state: "sealed",
+          digest: params.finalDigest,
+        },
+      };
+    },
+  });
+  if (result.status !== "updated") {
+    throw new Error(`Delivery effect authorization seal ${result.status} for ${params.id}`);
+  }
+  return {
+    kind: "outbound-effect-authorization",
+    version: 1,
+    id: params.id,
+    digest: params.finalDigest,
+  };
+}
+
+function isValidEffectAuthorizationSealHandle(
+  handle: OutboundEffectAuthorizationSealHandle,
+): boolean {
+  return (
+    handle.kind === "outbound-effect-authorization" &&
+    handle.version === 1 &&
+    Boolean(handle.id.trim()) &&
+    parseQueuedOutboundEffectAuthorization({
+      version: 1,
+      state: "sealed",
+      digest: handle.digest,
+      mediaAliases: [],
+    }) !== null
+  );
+}
+
+/** Promote every sealed delivery in one transaction; one mismatch promotes none. */
+export function authorizeSealedDeliveryEffects(
+  handles: readonly OutboundEffectAuthorizationSealHandle[],
+  stateDir?: string,
+): void {
+  if (handles.length === 0) {
+    return;
+  }
+  if (handles.some((handle) => !isValidEffectAuthorizationSealHandle(handle))) {
+    throw new Error("Malformed outbound effect authorization seal handle");
+  }
+  const result = compareAndSwapPendingDeliveryQueueEntries({
+    stateDir,
+    entries: handles.map((handle) => ({
+      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+      id: handle.id,
+      compare: (entry) => {
+        const authorization = parseQueuedOutboundEffectAuthorization(
+          (entry as QueuedDelivery).effectAuthorization,
+        );
+        return authorization?.state === "sealed" && authorization.digest === handle.digest;
+      },
+      update: (entry) => {
+        const queued = entry as QueuedDelivery;
+        const authorization = parseQueuedOutboundEffectAuthorization(queued.effectAuthorization);
+        if (!authorization || authorization.state !== "sealed") {
+          return queued;
+        }
+        return {
+          ...queued,
+          effectAuthorization: { ...authorization, state: "authorized" },
+        };
+      },
+    })),
+  });
+  if (result.status !== "updated") {
+    throw new Error(
+      `Delivery effect authorization batch ${result.status} for ${"id" in result ? result.id : "unknown"}`,
+    );
+  }
+}
+
+/** Refuse transport if a barrier returned without atomically promoting this seal. */
+export async function assertDeliveryEffectAuthorized(
+  handle: OutboundEffectAuthorizationSealHandle,
+  stateDir?: string,
+): Promise<void> {
+  const entry = await loadPendingDelivery(handle.id, stateDir);
+  const authorization = parseQueuedOutboundEffectAuthorization(entry?.effectAuthorization);
+  if (authorization?.state !== "authorized" || authorization.digest !== handle.digest) {
+    throw new Error(`Delivery effect authorization was not promoted for ${handle.id}`);
+  }
 }
 
 /** Load a single pending delivery entry by ID from the queue directory. */

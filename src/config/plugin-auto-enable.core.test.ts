@@ -959,6 +959,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("preserves required authorization policy plugins in restrictive plugins.allow", () => {
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            "sender-access": {
+              authorization: {
+                requiredPolicies: [{ id: "maintainer-control", operations: ["command.invoke"] }],
+              },
+            },
+          },
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([{ id: "sender-access", channels: [] }]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "sender-access"]);
+    expect(result.changes).toContain(
+      "sender-access plugin config present, added to plugin allowlist.",
+    );
+  });
+
   it("preserves official external plugin entries before installation", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {

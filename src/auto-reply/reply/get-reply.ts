@@ -13,6 +13,7 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -31,10 +32,16 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import type { ReplyPayload } from "../reply-payload.js";
+import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  authorizeCoreCommand,
+  resolveCommandAuthorizationDenialText,
+} from "./commands-authorization.js";
+import { buildCommandContext } from "./commands-context.js";
+import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -60,6 +67,7 @@ import {
   hasInboundMedia,
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import {
@@ -366,6 +374,45 @@ export async function getReplyFromConfig(
     opts?.onTypingController?.(controller);
     return controller;
   });
+
+  const resetCommandSource =
+    finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body ?? "";
+  const preflightTriggerBody = stripStructuralPrefixes(resetCommandSource).trim();
+  const normalizedChatType = normalizeChatType(finalized.ChatType);
+  const preflightCommand = buildCommandContext({
+    ctx: finalized,
+    cfg,
+    agentId,
+    sessionKey: agentSessionKey,
+    isGroup: normalizedChatType != null && normalizedChatType !== "direct",
+    triggerBodyNormalized: preflightTriggerBody,
+    commandAuthorized: finalized.CommandAuthorized,
+  });
+  const resetLikeCommand =
+    /^\/(?:new|reset)(?:\s|$)/iu.test(preflightCommand.commandBodyNormalized) &&
+    !parseSoftResetCommand(preflightCommand.commandBodyNormalized).matched;
+  if (
+    (preflightCommand.isAuthorizedSender || Object.is(finalized.CommandAuthorized, true)) &&
+    resetLikeCommand
+  ) {
+    const resetTarget = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+    const authorization = await authorizeCoreCommand({
+      command: preflightCommand,
+      ctx: finalized,
+      config: cfg,
+      agentId,
+      sessionKey: resetTarget.sessionKey,
+      sessionId: resetTarget.sessionEntry?.sessionId,
+      phase: "session-mutation",
+      signal: internalOptsWithSkillFilter?.abortSignal,
+    });
+    if (authorization.matched && !authorization.allowed) {
+      typing.cleanup();
+      return markCommandReplyForDelivery({
+        text: resolveCommandAuthorizationDenialText(authorization.denial),
+      });
+    }
+  }
 
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",

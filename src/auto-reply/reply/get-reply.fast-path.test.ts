@@ -4,11 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -53,6 +57,8 @@ const mocks = vi.hoisted(() => ({
   ]),
   resolveReplyDirectives: vi.fn(),
 }));
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => mocks.handleCommands(...args),
@@ -137,6 +143,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: () => ({
         providers: [],
@@ -206,6 +214,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   afterEach(() => {
     cliBackendsTesting.resetDepsForTest();
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     vi.unstubAllEnvs();
   });
 
@@ -476,6 +486,127 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("authorizes native commands once with the final session context", async () => {
+    const home = tempDirs.make("openclaw-native-status-policy-");
+    const storePath = path.join(home, "sessions.json");
+    const targetSessionKey = "agent:main:telegram:policy-final";
+    const policy = vi.fn((_request: { commandName: string }, context: { sessionId?: string }) =>
+      context.sessionId
+        ? ({ effect: "deny", code: "session-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Use final session context",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SenderId: "maintainer-1",
+        SessionKey: "telegram:slash:policy-final",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(reply).toMatchObject({ text: "Command blocked by authorization policy." });
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(policy.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        sessionId: expect.any(String),
+      }),
+    );
+    expect(loadSessionEntry({ sessionKey: targetSessionKey, storePath })).toBeUndefined();
+    expect(mocks.buildStatusReply).not.toHaveBeenCalled();
+    expect(mocks.handleCommands).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("does not reject a native command against incomplete session context", async () => {
+    const home = tempDirs.make("openclaw-native-status-policy-complete-");
+    const targetSessionKey = "agent:main:telegram:policy-complete";
+    const policy = vi.fn((_request: { commandName: string }, context: { sessionId?: string }) =>
+      context.sessionId
+        ? ({ effect: "pass" } as const)
+        : ({ effect: "deny", code: "session-required" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Require final session context",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SenderId: "maintainer-1",
+        SessionKey: "telegram:slash:policy-complete",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    if (!reply || Array.isArray(reply) || typeof reply.text !== "string") {
+      throw new Error("expected status reply text");
+    }
+    expect(reply.text).toContain("OpenClaw");
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(policy.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        sessionId: expect.any(String),
+      }),
+    );
+    expect(mocks.buildStatusReply).toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
   });
 

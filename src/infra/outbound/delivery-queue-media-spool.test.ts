@@ -202,6 +202,10 @@ describe("staging", () => {
     expect(await fs.readFile(staged, "utf8")).toBe("opus-bytes");
     expect(livePayload.mediaUrl).toBe(source);
     expect(result.artifacts).toEqual([staged]);
+    expect(result.effectAuthorizationMediaAliases).toEqual({
+      live: [{ source, alias: "media:0" }],
+      queued: [{ source: staged, alias: "media:0" }],
+    });
   });
 
   it("leaves replayable remote media untouched without creating the spool", async () => {
@@ -215,6 +219,7 @@ describe("staging", () => {
       status: "staged",
       payloads: [{ mediaUrl: "https://example.com/a.ogg" }],
       artifacts: [],
+      effectAuthorizationMediaAliases: { live: [], queued: [] },
     });
     expect(await exists(spoolRoot)).toBe(false);
   });

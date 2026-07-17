@@ -402,6 +402,7 @@ function mergeManifestContracts(
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
     "trustedToolPolicies",
+    "authorizationPolicies",
     "externalAuthProviders",
     "embeddingProviders",
     "memoryEmbeddingProviders",

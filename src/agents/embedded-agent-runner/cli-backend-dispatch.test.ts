@@ -354,6 +354,66 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(cliParams).not.toHaveProperty("toolsAllow");
   });
 
+  it("preserves authenticated requester identity for the CLI MCP grant", async () => {
+    await runEmbeddedAgentViaCliBackendIfEligible(
+      baseRunParams({
+        trigger: "user",
+        messageProvider: "discord",
+        clientCaps: ["inline-widgets"],
+        agentAccountId: "molty",
+        senderId: "user-42",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        memberRoleIds: ["maintainers", "reviewers"],
+        chatId: "native-conversation",
+        currentChannelId: "route-channel",
+        currentThreadTs: "thread-7",
+        currentMessageId: "message-9",
+        currentInboundAudio: true,
+        channelContext: {
+          sender: { id: "user-42" },
+          chat: { id: "native-conversation" },
+        },
+        senderName: "Maintainer",
+        senderUsername: "maintainer",
+        senderE164: "+15551234567",
+        groupId: "group-1",
+        groupChannel: "maintenance",
+        groupSpace: "guild-1",
+        spawnedBy: "agent:main:discord:channel:parent",
+        approvalReviewerDeviceId: "device-1",
+      }),
+    );
+
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      trigger: "user",
+      messageProvider: "discord",
+      clientCaps: ["inline-widgets"],
+      agentAccountId: "molty",
+      senderId: "user-42",
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      memberRoleIds: ["maintainers", "reviewers"],
+      chatId: "native-conversation",
+      currentChannelId: "route-channel",
+      currentThreadTs: "thread-7",
+      currentMessageId: "message-9",
+      currentInboundAudio: true,
+      channelContext: {
+        sender: { id: "user-42" },
+        chat: { id: "native-conversation" },
+      },
+      senderName: "Maintainer",
+      senderUsername: "maintainer",
+      senderE164: "+15551234567",
+      groupId: "group-1",
+      groupChannel: "maintenance",
+      groupSpace: "guild-1",
+      spawnedBy: "agent:main:discord:channel:parent",
+      approvalReviewerDeviceId: "device-1",
+    });
+  });
+
   // Fail-closed tool policy: only a non-empty named allowlist is expressible
   // on the CLI surface. Every other embedded tool state keeps the passthrough
   // so no closed state silently widens.

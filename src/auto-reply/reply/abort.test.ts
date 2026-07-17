@@ -9,6 +9,12 @@ import {
   replaceSessionEntry,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import type { AuthorizationPolicyHandler } from "../../plugins/authorization-policy.types.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { resolveAbortCutoffFromContext, shouldSkipMessageByAbortCutoff } from "./abort-cutoff.js";
 import { getAbortMemory } from "./abort-primitives.js";
@@ -149,6 +155,7 @@ describe("abort detection", () => {
     targetSessionKey?: string;
     messageSid?: string;
     timestamp?: number;
+    body?: string;
   }) {
     for (const key of [
       params.sessionKey,
@@ -163,8 +170,8 @@ describe("abort detection", () => {
     }
     return tryFastAbortFromMessage({
       ctx: buildTestCtx({
-        CommandBody: "/stop",
-        RawBody: "/stop",
+        CommandBody: params.body ?? "/stop",
+        RawBody: params.body ?? "/stop",
         CommandAuthorized: true,
         Provider: "telegram",
         Surface: "telegram",
@@ -221,6 +228,7 @@ describe("abort detection", () => {
   }
 
   beforeEach(() => {
+    resetGlobalHookRunner();
     abortTesting.setDepsForTests({
       getAcpSessionManager: (() =>
         ({
@@ -239,6 +247,8 @@ describe("abort detection", () => {
       clearCommandLane: commandQueueMocks.clearCommandLane,
     });
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReset().mockReturnValue([]);
+    subagentRegistryMocks.markSubagentRunTerminated.mockReset().mockReturnValue(1);
   });
 
   afterEach(() => {
@@ -256,6 +266,7 @@ describe("abort detection", () => {
     runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
+    resetGlobalHookRunner();
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -454,6 +465,7 @@ describe("abort detection", () => {
       to: "telegram:123",
       senderId: "123",
       commandSource: "text",
+      body: "stop",
     });
 
     expect(result.handled).toBe(true);
@@ -461,6 +473,62 @@ describe("abort detection", () => {
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
+  });
+
+  it("does not abort or mutate session state when policy denies fast /stop", async () => {
+    const sessionKey = "telegram:policy-denied-stop";
+    const sessionId = "session-policy-denied-stop";
+    const { storePath, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+      nowMs: 123,
+    });
+    const before = readAbortSessionEntry(storePath, sessionKey);
+    const policy = vi.fn<AuthorizationPolicyHandler<"command.invoke">>((request) =>
+      request.commandName === "stop"
+        ? ({ effect: "deny", code: "stop-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect destructive commands",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    const markSessionAbortTarget = vi.fn();
+    abortTesting.setDepsForTests({ markSessionAbortTarget });
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("active-policy-denied");
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:policy-denied-stop",
+      to: "telegram:policy-denied-stop",
+      senderId: "policy-denied-stop",
+      commandSource: "text",
+      body: "stop",
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      aborted: false,
+      rejectionReason: "policy-denied",
+    });
+    expect(formatAbortReplyText(undefined, result.rejectionReason)).toBe(
+      "Command blocked by authorization policy.",
+    );
+    expect(policy).toHaveBeenCalledOnce();
+    expect(policy.mock.calls[0]?.[1]).toMatchObject({ sessionKey, sessionId });
+    expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(markSessionAbortTarget).not.toHaveBeenCalled();
+    expect(subagentRegistryMocks.listSubagentRunsForRequester).not.toHaveBeenCalled();
+    expect(commandQueueMocks.clearCommandLane).not.toHaveBeenCalled();
+    expect(readAbortSessionEntry(storePath, sessionKey)).toEqual(before);
   });
 
   it("fast-abort clears queued followups and session lane", async () => {

@@ -26,6 +26,12 @@ import {
 } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import {
+  digestOutboundEffectPayload,
+  OutboundEffectAuthorizationError,
+  type OutboundEffectAuthorizationInput,
+  type OutboundEffectAuthorizationScope,
+} from "./effect-authorization.js";
+import {
   resolveOutboundMessageGatewayOptions,
   type OutboundMessageGatewayOptionsInput,
 } from "./message-gateway-options.js";
@@ -109,6 +115,10 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   /** @internal Reports the effective payload only after an identified direct send. */
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
+  /** @internal Binds this send to its exact final semantic payload before transport I/O. */
+  effectAuthorization?: OutboundEffectAuthorizationInput;
+  /** @internal Marks durable provenance at the message-action authorization boundary. */
+  effectAuthorizationScope?: OutboundEffectAuthorizationScope;
   abortSignal?: AbortSignal;
   silent?: boolean;
   parseMode?: "HTML";
@@ -325,6 +335,57 @@ async function callMessageGateway<T>(params: {
   });
 }
 
+async function authorizeFinalGatewayMessageEffect(params: {
+  input: OutboundEffectAuthorizationInput;
+  payloads: readonly ReplyPayload[];
+}): Promise<void> {
+  const enforceFinalPayloadAuthorization = params.input.enforceFinalPayloadAuthorization !== false;
+  let finalDigest: string | undefined;
+  let authorizationError: unknown;
+  try {
+    if (params.payloads.length > 1) {
+      throw new Error("Outbound effect authorization requires exactly one source payload");
+    }
+    const initialDigest = digestOutboundEffectPayload(params.input.authorizedPayload);
+    const finalPayload = params.payloads[0];
+    finalDigest = finalPayload ? digestOutboundEffectPayload(finalPayload) : initialDigest;
+    if (enforceFinalPayloadAuthorization && finalPayload && finalDigest !== initialDigest) {
+      if (!params.input.authorizeChangedPayload) {
+        throw new Error(
+          "Outbound payload changed after authorization without a changed-payload authorizer",
+        );
+      }
+      await params.input.authorizeChangedPayload(finalPayload);
+    }
+  } catch (error) {
+    authorizationError = error;
+  }
+
+  // Join on the exact RPC payload before any broadcast leaf starts. The remote
+  // Gateway independently rechecks its post-hook payload; a later remote deny
+  // remains that leaf's ordinary per-target failure, like any provider reject.
+  if (params.input.waitForAuthorizationBarrier) {
+    try {
+      await params.input.waitForAuthorizationBarrier(
+        authorizationError
+          ? { status: "denied", error: authorizationError }
+          : { status: "sealed", digest: finalDigest!, handle: null },
+      );
+    } catch (barrierError) {
+      throw new OutboundEffectAuthorizationError(
+        "Outbound effect authorization barrier rejected",
+        barrierError,
+      );
+    }
+  }
+  if (authorizationError) {
+    throw new OutboundEffectAuthorizationError(
+      "Outbound effect authorization rejected",
+      authorizationError,
+    );
+  }
+}
+
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
   if (cfg) {
     return cfg;
@@ -448,6 +509,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),
+      ...(params.effectAuthorization ? { effectAuthorization: params.effectAuthorization } : {}),
+      ...(params.effectAuthorizationScope
+        ? { effectAuthorizationScope: params.effectAuthorizationScope }
+        : {}),
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -479,6 +544,13 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     };
   }
 
+  if (params.effectAuthorization) {
+    await authorizeFinalGatewayMessageEffect({
+      input: params.effectAuthorization,
+      payloads: normalizedPayloads,
+    });
+  }
+  const idempotencyKey = await resolveGatewayIdempotencyKey(params.idempotencyKey);
   const result = await callMessageGateway<{ messageId: string }>({
     gateway: params.gateway,
     method: "send",
@@ -501,7 +573,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       parseMode: params.parseMode,
       sessionKey: params.mirror?.sessionKey,
-      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
+      idempotencyKey,
     },
   });
 

@@ -13,6 +13,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const { runtimeRegistry } = vi.hoisted(() => ({
   runtimeRegistry: new Map<string, { runtime: unknown; healthy?: () => boolean }>(),
 }));
+const { toolCallAuthorizationPolicyState } = vi.hoisted(() => ({
+  toolCallAuthorizationPolicyState: {
+    mode: "inactive" as "inactive" | "active" | "error",
+  },
+}));
 const { prepareAcpxCodexAuthConfigMock } = vi.hoisted(() => ({
   prepareAcpxCodexAuthConfigMock: vi.fn(
     async ({ pluginConfig }: { pluginConfig: unknown }) => pluginConfig,
@@ -79,6 +84,15 @@ vi.mock("../runtime-api.js", () => ({
   },
 }));
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+  hasAuthorizationPolicies: () => {
+    if (toolCallAuthorizationPolicyState.mode === "error") {
+      throw new Error("authorization registry unreadable");
+    }
+    return toolCallAuthorizationPolicyState.mode === "active";
+  },
+}));
+
 vi.mock("./runtime.js", () => ({
   ACPX_BACKEND_ID: "acpx",
   AcpxRuntime: acpxRuntimeConstructorMock,
@@ -134,6 +148,7 @@ async function makeTempDir(): Promise<string> {
 afterEach(async () => {
   resetPluginStateStoreForTests();
   runtimeRegistry.clear();
+  toolCallAuthorizationPolicyState.mode = "inactive";
   prepareAcpxCodexAuthConfigMock.mockClear();
   cleanupOpenClawOwnedAcpxProcessTreeMock.mockClear();
   reapStaleOpenClawOwnedAcpxOrphansMock.mockClear();
@@ -239,6 +254,9 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
     pluginConfig: {
       timeoutSeconds?: number;
       probeAgent?: string;
+      pluginToolsMcpBridge: boolean;
+      openClawToolsMcpBridge: boolean;
+      mcpServers: Record<string, unknown>;
     };
   };
 }
@@ -264,6 +282,88 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
 
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+  });
+
+  it("keeps managed MCP bridges when no tool.call authorization policy is active", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService(ctx, {
+      pluginConfig: {
+        pluginToolsMcpBridge: true,
+        openClawToolsMcpBridge: true,
+        mcpServers: {
+          custom: { command: "custom-mcp" },
+        },
+      },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    const config = readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig;
+    expect(config.pluginToolsMcpBridge).toBe(true);
+    expect(config.openClawToolsMcpBridge).toBe(true);
+    expect(Object.keys(config.mcpServers).toSorted()).toEqual([
+      "custom",
+      "openclaw-plugin-tools",
+      "openclaw-tools",
+    ]);
+
+    await service.stop?.(ctx);
+  });
+
+  it("disables managed MCP bridges when tool.call authorization is active", async () => {
+    toolCallAuthorizationPolicyState.mode = "active";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService(ctx, {
+      pluginConfig: {
+        pluginToolsMcpBridge: true,
+        openClawToolsMcpBridge: true,
+        mcpServers: {
+          custom: { command: "custom-mcp" },
+        },
+      },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    const config = readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig;
+    expect(config.pluginToolsMcpBridge).toBe(false);
+    expect(config.openClawToolsMcpBridge).toBe(false);
+    expect(config.mcpServers).toEqual({
+      custom: { command: "custom-mcp" },
+    });
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "ACPX managed MCP tool bridges disabled: tool.call authorization policies require authenticated per-turn caller context, but the current acpx runtime captures MCP servers per persistent session",
+    );
+
+    await service.stop?.(ctx);
+  });
+
+  it("fails managed MCP bridges closed when authorization policy discovery throws", async () => {
+    toolCallAuthorizationPolicyState.mode = "error";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = createMockRuntime();
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService(ctx, {
+      pluginConfig: { pluginToolsMcpBridge: true },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    const config = readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig;
+    expect(config.pluginToolsMcpBridge).toBe(false);
+    expect(config.mcpServers).not.toHaveProperty("openclaw-plugin-tools");
+
+    await service.stop?.(ctx);
   });
 
   it("skips the startup probe and does not advertise backend health when explicitly disabled", async () => {

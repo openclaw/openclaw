@@ -424,11 +424,27 @@ function requiresTrustedRequesterSender(
   );
 }
 
+/** Returns whether the active channel plugin owns this action before its callback runs. */
+export function hasChannelMessageActionHandler(params: {
+  channel: string;
+  action: ChannelMessageActionName;
+}): boolean {
+  const actions = resolveChannelPluginRegistration(params.channel)?.plugin.actions;
+  if (!actions?.handleAction) {
+    return false;
+  }
+  return !actions.supportsAction || actions.supportsAction({ action: params.action });
+}
+
 /**
  * Runs a channel message action if the target plugin supports it.
  */
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
+  options?: {
+    /** Runs after every host preflight and immediately before the plugin callback. */
+    beforeHandleAction?: () => Promise<void>;
+  },
 ): Promise<AgentToolResult<unknown> | null> {
   const registration = resolveChannelPluginRegistration(ctx.channel);
   if (!registration) {
@@ -462,5 +478,6 @@ export async function dispatchChannelMessageAction(
   if (actions.supportsAction && !actions.supportsAction({ action: ctx.action })) {
     return null;
   }
+  await options?.beforeHandleAction?.();
   return await actions.handleAction(ctx);
 }

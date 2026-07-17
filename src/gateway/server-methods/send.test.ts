@@ -12,11 +12,16 @@ import {
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
+import { OutboundEffectAuthorizationError } from "../../infra/outbound/effect-authorization.js";
+import type {
+  AuthorizationInvocationContext,
+  AuthorizationPolicyHandler,
+} from "../../plugins/authorization-policy.types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
 
@@ -67,15 +72,27 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  getLoadedChannelPlugin: mocks.getChannelPlugin,
-  getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
-}));
+vi.mock("../../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
+    "../../channels/plugins/index.js",
+  );
+  return {
+    ...actual,
+    getLoadedChannelPlugin: mocks.getChannelPlugin,
+    getChannelPlugin: mocks.getChannelPlugin,
+    normalizeChannelId: (value: string) => (value === "webchat" ? null : value),
+  };
+});
 
-vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
-  dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
-}));
+vi.mock("../../channels/plugins/message-action-dispatch.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../channels/plugins/message-action-dispatch.js")
+  >("../../channels/plugins/message-action-dispatch.js");
+  return {
+    ...actual,
+    dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
+  };
+});
 
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
@@ -121,17 +138,23 @@ function messageActionContextFromSessionKeyForTests(sessionKey: string): {
   };
 }
 
-vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: ({
-    sessionKey,
-  }: {
-    sessionKey?: string;
-    config?: unknown;
-    agentId?: string;
-  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
-  resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
-}));
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: ({
+      sessionKey,
+    }: {
+      sessionKey?: string;
+      config?: unknown;
+      agentId?: string;
+    }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+    resolveDefaultAgentId: () => "main",
+    resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
+  };
+});
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
@@ -168,9 +191,15 @@ vi.mock("../../infra/outbound/outbound-session.js", () => ({
   ensureOutboundSessionEntry: mocks.ensureOutboundSessionEntry,
 }));
 
-vi.mock("../../infra/outbound/channel-selection.js", () => ({
-  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
-}));
+vi.mock("../../infra/outbound/channel-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/channel-selection.js")>(
+    "../../infra/outbound/channel-selection.js",
+  );
+  return {
+    ...actual,
+    resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
+  };
+});
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
@@ -212,13 +241,39 @@ const makeContext = (): GatewayRequestContext =>
     getRuntimeConfig: () => ({}),
   }) as unknown as GatewayRequestContext;
 
+type TestGatewayClient = {
+  connect?: {
+    scopes?: string[];
+    client?: { id: string; mode: string };
+  };
+  internal?: {
+    agentRuntimeIdentity?: {
+      kind: "agentRuntime";
+      agentId: string;
+      sessionKey: string;
+      messageActionContext?: {
+        expiresAtMs: number;
+        sessionId?: string;
+        sourceReplyFinal?: boolean;
+        sourceReplyToolCallId?: string;
+        requesterAccountId?: string;
+        requesterSenderId?: string;
+        requesterSenderIsOwner?: boolean;
+        requesterIsAuthorizedSender?: boolean;
+        requesterRoleIds?: string[];
+        toolContext?: Record<string, unknown>;
+      };
+    };
+  };
+};
+
 async function runSend(params: Record<string, unknown>) {
   return await runSendWithClient(params);
 }
 
 async function runSendWithClient(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: TestGatewayClient | null,
 ) {
   const respond = vi.fn();
   await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
@@ -238,7 +293,7 @@ async function runPoll(params: Record<string, unknown>) {
 
 async function runPollWithClient(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: TestGatewayClient | null,
 ) {
   const respond = vi.fn();
   await expectDefined(sendHandlers.poll, "sendHandlers.poll test invariant").call(sendHandlers, {
@@ -264,28 +319,7 @@ function createDeferred<T>() {
 
 async function runMessageActionRequest(
   params: Record<string, unknown>,
-  client?: {
-    connect?: {
-      scopes?: string[];
-      client?: { id: string; mode: string };
-    };
-    internal?: {
-      agentRuntimeIdentity?: {
-        kind: "agentRuntime";
-        agentId: string;
-        sessionKey: string;
-        messageActionContext?: {
-          expiresAtMs: number;
-          sessionId?: string;
-          sourceReplyFinal?: boolean;
-          sourceReplyToolCallId?: string;
-          requesterAccountId?: string;
-          requesterSenderId?: string;
-          toolContext?: Record<string, unknown>;
-        };
-      };
-    };
-  } | null,
+  client?: TestGatewayClient | null,
 ) {
   const respond = vi.fn();
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
@@ -350,8 +384,18 @@ function directCliClient() {
   };
 }
 
-function agentRuntimeClient(sessionKey: string, agentId = "main") {
+function agentRuntimeClient(sessionKey: string, agentId = "main"): GatewayClient {
   return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        version: "test",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+    },
     internal: {
       agentRuntimeIdentity: {
         kind: "agentRuntime" as const,
@@ -360,7 +404,47 @@ function agentRuntimeClient(sessionKey: string, agentId = "main") {
         messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
       },
     },
-  } as never;
+  };
+}
+
+function senderAgentRuntimeClient(params: {
+  agentId?: string;
+  sessionKey: string;
+  expiresAtMs?: number;
+  sessionId?: string;
+  accountId?: string;
+  senderId?: string;
+  roleIds?: string[];
+  sourceConversationId?: string;
+  sourceThreadId?: string;
+  omitToolContext?: boolean;
+}): TestGatewayClient {
+  return {
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: params.agentId ?? "main",
+        sessionKey: params.sessionKey,
+        messageActionContext: {
+          expiresAtMs: params.expiresAtMs ?? Date.now() + 60_000,
+          sessionId: params.sessionId,
+          requesterAccountId: params.accountId ?? "ops",
+          requesterSenderId: params.senderId ?? "maintainer-1",
+          requesterSenderIsOwner: false,
+          requesterIsAuthorizedSender: true,
+          requesterRoleIds: params.roleIds ?? ["maintainers"],
+          toolContext: params.omitToolContext
+            ? undefined
+            : {
+                currentChannelProvider: "slack",
+                currentChannelId: params.sourceConversationId ?? "source-C1",
+                currentThreadTs: params.sourceThreadId,
+                currentChatType: "channel",
+              },
+        },
+      },
+    },
+  };
 }
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
@@ -443,6 +527,22 @@ function expectDeliverySessionMirror(params: { agentId: string; sessionKey: stri
 
 function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
+}
+
+function installGatewayMessageActionPolicy(handler: AuthorizationPolicyHandler<"message.action">) {
+  const registry = createTestRegistry([]);
+  registry.authorizationPolicies.push({
+    pluginId: "gateway-message-action-policy-test",
+    pluginName: "Gateway message action policy test",
+    origin: "workspace",
+    source: "test",
+    policy: {
+      id: "gateway-message-action-policy-test",
+      description: "Tests Gateway message action authorization",
+      handlers: { "message.action": handler },
+    },
+  });
+  setActivePluginRegistry(registry, "send-authorization-policy-test");
 }
 
 describe("gateway send mirroring", () => {
@@ -785,8 +885,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(1);
+    });
 
     actionDeferred.resolve({ details: { action: "handled" } });
     await Promise.all([firstRequest, secondRequest]);
@@ -850,8 +951,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledTimes(2);
+    });
     expect(mocks.dispatchChannelMessageAction.mock.calls[0]?.[0]).toMatchObject({
       conversationReadOrigin: "direct-operator",
     });
@@ -1009,8 +1111,9 @@ describe("gateway send mirroring", () => {
       isWebchatConnect: () => false,
     });
 
-    await Promise.resolve();
-    expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(mocks.sendPoll).toHaveBeenCalledTimes(1);
+    });
 
     pollDeferred.resolve({ messageId: "poll-concurrent", pollId: "poll-1" });
     await Promise.all([firstRequest, secondRequest]);
@@ -1145,6 +1248,618 @@ describe("gateway send mirroring", () => {
 
     expect(deliveryCall()?.channel).toBe("slack");
     expect(deliveryCall()?.gatewayClientScopes).toEqual(["operator.write"]);
+    expect(deliveryCall()?.effectAuthorizationScope).toBe("message-action");
+  });
+
+  it("authorizes the canonical direct send as the authenticated Gateway operator", async () => {
+    let seenRequest: unknown;
+    let seenContext: unknown;
+    installGatewayMessageActionPolicy((request, authorization) => {
+      seenRequest = request;
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+    mockDeliverySuccess("m-authorized");
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:C1",
+        message: "hello",
+        channel: "slack",
+        idempotencyKey: "idem-authorized",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenRequest).toMatchObject({
+      operation: "message.action",
+      action: "send",
+      channel: "slack",
+      target: "resolved",
+      input: { channel: "slack", to: "resolved", message: "hello" },
+    });
+    expect(seenContext).toMatchObject({
+      principal: {
+        kind: "operator",
+        scopes: ["operator.write"],
+        isOwner: false,
+      },
+      conversationId: "resolved",
+      trigger: "gateway",
+    });
+  });
+
+  it("reauthorizes the final Gateway payload and returns a generic nested denial", async () => {
+    const seenRequests: Array<Record<string, any>> = [];
+    const seenContexts: AuthorizationInvocationContext[] = [];
+    installGatewayMessageActionPolicy((request, authorization) => {
+      seenRequests.push(request as unknown as Record<string, any>);
+      seenContexts.push(authorization);
+      return request.input.payload &&
+        typeof request.input.payload === "object" &&
+        !Array.isArray(request.input.payload) &&
+        request.input.payload.text === "forbidden"
+        ? { effect: "deny", code: "private-final-payload-policy-code" }
+        : { effect: "pass" };
+    });
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (delivery) => {
+      const effectAuthorization = (delivery as Record<string, any>).effectAuthorization;
+      try {
+        await effectAuthorization.authorizeChangedPayload({
+          text: "forbidden",
+          channelData: { marker: "final" },
+        });
+      } catch (error) {
+        throw new OutboundEffectAuthorizationError("Outbound effect authorization rejected", error);
+      }
+      throw new Error("Expected final payload authorization to deny");
+    });
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "allowed",
+        channel: "discord",
+        sessionKey,
+        idempotencyKey: "idem-final-payload-denial",
+      },
+      senderAgentRuntimeClient({ sessionKey }),
+    );
+
+    expect(seenRequests).toHaveLength(2);
+    expect(seenRequests[1]).toMatchObject({
+      operation: "message.action",
+      action: "send",
+      input: {
+        message: "forbidden",
+        payload: {
+          text: "forbidden",
+          channelData: { marker: "final" },
+        },
+        channelData: { marker: "final" },
+      },
+    });
+    expect(seenContexts).toHaveLength(2);
+    expect(seenContexts[1]).toMatchObject({
+      principal: { kind: "sender", senderId: "maintainer-1" },
+      conversationId: "source-C1",
+    });
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("Message action blocked by authorization policy.");
+    expect(JSON.stringify(response)).not.toContain("private-final-payload-policy-code");
+  });
+
+  it("delivers after an allowed final Gateway payload rewrite", async () => {
+    const seenPayloads: unknown[] = [];
+    installGatewayMessageActionPolicy((request) => {
+      seenPayloads.push(request.input.payload);
+      return { effect: "pass" };
+    });
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (delivery) => {
+      const effectAuthorization = (delivery as Record<string, any>).effectAuthorization;
+      await effectAuthorization.authorizeChangedPayload({ text: "rewritten" });
+      return [{ messageId: "m-final-rewrite", channel: "slack" }];
+    });
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:C1",
+        message: "original",
+        channel: "slack",
+        idempotencyKey: "idem-final-payload-allowed",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
+
+    expect(seenPayloads).toEqual([{ text: "original" }, { text: "rewritten" }]);
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(firstRespondCall(respond)?.[1]?.messageId).toBe("m-final-rewrite");
+  });
+
+  it("authorizes a signed direct send as its source channel sender", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return authorization.principal.kind === "sender"
+        ? { effect: "pass" }
+        : { effect: "deny", code: "sender-required" };
+    });
+    mockDeliverySuccess("m-signed-sender");
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "discord",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: "idem-signed-sender",
+      },
+      senderAgentRuntimeClient({
+        sessionKey,
+        sourceConversationId: "source-C1",
+        sourceThreadId: "thread-1",
+      }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenContext).toMatchObject({
+      principal: {
+        kind: "sender",
+        provider: "slack",
+        accountId: "ops",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey,
+      conversationId: "source-C1",
+      threadId: "thread-1",
+      trigger: "gateway",
+    });
+  });
+
+  it("does not substitute a direct-send target for missing signed source context", async () => {
+    let seenRequest: unknown;
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((request, authorization) => {
+      seenRequest = request;
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+    mockDeliverySuccess("m-opaque-signed-sender");
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "discord",
+        threadId: "target-thread-2",
+        sessionKey,
+        idempotencyKey: "idem-opaque-signed-sender",
+      },
+      senderAgentRuntimeClient({ sessionKey, omitToolContext: true }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenRequest).toMatchObject({
+      operation: "message.action",
+      channel: "discord",
+      target: "resolved",
+      threadId: "target-thread-2",
+    });
+    expect(seenContext?.principal).toMatchObject({
+      kind: "sender",
+      senderId: "maintainer-1",
+    });
+    expect(seenContext?.principal).not.toHaveProperty("provider");
+    expect(seenContext).not.toHaveProperty("conversationId");
+    expect(seenContext).not.toHaveProperty("threadId");
+  });
+
+  it("keeps signed agent runtime calls without sender provenance as service calls", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+    mockDeliverySuccess("m-signed-service");
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "slack",
+        sessionKey,
+        idempotencyKey: "idem-signed-service",
+      },
+      agentRuntimeClient(sessionKey),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenContext).toMatchObject({
+      principal: { kind: "service", serviceId: "agent-runtime" },
+      agentId: "main",
+      sessionKey,
+    });
+  });
+
+  it("derives omitted direct-send routing identity from the signed runtime", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+    mockDeliverySuccess("m-signed-route");
+    const sessionKey = "agent:work:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "discord",
+        idempotencyKey: "idem-signed-route",
+      },
+      senderAgentRuntimeClient({ agentId: "work", sessionKey }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work", currentSessionKey: sessionKey }),
+    );
+    expect(deliveryCall()?.session).toMatchObject({ agentId: "work", key: sessionKey });
+    expect(seenContext).toMatchObject({ agentId: "work", sessionKey });
+  });
+
+  it("rejects expired signed direct-send provenance before delivery", async () => {
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "slack",
+        sessionKey,
+        idempotencyKey: "idem-expired-signed-send",
+      },
+      senderAgentRuntimeClient({ sessionKey, expiresAtMs: Date.now() - 1 }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)?.[2]?.message).toContain("agent runtime context has expired");
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed direct-send identity mismatches before delivery", async () => {
+    const identitySessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runSendWithClient(
+      {
+        to: "channel:target-C2",
+        message: "hello",
+        channel: "slack",
+        agentId: "other",
+        sessionKey: "agent:other:slack:channel:source-C1",
+        idempotencyKey: "idem-mismatched-signed-send",
+      },
+      senderAgentRuntimeClient({ sessionKey: identitySessionKey }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)?.[2]?.message).toContain(
+      "agent runtime identity does not match the requested session",
+    );
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("returns a generic denial before a direct Gateway message action dispatch", async () => {
+    installGatewayMessageActionPolicy(() => ({
+      effect: "deny",
+      code: "private-policy-detail",
+    }));
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "read",
+        params: { channelId: "C1", limit: 1 },
+        idempotencyKey: "idem-policy-denial",
+      },
+      directCliClient() as never,
+    );
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toBe("Message action blocked by authorization policy.");
+    expect(JSON.stringify(response)).not.toContain("private-policy-detail");
+  });
+
+  it("authorizes delegated Gateway message actions as the signed channel sender", async () => {
+    let seenContext: unknown;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+
+    const sessionKey = "agent:main:slack:channel:C1";
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "read",
+        params: { channelId: "C1", limit: 1 },
+        sessionKey,
+        sessionId: "session-1",
+        idempotencyKey: "idem-sender-authorization",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-1",
+              requesterAccountId: "ops",
+              requesterSenderId: "maintainer-1",
+              requesterSenderIsOwner: false,
+              requesterIsAuthorizedSender: true,
+              requesterRoleIds: ["maintainers"],
+              toolContext: {
+                currentChannelProvider: "slack",
+                currentChannelId: "C1",
+                currentChatType: "channel",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenContext).toMatchObject({
+      principal: {
+        kind: "sender",
+        provider: "slack",
+        accountId: "ops",
+        senderId: "maintainer-1",
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        roleIds: ["maintainers"],
+      },
+      sessionKey: "agent:main:slack:channel:C1",
+      sessionId: "session-1",
+      conversationId: "C1",
+      trigger: "gateway",
+    });
+  });
+
+  it("never trusts a request session id omitted from signed runtime provenance", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+
+    const sessionKey = "agent:main:slack:channel:C1";
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "read",
+        params: { channelId: "C1", limit: 1 },
+        sessionKey,
+        sessionId: "request-controlled-session",
+        idempotencyKey: "idem-unbound-runtime-session",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              requesterSenderId: "maintainer-1",
+              toolContext: {
+                currentChannelProvider: "slack",
+                currentChannelId: "C1",
+              },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenContext).toMatchObject({
+      principal: { kind: "sender", senderId: "maintainer-1" },
+      sessionKey,
+    });
+    expect(seenContext?.sessionId).toBeUndefined();
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: undefined }),
+    );
+  });
+
+  it("runs a signed broadcast inside the Gateway instead of dispatching one plugin action", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    const plugin = createOutboundTestPlugin({
+      id: "directchat",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: vi.fn(),
+      },
+    });
+    plugin.config = { ...plugin.config, listAccountIds: () => ["default"] };
+    const otherPlugin = createOutboundTestPlugin({
+      id: "otherchat",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: vi.fn(),
+      },
+    });
+    otherPlugin.config = { ...otherPlugin.config, listAccountIds: () => ["default"] };
+    const registry = createTestRegistry(
+      [plugin, otherPlugin].map((entry) => ({
+        pluginId: entry.id,
+        source: "test",
+        plugin: entry,
+      })),
+    );
+    registry.authorizationPolicies.push({
+      pluginId: "gateway-broadcast-policy-test",
+      pluginName: "Gateway broadcast policy test",
+      origin: "workspace",
+      source: "test",
+      policy: {
+        id: "gateway-broadcast-policy-test",
+        description: "Tests Gateway broadcast ownership",
+        handlers: {
+          "message.action": (_request, authorization) => {
+            seenContext = authorization;
+            return { effect: "pass" };
+          },
+        },
+      },
+    });
+    setActivePluginRegistry(registry, "gateway-broadcast-test");
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "directchat",
+      configured: ["directchat"],
+    });
+    mocks.deliverOutboundPayloads.mockImplementation(async (delivery) => {
+      const effectAuthorization = (delivery as Record<string, any>).effectAuthorization;
+      await effectAuthorization.waitForAuthorizationBarrier({
+        status: "sealed",
+        digest: "sha256:test-broadcast-digest",
+        handle: null,
+      });
+      return [{ messageId: "gateway-broadcast-message", channel: "directchat" }];
+    });
+    const cfg = {
+      channels: {
+        directchat: { enabled: true },
+        otherchat: { enabled: true },
+      },
+      tools: {
+        message: {
+          broadcast: { enabled: true },
+          crossContext: { allowAcrossProviders: true },
+        },
+      },
+    };
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => cfg,
+    } as unknown as GatewayRequestContext;
+    const sessionKey = "agent:main:slack:channel:C1";
+    const respond = vi.fn();
+
+    await expectDefined(
+      sendHandlers["message.action"],
+      'sendHandlers["message.action"] test invariant',
+    )({
+      params: {
+        channel: "directchat",
+        action: "broadcast",
+        params: { targets: ["channel:one"], message: "hello" },
+        sessionKey,
+        sessionId: "session-1",
+        agentId: "main",
+        idempotencyKey: "idem-gateway-broadcast",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: senderAgentRuntimeClient({ sessionKey, sessionId: "session-1" }) as never,
+      isWebchatConnect: () => false,
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(response?.[1]).toMatchObject({
+      results: [{ channel: "directchat", ok: true }],
+    });
+    expect(response?.[1]?.results).toHaveLength(1);
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(deliveryCall()?.mirror?.idempotencyKey).toBe("idem-gateway-broadcast");
+    expect(seenContext).toMatchObject({
+      principal: { kind: "sender", senderId: "maintainer-1" },
+      conversationId: "source-C1",
+      trigger: "gateway",
+    });
+  });
+
+  it("rejects an unauthenticated Gateway broadcast before any channel effect", async () => {
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "broadcast",
+        params: { targets: ["channel:one"], message: "hello" },
+        idempotencyKey: "idem-unauthenticated-broadcast",
+      },
+      null,
+    );
+
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toContain("authenticated runtime or operator");
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("does not copy target provider or account onto a source-opaque sender principal", async () => {
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((_request, authorization) => {
+      seenContext = authorization;
+      return { effect: "pass" };
+    });
+    const sessionKey = "agent:main:slack:channel:C1";
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        accountId: "target-account",
+        action: "read",
+        params: { channelId: "C1", limit: 1 },
+        sessionKey,
+        sessionId: "session-1",
+        idempotencyKey: "idem-opaque-sender-source",
+      },
+      {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey,
+            messageActionContext: {
+              expiresAtMs: Date.now() + 60_000,
+              sessionId: "session-1",
+              requesterSenderId: "maintainer-1",
+              toolContext: { currentChannelId: "C1", currentChatType: "channel" },
+            },
+          },
+        },
+      },
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenContext?.principal).toEqual({
+      kind: "sender",
+      senderId: "maintainer-1",
+    });
+    expect(seenContext?.principal).not.toHaveProperty("provider");
+    expect(seenContext?.principal).not.toHaveProperty("accountId");
   });
 
   it("forwards an empty gateway scope array into outbound delivery", async () => {
@@ -1308,6 +2023,72 @@ describe("gateway send mirroring", () => {
     }
     expect(call.to).toBe("resolved");
     expect(call.gatewayClientScopes).toEqual(["operator.admin"]);
+  });
+
+  it("authorizes a signed poll as its source channel sender", async () => {
+    let seenRequest: unknown;
+    let seenContext: AuthorizationInvocationContext | undefined;
+    installGatewayMessageActionPolicy((request, authorization) => {
+      seenRequest = request;
+      seenContext = authorization;
+      return authorization.principal.kind === "sender"
+        ? { effect: "pass" }
+        : { effect: "deny", code: "sender-required" };
+    });
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runPollWithClient(
+      {
+        to: "channel:target-C2",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "discord",
+        threadId: "target-thread-2",
+        idempotencyKey: "idem-signed-poll",
+      },
+      senderAgentRuntimeClient({
+        sessionKey,
+        sourceConversationId: "source-C1",
+      }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(true);
+    expect(seenRequest).toMatchObject({
+      operation: "message.action",
+      channel: "discord",
+      threadId: "target-thread-2",
+    });
+    expect(seenContext).toMatchObject({
+      principal: {
+        kind: "sender",
+        provider: "slack",
+        senderId: "maintainer-1",
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey,
+      conversationId: "source-C1",
+    });
+    expect(seenContext).not.toHaveProperty("threadId");
+  });
+
+  it("rejects expired signed poll provenance before delivery", async () => {
+    const sessionKey = "agent:main:slack:channel:source-C1";
+
+    const { respond } = await runPollWithClient(
+      {
+        to: "channel:target-C2",
+        question: "Q?",
+        options: ["A", "B"],
+        channel: "slack",
+        idempotencyKey: "idem-expired-signed-poll",
+      },
+      senderAgentRuntimeClient({ sessionKey, expiresAtMs: Date.now() - 1 }),
+    );
+
+    expect(firstRespondCall(respond)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)?.[2]?.message).toContain("agent runtime context has expired");
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
   });
 
   it("forwards an empty gateway scope array into outbound poll delivery", async () => {

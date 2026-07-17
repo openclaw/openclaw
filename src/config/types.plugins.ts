@@ -1,6 +1,13 @@
 // Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
+  authorization?: {
+    /** Operator-owned policy registrations that must cover the listed operations. */
+    requiredPolicies?: Array<{
+      id: string;
+      operations: Array<"tool.call" | "message.action" | "command.invoke">;
+    }>;
+  };
   hooks?: {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;

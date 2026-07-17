@@ -228,6 +228,28 @@ export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): Ac
   }));
 }
 
+/** Remove host-managed MCP bridges while preserving every user-configured server. */
+export function disableManagedMcpBridges(
+  config: ResolvedAcpxPluginConfig,
+): ResolvedAcpxPluginConfig {
+  if (!config.pluginToolsMcpBridge && !config.openClawToolsMcpBridge) {
+    return config;
+  }
+  const mcpServers = { ...config.mcpServers };
+  if (config.pluginToolsMcpBridge) {
+    delete mcpServers[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME];
+  }
+  if (config.openClawToolsMcpBridge) {
+    delete mcpServers[ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME];
+  }
+  return {
+    ...config,
+    pluginToolsMcpBridge: false,
+    openClawToolsMcpBridge: false,
+    mcpServers,
+  };
+}
+
 /** Validate and normalize raw ACPX plugin config for runtime startup. */
 export function resolveAcpxPluginConfig(params: {
   rawConfig: unknown;

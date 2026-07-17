@@ -17,6 +17,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
+import type { ExecuteSendActionParams, PreparedSendAction } from "./outbound-send-service.js";
 
 const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5m8gAAAABJRU5ErkJggg==",
@@ -36,7 +37,22 @@ vi.mock("./channel-resolution.js", () => ({
 
 vi.mock("./outbound-send-service.js", () => ({
   executeSendAction: channelResolutionMocks.executeSendAction,
+  prepareSendAction: vi.fn(async (params: ExecuteSendActionParams) => ({
+    kind: "core",
+    params,
+    message: params.message,
+    payload: params.payload ?? { text: params.message },
+    queuePolicy: "best_effort",
+  })),
+  executePreparedSendAction: vi.fn(async (prepared: PreparedSendAction) =>
+    channelResolutionMocks.executeSendAction(prepared.params),
+  ),
+  preparePollAction: vi.fn((params) => ({ kind: "plugin", ctx: params.ctx })),
+  executePreparedPollAction: vi.fn(async (prepared) =>
+    channelResolutionMocks.executePollAction({ ctx: prepared.ctx }),
+  ),
   executePollAction: channelResolutionMocks.executePollAction,
+  waitForPreparedSendEffectAuthorization: vi.fn(async () => {}),
 }));
 
 vi.mock("./outbound-session.js", () => ({

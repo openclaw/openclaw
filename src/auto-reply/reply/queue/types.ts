@@ -137,6 +137,10 @@ export type FollowupRun = {
     /** Parent session provenance used to validate inherited group policy. */
     spawnedBy?: string;
     senderId?: string;
+    /** Host-resolved sender authorization result for this turn. */
+    isAuthorizedSender?: boolean;
+    /** Host-authenticated provider role IDs for this sender. */
+    memberRoleIds?: string[];
     channelContext?: PluginHookChannelContext;
     senderName?: string;
     senderUsername?: string;

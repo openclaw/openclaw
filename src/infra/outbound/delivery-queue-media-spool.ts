@@ -17,6 +17,7 @@ import {
   createDeliveryQueueMediaStage,
   loadDeliveryQueueMediaRetentionSnapshot,
 } from "./delivery-queue-media-staging.js";
+import type { OutboundEffectAuthorizationMediaAlias } from "./effect-authorization.js";
 
 const ARTIFACT_EXT_RE = /^\.[A-Za-z0-9]{1,10}$/;
 const ARTIFACT_NAME_RE =
@@ -69,6 +70,10 @@ type StageQueueMediaResult =
       status: "staged";
       payloads: ReplyPayload[];
       artifacts: string[];
+      effectAuthorizationMediaAliases: {
+        live: OutboundEffectAuthorizationMediaAlias[];
+        queued: OutboundEffectAuthorizationMediaAlias[];
+      };
       mediaStageId?: string;
     }
   | { status: "not-durable"; reason: "sensitive-media" };
@@ -98,6 +103,16 @@ export async function stageQueuePayloadMedia(params: {
     }
   }
   const artifacts = [...artifactsBySource.values()];
+  const effectAuthorizationMediaAliases = {
+    live: [...artifactsBySource.keys()].map((source, index) => ({
+      source,
+      alias: `media:${index}`,
+    })),
+    queued: [...artifactsBySource.values()].map((source, index) => ({
+      source,
+      alias: `media:${index}`,
+    })),
+  };
   // The SQLite stage row is visible before any artifact. GC either preserves it
   // or expires it; enqueue then consumes it atomically or fails closed.
   const mediaStageId =
@@ -172,6 +187,7 @@ export async function stageQueuePayloadMedia(params: {
     status: "staged",
     payloads: stagedPayloads,
     artifacts,
+    effectAuthorizationMediaAliases,
     ...(mediaStageId ? { mediaStageId } : {}),
   };
 }

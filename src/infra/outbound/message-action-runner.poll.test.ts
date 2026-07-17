@@ -3,12 +3,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthorizationPolicyHandler } from "../../plugins/authorization-policy.types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const mocks = vi.hoisted(() => ({
-  executePollAction: vi.fn(),
+  executePreparedPollAction: vi.fn(),
+  preparePollAction: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
 }));
 
@@ -36,7 +38,15 @@ vi.mock("./outbound-send-service.js", () => ({
   executeSendAction: vi.fn(async () => {
     throw new Error("executeSendAction should not run in poll tests");
   }),
-  executePollAction: mocks.executePollAction,
+  prepareSendAction: vi.fn(async () => {
+    throw new Error("prepareSendAction should not run in poll tests");
+  }),
+  executePreparedSendAction: vi.fn(async () => {
+    throw new Error("executePreparedSendAction should not run in poll tests");
+  }),
+  executePreparedPollAction: mocks.executePreparedPollAction,
+  preparePollAction: mocks.preparePollAction,
+  waitForPreparedSendEffectAuthorization: vi.fn(async () => {}),
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -114,7 +124,7 @@ async function runPollAction(params: {
     toolContext: params.toolContext as never,
     inboundEventKind: params.inboundEventKind,
   });
-  const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
+  const call = firstMockArg(mocks.preparePollAction, "preparePollAction") as {
     resolveCorePoll?: () => {
       durationHours?: number;
       maxSelections?: number;
@@ -144,17 +154,24 @@ describe("runMessageAction poll handling", () => {
       ({ channel }: { channel: string }) =>
         getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
     );
-    mocks.executePollAction.mockReset();
-    mocks.executePollAction.mockImplementation(async (input) => ({
+    mocks.preparePollAction.mockReset();
+    mocks.preparePollAction.mockImplementation((input) => ({
+      kind: "core",
+      ctx: input.ctx,
+      poll: input.resolveCorePoll(),
+    }));
+    mocks.executePreparedPollAction.mockReset();
+    mocks.executePreparedPollAction.mockImplementation(async (prepared) => ({
       handledBy: "core",
-      payload: { ok: true, corePoll: input.resolveCorePoll() },
+      payload: { ok: true, corePoll: prepared.poll },
       pollResult: { ok: true },
     }));
   });
 
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
-    mocks.executePollAction.mockReset();
+    mocks.preparePollAction.mockReset();
+    mocks.executePreparedPollAction.mockReset();
   });
 
   it("requires at least two poll options", async () => {
@@ -169,10 +186,11 @@ describe("runMessageAction poll handling", () => {
         },
       }),
     ).rejects.toThrow(/pollOption requires at least two values/i);
-    expect(mocks.executePollAction).toHaveBeenCalledTimes(1);
+    expect(mocks.preparePollAction).toHaveBeenCalledTimes(1);
+    expect(mocks.executePreparedPollAction).not.toHaveBeenCalled();
   });
 
-  it("passes shared poll fields and auto threadId to executePollAction", async () => {
+  it("passes shared poll fields and auto threadId to the prepared action", async () => {
     const call = await runPollAction({
       cfg: pollerConfig,
       actionParams: {
@@ -191,6 +209,60 @@ describe("runMessageAction poll handling", () => {
     expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it("authorizes the normalized core poll plan before execution", async () => {
+    let seenInput: Record<string, unknown> | undefined;
+    const handler: AuthorizationPolicyHandler<"message.action"> = (request) => {
+      seenInput = request.input;
+      return request.input.pollMulti === true
+        ? { effect: "deny", code: "multiselect-blocked" }
+        : { effect: "pass" };
+    };
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected active plugin registry");
+    }
+    registry.authorizationPolicies.push({
+      pluginId: "poll-policy-test",
+      pluginName: "Poll policy test",
+      origin: "workspace",
+      source: "test",
+      policy: {
+        id: "poll-policy-test",
+        description: "Tests normalized poll authorization",
+        handlers: { "message.action": handler },
+      },
+    });
+
+    await expect(
+      runMessageAction({
+        cfg: pollerConfig,
+        action: "poll",
+        params: {
+          channel: "poller",
+          target: "poller:123",
+          pollQuestion: " Lunch? ",
+          pollOption: [" Pizza ", " Sushi "],
+          pollMulti: "true",
+          pollDurationHours: "2",
+          silent: "true",
+        },
+      }),
+    ).rejects.toThrow("Message action blocked by authorization policy.");
+
+    expect(seenInput).toMatchObject({
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 2,
+      durationHours: 2,
+      pollQuestion: "Lunch?",
+      pollOption: ["Pizza", "Sushi"],
+      pollMulti: true,
+      pollDurationHours: 2,
+      silent: true,
+    });
+    expect(mocks.executePreparedPollAction).not.toHaveBeenCalled();
   });
 
   it.each([0, -1, 1.5, "1.5", "soon"])(

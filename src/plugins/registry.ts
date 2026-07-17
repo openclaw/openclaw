@@ -82,6 +82,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerCommand: registrars.registerCommand,
     registerSessionExtension: registrars.registerSessionExtension,
     registerTrustedToolPolicy: registrars.registerTrustedToolPolicy,
+    registerAuthorizationPolicy: registrars.registerAuthorizationPolicy,
     registerToolMetadata: registrars.registerToolMetadata,
     registerControlUiDescriptor: registrars.registerControlUiDescriptor,
     registerRuntimeLifecycle: registrars.registerRuntimeLifecycle,

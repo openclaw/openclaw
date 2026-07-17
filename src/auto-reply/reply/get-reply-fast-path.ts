@@ -132,12 +132,15 @@ export function buildFastReplyCommandContext(params: {
   const surface = normalizeOptionalLowercaseString(ctx.Surface ?? ctx.Provider) ?? "";
   const channel =
     originatingChannel ?? normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
+  const channelId =
+    normalizeAnyChannelId(channel) ??
+    (channel ? (channel as CommandContext["channelId"]) : undefined);
   const from = normalizeOptionalString(ctx.From ?? ctx.SenderId);
   const to = normalizeOptionalString(ctx.To ?? ctx.OriginatingTo);
   return {
     surface,
     channel,
-    channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    channelId: channelId ?? normalizeAnyChannelId(surface) ?? undefined,
     accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,

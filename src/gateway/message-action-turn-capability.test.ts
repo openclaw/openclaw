@@ -23,6 +23,9 @@ describe("message action turn capability", () => {
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
+      requesterSenderIsOwner: false,
+      requesterIsAuthorizedSender: true,
+      requesterRoleIds: ["maintainers", "contributors", "maintainers"],
       toolContext: {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",
@@ -47,6 +50,9 @@ describe("message action turn capability", () => {
       sessionId: "session-1",
       requesterAccountId: "ops",
       requesterSenderId: "@sender:example.org",
+      requesterSenderIsOwner: false,
+      requesterIsAuthorizedSender: true,
+      requesterRoleIds: ["contributors", "maintainers"],
       toolContext: {
         currentChannelProvider: "matrix",
         currentChannelId: "!room-1:example.org",

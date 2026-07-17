@@ -22,7 +22,7 @@ import { buildTestCtx } from "./test-ctx.js";
 type AbortResult = {
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
+  rejectionReason?: "finalizing" | "policy-denied";
   stoppedSubagents?: number;
 };
 type PluginTargetedInboundClaimOutcome = Awaited<

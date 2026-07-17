@@ -1,7 +1,10 @@
 /** Tests directive handling for target-session command turns. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
@@ -298,20 +301,25 @@ vi.mock("../commands-text-routing.js", () => ({
 }));
 
 vi.mock("./commands-context.js", () => ({
-  buildCommandContext: vi.fn((params: { commandAuthorized?: boolean }) => ({
-    surface: "whatsapp",
-    channel: "whatsapp",
-    channelId: "whatsapp",
-    ownerList: [],
-    senderIsOwner: false,
-    isAuthorizedSender: params.commandAuthorized === true,
-    senderId: undefined,
-    abortKey: "abort-key",
-    rawBodyNormalized: "hello",
-    commandBodyNormalized: "hello",
-    from: "whatsapp:+1000",
-    to: "whatsapp:+2000",
-  })),
+  buildCommandContext: vi.fn(
+    (params: { commandAuthorized?: boolean; ctx?: { CommandBody?: string; Body?: string } }) => {
+      const commandBodyNormalized = params.ctx?.CommandBody ?? params.ctx?.Body ?? "hello";
+      return {
+        surface: "whatsapp",
+        channel: "whatsapp",
+        channelId: "whatsapp",
+        ownerList: [],
+        senderIsOwner: false,
+        isAuthorizedSender: params.commandAuthorized === true,
+        senderId: undefined,
+        abortKey: "abort-key",
+        rawBodyNormalized: commandBodyNormalized,
+        commandBodyNormalized,
+        from: "whatsapp:+1000",
+        to: "whatsapp:+2000",
+      };
+    },
+  ),
 }));
 
 vi.mock("./directive-handling.parse.js", () => ({
@@ -362,6 +370,8 @@ vi.mock("./reply-elevated.js", () => ({
 
 describe("resolveReplyDirectives", () => {
   beforeEach(() => {
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     mocks.createModelSelectionState.mockReset();
     mocks.applyInlineDirectiveOverrides.mockReset();
     mocks.listAgentEntries.mockReset();
@@ -393,6 +403,11 @@ describe("resolveReplyDirectives", () => {
       fastAutoOnSeconds: 60,
     }));
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("passes one-turn model override state into model selection", async () => {
@@ -438,6 +453,59 @@ describe("resolveReplyDirectives", () => {
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+  });
+
+  it("does not apply directive session mutations when policy denies the final command", async () => {
+    const sessionEntry = makeSessionEntry({
+      modelOverride: "gpt-4o-mini",
+      providerOverride: "openai",
+    });
+    const before = structuredClone(sessionEntry);
+    const policy = vi.fn((request: { commandName: string }, context: { sessionId?: string }) =>
+      request.commandName === "model" && context.sessionId === sessionEntry.sessionId
+        ? ({ effect: "deny", code: "model-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect session directives",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const { result, typing } = await resolveHelloWithModelDefaults({
+      body: "/model openai/gpt-5.5",
+      commandAuthorized: true,
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      sessionEntry,
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "model",
+        owner: { kind: "core" },
+        arguments: {
+          raw: "openai/gpt-5.5",
+          values: { model: "openai/gpt-5.5" },
+        },
+      }),
+      expect.objectContaining({ sessionId: sessionEntry.sessionId }),
+      expect.any(AbortSignal),
+    );
+    expect(policy).toHaveBeenCalledTimes(1);
+    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
+    expect(sessionEntry).toEqual(before);
+    expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
   it("marks terminal directive replies for delivery under source suppression", async () => {

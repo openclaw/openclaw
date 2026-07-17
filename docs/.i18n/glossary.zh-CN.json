@@ -896,6 +896,18 @@
     "target": "插件钩子"
   },
   {
+    "source": "Authorization policies",
+    "target": "授权策略"
+  },
+  {
+    "source": "Access groups",
+    "target": "访问组"
+  },
+  {
+    "source": "Multi-agent tool policy",
+    "target": "多 Agent 工具策略"
+  },
+  {
     "source": "Internal hooks",
     "target": "内部钩子"
   },

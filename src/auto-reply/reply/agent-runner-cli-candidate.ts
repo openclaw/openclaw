@@ -293,6 +293,8 @@ export async function runCliFallbackCandidate(params: {
             currentChannelId:
               turn.followupRun.originatingTo ?? turn.sessionCtx.OriginatingTo ?? turn.sessionCtx.To,
             senderId: turn.followupRun.run.senderId,
+            isAuthorizedSender: turn.followupRun.run.isAuthorizedSender,
+            memberRoleIds: turn.followupRun.run.memberRoleIds,
             senderName: turn.followupRun.run.senderName,
             senderUsername: turn.followupRun.run.senderUsername,
             senderE164: turn.followupRun.run.senderE164,

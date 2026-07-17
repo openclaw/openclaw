@@ -108,6 +108,7 @@ export type AgentHarnessSideQuestionParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
   currentChannelId?: string;
   toolsAllow?: string[];
   authProfileId?: string;

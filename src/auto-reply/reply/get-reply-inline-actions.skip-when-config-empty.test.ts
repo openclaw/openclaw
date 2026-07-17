@@ -2,9 +2,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -231,6 +234,8 @@ function officeHoursSkillCommands(): SkillCommandSpec[] {
 
 describe("handleInlineActions", () => {
   beforeEach(() => {
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     listSkillCommandsForWorkspaceMock.mockReset();
@@ -247,6 +252,11 @@ describe("handleInlineActions", () => {
           ? { mentions: { stripPatterns: () => ["<@!?\\d+>"] } }
           : undefined,
     );
+  });
+
+  afterEach(() => {
+    resetGlobalHookRunner();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("skips whatsapp replies when config is empty and From !== To", async () => {
@@ -810,6 +820,101 @@ describe("handleInlineActions", () => {
     );
   });
 
+  it("does not dispatch /fix when policy denies the skill command", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "fixed" }));
+    createOpenClawToolsMock.mockReturnValue([{ name: "exec", execute: toolExecute }]);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-fix-denied",
+      updatedAt: 123,
+    };
+    const before = structuredClone(sessionEntry);
+    const policy = vi.fn((request: { commandName: string; owner: { kind: string } }) =>
+      request.commandName === "fix" && request.owner.kind === "skill"
+        ? ({ effect: "deny", code: "fix-denied" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "/plugins/sender-access/index.ts",
+      policy: {
+        id: "maintainer-actions",
+        description: "Protect skill commands",
+        handlers: { "command.invoke": policy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    const ctx = buildTestCtx({
+      Body: "/fix issue-123",
+      CommandBody: "/fix issue-123",
+      Provider: "discord",
+      Surface: "discord",
+      NativeChannelId: "maintenance",
+      SenderId: "maintainer-1",
+      MemberRoleIds: ["maintainers"],
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "fix",
+        skillName: "fix",
+        skillSource: "workspace",
+        description: "Fix an issue",
+        dispatch: { kind: "tool", toolName: "exec", argMode: "raw" },
+        sourceFilePath: "/tmp/workspace/skills/fix/SKILL.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/fix issue-123",
+        command: {
+          surface: "discord",
+          channel: "discord",
+          channelId: "maintenance",
+          isAuthorizedSender: true,
+          senderId: "maintainer-1",
+          memberRoleIds: ["maintainers"],
+          rawBodyNormalized: "/fix issue-123",
+          commandBodyNormalized: "/fix issue-123",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          allowTextCommands: true,
+          sessionEntry,
+          sessionStore: { "s:main": sessionEntry },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: "Command blocked by authorization policy." },
+    });
+    expect(policy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "fix",
+        owner: { kind: "skill", skillName: "fix", skillSource: "workspace" },
+      }),
+      expect.objectContaining({
+        sessionId: "session-fix-denied",
+        conversationId: "maintenance",
+        principal: expect.objectContaining({
+          senderId: "maintainer-1",
+          roleIds: ["maintainers"],
+        }),
+      }),
+      expect.any(AbortSignal),
+    );
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(toolExecute).not.toHaveBeenCalled();
+    expect(sessionEntry).toEqual(before);
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
   it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "spawned" }));
@@ -920,7 +1025,7 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
     const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
-    expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.senderIsOwner).toBe(true);
     expect(toolsArgs.nativeChannelId).toBe("oc_native_chat");
     expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
       cwd: "/tmp",

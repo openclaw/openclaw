@@ -31,6 +31,12 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+  normalizeAuthorizationCommandSource,
+} from "../../plugins/authorization-policy-context.js";
+import { runAuthorizationPolicies } from "../../plugins/authorization-policy.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -129,8 +135,11 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
 
 export function formatAbortReplyText(
   stoppedSubagents?: number,
-  rejectionReason?: "finalizing",
+  rejectionReason?: "finalizing" | "policy-denied",
 ): string {
+  if (rejectionReason === "policy-denied") {
+    return "Command blocked by authorization policy.";
+  }
   if (rejectionReason === "finalizing") {
     const base = "Agent reply is already finalizing and can no longer be aborted.";
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -320,7 +329,7 @@ export async function tryFastAbortFromMessage(params: {
 }): Promise<{
   handled: boolean;
   aborted: boolean;
-  rejectionReason?: "finalizing";
+  rejectionReason?: "finalizing" | "policy-denied";
   stoppedSubagents?: number;
 }> {
   const { ctx, cfg } = params;
@@ -360,19 +369,9 @@ export async function tryFastAbortFromMessage(params: {
     sessionKey: targetKey ?? ctx.SessionKey ?? "",
     config: cfg,
   });
-  const abortKey = targetKey ?? auth.from ?? auth.to;
-  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
-
-  if (targetKey) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const abortCutoffForTarget = (target: SessionAbortTargetContext): AbortCutoff | undefined =>
-      shouldPersistAbortCutoff({
-        commandSessionKey,
-        targetSessionKey: target.sessionKey,
-      })
-        ? resolveAbortCutoffFromContext(ctx)
-        : undefined;
-    let resolvedAbortTarget: SessionAbortTargetIdentity | null = null;
+  const storePath = targetKey ? resolveStorePath(cfg.session?.store, { agentId }) : undefined;
+  let resolvedAbortTarget: SessionAbortTargetIdentity | null = null;
+  if (targetKey && storePath) {
     try {
       resolvedAbortTarget = abortDeps.resolveSessionAbortTarget({
         agentId,
@@ -384,6 +383,54 @@ export async function tryFastAbortFromMessage(params: {
         `abort: failed to resolve abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
       );
     }
+  }
+  const policySessionKey = resolvedAbortTarget?.sessionKey ?? targetKey ?? ctx.SessionKey;
+  const policySessionId = policySessionKey
+    ? (resolvedAbortTarget?.sessionId ??
+      replyRunRegistry.resolveSessionId(policySessionKey) ??
+      resolveStoredSessionId({ cfg, sessionKey: policySessionKey }))
+    : undefined;
+  const policyDenial = await runAuthorizationPolicies({
+    request: {
+      operation: "command.invoke",
+      phase: "final",
+      commandName: "stop",
+      owner: { kind: "core" },
+      source: normalizeAuthorizationCommandSource(ctx.CommandSource),
+    },
+    context: createAuthorizationInvocationContext({
+      principal: createAuthorizationPrincipal({
+        provider: ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+        accountId: ctx.AccountId,
+        senderId: auth.senderId,
+        senderIsOwner: auth.senderIsOwner,
+        isAuthorizedSender: auth.isAuthorizedSender,
+        roleIds: ctx.MemberRoleIds,
+      }),
+      agentId,
+      sessionKey: policySessionKey,
+      sessionId: policySessionId,
+      conversationId: ctx.OriginatingTo ?? ctx.NativeChannelId ?? auth.to ?? auth.from,
+      parentConversationId: ctx.ThreadParentId,
+      threadId: ctx.MessageThreadId,
+      trigger: "command",
+    }),
+    config: cfg,
+  });
+  if (policyDenial) {
+    return { handled: true, aborted: false, rejectionReason: "policy-denied" };
+  }
+  const abortKey = targetKey ?? auth.from ?? auth.to;
+  const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
+
+  if (targetKey && storePath) {
+    const abortCutoffForTarget = (target: SessionAbortTargetContext): AbortCutoff | undefined =>
+      shouldPersistAbortCutoff({
+        commandSessionKey,
+        targetSessionKey: target.sessionKey,
+      })
+        ? resolveAbortCutoffFromContext(ctx)
+        : undefined;
     const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
     const conversationBoundAcpTargetKey = commandSessionKey
       ? resolveBoundAcpAbortTargetSessionKey({

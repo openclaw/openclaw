@@ -5581,6 +5581,27 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Internals and reference
   - H2: Related
 
+## plugins/authorization-policies.md
+
+- Route: /plugins/authorization-policies
+- Headings:
+  - H2: Choose the right gate
+  - H2: Quickstart
+  - H3: Declare the policy
+  - H3: Register the policy
+  - H3: Require operation coverage
+  - H3: Restart and inspect
+  - H2: Operation contracts
+  - H3: tool.call
+  - H3: message.action
+  - H3: command.invoke
+  - H2: Principal and invocation context
+  - H2: Evaluation and failure behavior
+  - H2: Native Codex boundary
+  - H2: Lifecycle and migration
+  - H2: Troubleshooting
+  - H2: Related
+
 ## plugins/building-extensions.md
 
 - Route: /plugins/building-extensions

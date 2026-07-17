@@ -10,6 +10,11 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
+import type { AuthorizationPrincipal } from "../plugins/authorization-policy.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -20,6 +25,14 @@ import {
   type McpLoopbackRequestContext,
 } from "./mcp-grant-store.js";
 import { isLoopbackAddress } from "./net.js";
+import {
+  ADMIN_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  TALK_SECRETS_SCOPE,
+  WRITE_SCOPE,
+} from "./operator-scopes.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 const MAX_MCP_BODY_BYTES = 1_048_576;
@@ -405,21 +418,68 @@ function normalizeMcpClientCapsHeader(value: string | undefined): string[] | und
   return clientCaps.length > 0 ? clientCaps : undefined;
 }
 
+function resolveMcpAuthorizationPrincipal(auth: McpLoopbackRequestAuth): AuthorizationPrincipal {
+  if (auth.boundContext?.authorization?.principal) {
+    return auth.boundContext.authorization.principal;
+  }
+  if (auth.boundContext) {
+    return createAuthorizationPrincipal({ serviceId: "mcp-loopback-client" });
+  }
+  if (auth.boundSessionKey) {
+    return createAuthorizationPrincipal({ serviceId: "mcp-attach" });
+  }
+  if (auth.senderIsOwner) {
+    return createAuthorizationPrincipal({
+      operatorScopes: [
+        ADMIN_SCOPE,
+        READ_SCOPE,
+        WRITE_SCOPE,
+        APPROVALS_SCOPE,
+        PAIRING_SCOPE,
+        TALK_SECRETS_SCOPE,
+      ],
+      operatorIsOwner: true,
+    });
+  }
+  return createAuthorizationPrincipal({ serviceId: "mcp-loopback" });
+}
+
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
   auth: McpLoopbackRequestAuth,
 ): McpRequestContext {
+  const authorizationPrincipal = resolveMcpAuthorizationPrincipal(auth);
   if (auth.boundContext) {
     // Gateway-launched CLI clients receive an immutable context grant. The
     // child process can replay the token, but cannot scope-shop by rewriting
     // session, channel, capability, or ownership headers.
-    return structuredClone(auth.boundContext);
+    const context = structuredClone(auth.boundContext);
+    return {
+      ...context,
+      authorization:
+        context.authorization ??
+        createAuthorizationInvocationContext({
+          principal: authorizationPrincipal,
+          agentId: context.agentId,
+          sessionKey: context.sessionKey,
+          sessionId: context.sessionId,
+          runId: context.runId,
+          conversationId: context.currentChannelId,
+          threadId: context.currentThreadTs,
+          trigger: context.trigger ?? "mcp",
+        }),
+    };
   }
   // Grant-authenticated callers get only their server-bound session; spoofable
   // delivery/action headers stay reserved for the gateway-launched loopback client.
   if (auth.boundSessionKey) {
     return {
+      authorization: createAuthorizationInvocationContext({
+        principal: authorizationPrincipal,
+        sessionKey: auth.boundSessionKey,
+        trigger: "mcp",
+      }),
       sessionKey: auth.boundSessionKey,
       sessionId: undefined,
       messageProvider: undefined,
@@ -436,7 +496,7 @@ export function resolveMcpRequestContext(
       senderIsOwner: auth.senderIsOwner,
     };
   }
-  return {
+  const context: McpRequestContext = {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     sessionId: normalizeOptionalString(getHeader(req, "x-openclaw-session-id")),
     messageProvider:
@@ -462,5 +522,16 @@ export function resolveMcpRequestContext(
       getHeader(req, "x-openclaw-require-explicit-message-target"),
     ),
     senderIsOwner: auth.senderIsOwner,
+  };
+  return {
+    ...context,
+    authorization: createAuthorizationInvocationContext({
+      principal: authorizationPrincipal,
+      sessionKey: context.sessionKey,
+      sessionId: context.sessionId,
+      conversationId: context.currentChannelId,
+      threadId: context.currentThreadTs,
+      trigger: "mcp",
+    }),
   };
 }

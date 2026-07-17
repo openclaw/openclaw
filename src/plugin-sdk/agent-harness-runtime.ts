@@ -118,6 +118,12 @@ export type {
   NativeHookRelayProvider,
   NativeHookRelayRegistrationHandle,
 } from "../agents/harness/native-hook-relay.js";
+export type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
+export {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
+export { hasAuthorizationPolicies } from "../plugins/authorization-policy.js";
 
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";

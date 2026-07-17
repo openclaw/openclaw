@@ -9,6 +9,7 @@ import type {
   ChannelMessageUnknownSendReconciliationResult,
 } from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { hasAuthorizationPoliciesForOperation } from "../../plugins/authorization-policy.js";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
@@ -56,6 +57,7 @@ import {
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
+import { parseQueuedOutboundEffectAuthorization } from "./effect-authorization.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditTerminals,
@@ -73,9 +75,10 @@ type RecoverySummary = {
 export type DeliverFn = (
   params: {
     cfg: OpenClawConfig;
-  } & QueuedDeliveryPayload & {
+  } & Omit<QueuedDeliveryPayload, "effectAuthorization"> & {
       deliveryQueueId?: string;
       deliveryQueueStateDir?: string;
+      recoveredEffectAuthorization?: unknown;
       skipQueue?: boolean;
       deferredDeliveryAdmissionPassed?: true;
       deferCommitHooks?: boolean;
@@ -215,6 +218,12 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
+      : {}),
+    ...(Object.hasOwn(entry, "effectAuthorization")
+      ? { recoveredEffectAuthorization: entry.effectAuthorization }
+      : {}),
+    ...(entry.effectAuthorizationScope !== undefined
+      ? { effectAuthorizationScope: entry.effectAuthorizationScope }
       : {}),
     payloads: entry.payloads,
     renderedBatchPlan: entry.renderedBatchPlan,
@@ -581,6 +590,64 @@ function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
 }
 
+function resolveRecoveryEffectAuthorizationFailure(
+  entry: QueuedDelivery,
+  cfg: OpenClawConfig,
+): string | undefined {
+  const authorization = parseQueuedOutboundEffectAuthorization(entry.effectAuthorization);
+  if (authorization) {
+    return authorization.state === "authorized"
+      ? undefined
+      : `outbound effect authorization is ${authorization.state}`;
+  }
+  if (entry.effectAuthorization !== undefined) {
+    return "outbound effect authorization is malformed";
+  }
+  if (
+    entry.effectAuthorizationScope !== undefined &&
+    entry.effectAuthorizationScope !== "not-applicable" &&
+    entry.effectAuthorizationScope !== "message-action"
+  ) {
+    return "outbound effect authorization scope is malformed";
+  }
+  if (
+    entry.effectAuthorizationScope === "message-action" &&
+    hasAuthorizationPoliciesForOperation({
+      operation: "message.action",
+      config: cfg,
+    })
+  ) {
+    // Caller identity is intentionally not persisted. Explicit message-action
+    // provenance lets policy activation fail closed without blocking ordinary
+    // replies or legacy rows whose origin cannot be reconstructed.
+    return "outbound effect authorization is missing under active message-action policy";
+  }
+  return undefined;
+}
+
+async function rejectUnauthorizedRecovery(opts: {
+  entry: QueuedDelivery;
+  error: string;
+  log: RecoveryLogger;
+  stateDir?: string;
+  onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
+}): Promise<"failed" | "moved-to-failed"> {
+  opts.onFailed?.(opts.entry, opts.error);
+  const moved = await moveEntryToFailedWithLogging(opts.entry, opts.log, opts.stateDir);
+  if (moved) {
+    emitQueuedAuditTerminals(opts.entry, () =>
+      failedOutboundAuditTerminals({
+        payloadCount: opts.entry.payloads.length,
+        results: [],
+        payloadOutcomes: [],
+        failureStage: "queue",
+      }),
+    );
+  }
+  opts.log.warn(`Delivery entry ${opts.entry.id} ${opts.error}; refusing recovery replay`);
+  return moved ? "moved-to-failed" : "failed";
+}
+
 async function persistRecoveredPostSendState(opts: {
   entry: QueuedDelivery;
   log: RecoveryLogger;
@@ -713,6 +780,16 @@ async function drainQueuedEntry(opts: {
       }
       return "failed";
     }
+  }
+  const effectAuthorizationFailure = resolveRecoveryEffectAuthorizationFailure(entry, opts.cfg);
+  if (effectAuthorizationFailure) {
+    return await rejectUnauthorizedRecovery({
+      entry,
+      error: effectAuthorizationFailure,
+      log: opts.log,
+      stateDir: opts.stateDir,
+      onFailed: opts.onFailed,
+    });
   }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
   let postSendState: "marked" | "acked" | "failed" | undefined;

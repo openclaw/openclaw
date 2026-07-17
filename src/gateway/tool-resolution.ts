@@ -49,6 +49,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { logWarn } from "../logger.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -106,6 +107,8 @@ export function resolveGatewayScopedTools(params: {
   groupChannel?: string;
   groupSpace?: string;
   spawnedBy?: string;
+  /** Authenticated caller identity forwarded into tools with nested effects. */
+  authorization?: AuthorizationInvocationContext;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const {
@@ -304,6 +307,15 @@ export function resolveGatewayScopedTools(params: {
       : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
+    beforeToolCallHookContext: params.authorization
+      ? {
+          authorization: {
+            ...params.authorization,
+            agentId,
+            sessionKey: params.sessionKey,
+          },
+        }
+      : undefined,
   });
   const nodeExecCandidate = nodeExecSurface
     ? resolveExecDefaults({

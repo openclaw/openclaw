@@ -774,6 +774,10 @@ export const ToolsInvokeParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   confirm: Type.Optional(Type.Boolean()),
   idempotencyKey: Type.Optional(NonEmptyString),
+  /** Requested conversation resource used to scope routed tool execution. */
+  conversationId: Type.Optional(NonEmptyString),
+  /** Requested thread resource within `conversationId`. */
+  threadId: Type.Optional(NonEmptyString),
   /**
    * Explicit operation-local marker for an authenticated direct operator.
    * Missing values remain delegated, and agent runtime identity wins server-side.

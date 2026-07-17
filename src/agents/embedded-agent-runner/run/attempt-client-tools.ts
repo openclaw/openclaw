@@ -125,6 +125,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
           config: params.toolSearchRuntimeConfig,
           sessionId: params.attempt.sessionId,
           runId: params.attempt.runId,
+          authorization: params.catalogToolHookContext?.authorization,
           loopDetection: clientToolLoopDetection,
           onToolOutcome: params.attempt.onToolOutcome,
           allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,

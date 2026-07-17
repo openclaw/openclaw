@@ -226,6 +226,8 @@ vi.mock("./commands-reset.js", () => ({
 }));
 
 vi.mock("../commands-registry.js", () => ({
+  parseCommandArgs: vi.fn(() => undefined),
+  resolveTextCommand: vi.fn(() => null),
   shouldHandleTextCommands: vi.fn(() => true),
 }));
 

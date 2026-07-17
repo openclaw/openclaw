@@ -31,7 +31,7 @@ import type { CodexAppServerTurnRouter, CodexThreadRouteReservation } from "./tu
 export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
   const { runtime, attemptTools } = context;
-  const { connection, hookChannelId } = runtime;
+  const { connection, hookChannelId, authorization } = runtime;
   const {
     appServer,
     params,
@@ -200,6 +200,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       config: params.config,
+      authorization,
       runId: params.runId,
       channelId: hookChannelId,
       attemptTimeoutMs: params.timeoutMs,
@@ -222,7 +223,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       configPatch: state.nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
             relay: state.nativeHookRelay,
-            events: nativeHookRelayEvents,
+            events: state.nativeHookRelay.allowedEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
             loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           })

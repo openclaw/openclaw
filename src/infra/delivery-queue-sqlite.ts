@@ -554,6 +554,113 @@ export function reserveDeliveryQueueEntryAttempt(params: {
   );
 }
 
+export type CompareAndSwapPendingDeliveryQueueEntryResult =
+  | { status: "updated" }
+  | { status: "missing" }
+  | { status: "mismatch" };
+
+export type PendingDeliveryQueueCompareAndSwap = {
+  queueName: string;
+  id: string;
+  compare: (entry: DeliveryQueueEntryState) => boolean;
+  update: (entry: DeliveryQueueEntryState) => DeliveryQueueEntryState;
+};
+
+export type CompareAndSwapPendingDeliveryQueueEntriesResult =
+  | { status: "updated" }
+  | { status: "missing"; id: string }
+  | { status: "mismatch"; id: string };
+
+/** Guard every row first, then replace the whole set in one IMMEDIATE transaction. */
+export function compareAndSwapPendingDeliveryQueueEntries(params: {
+  entries: readonly PendingDeliveryQueueCompareAndSwap[];
+  stateDir?: string;
+}): CompareAndSwapPendingDeliveryQueueEntriesResult {
+  const database = openStateDatabase(params.stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  return runSqliteImmediateTransactionSync(
+    database.db,
+    () => {
+      const seen = new Set<string>();
+      const prepared: Array<{
+        operation: PendingDeliveryQueueCompareAndSwap;
+        updated: DeliveryQueueEntryState;
+      }> = [];
+      for (const operation of params.entries) {
+        const key = `${operation.queueName}\0${operation.id}`;
+        if (seen.has(key)) {
+          return { status: "mismatch", id: operation.id };
+        }
+        seen.add(key);
+        const row = executeSqliteQueryTakeFirstSync(
+          database.db,
+          queueDb
+            .selectFrom("delivery_queue_entries")
+            .select([
+              "id",
+              "entry_json",
+              "enqueued_at",
+              "retry_count",
+              "last_attempt_at",
+              "last_error",
+              "platform_send_started_at",
+              "recovery_state",
+            ])
+            .where("queue_name", "=", operation.queueName)
+            .where("id", "=", operation.id)
+            .where("status", "=", "pending"),
+        ) as QueueRow | undefined;
+        if (!row) {
+          return { status: "missing", id: operation.id };
+        }
+        const current = inflate(row);
+        if (!current || !operation.compare(current)) {
+          return { status: "mismatch", id: operation.id };
+        }
+        const updated = operation.update(current);
+        if (updated.id !== operation.id) {
+          throw new Error(`Delivery queue entry id mismatch: ${updated.id} != ${operation.id}`);
+        }
+        prepared.push({ operation, updated });
+      }
+      for (const { operation, updated } of prepared) {
+        const persisted = upsertDeliveryQueueEntryInDatabase(
+          {
+            queueName: operation.queueName,
+            entry: updated,
+            stateDir: params.stateDir,
+            updatePendingOnly: true,
+          },
+          database,
+        );
+        if (!persisted) {
+          throw enoent(operation.queueName, operation.id);
+        }
+      }
+      return { status: "updated" };
+    },
+    {
+      databaseLabel: "openclaw-state",
+      operationLabel: "compare and swap pending delivery queue entry",
+    },
+  );
+}
+
+/** Atomically guard and replace one pending queue row inside an IMMEDIATE transaction. */
+export function compareAndSwapPendingDeliveryQueueEntry(params: {
+  queueName: string;
+  id: string;
+  stateDir?: string;
+  compare: (entry: DeliveryQueueEntryState) => boolean;
+  update: (entry: DeliveryQueueEntryState) => DeliveryQueueEntryState;
+}): CompareAndSwapPendingDeliveryQueueEntryResult {
+  const result = compareAndSwapPendingDeliveryQueueEntries({
+    entries: [params],
+    stateDir: params.stateDir,
+  });
+  return { status: result.status };
+}
+
 /** Dead-lettered entry counts for one queue namespace. */
 type FailedDeliveryQueueCount = {
   queueName: string;

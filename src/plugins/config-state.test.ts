@@ -1,5 +1,6 @@
 // Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -163,6 +164,39 @@ describe("normalizePluginsConfig", () => {
       allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
       allowAgentIdOverride: false,
     });
+  });
+
+  it("normalizes and deduplicates required authorization policies", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        authorization: {
+          requiredPolicies: [
+            {
+              id: " maintainer-control ",
+              operations: ["tool.call", "tool.call", "unknown"],
+            },
+            {
+              id: "maintainer-control",
+              operations: ["message.action", "command.invoke"],
+            },
+            { id: "", operations: ["tool.call"] },
+          ],
+        },
+      })?.authorization,
+    ).toEqual({
+      requiredPolicies: [
+        {
+          id: "maintainer-control",
+          operations: ["tool.call", "message.action", "command.invoke"],
+        },
+      ],
+    });
+  });
+
+  it("preserves an explicitly empty required-policy list", () => {
+    expect(
+      normalizeVoiceCallEntry({ authorization: { requiredPolicies: [] } })?.authorization,
+    ).toEqual({ requiredPolicies: [] });
   });
 
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
@@ -661,6 +695,48 @@ describe("resolveEnableState", () => {
     ],
   ] as const)("resolves workspace-helper enable state for %o", (config, expected) => {
     expect(resolveEnableState("workspace-helper", "workspace", config)).toEqual(expected);
+  });
+
+  it("activates a workspace plugin required for authorization", () => {
+    const config = normalizePluginsConfig({
+      allow: ["telegram"],
+      entries: {
+        "workspace-helper": {
+          authorization: {
+            requiredPolicies: [{ id: "maintainer-control", operations: ["command.invoke"] }],
+          },
+        },
+      },
+    });
+
+    expect(resolveEnableState("workspace-helper", "workspace", config)).toEqual({ enabled: true });
+  });
+
+  it("keeps deny and explicit disable authoritative over required authorization plugins", () => {
+    const required: PluginEntryConfig = {
+      authorization: {
+        requiredPolicies: [{ id: "maintainer-control", operations: ["command.invoke"] }],
+      },
+    };
+    expect(
+      resolveEnableState(
+        "workspace-helper",
+        "workspace",
+        normalizePluginsConfig({
+          deny: ["workspace-helper"],
+          entries: { "workspace-helper": required },
+        }),
+      ),
+    ).toEqual({ enabled: false, reason: "blocked by denylist" });
+    expect(
+      resolveEnableState(
+        "workspace-helper",
+        "workspace",
+        normalizePluginsConfig({
+          entries: { "workspace-helper": { ...required, enabled: false } },
+        }),
+      ),
+    ).toEqual({ enabled: false, reason: "disabled in config" });
   });
 
   it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {

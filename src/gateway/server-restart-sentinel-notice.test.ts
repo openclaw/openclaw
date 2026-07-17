@@ -95,6 +95,7 @@ describe("restart sentinel notice recovery", () => {
 
   it("replays a retryable provider-not-dispatched failure after the startup scan", async () => {
     const queueId = await enqueueNotice();
+    expect((await loadPendingDelivery(queueId))?.effectAuthorizationScope).toBe("not-applicable");
     mocks.sendDurableMessageBatch.mockImplementationOnce(async (request) => {
       await markAttempt(request);
       return {

@@ -10,6 +10,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
+import type { AuthorizationPolicyRegistration } from "./authorization-policy.types.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -160,6 +161,11 @@ type OpenClawPluginLifecycleApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
 };
 
+type OpenClawPluginAuthorizationApi = {
+  /** Register host-enforced policy handlers for tools, message actions, and commands. */
+  registerPolicy: (policy: AuthorizationPolicyRegistration) => void;
+};
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -190,6 +196,8 @@ export type OpenClawPluginApi = {
   runContext: OpenClawPluginRunContextApi;
   /** Grouped facade for plugin-owned lifecycle cleanup hooks. */
   lifecycle: OpenClawPluginLifecycleApi;
+  /** Final authorization policies evaluated at side-effect boundaries. */
+  authorization: OpenClawPluginAuthorizationApi;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,

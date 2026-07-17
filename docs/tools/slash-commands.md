@@ -165,6 +165,11 @@ Commands come from three sources:
 Availability depends on config flags, channel surface, and installed/enabled
 plugins.
 
+After normal sender and owner checks, an installed
+[authorization policy](/plugins/authorization-policies) can add a final
+caller-aware veto through `command.invoke`. A policy `pass` never makes a
+command available to a sender who failed the existing command gates.
+
 ### Core commands
 
 <AccordionGroup>
@@ -541,5 +546,8 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Card>
   <Card title="Steer" href="/tools/steer" icon="compass">
     Guide the agent mid-run with `/steer`.
+  </Card>
+  <Card title="Authorization policies" href="/plugins/authorization-policies" icon="shield">
+    Add caller-aware command vetoes without replacing sender allowlists.
   </Card>
 </CardGroup>

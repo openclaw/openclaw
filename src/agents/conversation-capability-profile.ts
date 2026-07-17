@@ -67,6 +67,7 @@ export type ConversationCapabilityProfileParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   senderIsOwner?: boolean;
+  isAuthorizedSender?: boolean;
   modelProvider?: string;
   modelId?: string;
   modelApi?: string;
@@ -126,6 +127,7 @@ export type ResolvedConversationCapabilityProfile = {
     username?: string | null;
     e164?: string | null;
     isOwner?: boolean;
+    isAuthorized?: boolean;
   };
   workspace: {
     workspaceDir?: string;
@@ -330,6 +332,7 @@ export function resolveConversationCapabilityProfile(
       username: params.senderUsername,
       e164: params.senderE164,
       isOwner: params.senderIsOwner,
+      isAuthorized: params.isAuthorizedSender,
     },
     workspace: {
       workspaceDir: params.workspaceDir,

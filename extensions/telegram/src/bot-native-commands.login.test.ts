@@ -1,11 +1,16 @@
 // Tests Telegram native Codex login command behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramGroupCommandContext } from "./bot-native-commands.fixture-test-support.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
   createPrivateCommandContext,
+  listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
@@ -51,15 +56,105 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
+function installCommandDenialPolicy() {
+  const handler = vi.fn(() => ({ effect: "deny" as const, code: "native-command-denied" }));
+  const registry = createEmptyPluginRegistry();
+  registry.authorizationPolicies.push({
+    pluginId: "sender-access",
+    source: "test",
+    policy: {
+      id: "maintainer-actions",
+      description: "Deny native command shortcuts",
+      handlers: { "command.invoke": handler },
+    },
+  });
+  setActivePluginRegistry(registry);
+  return handler;
+}
+
 describe("registerTelegramNativeCommands /login", () => {
   beforeAll(async () => {
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
     resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("blocks /login before reserving or starting the login flow", async () => {
+    const authorizationHandler = installCommandDenialPolicy();
+    const loginFlow = vi.fn(async () => {
+      throw new Error("login flow should not start");
+    });
+    const { handler, sendMessage } = registerLoginCommand({
+      cfg: {
+        commands: {
+          native: true,
+          ownerAllowFrom: ["200"],
+        },
+        agents: { list: [{ id: "main", default: true }] },
+      } as OpenClawConfig,
+      loginFlow,
+    });
+
+    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+
+    expect(authorizationHandler).toHaveBeenCalledTimes(1);
+    expect(loginFlow).not.toHaveBeenCalled();
+    expect(sendMessage.mock.calls.map((call) => String(call[1]))).toEqual([
+      "Command blocked by authorization policy.",
+    ]);
+  });
+
+  it("leaves skill command authorization to the skill dispatch path", async () => {
+    const botHarness = createCommandBot();
+    listSkillCommandsForAgents.mockReturnValue([
+      {
+        name: "demo_skill",
+        skillName: "demo-skill",
+        description: "Demo skill",
+      },
+    ]);
+    const cfg: OpenClawConfig = {
+      commands: { native: true, nativeSkills: true },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const nativeParams = createNativeCommandTestParams(cfg, {
+      bot: botHarness.bot,
+      allowFrom: ["200"],
+    });
+    const dispatch = nativeParams.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher;
+    const corePolicy = vi.fn((request: unknown) =>
+      (request as { owner?: { kind?: string } }).owner?.kind === "core"
+        ? ({ effect: "deny", code: "core-only" } as const)
+        : ({ effect: "pass" } as const),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.authorizationPolicies.push({
+      pluginId: "sender-access",
+      source: "test",
+      policy: {
+        id: "maintainer-actions",
+        description: "Deny core commands only",
+        handlers: { "command.invoke": corePolicy },
+      },
+    });
+    setActivePluginRegistry(registry);
+    registerTelegramNativeCommands(nativeParams);
+    const handler = botHarness.commandHandlers.get("demo_skill");
+    expect(handler).toBeDefined();
+
+    await handler?.(createPrivateCommandContext({ userId: 200 }));
+
+    expect(corePolicy).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("handles /login codex by sending the device code before login completes", async () => {

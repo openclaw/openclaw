@@ -370,6 +370,64 @@ describe("gateway url override hardening", () => {
     return gatewayCall();
   };
 
+  it("re-authorizes and joins a local multi-target barrier before gateway delivery", async () => {
+    setThreadChatGatewayRegistry();
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
+    const authorizeChangedPayload = vi.fn(async () => {});
+    const barrier = vi.fn(async () => {});
+
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "threadchat",
+      effectAuthorization: {
+        authorizedPayload: { text: "before-normalization" },
+        authorizeChangedPayload,
+        waitForAuthorizationBarrier: barrier,
+      },
+    });
+
+    expect(authorizeChangedPayload).toHaveBeenCalledWith(expect.objectContaining({ text: "hi" }));
+    expect(barrier).toHaveBeenCalledWith({
+      status: "sealed",
+      digest: expect.stringMatching(/^sha256:/u),
+      handle: null,
+    });
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+  });
+
+  it("joins an ordering-only barrier before gateway delivery", async () => {
+    setThreadChatGatewayRegistry();
+    const order: string[] = [];
+    const barrier = vi.fn(async () => {
+      order.push("barrier");
+    });
+    callGatewayMock.mockImplementationOnce(async () => {
+      order.push("gateway");
+      return { messageId: "m1" };
+    });
+
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "threadchat",
+      effectAuthorization: {
+        authorizedPayload: { text: "hi" },
+        enforceFinalPayloadAuthorization: false,
+        waitForAuthorizationBarrier: barrier,
+      },
+    });
+
+    expect(order).toEqual(["barrier", "gateway"]);
+    expect(barrier).toHaveBeenCalledWith({
+      status: "sealed",
+      digest: expect.stringMatching(/^sha256:/u),
+      handle: null,
+    });
+  });
+
   it.each([
     {
       name: "drops gateway url overrides in backend mode (SSRF hardening)",

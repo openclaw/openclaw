@@ -7,6 +7,7 @@ import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
+import type { PluginInspectReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
@@ -55,6 +56,33 @@ function formatHookSummary(params: {
     parts.push(`${params.customHookCount} custom`);
   }
   return parts.length > 0 ? parts.join(", ") : "-";
+}
+
+function formatAuthorizationPolicyLines(
+  authorizationPolicies: PluginInspectReport["authorizationPolicies"],
+): string[] {
+  const hasPolicies =
+    authorizationPolicies.declaredPolicyIds.length > 0 ||
+    authorizationPolicies.registeredPolicies.length > 0 ||
+    authorizationPolicies.requiredPolicies.length > 0;
+  if (!hasPolicies) {
+    return [];
+  }
+  const lines = [`inspection: ${authorizationPolicies.inspection}`];
+  for (const id of authorizationPolicies.declaredPolicyIds) {
+    lines.push(`declared: ${id}`);
+  }
+  for (const policy of authorizationPolicies.registeredPolicies) {
+    lines.push(`registered: ${policy.id} [${policy.operations.join(", ") || "no handlers"}]`);
+  }
+  for (const policy of authorizationPolicies.requiredPolicies) {
+    const missing =
+      policy.missingOperations.length > 0 ? `; missing ${policy.missingOperations.join(", ")}` : "";
+    lines.push(
+      `required: ${policy.id} [${policy.operations.join(", ")}] (${policy.status}${missing})`,
+    );
+  }
+  return lines;
 }
 
 function formatInstallLines(install: PluginInstallRecord | undefined): string[] {
@@ -365,6 +393,14 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
   lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
+  if (inspect.authorizationPolicies) {
+    lines.push(
+      ...formatInspectSection(
+        "Authorization policies",
+        formatAuthorizationPolicyLines(inspect.authorizationPolicies),
+      ),
+    );
+  }
   lines.push(
     ...formatInspectSection(
       "MCP servers",

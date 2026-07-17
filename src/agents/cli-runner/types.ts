@@ -163,6 +163,10 @@ export type RunCliAgentParams = {
   senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
+  /** Host-resolved sender authorization result for the originating channel turn. */
+  isAuthorizedSender?: boolean;
+  /** Host-authenticated provider role IDs for the originating sender. */
+  memberRoleIds?: string[];
   /** Additional trusted sender identities used by toolsBySender policy. */
   senderName?: string | null;
   senderUsername?: string | null;

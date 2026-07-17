@@ -9,6 +9,15 @@ import {
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
+import {
+  AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  runAuthorizationPolicies,
+} from "../plugins/authorization-policy.js";
+import type { PluginJsonValue } from "../plugins/host-hook-json.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -174,6 +183,48 @@ export async function handleMcpJsonRpc(params: {
         const finalizedToolArgs =
           tool.finalizeBeforeToolCallParams?.(hookResult.params, preparedToolArgs) ??
           hookResult.params;
+        const authorizationDenial = await runAuthorizationPolicies({
+          request: {
+            operation: "tool.call",
+            toolName,
+            phase: "final",
+            ...(isRecord(finalizedToolArgs) &&
+            typeof finalizedToolArgs.action === "string" &&
+            finalizedToolArgs.action.trim()
+              ? { action: finalizedToolArgs.action.trim() }
+              : {}),
+            input: finalizedToolArgs as Record<string, PluginJsonValue>,
+          },
+          context:
+            params.hookContext?.authorization ??
+            createAuthorizationInvocationContext({
+              principal: createAuthorizationPrincipal({ serviceId: "mcp-loopback" }),
+              agentId: params.hookContext?.agentId,
+              sessionKey: params.hookContext?.sessionKey,
+              sessionId: params.hookContext?.sessionId,
+              runId: params.hookContext?.runId,
+              conversationId: params.hookContext?.channelId,
+              trigger: "mcp",
+            }),
+          config: params.hookContext?.config,
+          signal: params.signal,
+        });
+        if (authorizationDenial) {
+          reportToolCallResult({
+            outcome: "blocked",
+            deniedReason: "authorization-policy",
+          });
+          return jsonRpcResult(id, {
+            content: [
+              {
+                type: "text",
+                text: AUTHORIZATION_POLICY_DENIED_MESSAGE,
+              },
+            ],
+            isError: true,
+          });
+        }
+        params.signal?.throwIfAborted();
         executedToolArgs = finalizedToolArgs as Record<string, unknown>;
         try {
           params.onToolCallPrepared?.({ toolName, args: executedToolArgs });

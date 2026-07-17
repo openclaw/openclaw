@@ -32,6 +32,10 @@ import {
   takeCommandSessionMetadataChangesFromTargets,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import {
+  authorizeCommandInvocation,
+  resolveCommandAuthorizationDenialText,
+} from "./commands-authorization.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -355,6 +359,34 @@ export async function handleInlineActions(params: {
       return { kind: "reply", reply: undefined };
     }
 
+    const authorization = await authorizeCommandInvocation({
+      command,
+      ctx,
+      commandName: skillInvocation.command.name,
+      config: cfg,
+      owner: {
+        kind: "skill",
+        skillName: skillInvocation.command.skillName,
+        ...(skillInvocation.command.skillSource
+          ? { skillSource: skillInvocation.command.skillSource }
+          : {}),
+      },
+      rawArguments: skillInvocation.args,
+      agentId,
+      sessionKey,
+      sessionId: targetSessionEntry?.sessionId,
+      signal: opts?.abortSignal,
+    });
+    if (!authorization.allowed) {
+      typing.cleanup();
+      return {
+        kind: "reply",
+        reply: markCommandReplyForDelivery({
+          text: resolveCommandAuthorizationDenialText(authorization.denial),
+        }),
+      };
+    }
+
     const dispatch = skillInvocation.command.dispatch;
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
@@ -368,10 +400,13 @@ export async function handleInlineActions(params: {
           senderName: ctx.SenderName,
           senderUsername: ctx.SenderUsername,
           senderE164: ctx.SenderE164,
+          senderIsOwner: command.senderIsOwner,
+          isAuthorizedSender: command.isAuthorizedSender,
           originatingTo: ctx.OriginatingTo,
           to: ctx.To,
           nativeChannelId: ctx.NativeChannelId,
           messageThreadId: ctx.MessageThreadId,
+          threadParentId: ctx.ThreadParentId,
           memberRoleIds: ctx.MemberRoleIds,
         },
         cfg,

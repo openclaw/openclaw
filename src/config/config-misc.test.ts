@@ -658,6 +658,43 @@ describe("gateway.controlUi.chatMessageMaxWidth", () => {
   });
 });
 
+describe("plugins.entries.*.authorization", () => {
+  it("accepts operation-scoped required policies", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        plugins: {
+          entries: {
+            "sender-access": {
+              authorization: {
+                requiredPolicies: [
+                  {
+                    id: "maintainer-control",
+                    operations: ["tool.call", "message.action", "command.invoke"],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    [{ id: "", operations: ["tool.call"] }],
+    [{ id: "maintainer-control", operations: [] }],
+    [{ id: "maintainer-control", operations: ["unknown"] }],
+  ])("rejects invalid required policy entries", (requiredPolicies) => {
+    expect(
+      OpenClawSchema.safeParse({
+        plugins: {
+          entries: { "sender-access": { authorization: { requiredPolicies } } },
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("plugins.entries.*.hooks", () => {
   it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({

@@ -48,8 +48,18 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../plugins/authorization-policy-context.js";
+import {
+  AUTHORIZATION_POLICY_DENIED_MESSAGE,
+  runAuthorizationPolicies,
+} from "../plugins/authorization-policy.js";
+import type { AuthorizationInvocationContext } from "../plugins/authorization-policy.types.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginJsonValue } from "../plugins/host-hook-json.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -145,6 +155,8 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  /** Host-authenticated requester and conversation facts for final authorization. */
+  authorization?: AuthorizationInvocationContext;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
@@ -172,7 +184,11 @@ export type HookContext = {
   };
 };
 
-type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookBlockedReason =
+  | "authorization-policy"
+  | "plugin-before-tool-call"
+  | "plugin-approval"
+  | "tool-loop";
 export type BeforeToolCallFailureDisposition = "blocked" | DiagnosticToolTerminalReason;
 type HookBlockedOutcome = {
   blocked: true;
@@ -806,11 +822,17 @@ function emitToolBlockedSecurityEvent(params: {
             controlId: "plugin-tool-approval",
             family: "approval",
           } as const)
-        : ({
-            policyId: "plugin-before-tool-call",
-            controlId: "before-tool-call",
-            family: "approval",
-          } as const);
+        : params.deniedReason === "authorization-policy"
+          ? ({
+              policyId: "plugin-authorization-policy",
+              controlId: "authorization-policy",
+              family: "authorization",
+            } as const)
+          : ({
+              policyId: "plugin-before-tool-call",
+              controlId: "before-tool-call",
+              family: "approval",
+            } as const);
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -1922,6 +1944,67 @@ export function wrapToolWithBeforeToolCallHook(
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal);
       }
+      const authorizationDenial = await runAuthorizationPolicies({
+        request: {
+          operation: "tool.call",
+          toolName: normalizedToolName,
+          phase: "final",
+          ...(isPlainObject(executeParams) &&
+          typeof executeParams.action === "string" &&
+          executeParams.action.trim()
+            ? { action: executeParams.action.trim() }
+            : {}),
+          input: executeParams as Record<string, PluginJsonValue>,
+        },
+        context:
+          ctx?.authorization ??
+          createAuthorizationInvocationContext({
+            principal: createAuthorizationPrincipal({}),
+            agentId: ctx?.agentId,
+            sessionKey: ctx?.sessionKey,
+            sessionId: ctx?.sessionId,
+            runId: ctx?.runId,
+            conversationId: ctx?.channelId,
+          }),
+        config: ctx?.config,
+        signal,
+      });
+      if (authorizationDenial) {
+        const reason = AUTHORIZATION_POLICY_DENIED_MESSAGE;
+        const eventBase = buildEventBase(executeParams);
+        if (hookOptions.emitDiagnostics) {
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.blocked",
+            ...eventBase,
+            reason,
+            deniedReason: "authorization-policy",
+          });
+          emitToolBlockedSecurityEvent({
+            ctx,
+            deniedReason: "authorization-policy",
+            toolIdentity: diagnosticIdentity,
+            toolName: normalizedToolName,
+            trace,
+            paramsSummary: eventBase.paramsSummary,
+          });
+        }
+        const blockedResult = buildBlockedToolResult({
+          reason,
+          deniedReason: "authorization-policy",
+          toolCallId,
+          runId: ctx?.runId,
+        });
+        await recordLoopOutcome({
+          ctx,
+          toolName: normalizedToolName,
+          toolParams: executeParams,
+          toolCallId,
+          result: blockedResult,
+          toolCallOrdinal,
+        });
+        return blockedResult;
+      }
+      signal?.throwIfAborted();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);

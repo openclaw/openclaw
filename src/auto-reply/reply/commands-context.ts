@@ -52,6 +52,9 @@ export function buildCommandContext(params: {
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
+    ...(Array.isArray(ctx.MemberRoleIds) && ctx.MemberRoleIds.length > 0
+      ? { memberRoleIds: [...ctx.MemberRoleIds] }
+      : {}),
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,

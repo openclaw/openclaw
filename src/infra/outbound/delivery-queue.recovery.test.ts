@@ -14,6 +14,7 @@ import {
   markConversationDeliverySuppressed,
 } from "../../config/sessions/conversation-delivery-store.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -41,9 +42,21 @@ import {
   readQueuedEntry,
   setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
+import { digestOutboundEffectPayload } from "./effect-authorization.js";
 
 const RECOVERY_REPLAY_SPACING_MS = 250;
 const MAX_RETRIES = 5;
+const activeMessageActionPolicyCfg = {
+  plugins: {
+    entries: {
+      guard: {
+        authorization: {
+          requiredPolicies: [{ id: "sender-access", operations: ["message.action"] }],
+        },
+      },
+    },
+  },
+} satisfies OpenClawConfig;
 const resolveOutboundChannelMessageAdapterMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() => vi.fn<(ms: number) => Promise<void>>());
 
@@ -152,6 +165,100 @@ describe("delivery-queue recovery", () => {
     });
 
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+  });
+
+  it("recovers ordinary and grandfathered legacy rows after policy activation", async () => {
+    const ordinaryId = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "ordinary" }],
+        effectAuthorizationScope: "not-applicable",
+      },
+      tmpDir(),
+    );
+    const legacyId = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "legacy" }],
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockResolvedValue([]);
+
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log: createRecoveryLog(),
+      cfg: activeMessageActionPolicyCfg,
+      stateDir: tmpDir(),
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver.mock.calls.map(([params]) => params.effectAuthorizationScope)).toEqual([
+      "not-applicable",
+      undefined,
+    ]);
+    expect(result).toEqual({
+      recovered: 2,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(readOutboundQueueStatus(tmpDir(), ordinaryId)).toBeUndefined();
+    expect(readOutboundQueueStatus(tmpDir(), legacyId)).toBeUndefined();
+  });
+
+  it("dead-letters an explicitly unprotected message action after policy activation", async () => {
+    const unprotectedId = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [{ text: "unprotected" }],
+        effectAuthorizationScope: "message-action",
+      },
+      tmpDir(),
+    );
+    const authorizedPayload = { text: "authorized" };
+    const authorizedId = await enqueueDelivery(
+      {
+        channel: "demo-channel-a",
+        to: "+1",
+        payloads: [authorizedPayload],
+        effectAuthorizationScope: "message-action",
+        effectAuthorization: {
+          version: 1,
+          state: "authorized",
+          digest: digestOutboundEffectPayload(authorizedPayload),
+          mediaAliases: [],
+        },
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockResolvedValue([]);
+    const log = createRecoveryLog();
+
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log,
+      cfg: activeMessageActionPolicyCfg,
+      stateDir: tmpDir(),
+    });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({
+      payloads: [authorizedPayload],
+      recoveredEffectAuthorization: { state: "authorized" },
+    });
+    expect(result).toEqual({
+      recovered: 1,
+      failed: 1,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(readOutboundQueueStatus(tmpDir(), unprotectedId)).toBe("failed");
+    expect(readOutboundQueueStatus(tmpDir(), authorizedId)).toBeUndefined();
+    expectMockMessageContaining(log.warn, "missing under active message-action policy");
   });
 
   it("finalizes a persisted conversation operation during queue recovery", async () => {

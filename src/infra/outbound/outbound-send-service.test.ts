@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createDeferred } from "../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -12,6 +13,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 
 const getDefaultMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
 const dispatchChannelMessageActionMock = vi.hoisted(() => vi.fn());
+const hasChannelMessageActionHandlerMock = vi.hoisted(() => vi.fn(() => false));
 const sendMessageMock = vi.hoisted(() => vi.fn());
 const sendPollMock = vi.hoisted(() => vi.fn());
 const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() =>
@@ -69,6 +71,7 @@ const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
 const mocks = {
   getDefaultMediaLocalRoots: getDefaultMediaLocalRootsMock,
   dispatchChannelMessageAction: dispatchChannelMessageActionMock,
+  hasChannelMessageActionHandler: hasChannelMessageActionHandlerMock,
   sendMessage: sendMessageMock,
   sendPoll: sendPollMock,
   getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
@@ -79,6 +82,7 @@ const mocks = {
 
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
+  hasChannelMessageActionHandler: mocks.hasChannelMessageActionHandler,
 }));
 
 vi.mock("./message.js", () => ({
@@ -111,7 +115,9 @@ type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"
 type ExecuteSendContext = ExecuteSendInput["ctx"];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
+let executePreparedSendAction: OutboundSendServiceModule["executePreparedSendAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
+let prepareSendAction: OutboundSendServiceModule["prepareSendAction"];
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -190,6 +196,7 @@ describe("executeSendAction", () => {
     }>;
     mediaUrls?: string[];
   }) {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -223,6 +230,7 @@ describe("executeSendAction", () => {
   }
 
   async function executePluginMediaSend(ctx: Partial<ExecuteSendContext>) {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -233,12 +241,15 @@ describe("executeSendAction", () => {
   }
 
   beforeAll(async () => {
-    ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
+    ({ executePollAction, executePreparedSendAction, executeSendAction, prepareSendAction } =
+      await import("./outbound-send-service.js"));
   });
 
   beforeEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
     mocks.dispatchChannelMessageAction.mockClear();
+    mocks.hasChannelMessageActionHandler.mockReset();
+    mocks.hasChannelMessageActionHandler.mockReturnValue(false);
     mocks.sendMessage.mockClear();
     mocks.sendPoll.mockClear();
     mocks.getDefaultMediaLocalRoots.mockClear();
@@ -275,6 +286,74 @@ describe("executeSendAction", () => {
       to: "channel:123",
       content: "hello",
     });
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("forwards message-action queue provenance on a core send", async () => {
+    mocks.sendMessage.mockResolvedValue({
+      channel: "demo-outbound",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: null,
+    });
+    const prepared = await prepareSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: {},
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+
+    await executePreparedSendAction(prepared, {
+      effectAuthorizationScope: "message-action",
+    });
+
+    expectSingleCallFields(mocks.sendMessage, {
+      effectAuthorizationScope: "message-action",
+    });
+  });
+
+  it("joins the authorization barrier immediately before a plugin send callback", async () => {
+    const barrierEntered = createDeferred();
+    const releaseBarrier = createDeferred();
+    const pluginEffect = vi.fn();
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
+    mocks.dispatchChannelMessageAction.mockImplementation(
+      async (_ctx: unknown, options?: { beforeHandleAction?: () => Promise<void> }) => {
+        await options?.beforeHandleAction?.();
+        pluginEffect();
+        return pluginActionResult("msg-plugin");
+      },
+    );
+    const prepared = await prepareSendAction({
+      ctx: {
+        cfg: {},
+        channel: "demo-outbound",
+        params: { to: "channel:123", message: "hello" },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "hello",
+    });
+    const execution = executePreparedSendAction(prepared, {
+      effectAuthorization: {
+        authorizedPayload: { text: "hello" },
+        waitForAuthorizationBarrier: async (outcome) => {
+          expect(outcome).toMatchObject({ status: "sealed", handle: null });
+          barrierEntered.resolve();
+          await releaseBarrier.promise;
+        },
+      },
+    });
+
+    await barrierEntered.promise;
+    expect(pluginEffect).not.toHaveBeenCalled();
+    releaseBarrier.resolve();
+    await execution;
+    expect(pluginEffect).toHaveBeenCalledOnce();
   });
 
   it("reports delivery-layer effective text instead of the pre-adapter message", async () => {
@@ -640,6 +719,7 @@ describe("executeSendAction", () => {
       },
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
@@ -674,6 +754,43 @@ describe("executeSendAction", () => {
       agentId: "main",
       text: "Summary\n\nPortable fallback",
     });
+  });
+
+  it("fails when payload preparation declines without a send action handler", async () => {
+    const presentation: NonNullable<ReplyPayload["presentation"]> = {
+      blocks: [{ type: "text", text: "Portable fallback" }],
+    };
+    const prepareSendPayload = vi.fn(() => null);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "discord" }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        prepareSendPayload,
+      },
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "discord",
+          params: { to: "channel:123", presentation },
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "Summary",
+        payload: { text: "Summary", presentation },
+      }),
+    ).rejects.toThrow("Channel declined core send payload but has no send action handler.");
+
+    expect(prepareSendPayload).toHaveBeenCalledOnce();
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("materializes chart data for legacy gateway delivery", async () => {
@@ -748,6 +865,7 @@ describe("executeSendAction", () => {
       },
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
@@ -772,6 +890,7 @@ describe("executeSendAction", () => {
   });
 
   it("keeps non-presentation sends on the plugin action path", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
@@ -792,7 +911,29 @@ describe("executeSendAction", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a prepared plugin send route disappears", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow("Prepared plugin send action lost its execution route.");
+
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses plugin poll action when available", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
 
     const result = await executePollAction({
@@ -815,6 +956,7 @@ describe("executeSendAction", () => {
   });
 
   it("does not invoke shared poll parsing before plugin poll dispatch", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("poll-plugin"));
     const resolveCorePoll = vi.fn(() => {
       throw new Error("shared poll fallback should not run");
@@ -841,6 +983,7 @@ describe("executeSendAction", () => {
   });
 
   it("passes agent-scoped media local roots to plugin dispatch", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -867,6 +1010,7 @@ describe("executeSendAction", () => {
   });
 
   it("passes concrete media sources when widening plugin dispatch roots", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -894,6 +1038,7 @@ describe("executeSendAction", () => {
   });
 
   it("passes mediaUrls and structured attachment sources when widening send roots", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -923,6 +1068,7 @@ describe("executeSendAction", () => {
 
   it("preserves explicit plugin send media access roots", async () => {
     const explicitReadFile = vi.fn(async () => Buffer.from("explicit capability"));
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     await executeSendAction({
@@ -992,6 +1138,7 @@ describe("executeSendAction", () => {
   });
 
   it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {
+    mocks.hasChannelMessageActionHandler.mockReturnValue(true);
     mocks.sendMessage.mockResolvedValue({
       channel: "demo-outbound",
       to: "channel:123",

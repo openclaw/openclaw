@@ -15,6 +15,7 @@ import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
@@ -149,9 +150,13 @@ type RunMessageActionInput = {
   params?: Record<string, unknown>;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  authorization?: AuthorizationInvocationContext;
   messageActionAuthorization?: {
     requesterAccountId?: string;
     requesterSenderId?: string;
+    requesterSenderIsOwner?: boolean;
+    requesterIsAuthorizedSender?: boolean;
+    requesterRoleIds?: readonly string[];
     toolContext?: RunMessageActionInput["toolContext"];
   };
   sandboxRoot?: string;
@@ -949,6 +954,11 @@ describe("message tool secret scoping", () => {
       runId: "run-source-reply",
       sessionId: "session-source-reply",
       sessionKey,
+      requesterAccountId: "ops",
+      requesterSenderId: "maintainer-1",
+      requesterSenderIsOwner: false,
+      requesterIsAuthorizedSender: true,
+      requesterRoleIds: ["maintainers", "contributors"],
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "123",
@@ -986,6 +996,13 @@ describe("message tool secret scoping", () => {
     expect(terminal?.sourceReplyToolCallId).toBe("message_terminal");
     expect(progress?.params).not.toHaveProperty("final");
     expect(terminal?.params).not.toHaveProperty("final");
+    expect(terminal?.messageActionAuthorization).toMatchObject({
+      requesterAccountId: "ops",
+      requesterSenderId: "maintainer-1",
+      requesterSenderIsOwner: false,
+      requesterIsAuthorizedSender: true,
+      requesterRoleIds: ["contributors", "maintainers"],
+    });
   });
 
   it("assigns remote terminal source-reply receipts to the caller", async () => {
@@ -3818,6 +3835,9 @@ describe("message tool sandbox passthrough", () => {
     expect(call?.messageActionAuthorization).toEqual({
       requesterAccountId: undefined,
       requesterSenderId: undefined,
+      requesterSenderIsOwner: undefined,
+      requesterIsAuthorizedSender: undefined,
+      requesterRoleIds: undefined,
       toolContext: undefined,
     });
   });
@@ -3879,6 +3899,48 @@ describe("message tool sandbox passthrough", () => {
       currentChannelProvider: "discord",
       currentChannelId: "forged-current",
       skipCrossContextDecoration: true,
+    });
+  });
+
+  it("forwards host-authenticated authorization context to local actions", async () => {
+    mockSendResult({ to: "discord:123" });
+    const authorization: AuthorizationInvocationContext = {
+      principal: {
+        kind: "sender",
+        provider: "discord",
+        accountId: "trusted-account",
+        senderId: "trusted-sender",
+        senderIsOwner: true,
+        roleIds: ["maintainers"],
+      },
+      agentId: "main",
+      sessionKey: "agent:main:runtime-policy",
+      sessionId: "session-1",
+      conversationId: "trusted-current",
+    };
+
+    const call = await executeSend({
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        sessionId: "session-1",
+        authorization,
+        senderIsOwner: false,
+      },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
+    });
+
+    expect(call?.authorization).toBe(authorization);
+    expect(call?.messageActionAuthorization).toEqual({
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+      requesterSenderIsOwner: undefined,
+      requesterIsAuthorizedSender: undefined,
+      requesterRoleIds: undefined,
+      toolContext: undefined,
     });
   });
 });

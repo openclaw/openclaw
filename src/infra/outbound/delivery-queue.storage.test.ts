@@ -13,6 +13,7 @@ import {
 } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
+  authorizeSealedDeliveryEffects,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
@@ -21,8 +22,10 @@ import {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  sealDeliveryEffectAuthorization,
 } from "./delivery-queue.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import { digestOutboundEffectPayload } from "./effect-authorization.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -243,6 +246,63 @@ describe("delivery-queue storage", () => {
       expect(repeated).toEqual({ id, created: false });
       expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
       expect(readStatus(id)).toBe("completed");
+    });
+
+    it("atomically promotes a complete set of sealed effect authorizations", async () => {
+      const digestA = digestOutboundEffectPayload({ text: "a" });
+      const digestB = digestOutboundEffectPayload({ text: "b" });
+      const idA = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        effectAuthorization: {
+          version: 1,
+          state: "pending",
+          digest: digestA,
+          mediaAliases: [],
+        },
+      });
+      const idB = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+2",
+        payloads: [{ text: "b" }],
+        effectAuthorization: {
+          version: 1,
+          state: "pending",
+          digest: digestB,
+          mediaAliases: [],
+        },
+      });
+      const handleA = await sealDeliveryEffectAuthorization({
+        id: idA,
+        expectedDigest: digestA,
+        finalDigest: digestA,
+        stateDir: tmpDir(),
+      });
+      const handleB = await sealDeliveryEffectAuthorization({
+        id: idB,
+        expectedDigest: digestB,
+        finalDigest: digestB,
+        stateDir: tmpDir(),
+      });
+
+      expect(() =>
+        authorizeSealedDeliveryEffects([handleA, { ...handleB, digest: digestA }], tmpDir()),
+      ).toThrow("batch mismatch");
+      expect(readQueuedEntry(tmpDir(), idA).effectAuthorization).toMatchObject({
+        state: "sealed",
+      });
+      expect(readQueuedEntry(tmpDir(), idB).effectAuthorization).toMatchObject({
+        state: "sealed",
+      });
+
+      expect(authorizeSealedDeliveryEffects([handleA, handleB], tmpDir())).toBeUndefined();
+      expect(readQueuedEntry(tmpDir(), idA).effectAuthorization).toMatchObject({
+        state: "authorized",
+      });
+      expect(readQueuedEntry(tmpDir(), idB).effectAuthorization).toMatchObject({
+        state: "authorized",
+      });
     });
 
     it("ack is idempotent (no error on missing file)", async () => {

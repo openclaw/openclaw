@@ -116,7 +116,9 @@ local proof.
     declaration for installed plugins: `api.registerAgentToolResultMiddleware(...)`
     needs each target runtime listed in `contracts.agentToolResultMiddleware`,
     and `api.registerTrustedToolPolicy(...)` needs each policy id in
-    `contracts.trustedToolPolicies`. These declarations keep install-time
+    `contracts.trustedToolPolicies`. Sender-aware, deny-only policies registered
+    with `api.authorization.registerPolicy(...)` need each policy id in
+    `contracts.authorizationPolicies`. These declarations keep install-time
     inspection and runtime registration aligned.
 
     For every manifest field, see [Plugin manifest](/plugins/manifest).
@@ -396,9 +398,13 @@ For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
   <Card title="Plugin Manifest" icon="file-json" href="/plugins/manifest">
     Full manifest schema reference
   </Card>
+  <Card title="Authorization Policies" icon="shield" href="/plugins/authorization-policies">
+    Add caller-aware vetoes for tools, message actions, and commands
+  </Card>
 </CardGroup>
 
 ## Related
 
 - [Plugin hooks](/plugins/hooks)
+- [Authorization policies](/plugins/authorization-policies)
 - [Plugin architecture](/plugins/architecture)

@@ -2,6 +2,7 @@
 import { createHmac } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
@@ -95,7 +96,14 @@ function decodeMessageActionContext(
       replyToMode !== "all" &&
       replyToMode !== "batched") ||
     (hasRepliedRef !== undefined &&
-      (!isRecord(hasRepliedRef) || typeof hasRepliedRef.value !== "boolean"))
+      (!isRecord(hasRepliedRef) || typeof hasRepliedRef.value !== "boolean")) ||
+    (value.requesterSenderIsOwner !== undefined &&
+      typeof value.requesterSenderIsOwner !== "boolean") ||
+    (value.requesterIsAuthorizedSender !== undefined &&
+      typeof value.requesterIsAuthorizedSender !== "boolean") ||
+    (value.requesterRoleIds !== undefined &&
+      (!Array.isArray(value.requesterRoleIds) ||
+        value.requesterRoleIds.some((entry) => typeof entry !== "string")))
   ) {
     return undefined;
   }
@@ -135,6 +143,15 @@ function decodeMessageActionContext(
     sessionId: normalizeOptionalString(value.sessionId),
     requesterAccountId: normalizeOptionalString(value.requesterAccountId),
     requesterSenderId: normalizeOptionalString(value.requesterSenderId),
+    requesterSenderIsOwner:
+      typeof value.requesterSenderIsOwner === "boolean" ? value.requesterSenderIsOwner : undefined,
+    requesterIsAuthorizedSender:
+      typeof value.requesterIsAuthorizedSender === "boolean"
+        ? value.requesterIsAuthorizedSender
+        : undefined,
+    requesterRoleIds: Array.isArray(value.requesterRoleIds)
+      ? normalizeSortedUniqueStringEntries(value.requesterRoleIds as string[])
+      : undefined,
     toolContext,
   };
   if (sourceReplyFinal === true) {

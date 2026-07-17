@@ -15,10 +15,15 @@ import {
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { ToolAuthorizationError } from "../../agents/tools/common.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionName,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -33,6 +38,12 @@ import {
   hydrateAttachmentParamsForAction,
   resolveAttachmentMediaPolicy,
 } from "../../infra/outbound/message-action-params.js";
+import {
+  authorizePreparedMessageAction,
+  buildCanonicalSendMessageActionInput,
+  findMessageActionPolicyDenial,
+  runMessageAction,
+} from "../../infra/outbound/message-action-runner.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -52,6 +63,11 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../../plugins/authorization-policy-context.js";
+import type { AuthorizationInvocationContext } from "../../plugins/authorization-policy.types.js";
 import { normalizePollInput } from "../../polls.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -78,34 +94,57 @@ import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from ".
 
 type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
 
-function resolveTrustedMessageActionToolContext(params: {
+function resolveTrustedAgentRuntimeMessageContext(params: {
   client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
-  request: {
-    agentId?: string;
-    sessionKey?: string;
-    sessionId?: string;
-  };
 }):
   | {
       ok: true;
+      identityAgentId: string | undefined;
+      identitySessionKey: string | undefined;
       toolContext: InternalChannelThreadingToolContext | undefined;
       requesterAccountId: string | undefined;
       requesterSenderId: string | undefined;
+      requesterSenderIsOwner: boolean | undefined;
+      requesterIsAuthorizedSender: boolean | undefined;
+      requesterRoleIds: readonly string[] | undefined;
       sessionId: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
-  // Current-turn metadata can relax channel read policy. It must come from the
-  // signed ingress-issued turn context, never from message.action request fields.
+  // Sender provenance and channel-read authority must come from the signed
+  // ingress-issued turn context, never from request-controlled action fields.
   const identity = params.client?.internal?.agentRuntimeIdentity;
   const messageActionContext = identity?.messageActionContext;
-  if (!identity || !messageActionContext) {
+  if (!identity) {
     return {
       ok: true,
+      identityAgentId: undefined,
+      identitySessionKey: undefined,
       toolContext: undefined,
       requesterAccountId: undefined,
       requesterSenderId: undefined,
+      requesterSenderIsOwner: undefined,
+      requesterIsAuthorizedSender: undefined,
+      requesterRoleIds: undefined,
+      sessionId: undefined,
+      sourceReplyFinal: undefined,
+      sourceReplyToolCallId: undefined,
+    };
+  }
+  const identityAgentId = normalizeAgentId(identity.agentId);
+  const identitySessionKey = identity.sessionKey.trim();
+  if (!messageActionContext) {
+    return {
+      ok: true,
+      identityAgentId,
+      identitySessionKey,
+      toolContext: undefined,
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+      requesterSenderIsOwner: undefined,
+      requesterIsAuthorizedSender: undefined,
+      requesterRoleIds: undefined,
       sessionId: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
@@ -114,42 +153,118 @@ function resolveTrustedMessageActionToolContext(params: {
   if (Date.now() >= messageActionContext.expiresAtMs) {
     return {
       ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "message.action agent runtime context has expired",
-      ),
-    };
-  }
-  const requestSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(params.request.sessionKey);
-  const identitySessionKey = normalizeSessionKeyPreservingOpaquePeerIds(identity.sessionKey);
-  const identityAgentId = normalizeAgentId(identity.agentId);
-  const requestAgentId = normalizeOptionalString(params.request.agentId);
-  const sessionAgentId = parseAgentSessionKey(requestSessionKey)?.agentId;
-  const requestSessionId = normalizeOptionalString(params.request.sessionId);
-  if (
-    !requestSessionKey ||
-    requestSessionKey !== identitySessionKey ||
-    (requestAgentId && normalizeAgentId(requestAgentId) !== identityAgentId) ||
-    (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
-    (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId)
-  ) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "message.action agent runtime identity does not match the requested session",
-      ),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime context has expired"),
     };
   }
   return {
     ok: true,
+    identityAgentId,
+    identitySessionKey,
     toolContext: messageActionContext.toolContext,
     requesterAccountId: messageActionContext.requesterAccountId,
     requesterSenderId: messageActionContext.requesterSenderId,
+    requesterSenderIsOwner: messageActionContext.requesterSenderIsOwner,
+    requesterIsAuthorizedSender: messageActionContext.requesterIsAuthorizedSender,
+    requesterRoleIds: messageActionContext.requesterRoleIds,
     sessionId: messageActionContext.sessionId,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
   };
+}
+
+function validateTrustedAgentRuntimeRequestIdentity(params: {
+  trustedContext: Extract<
+    ReturnType<typeof resolveTrustedAgentRuntimeMessageContext>,
+    { ok: true }
+  >;
+  request: {
+    agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
+  };
+  requireSessionKey: boolean;
+}): ReturnType<typeof errorShape> | undefined {
+  const identityAgentId = params.trustedContext.identityAgentId;
+  const identitySessionKey = params.trustedContext.identitySessionKey;
+  if (!identityAgentId || !identitySessionKey) {
+    return undefined;
+  }
+  const canonicalIdentitySessionKey =
+    normalizeSessionKeyPreservingOpaquePeerIds(identitySessionKey);
+  const requestSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(params.request.sessionKey);
+  const requestAgentId = normalizeOptionalString(params.request.agentId);
+  const sessionAgentId = parseAgentSessionKey(requestSessionKey)?.agentId;
+  const requestSessionId = normalizeOptionalString(params.request.sessionId);
+  if (
+    (params.requireSessionKey && !requestSessionKey) ||
+    (requestSessionKey && requestSessionKey !== canonicalIdentitySessionKey) ||
+    (requestAgentId && normalizeAgentId(requestAgentId) !== identityAgentId) ||
+    (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
+    (params.requireSessionKey &&
+      params.trustedContext.sessionId &&
+      requestSessionId !== params.trustedContext.sessionId)
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "agent runtime identity does not match the requested session",
+    );
+  }
+  return undefined;
+}
+
+function resolveGatewayMessageActionAuthorizationContext(params: {
+  client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
+  agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  targetConversationId?: string;
+  threadId?: string | number;
+  trustedContext?: Extract<
+    ReturnType<typeof resolveTrustedAgentRuntimeMessageContext>,
+    { ok: true }
+  >;
+}): AuthorizationInvocationContext {
+  const trusted = params.trustedContext;
+  const sourceToolContext = trusted?.toolContext;
+  const sourceConversationId =
+    sourceToolContext?.currentChannelId ?? sourceToolContext?.currentMessagingTarget;
+  const trustedSenderId = trusted?.requesterSenderId;
+  const hasTrustedSender = Boolean(trustedSenderId);
+  // A signed runtime may omit the optional turn session id, but it may never
+  // replace that signed fact with a request-controlled value.
+  const sessionId = trusted?.identityAgentId ? trusted.sessionId : params.sessionId;
+  const principal = trustedSenderId
+    ? createAuthorizationPrincipal({
+        provider: sourceToolContext?.currentChannelProvider,
+        accountId: trusted.requesterAccountId,
+        senderId: trustedSenderId,
+        senderIsOwner: trusted.requesterSenderIsOwner,
+        isAuthorizedSender: trusted.requesterIsAuthorizedSender,
+        roleIds: trusted.requesterRoleIds,
+      })
+    : trusted?.identityAgentId
+      ? createAuthorizationPrincipal({ serviceId: "agent-runtime" })
+      : params.client?.connect
+        ? createAuthorizationPrincipal({
+            operatorScopes: params.client.connect.scopes ?? [],
+            operatorClientId: params.client.connect.client?.id,
+            operatorDeviceId: params.client.connect.device?.id,
+            operatorIsOwner: (params.client.connect.scopes ?? []).includes(ADMIN_SCOPE),
+          })
+        : createAuthorizationPrincipal({});
+  return createAuthorizationInvocationContext({
+    principal,
+    agentId: trusted?.identityAgentId ?? params.agentId,
+    sessionKey: trusted?.identitySessionKey ?? params.sessionKey,
+    sessionId,
+    conversationId: hasTrustedSender ? sourceConversationId : params.targetConversationId,
+    threadId: hasTrustedSender
+      ? sourceConversationId
+        ? sourceToolContext?.currentThreadTs
+        : undefined
+      : params.threadId,
+    trigger: "gateway",
+  });
 }
 
 function resolveGatewayInflightRequest(params: {
@@ -403,7 +518,13 @@ function createGatewayInflightUnavailableFailure(params: {
   channel: string;
   err: unknown;
 }): InflightResult {
-  const error = errorShape(ErrorCodes.UNAVAILABLE, String(params.err));
+  const authorizationDenied =
+    params.err instanceof ToolAuthorizationError ||
+    findMessageActionPolicyDenial(params.err) !== null;
+  const error = errorShape(
+    authorizationDenied ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+    authorizationDenied ? "Message action blocked by authorization policy." : String(params.err),
+  );
   cacheGatewayDedupeFailure({
     context: params.context,
     dedupeKey: params.dedupeKey,
@@ -491,9 +612,18 @@ export const sendHandlers: GatewayRequestHandlers = {
       conversationReadOrigin?: "direct-operator";
       idempotencyKey: string;
     };
-    const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
+    const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
     if (!trustedContext.ok) {
       respond(false, undefined, trustedContext.error);
+      return;
+    }
+    const identityError = validateTrustedAgentRuntimeRequestIdentity({
+      trustedContext,
+      request,
+      requireSessionKey: true,
+    });
+    if (identityError) {
+      respond(false, undefined, identityError);
       return;
     }
     const conversationReadOrigin = resolveGatewayConversationReadOrigin({
@@ -524,6 +654,84 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
       const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
       const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
+      if (request.action === "broadcast") {
+        // Connected operators already passed the central `operator.write` method
+        // gate. This local check only rejects callers with neither authority path.
+        if (!trustedContext.identityAgentId && !client?.connect) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "Gateway broadcast delegation requires an authenticated runtime or operator.",
+            ),
+          };
+        }
+        try {
+          const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+          const agentId =
+            normalizeOptionalString(request.agentId) ??
+            trustedContext.identityAgentId ??
+            (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+          const accountId = normalizeOptionalString(request.accountId) ?? undefined;
+          const authorization = resolveGatewayMessageActionAuthorizationContext({
+            client,
+            agentId,
+            sessionKey,
+            sessionId: request.sessionId,
+            trustedContext,
+          });
+          const delegatedChannel =
+            normalizeOptionalLowercaseString(request.params.channel) === "all" ? "all" : channel;
+          const broadcast = await runMessageAction({
+            cfg,
+            action: "broadcast",
+            params: {
+              ...request.params,
+              channel: delegatedChannel,
+              idempotencyKey: request.idempotencyKey,
+            },
+            defaultAccountId: accountId,
+            requesterAccountId: trustedContext.requesterAccountId,
+            requesterSenderId: trustedContext.requesterSenderId,
+            senderIsOwner:
+              authorization.principal.kind === "sender"
+                ? authorization.principal.senderIsOwner
+                : authorization.principal.kind === "operator"
+                  ? authorization.principal.isOwner
+                  : false,
+            messageActionAuthorization: {
+              requesterAccountId: trustedContext.requesterAccountId,
+              requesterSenderId: trustedContext.requesterSenderId,
+              requesterSenderIsOwner: trustedContext.requesterSenderIsOwner,
+              requesterIsAuthorizedSender: trustedContext.requesterIsAuthorizedSender,
+              requesterRoleIds: trustedContext.requesterRoleIds,
+              toolContext: trustedContext.toolContext,
+            },
+            authorization,
+            sessionKey,
+            sessionId: trustedContext.identityAgentId
+              ? trustedContext.sessionId
+              : normalizeOptionalString(request.sessionId),
+            toolContext: trustedContext.toolContext,
+            conversationReadOrigin,
+            inboundEventKind: request.inboundTurnKind,
+            agentId,
+            gatewayOwnedDelivery: true,
+            deps: context.deps ? createOutboundSendDeps(context.deps) : undefined,
+          });
+          if (broadcast.kind !== "broadcast") {
+            throw new Error("Gateway broadcast delegation returned an unexpected result.");
+          }
+          return createGatewayInflightSuccess({
+            context,
+            dedupeKey,
+            payload: broadcast.payload,
+            channel,
+          });
+        } catch (err) {
+          return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
+        }
+      }
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin?.actions?.handleAction) {
         return {
@@ -553,6 +761,38 @@ export const sendHandlers: GatewayRequestHandlers = {
             }),
           });
         }
+        const target =
+          normalizeOptionalString(request.params.to) ??
+          normalizeOptionalString(request.params.channelId);
+        const threadId =
+          normalizeOptionalString(request.params.threadId) ??
+          normalizeOptionalString(request.params.threadTs);
+        await authorizePreparedMessageAction({
+          cfg,
+          action: request.action as ChannelMessageActionName,
+          channel,
+          accountId,
+          target,
+          threadId,
+          dryRun: false,
+          input: {
+            ...request.params,
+            channel,
+            ...(accountId ? { accountId } : {}),
+            ...(target ? { target, to: target } : {}),
+            ...(threadId ? { threadId } : {}),
+            dryRun: false,
+          },
+          authorization: resolveGatewayMessageActionAuthorizationContext({
+            client,
+            agentId,
+            sessionKey,
+            sessionId: request.sessionId,
+            targetConversationId: target,
+            threadId,
+            trustedContext,
+          }),
+        });
         const sourceReplyMirror = {
           action: request.action,
           channel,
@@ -583,12 +823,16 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
           requesterAccountId: trustedContext.requesterAccountId,
           requesterSenderId: trustedContext.requesterSenderId,
-          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
-            ? request.senderIsOwner === true
-            : false,
+          senderIsOwner: trustedContext.requesterSenderId
+            ? trustedContext.requesterSenderIsOwner === true
+            : gatewayClientScopes.includes(ADMIN_SCOPE)
+              ? request.senderIsOwner === true
+              : false,
           conversationReadOrigin,
           sessionKey,
-          sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+          sessionId: trustedContext.identityAgentId
+            ? trustedContext.sessionId
+            : normalizeOptionalString(request.sessionId),
           inboundEventKind: request.inboundTurnKind,
           agentId,
           mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
@@ -670,6 +914,20 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       idempotencyKey: string;
     };
+    const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
+    if (!trustedContext.ok) {
+      respond(false, undefined, trustedContext.error);
+      return;
+    }
+    const identityError = validateTrustedAgentRuntimeRequestIdentity({
+      trustedContext,
+      request,
+      requireSessionKey: false,
+    });
+    if (identityError) {
+      respond(false, undefined, identityError);
+      return;
+    }
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "send",
@@ -742,8 +1000,10 @@ export const sendHandlers: GatewayRequestHandlers = {
         // explicit session key instead of raw-lowercasing it (openclaw#75670).
         // Non-enrolled channels still canonicalize to lowercase via the registry.
         const providedSessionKey =
-          normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
-        const explicitAgentId = normalizeOptionalString(request.agentId);
+          trustedContext.identitySessionKey ??
+          (normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined);
+        const explicitAgentId =
+          trustedContext.identityAgentId ?? normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
           : undefined;
@@ -835,6 +1095,46 @@ export const sendHandlers: GatewayRequestHandlers = {
             };
           }
         }
+        const resolvedThreadId = outboundRoute?.threadId ?? threadId;
+        const authorization = resolveGatewayMessageActionAuthorizationContext({
+          client,
+          agentId: effectiveAgentId,
+          sessionKey: outboundSessionKey,
+          targetConversationId: deliveryTarget,
+          threadId: resolvedThreadId,
+          trustedContext,
+        });
+        const authorizePayload = async (payload: ReplyPayload): Promise<boolean> => {
+          return await authorizePreparedMessageAction({
+            cfg,
+            action: "send",
+            channel: outboundChannel,
+            accountId,
+            target: deliveryTarget,
+            threadId: resolvedThreadId,
+            dryRun: false,
+            input: buildCanonicalSendMessageActionInput({
+              input: request,
+              payload,
+              message: payload.text,
+              mediaUrl: payload.mediaUrl,
+              mediaUrls: payload.mediaUrls,
+              audioAsVoice: payload.audioAsVoice,
+              fallbackReplyToId: replyToId,
+              extra: {
+                channel: outboundChannel,
+                target: deliveryTarget,
+                to: deliveryTarget,
+                ...(accountId ? { accountId } : {}),
+                ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+                dryRun: false,
+              },
+            }),
+            authorization,
+          });
+        };
+        const authorizedPayload = outboundPayloads[0]!;
+        const enforceFinalPayloadAuthorization = await authorizePayload(authorizedPayload);
         if (outboundRoute) {
           await ensureOutboundSessionEntry({
             cfg,
@@ -864,6 +1164,18 @@ export const sendHandlers: GatewayRequestHandlers = {
           gatewayClientScopes: client?.connect?.scopes ?? [],
           silent: request.silent,
           formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+          effectAuthorizationScope: "message-action",
+          ...(enforceFinalPayloadAuthorization
+            ? {
+                effectAuthorization: {
+                  authorizedPayload,
+                  enforceFinalPayloadAuthorization: true,
+                  authorizeChangedPayload: async (payload: ReplyPayload) => {
+                    await authorizePayload(payload);
+                  },
+                },
+              }
+            : {}),
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,
@@ -924,6 +1236,11 @@ export const sendHandlers: GatewayRequestHandlers = {
       accountId?: string;
       idempotencyKey: string;
     };
+    const trustedContext = resolveTrustedAgentRuntimeMessageContext({ client });
+    if (!trustedContext.ok) {
+      respond(false, undefined, trustedContext.error);
+      return;
+    }
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "poll",
@@ -998,6 +1315,29 @@ export const sendHandlers: GatewayRequestHandlers = {
         const normalized = outbound.pollMaxOptions
           ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
           : normalizePollInput(poll);
+        await authorizePreparedMessageAction({
+          cfg,
+          action: "poll",
+          channel,
+          accountId,
+          target: resolvedTarget.to,
+          threadId,
+          dryRun: false,
+          input: {
+            ...request,
+            channel,
+            to: resolvedTarget.to,
+            poll: normalized,
+            ...(accountId ? { accountId } : {}),
+            ...(threadId ? { threadId } : {}),
+          },
+          authorization: resolveGatewayMessageActionAuthorizationContext({
+            client,
+            targetConversationId: resolvedTarget.to,
+            threadId,
+            trustedContext,
+          }),
+        });
         const result = await outbound.sendPoll({
           cfg,
           to: resolvedTarget.to,
@@ -1016,13 +1356,12 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         return { ok: true, payload, meta: { channel } };
       } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-        cacheGatewayDedupeFailure({
+        return createGatewayInflightUnavailableFailure({
           context,
           dedupeKey,
-          error,
+          channel,
+          err,
         });
-        return { ok: false, error, meta: { channel, error: formatForLog(err) } };
       }
     })();
 

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import type { AuthorizationOperation } from "./authorization-policy.types.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -103,9 +104,124 @@ export type PluginInspectReport = {
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
   };
+  authorizationPolicies: {
+    inspection: "metadata" | "runtime";
+    declaredPolicyIds: string[];
+    registeredPolicies: Array<{
+      id: string;
+      operations: AuthorizationOperation[];
+    }>;
+    requiredPolicies: Array<{
+      id: string;
+      operations: AuthorizationOperation[];
+      status: "not-runtime-inspected" | "ready" | "missing-registration" | "missing-handler";
+      missingOperations: AuthorizationOperation[];
+    }>;
+  };
   usesLegacyBeforeAgentStart: boolean;
   compatibility: PluginCompatibilityNotice[];
 };
+
+const AUTHORIZATION_OPERATIONS = [
+  "tool.call",
+  "message.action",
+  "command.invoke",
+] as const satisfies readonly AuthorizationOperation[];
+
+// Status callers may pass either metadata-only or runtime-loaded reports. Keep
+// that provenance out of the public registry payload while avoiding false
+// missing-registration warnings for cold metadata inspection.
+const runtimeInspectedReports = new WeakSet<PluginStatusReport>();
+
+function readAuthorizationPolicyId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    const id = (value as { id?: unknown }).id;
+    return typeof id === "string" && id.trim() ? id.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readAuthorizationPolicyOperations(value: unknown): AuthorizationOperation[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  try {
+    const handlers = (value as { handlers?: unknown }).handlers;
+    if (!handlers || typeof handlers !== "object" || Array.isArray(handlers)) {
+      return [];
+    }
+    return AUTHORIZATION_OPERATIONS.filter(
+      (operation) =>
+        typeof (handlers as Partial<Record<AuthorizationOperation, unknown>>)[operation] ===
+        "function",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function buildAuthorizationPolicyInspect(params: {
+  plugin: PluginRegistry["plugins"][number];
+  policyEntry: ReturnType<typeof normalizePluginsConfig>["entries"][string] | undefined;
+  report: PluginStatusReport;
+}): PluginInspectReport["authorizationPolicies"] {
+  const runtimeInspected = runtimeInspectedReports.has(params.report);
+  const registeredPolicies = params.report.authorizationPolicies
+    .filter((entry) => entry.pluginId === params.plugin.id)
+    .flatMap((entry) => {
+      const id = readAuthorizationPolicyId(entry.policy);
+      return id ? [{ id, operations: readAuthorizationPolicyOperations(entry.policy) }] : [];
+    })
+    .toSorted((a, b) => a.id.localeCompare(b.id));
+  const registrationsById = new Map(registeredPolicies.map((entry) => [entry.id, entry]));
+  const requiredPolicies = (params.policyEntry?.authorization?.requiredPolicies ?? []).map(
+    (required) => {
+      const operations = AUTHORIZATION_OPERATIONS.filter((operation) =>
+        required.operations.includes(operation),
+      );
+      if (!runtimeInspected) {
+        return {
+          id: required.id,
+          operations,
+          status: "not-runtime-inspected" as const,
+          missingOperations: [],
+        };
+      }
+      const registration = registrationsById.get(required.id);
+      if (!registration) {
+        return {
+          id: required.id,
+          operations,
+          status: "missing-registration" as const,
+          missingOperations: [...operations],
+        };
+      }
+      const missingOperations = operations.filter(
+        (operation) => !registration.operations.includes(operation),
+      );
+      return {
+        id: required.id,
+        operations,
+        status: missingOperations.length > 0 ? ("missing-handler" as const) : ("ready" as const),
+        missingOperations,
+      };
+    },
+  );
+
+  return {
+    inspection: runtimeInspected ? "runtime" : "metadata",
+    declaredPolicyIds: [...new Set(params.plugin.contracts?.authorizationPolicies ?? [])]
+      .filter((id) => typeof id === "string" && id.trim())
+      .map((id) => id.trim())
+      .toSorted(),
+    registeredPolicies,
+    requiredPolicies,
+  };
+}
 
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart"> & {
@@ -312,7 +428,7 @@ function buildPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return {
+  const statusReport: PluginStatusReport = {
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) =>
@@ -330,6 +446,10 @@ function buildPluginReport(
       }),
     ),
   };
+  if (loadModules) {
+    runtimeInspectedReports.add(statusReport);
+  }
+  return statusReport;
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
@@ -481,6 +601,11 @@ export function buildPluginInspectReport(params: {
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
     },
+    authorizationPolicies: buildAuthorizationPolicyInspect({
+      plugin,
+      policyEntry,
+      report,
+    }),
     usesLegacyBeforeAgentStart,
     compatibility,
   };

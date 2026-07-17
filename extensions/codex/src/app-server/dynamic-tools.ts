@@ -36,6 +36,7 @@ import {
   sanitizeToolResult,
   setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
+  type AuthorizationInvocationContext,
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
@@ -70,6 +71,7 @@ import { recordCodexSourceReplyDeliveryIntent } from "./source-reply-finality.js
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = {
+  authorization?: AuthorizationInvocationContext;
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
   workspaceDir?: string;

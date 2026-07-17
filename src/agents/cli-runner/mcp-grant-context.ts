@@ -2,6 +2,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
+import {
+  createAuthorizationInvocationContext,
+  createAuthorizationPrincipal,
+} from "../../plugins/authorization-policy-context.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -107,6 +111,33 @@ export function buildCliMcpGrantContext(params: {
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
+  const messageProvider = resolveCliMcpMessageProvider(params.run);
+  const accountId = normalizeOptionalMcpContextValue(params.run.agentAccountId);
+  const senderId = normalizeOptionalMcpContextValue(
+    params.run.senderId ?? channelContext?.sender?.id,
+  );
+  const chatId = normalizeOptionalMcpContextValue(params.run.chatId);
+  const currentChannelId = normalizeOptionalMcpContextValue(params.run.currentChannelId);
+  const currentThreadTs = normalizeOptionalMcpContextValue(params.run.currentThreadTs);
+  const trigger = normalizeOptionalMcpContextValue(params.run.trigger);
+  const authorization = createAuthorizationInvocationContext({
+    principal: createAuthorizationPrincipal({
+      provider: messageProvider,
+      accountId,
+      senderId,
+      senderIsOwner: params.run.senderIsOwner,
+      isAuthorizedSender: params.run.isAuthorizedSender,
+      roleIds: params.run.memberRoleIds,
+      serviceId: "cli-harness",
+    }),
+    agentId: params.agentId,
+    sessionKey,
+    sessionId: params.run.sessionId,
+    runId: params.run.runId,
+    conversationId: chatId ?? currentChannelId ?? channelContext?.chat?.id,
+    threadId: currentThreadTs,
+    trigger: trigger ?? "mcp",
+  });
   const senderName = normalizeOptionalMcpContextValue(params.run.senderName ?? undefined);
   const senderUsername = normalizeOptionalMcpContextValue(params.run.senderUsername ?? undefined);
   const senderE164 = normalizeOptionalMcpContextValue(params.run.senderE164 ?? undefined);
@@ -115,6 +146,7 @@ export function buildCliMcpGrantContext(params: {
   const groupSpace = normalizeOptionalMcpContextValue(params.run.groupSpace ?? undefined);
   const spawnedBy = normalizeOptionalMcpContextValue(params.run.spawnedBy ?? undefined);
   return {
+    authorization,
     sessionKey,
     runtimePolicySessionKey: normalizeOptionalMcpContextValue(params.run.runtimePolicySessionKey),
     agentId: params.agentId,
@@ -125,16 +157,16 @@ export function buildCliMcpGrantContext(params: {
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-    messageProvider: resolveCliMcpMessageProvider(params.run),
+    messageProvider,
     clientCaps: clientCaps.length > 0 ? clientCaps : undefined,
-    currentChannelId: normalizeOptionalMcpContextValue(params.run.currentChannelId),
-    currentThreadTs: normalizeOptionalMcpContextValue(params.run.currentThreadTs),
+    currentChannelId,
+    currentThreadTs,
     currentMessageId:
       params.run.currentMessageId == null
         ? undefined
         : normalizeOptionalMcpContextValue(String(params.run.currentMessageId)),
     currentInboundAudio: params.run.currentInboundAudio === true ? true : undefined,
-    accountId: normalizeOptionalMcpContextValue(params.run.agentAccountId),
+    accountId,
     inboundEventKind: params.run.currentInboundEventKind,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
@@ -144,7 +176,7 @@ export function buildCliMcpGrantContext(params: {
     ...(execSession ? { execSession } : {}),
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
-    ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(trigger ? { trigger } : {}),
     ...(normalizeOptionalMcpContextValue(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

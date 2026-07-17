@@ -1,6 +1,8 @@
 // Public outbound delivery queue facade for storage and recovery operations.
 export {
   ackDelivery,
+  assertDeliveryEffectAuthorized,
+  authorizeSealedDeliveryEffects,
   enqueueDelivery,
   enqueueDeliveryOnce,
   failDelivery,
@@ -9,6 +11,7 @@ export {
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
+  sealDeliveryEffectAuthorization,
 } from "./delivery-queue-storage.js";
 export type {
   QueuedReplyPayloadSendingHook,
