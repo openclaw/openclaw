@@ -22,6 +22,8 @@ Press Option-Space (⌥Space) or choose **Quick Chat** from the menu bar menu to
 
 Quick Chat shows the targeted agent (avatar or emoji, with the agent's name as the placeholder), sends to that agent's main session, and leaves replies in the full chat window. With more than one agent configured, click the avatar to switch agents from a native menu. Press Return to send, Command-Return to send and open full chat, Shift-Return for a newline, or Escape to dismiss. Clicking outside the bar also dismisses it. When relevant macOS permissions are missing, an attached strip offers **Grant** and **Not now** actions.
 
+Command-Return opens the conversation of the agent that received the send, including when session scope is global.
+
 The camera button starts a window screenshot: every visible window gets a labeled overlay, and clicking one captures it and sends it (with any typed text as the caption) to the selected agent. The first use asks for macOS Screen Recording access. Escape or clicking empty space cancels.
 
 Disable the feature entirely with **Settings → General → Quick Chat**; the same section hosts the shortcut recorder.
