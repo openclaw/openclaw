@@ -1,0 +1,9 @@
+脚本启动于 2026-07-19 05:11:13+08:00 [COMMAND="node docs/.local/issue-109983/verify.mjs" <not executed on terminal>]
+PASS: response.body.cancel() called on auth error, no unhandled rejection
+PASS: response.status = 401 (expected 401)
+PASS: response.ok = false (expected false)
+PASS: body stream is closed after cancel (done=true)
+PASS: repeated cancel() is idempotent
+ALL CHECKS PASSED
+
+脚本完成于 2026-07-19 05:11:13+08:00 [COMMAND_EXIT_CODE="0"]
