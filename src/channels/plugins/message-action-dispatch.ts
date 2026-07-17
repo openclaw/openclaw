@@ -419,7 +419,7 @@ function canonicalizeBundledReadTargets(params: {
 }): void {
   if (
     params.pluginOrigin !== "bundled" ||
-    !READ_DEPENDENT_ACTIONS.has(params.ctx.action) ||
+    params.ctx.action !== "read" ||
     !params.plugin.messaging?.normalizeTarget
   ) {
     return;
