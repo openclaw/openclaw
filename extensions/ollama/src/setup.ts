@@ -440,7 +440,9 @@ function buildOllamaModelsConfig(
     // so keep Kimi vision-capable during setup even without discovered metadata.
     const capabilities =
       discovered?.capabilities ?? (name === "kimi-k2.5:cloud" ? ["vision"] : undefined);
-    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities);
+    return buildOllamaModelDefinition(name, discovered?.contextWindow, capabilities, {
+      showInspectionFailed: discovered?.showInspectionFailed,
+    });
   });
 }
 
@@ -630,12 +632,14 @@ async function inspectOllamaModelsForSetup(
           signal?.throwIfAborted();
           // Fail open per model: one stale/corrupt local model (observed: a
           // months-old pull whose /api/show returns HTTP 500) must not brick
-          // the whole setup. Mark the failure with EMPTY capabilities: undefined
-          // means "never inspected" and downstream config building optimistically
-          // defaults that to supportsTools, which would advertise a broken model
-          // as tools-capable (ClawSweeper P2 on #109797).
+          // the whole setup. Mark inspection failure distinctly from
+          // capabilities: [] (authoritative empty): tools stay off, but
+          // model-name reasoning heuristics still apply.
           inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
-          return Object.assign({}, model, { capabilities: [] as string[] });
+          return Object.assign({}, model, {
+            capabilities: undefined,
+            showInspectionFailed: true as const,
+          });
         }
       }),
     );
