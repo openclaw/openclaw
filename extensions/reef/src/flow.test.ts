@@ -42,7 +42,7 @@ describe("createConfiguredGuard", () => {
 
   it("trims a configured guard credential before requests", async () => {
     vi.stubEnv("REEF_TEST_KEY", "  guard-key  ");
-    const fetcher = vi.fn(async () => new Response("", { status: 401 }));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
     const classifier = createConfiguredGuard(config(), fetcher);
 
     await classifier.classify({
