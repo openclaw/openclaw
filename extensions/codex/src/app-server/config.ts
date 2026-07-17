@@ -239,7 +239,7 @@ export type CodexAppServerRuntimeOptions = {
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
-  turnAssistantCompletionIdleTimeoutMs: number;
+  turnAssistantCompletionIdleTimeoutMs?: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
