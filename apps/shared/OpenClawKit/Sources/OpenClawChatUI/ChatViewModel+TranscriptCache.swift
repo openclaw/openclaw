@@ -62,7 +62,8 @@ extension OpenClawChatViewModel {
                 // A live sessions response (even an empty one) is authoritative;
                 // a slow cache read must never repaint over it.
                 guard self.sessions.isEmpty, !self.hasAppliedLiveSessions else { return }
-                self.sessions = OpenClawChatSessionListOrganizer.organize(cached)
+                self.sessions = self.applyingLocalUnreadOverrides(
+                    to: OpenClawChatSessionListOrganizer.organize(cached))
             }
         }
         guard messages.isEmpty, !hasAppliedLiveHistory else { return }

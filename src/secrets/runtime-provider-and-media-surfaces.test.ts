@@ -508,6 +508,49 @@ describe("secrets runtime provider and media surfaces", () => {
     );
   });
 
+  it("isolates a broken media request ref to its exact model owner", async () => {
+    const missingRef = envTokenRef("MISSING_MEDIA_MODEL_VALUE");
+    const healthyRef = envTokenRef("HEALTHY_MEDIA_MODEL_VALUE");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        tools: {
+          media: {
+            models: [
+              {
+                provider: "openai",
+                capabilities: ["audio"],
+                request: { auth: { mode: "authorization-bearer", token: missingRef } },
+              },
+              {
+                provider: "deepgram",
+                capabilities: ["audio"],
+                request: { auth: { mode: "authorization-bearer", token: healthyRef } },
+              },
+            ],
+            audio: { enabled: true },
+          },
+        },
+      }),
+      env: { HEALTHY_MEDIA_MODEL_VALUE: "test-token" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      allowUnavailableSecretOwners: true,
+    });
+
+    expect(snapshot.config.tools?.media?.models?.[1]?.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "test-token",
+    });
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "media-model:shared:0",
+        state: "unavailable",
+        paths: ["tools.media.models.0.request.auth.token"],
+      },
+    ]);
+  });
+
   it("treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

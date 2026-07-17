@@ -11,6 +11,10 @@ import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
+  runtimeMediaModelSecretOwnerId,
+  runtimeMediaRequestSecretOwnerId,
+} from "./runtime-media-secret-owner.js";
+import {
   collectSecretInputAssignment,
   collectRuntimeSecretInputAssignment,
   type SecretAssignmentOwner,
@@ -384,6 +388,7 @@ function collectMediaRequestAssignments(params: {
   const collectModelAssignments = (
     models: unknown,
     pathPrefix: string,
+    resolveOwnerId: (index: number) => string,
     resolveActivity: (rawModel: Record<string, unknown>) => {
       active: boolean;
       inactiveReason: string;
@@ -404,34 +409,45 @@ function collectMediaRequestAssignments(params: {
         context: params.context,
         active,
         inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: resolveOwnerId(index),
+          requiredForGateway: false,
+          disposition: "isolate",
+        },
       });
     });
   };
 
-  collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
-    const entry = rawModel as MediaUnderstandingModelConfig;
-    const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-    // Shared models are active only for enabled capabilities; when the config omits explicit
-    // capabilities, provider metadata is the contract for which media sections can use it.
-    const capabilities =
-      configuredCapabilities ??
-      resolveEffectiveMediaEntryCapabilities({
-        entry,
-        source: "shared",
-        providerRegistry: getProviderRegistry(),
-      });
-    if (!capabilities || capabilities.length === 0) {
+  collectModelAssignments(
+    media.models,
+    "tools.media.models",
+    (index) => runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    (rawModel) => {
+      const entry = rawModel as MediaUnderstandingModelConfig;
+      const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+      // Shared models are active only for enabled capabilities; when the config omits explicit
+      // capabilities, provider metadata is the contract for which media sections can use it.
+      const capabilities =
+        configuredCapabilities ??
+        resolveEffectiveMediaEntryCapabilities({
+          entry,
+          source: "shared",
+          providerRegistry: getProviderRegistry(),
+        });
+      if (!capabilities || capabilities.length === 0) {
+        return {
+          active: false,
+          inactiveReason:
+            "shared media model does not declare capabilities and none could be inferred from its provider.",
+        };
+      }
       return {
-        active: false,
-        inactiveReason:
-          "shared media model does not declare capabilities and none could be inferred from its provider.",
+        active: capabilities.some((capability) => isCapabilityEnabled(capability)),
+        inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
       };
-    }
-    return {
-      active: capabilities.some((capability) => isCapabilityEnabled(capability)),
-      inactiveReason: `all configured media capabilities for this shared model are disabled: ${capabilities.join(", ")}.`,
-    };
-  });
+    },
+  );
 
   for (const capability of capabilityKeys) {
     const section = isRecord(media[capability]) ? media[capability] : undefined;
@@ -445,20 +461,31 @@ function collectMediaRequestAssignments(params: {
         context: params.context,
         active,
         inactiveReason,
+        owner: {
+          ownerKind: "capability",
+          ownerId: runtimeMediaRequestSecretOwnerId(capability),
+          requiredForGateway: false,
+          disposition: "isolate",
+        },
       });
     }
-    collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
-      active:
-        active &&
-        (() => {
-          const entry = rawModel as MediaUnderstandingModelConfig;
-          const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
-          return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
-        })(),
-      inactiveReason: active
-        ? `${capability} media model is filtered out by its configured capabilities.`
-        : inactiveReason,
-    }));
+    collectModelAssignments(
+      section?.models,
+      `tools.media.${capability}.models`,
+      (index) => runtimeMediaModelSecretOwnerId({ source: "capability", capability, index }),
+      (rawModel) => ({
+        active:
+          active &&
+          (() => {
+            const entry = rawModel as MediaUnderstandingModelConfig;
+            const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+            return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
+          })(),
+        inactiveReason: active
+          ? `${capability} media model is filtered out by its configured capabilities.`
+          : inactiveReason,
+      }),
+    );
   }
 }
 

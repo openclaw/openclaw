@@ -3,12 +3,13 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
 } from "../../agents/run-timeout-attribution.js";
-import { agentCommandFromIngress } from "../../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
 import { readErrorName } from "../../infra/errors.js";
@@ -77,7 +78,7 @@ export function deleteGatewayDedupeEntries(params: {
 }
 
 export function dispatchAgentRunFromGateway(params: {
-  ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
+  ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
   runId: string;
   dedupeKeys: readonly string[];
   /**
@@ -90,6 +91,7 @@ export function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   onSettled?: (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
@@ -139,7 +141,9 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  void agentCommandFromGatewayIngress(params.ingressOpts, defaultRuntime, params.context.deps, {
+    restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+  })
     .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);

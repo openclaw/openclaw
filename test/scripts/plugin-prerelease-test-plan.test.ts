@@ -672,8 +672,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(workflow.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual({
       default: false,
-      description:
-        "Allow current-tree packaging to use Unreleased notes; release branches and tags stay strict",
+      description: "Allow explicitly opted-in current-tree packaging to use Unreleased notes",
       required: false,
       type: "boolean",
     });
@@ -688,6 +687,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");
+    const explicitOptIn = captureInputs?.run.indexOf('"$allow_unreleased_changelog" == "true"');
+    const releaseRefGuard = captureInputs?.run.indexOf(
+      '"$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/',
+    );
+    expect(explicitOptIn).toBeGreaterThanOrEqual(0);
+    expect(releaseRefGuard).toBeGreaterThan(explicitOptIn ?? -1);
     expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
       currentTreeAllowance,
     );

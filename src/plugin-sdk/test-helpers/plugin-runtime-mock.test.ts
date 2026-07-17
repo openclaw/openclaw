@@ -167,6 +167,7 @@ describe("createPluginRuntimeMock", () => {
         CommandAuthorized: false,
         SessionKey: "agent:main:test:direct:u1",
       },
+      replyPipeline: {},
       delivery: { deliver: vi.fn(async () => undefined) },
     });
 
@@ -178,6 +179,14 @@ describe("createPluginRuntimeMock", () => {
       }),
     );
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          responsePrefixContextProvider: expect.any(Function),
+        }),
+        replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
+      }),
+    );
   });
 
   it("assembles routed prepared turns before dispatch", async () => {

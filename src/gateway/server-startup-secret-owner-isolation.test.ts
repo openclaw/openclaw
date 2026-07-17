@@ -146,6 +146,49 @@ describe("Gateway startup SecretRef owner isolation", () => {
     });
   });
 
+  it("reaches /readyz with one cold media model", async () => {
+    await withEnvAsync({ MISSING_MEDIA_MODEL_VALUE: undefined }, async () => {
+      await writeConfig({
+        ...baseConfig(),
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              models: [
+                {
+                  provider: "openai",
+                  request: {
+                    auth: {
+                      mode: "authorization-bearer",
+                      token: {
+                        source: "env",
+                        provider: "default",
+                        id: "MISSING_MEDIA_MODEL_VALUE",
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      const port = await getFreePort();
+      server = await startGatewayServer(port, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+      expect(ready.status).toBe(200);
+      expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+        {
+          ownerKind: "capability",
+          ownerId: "media-model:audio:0",
+          state: "unavailable",
+        },
+      ]);
+    });
+  });
+
   it("isolates TTS during a successful Gateway-auth SecretRef preflight", async () => {
     await withEnvAsync(
       {
