@@ -319,6 +319,8 @@ export async function streamContainerEvents(params: {
 
   log(`[signal-ws] connecting to ${redactedWsUrl}`);
 
+  const handshakeTimeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_TIMEOUT_MS);
+
   return new Promise((resolve, reject) => {
     let ws: WebSocket;
     let resolved = false;
@@ -329,15 +331,24 @@ export async function streamContainerEvents(params: {
         return;
       }
       resolved = true;
+      clearTimeout(connectTimer);
       if (abortHandler) {
         params.abortSignal?.removeEventListener("abort", abortHandler);
         abortHandler = undefined;
       }
     };
 
+    const connectTimer = setTimeout(() => {
+      cleanup();
+      ws?.terminate();
+      reject(new Error("Signal container receive WebSocket connection timed out"));
+    }, handshakeTimeoutMs);
+    connectTimer.unref?.();
+
     try {
       ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
     } catch (err) {
+      clearTimeout(connectTimer);
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -346,6 +357,7 @@ export async function streamContainerEvents(params: {
     }
 
     ws.on("open", () => {
+      clearTimeout(connectTimer);
       log("[signal-ws] connected");
     });
 

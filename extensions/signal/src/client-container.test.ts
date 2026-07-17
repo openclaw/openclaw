@@ -35,7 +35,7 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
   };
 }
 const wsMockState = vi.hoisted(() => ({
-  behavior: "close" as "close" | "open" | "error" | "unexpected-response",
+  behavior: "close" as "close" | "open" | "error" | "unexpected-response" | "hang",
   urls: [] as string[],
   options: [] as Array<{ maxPayload?: number } | undefined>,
 }));
@@ -96,6 +96,8 @@ vi.mock("ws", () => ({
           this.emit("error", new Error("WebSocket failed"));
         } else if (wsMockState.behavior === "unexpected-response") {
           this.emit("unexpected-response", {}, { statusCode: 200, statusMessage: "OK" });
+        } else if (wsMockState.behavior === "hang") {
+          // Never fire any event — used for connect-timeout tests.
         } else {
           this.emit("close", 1000, Buffer.from("done"));
         }
@@ -1173,6 +1175,39 @@ describe("streamContainerEvents", () => {
     const abortHandler = addEventListener.mock.calls.find((call) => call[0] === "abort")?.[1];
     expect(abortHandler).toBeTypeOf("function");
     expect(removeEventListener).toHaveBeenCalledWith("abort", abortHandler);
+  });
+
+  it("rejects after the connect timeout when the server never responds", async () => {
+    wsMockState.behavior = "hang";
+    const promise = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      timeoutMs: 100,
+      onEvent: vi.fn(),
+    });
+    await expect(promise).rejects.toThrow(
+      "Signal container receive WebSocket connection timed out",
+    );
+  });
+
+  it("uses DEFAULT_TIMEOUT_MS when timeoutMs is not provided", async () => {
+    wsMockState.behavior = "hang";
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const promise = streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      onEvent: vi.fn(),
+    });
+    // The connect timer should fire after the default 10s.
+    const connectTimer = setTimeoutSpy.mock.results.find((r) => {
+      const ms = setTimeoutSpy.mock.calls[setTimeoutSpy.mock.results.indexOf(r)]?.[1];
+      return ms === 10_000;
+    });
+    expect(connectTimer).toBeDefined();
+    await expect(promise).rejects.toThrow(
+      "Signal container receive WebSocket connection timed out",
+    );
+    setTimeoutSpy.mockRestore();
   });
 });
 
