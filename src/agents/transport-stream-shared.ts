@@ -45,11 +45,27 @@ export function encodeAssistantTextSignatureV1(
   return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
 }
 
+/**
+ * MiniMax portal (and similar Anthropic-compat streams) can append a framing
+ * sentinel into native text_delta chunks. The token is not present in OpenClaw
+ * sources; it arrives only on the wire. Strip whole and repeated occurrences so
+ * completed assistant text, next-turn prompts, and channel delivery stay clean.
+ *
+ * Reported marker (issue #104403): the character sequence [ e ~ [ ` ] without
+ * spaces — may appear once or repeated up to a few times at the end of a reply.
+ */
+const MINIMAX_STREAM_BOUNDARY_MARKER = "[e~[`";
+const MINIMAX_STREAM_BOUNDARY_GLOBAL = /(?:\[e~\[`)+/g;
+
 export function sanitizeTransportPayloadText(text: string): string {
   if (typeof text !== "string") {
     return "";
   }
-  return sanitizeSurrogates(text);
+  let cleaned = sanitizeSurrogates(text);
+  if (cleaned.includes(MINIMAX_STREAM_BOUNDARY_MARKER)) {
+    cleaned = cleaned.replace(MINIMAX_STREAM_BOUNDARY_GLOBAL, "");
+  }
+  return cleaned;
 }
 
 export function sanitizeNonEmptyTransportPayloadText(
