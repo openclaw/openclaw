@@ -31,7 +31,8 @@ import {
   type MSTeamsAttachmentLike,
 } from "../attachments.js";
 import { extractHtmlFromAttachment } from "../attachments/shared.js";
-import { buildStoredConversationReference } from "../conversation-reference.js";
+import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
+import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   fetchChannelMessage,
@@ -133,6 +134,49 @@ function formatMSTeamsSenderReason(params: {
     default:
       return params.reasonCode;
   }
+}
+
+function buildStoredConversationReference(params: {
+  activity: MSTeamsTurnContext["activity"];
+  conversationId: string;
+  conversationType: string;
+  teamId?: string;
+  /** Thread root message ID for channel thread messages. */
+  threadId?: string;
+}): StoredConversationReference {
+  const { activity, conversationId, conversationType, teamId, threadId } = params;
+  const from = activity.from;
+  const conversation = activity.conversation;
+  const agent = activity.recipient;
+  const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  // Bot Framework requires `tenantId` on outbound proactive activities so the
+  // connector can route them to the correct Azure AD tenant; missing it causes
+  // HTTP 403. Channel activities often leave `conversation.tenantId` unset, so
+  // prefer the canonical `channelData.tenant.id` source when available.
+  const channelDataTenantId = activity.channelData?.tenant?.id;
+  const tenantId = channelDataTenantId ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent,
+    conversation: {
+      id: conversationId,
+      conversationType,
+      tenantId,
+    },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
+    teamId,
+    channelId: activity.channelId,
+    ...(serviceUrl ? { serviceUrl } : {}),
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {

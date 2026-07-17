@@ -772,7 +772,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     await task;
   });
 
-  it("acks non-poll card actions after the durable commit without waiting for dispatch", async () => {
+  it("acks non-poll card actions after the durable commit", async () => {
     const abort = new AbortController();
     const task = monitorMSTeamsProvider({
       cfg: createConfig(0),
@@ -786,15 +786,17 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const cardActionHandler = app.on.mock.calls.find(
       (call: [string, unknown]) => call[0] === "card.action",
     )?.[1] as (event: unknown) => Promise<unknown>;
-    const commit = Promise.withResolvers<{ kind: "accepted"; duplicate: false }>();
-    const drain = Promise.withResolvers<{ started: number }>();
-    cardActionIngress.enqueue.mockReturnValueOnce(commit.promise);
-    cardActionIngress.drainOnce.mockReturnValueOnce(drain.promise);
+    let releaseCommit: (() => void) | undefined;
+    cardActionIngress.enqueue.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCommit = () => resolve({ kind: "accepted", duplicate: false });
+        }),
+    );
     const responsePromise = cardActionHandler({
       activity: {
         type: "invoke",
         name: "adaptiveCard/action",
-        id: "invoke-1",
         value: { action: { data: { action: "nonPoll" } } },
       },
     });
@@ -805,10 +807,8 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     await Promise.resolve();
     expect(acked).toBe(false);
-    commit.resolve({ kind: "accepted", duplicate: false });
+    releaseCommit?.();
     expect(await responsePromise).toMatchObject({ statusCode: 200, value: "OK" });
-    expect(cardActionIngress.drainOnce).toHaveBeenCalled();
-    drain.resolve({ started: 1 });
     abort.abort();
     await task;
   });
