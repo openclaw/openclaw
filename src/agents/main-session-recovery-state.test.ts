@@ -377,6 +377,25 @@ describe("main session recovery state", () => {
     const view = observe(entry, "generation-new");
 
     expect(view).toMatchObject({ status: "recoverable", nextAttempt: 1 });
+    expect(entry.mainRestartRecovery).toMatchObject({ revision: 2 });
+    expect(entry.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+  });
+
+  it("clears a healthy aggregate owned by an older lifecycle generation", () => {
+    const entry = interruptedEntry({
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "completed-run", lifecycleGeneration: "generation-old" }],
+      mainRestartRecovery: recoveryState({
+        foregroundClaims: {
+          lifecycleGeneration: "generation-old",
+          tokens: ["old-owner"],
+        },
+      }),
+    });
+
+    expect(observe(entry, "generation-new")).toEqual({ status: "inactive" });
+    expect(entry.restartRecoveryRuns).toBeUndefined();
+    expect(entry.mainRestartRecovery).toBeUndefined();
   });
 
   it("retains the charge but releases a reservation orphaned by process restart", () => {

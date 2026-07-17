@@ -267,7 +267,24 @@ export function transitionMainSessionRecovery(
         // Rows interrupted by an older shipped version acquire identity before scanning.
         entry.mainRestartRecovery = createCycle(command.cycleId);
       }
-      const state = entry.mainRestartRecovery;
+      let state = entry.mainRestartRecovery;
+      if (
+        state?.foregroundClaims &&
+        state.foregroundClaims.lifecycleGeneration !== command.lifecycleGeneration
+      ) {
+        // Process-local owners cannot survive a Gateway generation. Retire their
+        // durable lease before the new process decides whether recovery is needed.
+        if (entry.abortedLastRun !== true) {
+          Object.assign(entry, buildMainSessionRecoveryClearPatch(entry));
+          state = undefined;
+        } else {
+          entry.mainRestartRecovery = state = {
+            ...state,
+            revision: nextRevision(state),
+            foregroundClaims: undefined,
+          };
+        }
+      }
       if (
         state?.reservation &&
         state.reservation.lifecycleGeneration !== command.lifecycleGeneration

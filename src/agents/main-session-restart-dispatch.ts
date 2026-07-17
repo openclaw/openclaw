@@ -244,6 +244,24 @@ async function settleRestartRecoveryDispatch(params: {
 
 type MainSessionResumeResult = "resumed" | "skipped" | "failed";
 
+async function rollbackRestartRecoveryReservation(params: {
+  kind: "abandon_reservation" | "cancel_reservation";
+  reservation: MainSessionRecoveryReservation;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  await retryAsync(
+    async () =>
+      await commitMainSessionRecovery({
+        command: { kind: params.kind, reservation: params.reservation },
+        requireWriteSuccess: true,
+        target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      }),
+    3,
+    25,
+  );
+}
+
 export async function resumeMainSession(params: {
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
@@ -328,9 +346,11 @@ export async function resumeMainSession(params: {
       },
     });
     if (!recoveryStatePrepared) {
-      await commitMainSessionRecovery({
-        command: { kind: "cancel_reservation", reservation },
-        target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      await rollbackRestartRecoveryReservation({
+        kind: "cancel_reservation",
+        reservation,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
       });
       reservation = undefined;
       return "skipped";
@@ -466,22 +486,12 @@ export async function resumeMainSession(params: {
     }
     if (reservation) {
       const rollbackReservation = reservation;
-      await retryAsync(
-        async () =>
-          await commitMainSessionRecovery({
-            command: {
-              kind:
-                dispatchStarted && !explicitlyRejected
-                  ? "abandon_reservation"
-                  : "cancel_reservation",
-              reservation: rollbackReservation,
-            },
-            requireWriteSuccess: true,
-            target: { sessionKey: params.sessionKey, storePath: params.storePath },
-          }),
-        3,
-        25,
-      ).catch((rollbackError: unknown) => {
+      await rollbackRestartRecoveryReservation({
+        kind: dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation",
+        reservation: rollbackReservation,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      }).catch((rollbackError: unknown) => {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );

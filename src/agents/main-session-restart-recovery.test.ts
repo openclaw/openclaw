@@ -1090,6 +1090,60 @@ describe("main-session-restart-recovery", () => {
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
+  it("retries reservation cleanup when durable dispatch preparation is rejected", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    let preparationRejected = false;
+    let cleanupFailures = 0;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+        if (
+          !preparationRejected &&
+          params.requireWriteSuccess !== true &&
+          entry?.mainRestartRecovery?.reservation
+        ) {
+          preparationRejected = true;
+          return false;
+        }
+        if (preparationRejected && params.requireWriteSuccess && cleanupFailures < 2) {
+          cleanupFailures += 1;
+          throw new Error("transient session-store failure");
+        }
+        return await applySessionEntryReplacements(params);
+      });
+
+    try {
+      await expect(
+        recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir }),
+      ).resolves.toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    } finally {
+      replacementSpy.mockRestore();
+    }
+
+    expect(preparationRejected).toBe(true);
+    expect(cleanupFailures).toBe(2);
+    expect(callGateway).not.toHaveBeenCalled();
+    const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+    expect(entry?.mainRestartRecovery).toMatchObject({ chargedAttempts: 0 });
+    expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+  });
+
   it("refunds an explicit Gateway rejection before recovery admission", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
