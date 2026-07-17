@@ -6,6 +6,12 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
+import {
+  activityMarkerBelongsToOwner,
+  activityMarkerStartedAfter,
+  recoveryOwnerRefs,
+  startedEventOwnerRefs,
+} from "./diagnostic-run-activity-recovery.js";
 import { createDiagnosticRunActivityRetention } from "./diagnostic-run-activity-retention.js";
 import {
   deleteDiagnosticActiveRunsStartedBefore,
@@ -423,46 +429,6 @@ function resolveEmbeddedRunWorkKey(params: { sessionId: string; workKey?: string
   return params.workKey ?? params.sessionId;
 }
 
-function ownerRefsForRecovery(params: {
-  sessionId?: string;
-  activeSessionId?: string;
-}): Set<string> {
-  const refs = [params.activeSessionId?.trim(), params.sessionId?.trim()].filter(
-    (ref): ref is string => Boolean(ref),
-  );
-  return new Set(refs);
-}
-
-function ownerRefsForStartedEvent(event: { runId?: string; sessionId?: string }): string[] {
-  return [event.runId?.trim(), event.sessionId?.trim()].filter((ref): ref is string =>
-    Boolean(ref),
-  );
-}
-
-function markerBelongsToRecoveredOwner(
-  marker: { runId?: string; sessionId?: string },
-  ownerRefs: Set<string>,
-): boolean {
-  return (
-    (marker.runId !== undefined && ownerRefs.has(marker.runId)) ||
-    (marker.sessionId !== undefined && ownerRefs.has(marker.sessionId))
-  );
-}
-
-function embeddedRunStartedAfter(
-  embeddedRun: ActiveEmbeddedRun,
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && embeddedRun.sequence > sequence;
-}
-
-function activityMarkerStartedAfter(
-  marker: { sequence?: number },
-  sequence: number | undefined,
-): boolean {
-  return sequence !== undefined && marker.sequence !== undefined && marker.sequence > sequence;
-}
-
 function clearRecoveredOwnerEmbeddedRuns(
   activity: SessionActivity,
   ownerRefs: Set<string>,
@@ -475,7 +441,7 @@ function clearRecoveredOwnerEmbeddedRuns(
     if (
       embeddedRun.sessionId !== undefined &&
       ownerRefs.has(embeddedRun.sessionId) &&
-      !embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterSequence)
+      !activityMarkerStartedAfter(embeddedRun, recoveryStartedAfterSequence)
     ) {
       activity.activeEmbeddedRuns.delete(key);
     }
@@ -490,7 +456,7 @@ function hasEmbeddedRunStartedAfter(
     return activity.activeEmbeddedRuns.size > 0;
   }
   for (const embeddedRun of activity.activeEmbeddedRuns.values()) {
-    if (embeddedRun.sequence > sequence) {
+    if (activityMarkerStartedAfter(embeddedRun, sequence)) {
       return true;
     }
   }
@@ -507,7 +473,7 @@ function clearRecoveredOwnerMarkers(
   }
   for (const [key, tool] of activity.activeTools) {
     if (
-      markerBelongsToRecoveredOwner(tool, ownerRefs) &&
+      activityMarkerBelongsToOwner(tool, ownerRefs) &&
       !activityMarkerStartedAfter(tool, recoveryStartedAfterSequence)
     ) {
       activity.activeTools.delete(key);
@@ -515,7 +481,7 @@ function clearRecoveredOwnerMarkers(
   }
   for (const [key, modelCall] of activity.activeModelCalls) {
     if (
-      markerBelongsToRecoveredOwner(modelCall, ownerRefs) &&
+      activityMarkerBelongsToOwner(modelCall, ownerRefs) &&
       !activityMarkerStartedAfter(modelCall, recoveryStartedAfterSequence)
     ) {
       activity.activeModelCalls.delete(key);
@@ -555,7 +521,7 @@ function pruneActivityStartedBeforeRecoveryCutoff(
     return;
   }
   for (const [key, embeddedRun] of activity.activeEmbeddedRuns) {
-    if (!embeddedRunStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
+    if (!activityMarkerStartedAfter(embeddedRun, recoveryStartedAfterEmbeddedRunSequence)) {
       activity.activeEmbeddedRuns.delete(key);
     }
   }
@@ -608,7 +574,7 @@ function shouldIgnoreRecoveredOwnerStartEvent(
   if (event.seq === undefined) {
     return false;
   }
-  for (const ownerRef of ownerRefsForStartedEvent(event)) {
+  for (const ownerRef of startedEventOwnerRefs(event)) {
     const cutoff = activity.recoveredOwnerStartEventCutoffs.get(ownerRef);
     if (cutoff !== undefined && event.seq <= cutoff) {
       return true;
@@ -647,7 +613,7 @@ export function clearDiagnosticEmbeddedRunActivityForSession(params: {
       sessionKey: params.sessionKey,
     });
   }
-  const ownerRefs = ownerRefsForRecovery(params);
+  const ownerRefs = recoveryOwnerRefs(params);
   rememberRecoveredOwnerStartEventCutoffs(
     activity,
     ownerRefs,
