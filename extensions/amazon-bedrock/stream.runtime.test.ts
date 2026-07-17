@@ -77,6 +77,7 @@ async function captureClientRegion(
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("Bedrock tool-result replay", () => {
@@ -294,6 +295,49 @@ describe("Bedrock stop reasons", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(stopReason);
+  });
+});
+
+describe("Bedrock bearer token resolution", () => {
+  function mockSendAndCaptureToken() {
+    let configuredToken: unknown;
+    vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(async function () {
+      configuredToken = this.config.token ? await this.config.token() : undefined;
+      return {
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { messageStop: { stopReason: "end_turn" } },
+        ]),
+      } as never;
+    });
+    return () => configuredToken;
+  }
+
+  function runWithBearerToken(bearerToken?: string) {
+    return streamBedrock(
+      bedrockModel({}),
+      { messages: [{ role: "user", content: "ping", timestamp: 0 }] } as never,
+      { bearerToken },
+    ).result();
+  }
+
+  it("ignores blank bearer tokens so the AWS credential chain remains available", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "  ");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    await runWithBearerToken(" \t ");
+
+    expect(getConfiguredToken()).toBeUndefined();
+  });
+
+  it("trims configured bearer tokens", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "env-token");
+    const getConfiguredToken = mockSendAndCaptureToken();
+
+    await runWithBearerToken("  option-token  ");
+
+    expect(getConfiguredToken()).toEqual({ token: "option-token" });
   });
 });
 

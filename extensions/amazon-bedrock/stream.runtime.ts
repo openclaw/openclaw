@@ -110,6 +110,10 @@ function normalizeAdaptiveClaudeToolChoice(
   return toolChoice;
 }
 
+function resolveBedrockBearerToken(options: BedrockOptions): string | undefined {
+  return options.bearerToken?.trim() || process.env.AWS_BEARER_TOKEN_BEDROCK?.trim() || undefined;
+}
+
 // OpenClaw synthesizes these caps when the provider's real output limit is unknown.
 // Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
 const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
@@ -183,7 +187,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
     }
 
     // Resolve bearer token for Bedrock API key auth.
-    const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
+    const bearerToken = resolveBedrockBearerToken(options);
     const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
 
     // in Node.js/Bun environment only
