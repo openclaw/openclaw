@@ -1925,15 +1925,13 @@ describe("ci workflow guards", () => {
       );
       expect(cacheCondition, jobName).toContain("&& 'false' || 'true'");
     }
-    // Exactly one CI job may publish the shared snapshot; concurrent
-    // committers would race the disk and consumers could clone a torn tree.
-    const ciWriters = stickyConsumers.filter(
-      (entry) => entry.stepWith["save-sticky-disk"] === "true",
-    );
-    expect(ciWriters.map((entry) => entry.jobName)).toEqual(["build-artifacts"]);
-    // The disk key is partitioned by node-version and both writers rely on
-    // the action default; a consumer pinning any other version would split
-    // onto a writerless key and silently regress to permanently cold installs.
+    // Required CI jobs only clone the snapshot. The disposable warmer below
+    // owns commits so writer coalescing cannot cancel a required build job.
+    for (const { jobName, stepWith } of stickyConsumers) {
+      expect(stepWith["save-sticky-disk"], jobName).toBeUndefined();
+    }
+    // Current sticky consumers all use the single supported Node line. A
+    // planner-provided version would silently create a writerless disk.
     for (const { jobName, stepWith } of stickyConsumers) {
       const nodeVersion = stepWith["node-version"];
       expect(
@@ -1942,17 +1940,30 @@ describe("ci workflow guards", () => {
           nodeVersion === "${{ matrix.node_version || '24.x' }}",
         `${jobName} must resolve to the writer's 24.x snapshot key (got ${String(nodeVersion)})`,
       ).toBe(true);
+      if (nodeVersion === "${{ matrix.node_version || '24.x' }}") {
+        expect(stepWith["sticky-disk"], jobName).toContain(
+          "matrix.node_version == null || matrix.node_version == '24.x'",
+        );
+        expect(stepWith["runtime-cache-sticky-disk"], jobName).toContain(
+          "matrix.node_version == null || matrix.node_version == '24.x'",
+        );
+      }
     }
     const warmWorkflow = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
     const warmSetupStep = warmWorkflow.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
-    // The scheduled warm run is the deadline writer: canonical main pushes
-    // cancel each other under merge traffic, so build-artifacts alone could
-    // starve the snapshot for days.
     expect(warmSetupStep.with["save-sticky-disk"]).toBe("true");
     expect(warmWorkflow.on).not.toHaveProperty("pull_request");
     expect(warmWorkflow.on).not.toHaveProperty("workflow_dispatch");
+    expect(warmWorkflow.on.workflow_run).toMatchObject({
+      workflows: ["CI"],
+      branches: ["main"],
+      types: ["completed"],
+    });
+    expect(warmWorkflow.jobs.warm.if).toContain(
+      "github.event.workflow_run.conclusion == 'success'",
+    );
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const validateLayoutStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Validate sticky pnpm layout",
@@ -2005,9 +2016,9 @@ describe("ci workflow guards", () => {
         path: "/var/tmp/openclaw-node-deps",
       },
     });
-    // O(1) disks: Blacksmith caps sticky disks per installation, and the old
-    // per-PR/per-manifest-hash keys saturated that cap (mounts 429ed fleet
-    // wide). Install inputs belong in the runtime fingerprint, not the key.
+    // Bounded disks: Blacksmith caps sticky disks per installation, and the old
+    // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
+    // runtime patches belong in the marker, not the backing-disk key.
     expect(mountStep.with.key).toBe(
       "${{ github.repository }}-node-deps-bind-v3-${{ inputs.node-version }}",
     );
@@ -2028,14 +2039,16 @@ describe("ci workflow guards", () => {
     expect(bindStep.run).toContain('sudo mount --bind "$sticky_modules" "$workspace_modules"');
     expect(bindStep.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$sticky_store"');
     expect(bindStep.run).toContain('echo "OPENCLAW_BUILD_ALL_NO_PNPM=1"');
-    expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$DEPS_FINGERPRINT"');
+    expect(bindStep.run).toContain(
+      'deps_fingerprint="os-${RUNNER_OS:?}-arch-${RUNNER_ARCH:?}-node-$(node --version)-${DEPS_INPUT_FINGERPRINT:?}"',
+    );
+    expect(bindStep.run).toContain('echo "OPENCLAW_STICKY_DEPS_FINGERPRINT=$deps_fingerprint"');
     expect(bindStep.run).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(bindStep.run).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     // The fingerprint must be evaluated on this step (before its bind mount
     // lands): any later hashFiles('**/package.json') sweep would include
     // snapshot-internal manifests and permanently miss the warm path.
-    const fingerprintEnv = bindStep.env.DEPS_FINGERPRINT;
-    expect(fingerprintEnv).toContain("node-${{ inputs.node-version }}");
+    const fingerprintEnv = bindStep.env.DEPS_INPUT_FINGERPRINT;
     expect(fingerprintEnv).toContain("frozen-${{ inputs.frozen-lockfile }}");
     expect(fingerprintEnv).toContain("hashFiles('**/package.json', 'pnpm-lock.yaml'");
     expect(fingerprintEnv).toContain("'pnpm-workspace.yaml'");
@@ -2209,9 +2222,6 @@ describe("ci workflow guards", () => {
     const stickyStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Mount Vitest transform cache sticky disk",
     );
-    const protectedSeedStep = action.runs.steps.find(
-      (step: WorkflowStep) => step.name === "Mount protected Vitest transform seed",
-    );
     const writerStep = action.runs.steps.find(
       (step: WorkflowStep) => step.name === "Restore and save Vitest transform cache",
     );
@@ -2252,24 +2262,27 @@ describe("ci workflow guards", () => {
     expect(action.inputs["node-compile-cache"].default).toBe("false");
     expect(action.inputs["node-compile-cache-scope"].default).toBe("test");
     expect(action.inputs["save-node-compile-cache"].default).toBe("false");
-    expect(protectedSeedStep).toMatchObject({
-      uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
-      with: {
-        path: "/var/tmp/openclaw-vitest-fs-protected-seed",
-        commit: false,
-      },
-    });
-    expect(protectedSeedStep.if).toContain("github.event_name == 'pull_request'");
+    // O(1) disks: the old per-PR overlay minted a backing disk per PR and
+    // helped exhaust Blacksmith's installation-wide sticky-disk budget.
+    // Content-hash entry keys make cross-PR sharing safe by construction, so
+    // every PR reads the one protected snapshot instead.
+    expect(
+      action.runs.steps.some(
+        (step: WorkflowStep) => step.name === "Mount protected Vitest transform seed",
+      ),
+    ).toBe(false);
     expect(stickyStep).toMatchObject({
       uses: "useblacksmith/stickydisk@5b350170ae4ef55b536b548ef5f5896e76a6b54f",
       with: {
+        key: "${{ github.repository }}-vitest-fs-v2-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}",
         path: "/var/tmp/openclaw-vitest-fs-cache",
-        commit: "${{ inputs.save-vitest-fs-cache == 'true' && 'true' || 'false' }}",
+        // Single semantic writer: PR mounts never commit the shared snapshot.
+        commit:
+          "${{ inputs.save-vitest-fs-cache == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
       },
     });
     expect(stickyStep.if).toContain("inputs.sticky-disk == 'true'");
-    expect(stickyStep.with.key).toContain("vitest-fs-v2-");
-    expect(stickyStep.with.key).toContain("format('pr-{0}', github.event.pull_request.number)");
+    expect(stickyStep.with.key).not.toContain("pull_request");
     expect(stickyStep.with.key).not.toContain("hashFiles");
     expect(writerStep.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(writerStep.if).toContain("inputs.save-vitest-fs-cache == 'true'");
@@ -2281,9 +2294,13 @@ describe("ci workflow guards", () => {
     expect(readerStep.with["restore-keys"]).toBe(writerStep.with["restore-keys"]);
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root");
     expect(configureStep.run).toContain(".openclaw-transform-generation");
-    expect(configureStep.run).toContain('"$(<"$seed_generation_file")" == "$CACHE_GENERATION"');
-    expect(configureStep.run).toContain("Ignoring protected Vitest transform seed");
+    expect(configureStep.run).not.toContain("protected Vitest transform seed");
+    expect(configureStep.env.CACHE_WRITER).toBe(
+      "${{ inputs.save-vitest-fs-cache == 'true' && ((inputs.sticky-disk != 'true' && inputs.runtime-cache-sticky-disk != 'true') || github.event_name != 'pull_request') && '1' || '0' }}",
+    );
     expect(configureStep.run).toContain("OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=");
+    // Prune work on a read-only sticky PR mount is discarded with the clone.
+    expect(configureStep.env.CACHE_WRITER).toContain("github.event_name != 'pull_request'");
     expect(compileStickyStep.with).toMatchObject({
       path: "/var/tmp/openclaw-node-compile-cache",
       commit:
@@ -2316,32 +2333,42 @@ describe("ci workflow guards", () => {
     expect(buildStepCache.with["restore-keys"]).toContain("build-all-v4-");
   });
 
-  it("warms protected caches without main-run cancellation and cleans closed PR archives", () => {
+  it("warms protected caches without main-run cancellation", () => {
     const warmerSource = readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8");
     const warmer = parse(warmerSource);
-    const cleanup = parse(readFileSync(".github/workflows/pr-cache-cleanup.yml", "utf8"));
     const warmerSetup = warmer.jobs.warm.steps.find(
       (step: WorkflowStep) => step.name === "Setup Node environment",
     );
+    const seedStep = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Select broad cache seed",
+    );
+    const warmStep = warmer.jobs.warm.steps.find(
+      (step: WorkflowStep) => step.name === "Warm transform and compile caches",
+    );
 
     expect(warmer.concurrency["cancel-in-progress"]).toBe(false);
+    expect(warmer.concurrency.group).toBe("vitest-cache-warm");
     expect(warmer.on.workflow_dispatch).toBeUndefined();
     expect(warmer.on.repository_dispatch.types).toEqual(["vitest-cache-warm"]);
-    expect(warmer.jobs.warm.if).toBe("github.repository == 'openclaw/openclaw'");
+    expect(warmer.jobs.warm.if).toContain("github.repository == 'openclaw/openclaw'");
     expect(warmerSource).toContain('cron: "17 8 * * *"');
     expect(warmerSource).toContain('candidate.shardName.startsWith("core-unit-fast")');
     expect(warmerSetup.with).toMatchObject({
       "node-compile-cache-scope": "test",
-      "save-node-compile-cache": "true",
-      "save-vitest-fs-cache": "true",
+      "save-sticky-disk": "true",
       "sticky-disk": "true",
-      "vitest-fs-cache": "true",
     });
-    expect(cleanup.permissions.actions).toBe("write");
-    expect(cleanup.on.pull_request_target.types).toEqual(["closed"]);
-    expect(cleanup.on.pull_request).toBeUndefined();
-    expect(cleanup.jobs.cleanup.steps[0].run).toContain("gh cache delete");
-    expect(cleanup.jobs.cleanup.steps[0].run).toContain("--ref");
+    // The per-PR cache layer is gone, so its close-time cleanup workflow must
+    // stay deleted; GitHub's own LRU/TTL eviction handles PR-ref archives.
+    expect(existsSync(".github/workflows/pr-cache-cleanup.yml")).toBe(false);
+    expect(warmerSetup.with["save-node-compile-cache"]).toContain(
+      "github.event_name != 'workflow_run'",
+    );
+    expect(warmerSetup.with["save-vitest-fs-cache"]).toContain(
+      "github.event_name != 'workflow_run'",
+    );
+    expect(seedStep.if).toBe("github.event_name != 'workflow_run'");
+    expect(warmStep.if).toBe("github.event_name != 'workflow_run'");
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -2442,6 +2469,79 @@ describe("ci workflow guards", () => {
     // would burn wall clock on a discarded clone.
     expect(seedStep.if).toContain("github.event_name != 'pull_request'");
     expect(seedStep.if).toContain("steps.boundary-sticky-restore.outputs.restored == 'false'");
+  });
+
+  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
+    const workflow = readCiWorkflow();
+    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
+    const mountWith = expectDefined(
+      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
+      "Gradle sticky mount step",
+    );
+    const pointStep = expectDefined(
+      androidSteps.find((step) => step.name === "Point Gradle at the sticky disk"),
+      "Gradle sticky point step",
+    );
+    const pointEnv = expectDefined(pointStep.env, "Gradle sticky point step env");
+
+    // Task scope stays in the key (a light task like ktlint must never seed
+    // heavy build lanes), but PR number and dependency hash must not: those
+    // minted a backing disk per PR/bump until Blacksmith's installation-wide
+    // budget 429-failed every mount fleet-wide.
+    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
+    // Single semantic writer: protected pushes commit explicitly (on-change's
+    // allocated-byte heuristic can miss a same-size refresh and strand the
+    // fingerprint marker); PR clones stay read-only.
+    expect(mountWith.commit).toBe(
+      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
+    );
+    // The dependency hash moved from the key into a runtime fingerprint that
+    // bounds disk growth: the writer rebuilds cold when inputs change so
+    // retired artifacts do not accumulate on the O(1) key forever.
+    expect(pointEnv.GRADLE_DEPS_FINGERPRINT).toContain("hashFiles(");
+    expect(pointEnv.GRADLE_DEPS_FINGERPRINT).toContain("apps/android/gradle/libs.versions.toml");
+    expect(pointEnv.STICKY_WRITER).toContain("github.event_name != 'pull_request'");
+    expect(pointStep.run).toContain(".openclaw-gradle-deps-fingerprint");
+    expect(pointStep.run).toContain('rm -rf "$sticky_root/gradle-user-home"');
+  });
+
+  it("never keys a Blacksmith sticky disk by unbounded run dimensions", () => {
+    // Blacksmith caps backing disks per installation; per-PR, per-commit,
+    // per-run, or per-hash key segments mint disks until every mount 429s.
+    // Snapshot validity belongs in in-job fingerprints/markers, never the key.
+    const workflowFiles = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml"))
+      .map((name) => `.github/workflows/${name}`);
+    const actionFiles = readdirSync(".github/actions").map(
+      (name) => `.github/actions/${name}/action.yml`,
+    );
+    const stickyKeys: Array<{ file: string; key: string }> = [];
+    for (const file of [...workflowFiles, ...actionFiles]) {
+      if (!existsSync(file)) {
+        continue;
+      }
+      const parsed = parse(readFileSync(file, "utf8"));
+      const jobs = parsed?.jobs ? Object.values(parsed.jobs) : [];
+      const stepLists = [
+        ...jobs.map((job) => (job as { steps?: WorkflowStep[] }).steps ?? []),
+        (parsed?.runs?.steps ?? []) as WorkflowStep[],
+      ];
+      for (const step of stepLists.flat()) {
+        if (typeof step?.uses !== "string" || !step.uses.startsWith("useblacksmith/stickydisk@")) {
+          continue;
+        }
+        const key = step.with?.key;
+        stickyKeys.push({ file, key: typeof key === "string" ? key : "" });
+      }
+    }
+    expect(stickyKeys.length).toBeGreaterThan(0);
+    for (const { file, key } of stickyKeys) {
+      expect(key, file).not.toContain("github.event.pull_request.number");
+      expect(key, file).not.toContain("github.sha");
+      expect(key, file).not.toContain("github.ref");
+      expect(key, file).not.toContain("github.run_");
+      expect(key, file).not.toContain("hashFiles(");
+    }
   });
 
   it("runs the session accessor ratchet as a visible additional check", () => {

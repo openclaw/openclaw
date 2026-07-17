@@ -658,6 +658,13 @@ export interface ManagedOutgoingImageRecords {
   updated_at: string | null;
 }
 
+export interface McpOauthStores {
+  format_version: number;
+  store_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
 export interface MediaBlobs {
   blob: Uint8Array;
   content_type: string | null;
@@ -1328,6 +1335,7 @@ export interface DB {
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
+  mcp_oauth_stores: McpOauthStores;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;

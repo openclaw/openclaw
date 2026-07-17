@@ -88,6 +88,7 @@ describe("mcp cli", () => {
     vi.clearAllMocks();
     readMcpOAuthCredentialsStatus.mockResolvedValue({
       hasTokens: false,
+      requiresAuthorization: false,
       hasClientInformation: false,
       hasCodeVerifier: false,
       hasDiscoveryState: false,
@@ -310,6 +311,7 @@ describe("mcp cli", () => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
       readMcpOAuthCredentialsStatus.mockResolvedValueOnce({
         hasTokens: true,
+        requiresAuthorization: false,
         hasClientInformation: true,
         hasCodeVerifier: false,
         hasDiscoveryState: true,
@@ -331,11 +333,61 @@ describe("mcp cli", () => {
         auth: "oauth",
         authStatus: {
           hasTokens: true,
+          requiresAuthorization: false,
           hasClientInformation: true,
           hasCodeVerifier: false,
           hasDiscoveryState: true,
           hasLastAuthorizationUrl: true,
         },
+      });
+    });
+  });
+
+  it("surfaces required OAuth authorization in status and doctor", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      readMcpOAuthCredentialsStatus.mockResolvedValue({
+        hasTokens: true,
+        requiresAuthorization: true,
+        hasClientInformation: true,
+        hasCodeVerifier: false,
+        hasDiscoveryState: true,
+        hasLastAuthorizationUrl: true,
+      });
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http","auth":"oauth"}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "status", "--verbose"]);
+
+      const statusLines = mockLog.mock.calls.map((call) => String(call[0]));
+      expect(statusLines).toContain("- docs: streamable-http oauth authorization-required");
+      expect(statusLines).toContain("  oauth: tokens=yes authorization=required client=yes");
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "doctor", "--json"]);
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: true,
+        servers: [
+          {
+            name: "docs",
+            ok: true,
+            issues: [
+              {
+                level: "warning",
+                message:
+                  "OAuth credentials require additional authorization; run openclaw mcp login docs",
+              },
+            ],
+          },
+        ],
       });
     });
   });
