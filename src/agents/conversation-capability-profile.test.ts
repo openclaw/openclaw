@@ -245,41 +245,6 @@ describe("resolveConversationCapabilityProfile", () => {
     }
   });
 
-  it("does not reapply wildcard sender restrictions to a subagent without sender identity", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionKey = "agent:main:subagent:owner-task";
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      sessionId: "owner-task-session",
-      updatedAt: Date.now(),
-      spawnDepth: 1,
-      subagentRole: "worker",
-      subagentControlScope: "none",
-    } as SessionEntry);
-
-    try {
-      const profile = resolveConversationCapabilityProfile({
-        config: {
-          session: { store: storePath },
-          tools: {
-            toolsBySender: {
-              "*": { deny: ["group:runtime", "group:fs"] },
-              "e164:+15551234567": {},
-            },
-          },
-        },
-        sessionKey,
-        agentId: "main",
-      });
-
-      expect(profile.policy.senderPolicy).toBeUndefined();
-      expect(profile.policy.explicitToolDenylist).not.toContain("group:runtime");
-      expect(profile.policy.explicitToolDenylist).not.toContain("group:fs");
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("does not classify the conversation as shared from a dropped caller group id", () => {
     // Non-group session key cannot vouch for the caller-supplied group facts:
     // the trust check drops them, so scope must stay unknown instead of

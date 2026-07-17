@@ -217,35 +217,29 @@ export function resolveConversationCapabilityProfile(
   const isOwnerInternalSession =
     params.senderIsOwner === true &&
     normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const senderPolicy = isOwnerInternalSession
+    ? undefined
+    : resolveSenderToolPolicy({
+        config: params.config,
+        agentId: effective.agentId,
+        messageProvider,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
+  const profilePolicy = resolveToolProfilePolicy(effective.profile);
+  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const subagentStore = resolveSubagentCapabilityStore(subagentSessionKey, {
     cfg: params.config,
   });
-  const isSubagentSession = Boolean(
+  const subagentPolicy =
     subagentSessionKey &&
     isSubagentEnvelopeSession(subagentSessionKey, {
       cfg: params.config,
       store: subagentStore,
-    }),
-  );
-  // Subagents inherit the requester's already-resolved policy. Reapplying a
-  // wildcard sender policy without sender identity can revoke owner tools.
-  const senderPolicy =
-    isOwnerInternalSession || isSubagentSession
-      ? undefined
-      : resolveSenderToolPolicy({
-          config: params.config,
-          agentId: effective.agentId,
-          messageProvider,
-          senderId: params.senderId,
-          senderName: params.senderName,
-          senderUsername: params.senderUsername,
-          senderE164: params.senderE164,
-        });
-  const profilePolicy = resolveToolProfilePolicy(effective.profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
-  const subagentPolicy =
-    subagentSessionKey && isSubagentSession
+    })
       ? resolveSubagentToolPolicyForSession(params.config, subagentSessionKey, {
           store: subagentStore,
         })
