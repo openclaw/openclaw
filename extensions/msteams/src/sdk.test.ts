@@ -10,9 +10,13 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     openSync: vi.fn(() => 42),
     readSync: vi.fn(
-      (_fd: number, buffer: Buffer, _offset: number, _length: number, _position: number) => {
+      (
+        _fd: number,
+        buffer: Buffer,
+        opts?: { offset?: number; length?: number; position?: number | null },
+      ) => {
         const content = "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----";
-        return buffer.write(content, 0, buffer.length, "utf-8");
+        return buffer.write(content, 0, opts?.length ?? buffer.length, "utf-8");
       },
     ),
     closeSync: vi.fn(),
@@ -87,8 +91,8 @@ describe("createMSTeamsApp", () => {
   });
 
   it("rejects oversized certificate files before reading them", async () => {
-    vi.mocked(fs.readSync).mockImplementationOnce((_fd, _buffer, _offset, length, _position) => {
-      return length; // maxBytes + 1 — triggers the oversized rejection
+    vi.mocked(fs.readSync).mockImplementationOnce((_fd, _buffer, opts) => {
+      return opts?.length ?? 0; // buffer length = maxBytes + 1 — triggers the oversized rejection
     });
 
     const creds: MSTeamsFederatedCredentials = {

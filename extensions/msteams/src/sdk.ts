@@ -191,7 +191,7 @@ function readBoundedFileSync(path: string, maxBytes: number): string {
     // Allocate one extra byte so we can detect overflow — if readSync fills
     // the buffer the file is larger than maxBytes.
     const buffer = Buffer.alloc(maxBytes + 1);
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const bytesRead = fs.readSync(fd, buffer, { offset: 0, length: buffer.length, position: 0 });
     if (bytesRead > maxBytes) {
       throw new Error(`certificate file exceeds ${maxBytes} bytes`);
     }
