@@ -367,6 +367,165 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(secondValue);
   });
 
+  it("masks complete structured authorization fields", () => {
+    const digestUser = ["digest", "user", "example"].join("-");
+    const digestResponse = ["digest", "response", "1234567890abcdef"].join("-");
+    const digestExtension = ["digest", "extension", "1234567890abcdef"].join("-");
+    const digestTail = ["digest", "tail", "1234567890abcdef"].join("-");
+    const awsCredential = [
+      "AK",
+      "IA",
+      "EXAMPLE",
+      "1234567890",
+      "/20260717/eu-west-1/s3/aws4_request",
+    ].join("");
+    const awsSignature = ["aws", "signature", "1234567890abcdef"].join("-");
+    const input = [
+      `Authorization: Digest username="${digestUser}", 2fa="${digestExtension}", response="${digestResponse}", extension="${digestTail}", cnonce="tail-nonce"; request_id=digest-example`,
+      `Authorization: AWS4-HMAC-SHA256 Credential=${awsCredential}, SignedHeaders=:authority;x_custom;x.custom, Signature=${awsSignature}; status=403`,
+      `Proxy-Authorization: Digest username="${digestUser}", response="${digestResponse}"; request_id=proxy-example`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain("Authorization: Digest ");
+    expect(output).toContain("Authorization: AWS4-HMAC-SHA256 ");
+    expect(output).toContain("Proxy-Authorization: Digest ");
+    for (const value of [
+      digestUser,
+      digestExtension,
+      digestResponse,
+      digestTail,
+      awsCredential,
+      awsSignature,
+    ]) {
+      expect(output).not.toContain(value);
+    }
+    expect(output).not.toContain("username=");
+    expect(output).not.toContain("Credential=");
+    expect(output).not.toContain("Signature=");
+    expect(output).toContain("; request_id=digest-example");
+    expect(output).toContain("; status=403");
+    expect(output).toContain("; request_id=proxy-example");
+  });
+
+  it("masks escaped structured authorization fields", () => {
+    const response = ["escaped", "digest", "response", "1234567890abcdef"].join("-");
+    const input = `Authorization: Digest realm=\\"Example Realm\\", response=\\"${response}\\"; status=401`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toBe("Authorization: Digest ***; status=401");
+    expect(output).not.toContain(response);
+  });
+
+  it("masks parameterized authorization schemes", () => {
+    const proof = ["hawk", "credential", "proof", "1234567890abcdef"].join("-");
+    const output = redactSensitiveText(
+      `Authorization: Hawk id="client", mac="${proof}"; status=401`,
+      { mode: "tools" },
+    );
+
+    expect(output).toBe("Authorization: Hawk ***; status=401");
+    expect(output).not.toContain(proof);
+  });
+
+  it("masks full token grammar in auth-param values", () => {
+    const id = ["abc", "'", "def", "`", "ghi"].join("");
+    const proof = ["token", "grammar", "proof", "1234567890abcdef"].join("-");
+    const output = redactSensitiveText(`Authorization: Foo id=${id}, proof=${proof}; status=401`, {
+      mode: "tools",
+    });
+
+    expect(output).toBe("Authorization: Foo ***; status=401");
+    expect(output).not.toContain(proof);
+  });
+
+  it("does not confuse auth-param names beginning with the display marker", () => {
+    const response = ["marker", "digest", "response", "1234567890abcdef"].join("-");
+    const output = redactSensitiveText(
+      `Authorization: Digest ***ext=one, response="${response}"; status=401`,
+      { mode: "tools" },
+    );
+
+    expect(output).toBe("Authorization: Digest ***; status=401");
+    expect(output).not.toContain(response);
+  });
+
+  it("masks structured auth in serialized header objects", () => {
+    const response = ["json", "digest", "response", "1234567890abcdef"].join("-");
+    const input = `{"Authorization":"Digest username=\\"example\\", response=\\"${response}\\""}`;
+
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(`{"Authorization":"***"}`);
+  });
+
+  it("keeps token68 padding out of structured auth parsing", () => {
+    expect(
+      redactSensitiveText("Authorization: Basic dXNlcg==, status=401", { mode: "tools" }),
+    ).toBe("Authorization: Basic ***, status=401");
+  });
+
+  it("masks structured authorization inside quoted diagnostics", () => {
+    const response = ["quoted", "header", "response", "1234567890abcdef"].join("-");
+    const input = `curl -H 'Authorization: Digest username="example", response="${response}"'`;
+
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
+      "curl -H 'Authorization: Digest ***'",
+    );
+  });
+
+  it("preserves structural closers after unquoted auth parameters", () => {
+    const signature = ["structural", "aws", "signature", "1234567890abcdef"].join("-");
+    const awsScopeField = ["Cred", "ential", "=scope/path"].join("");
+    const input = `{Authorization: AWS4-HMAC-SHA256 ${awsScopeField}, SignedHeaders=host, Signature=${signature}}`;
+
+    expect(redactSensitiveText(input, { mode: "tools" })).toBe(
+      "{Authorization: AWS4-HMAC-SHA256 ***}",
+    );
+  });
+
+  it("masks escaped auth fields containing encoded quoted-pairs", () => {
+    const response = ["escaped", "quoted", "response", "1234567890abcdef"].join("-");
+    const input = `Authorization: Digest realm=\\"Example \\\\\\"Realm\\\\\\"\\", response=\\"${response}\\"; status=401`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toBe("Authorization: Digest ***; status=401");
+    expect(output).not.toContain(response);
+  });
+
+  it("masks structured authorization fields across bounded-replacement chunks", () => {
+    const response = ["cross", "chunk", "response", "1234567890abcdef"].join("-");
+    const input = `${"x".repeat(32_768)}\nAuthorization: Digest username="example", response="${response}"`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(response);
+    expect(output).not.toContain("response=");
+  });
+
+  it("masks token authorization fields without consuming adjacent diagnostics", () => {
+    const token = ["opaque", "auth", "value", "1234567890abcdef"].join("-");
+    const input = [
+      `Authorization: ${token}, status=401`,
+      `Proxy-Authorization: ${token}; request_id=example`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(token);
+    expect(output).toContain(", status=401");
+    expect(output).toContain("; request_id=example");
+  });
+
+  it("masks scheme tokens without consuming adjacent diagnostics", () => {
+    const token = ["scheme", "auth", "value", "1234567890abcdef"].join("-");
+    const input = [
+      `Authorization: Token ${token}, status=401`,
+      `Proxy-Authorization: Basic ${token}; request_id=example`,
+    ].join("\n");
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).not.toContain(token);
+    expect(output).toContain(", status=401");
+    expect(output).toContain("; request_id=example");
+  });
+
   it("masks unquoted credential-style headers", () => {
     const firstValue = ["sample", "key", "value", "1234567890"].join("");
     const secondValue = ["sample", "goog", "value", "1234567890"].join("");
@@ -387,6 +546,26 @@ describe("redactSensitiveText", () => {
     expect(output).not.toContain(firstValue);
     expect(output).not.toContain(secondValue);
     expect(output).not.toContain(thirdValue);
+  });
+
+  it("preserves diagnostics following unquoted credential-style headers", () => {
+    const keyHeader = ["api", "-", "key"].join("");
+    const value = ["sample", "key", "value", "1234567890"].join("");
+    const output = redactSensitiveText(`${keyHeader}: ${value}, request_id=example, status=500`, {
+      mode: "tools",
+    });
+
+    expect(output).not.toContain(value);
+    expect(output).toContain(", request_id=example, status=500");
+  });
+
+  it("masks punctuation inside unquoted credential-style header values", () => {
+    const keyHeader = ["api", "-", "key"].join("");
+    const output = redactSensitiveText(`${keyHeader}: prefix)sensitive-suffix`, {
+      mode: "tools",
+    });
+
+    expect(output).not.toContain("sensitive-suffix");
   });
 
   it("does not redact ordinary authorization prose", () => {
@@ -1387,6 +1566,21 @@ describe("redactSensitiveLines", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
     const lines = ["TOKEN=abcdef1234567890ghij"];
     expect(redactSensitiveLines(lines, resolved)).toEqual(lines);
+  });
+
+  it("redacts structured auth when form-body preprocessing is disabled", () => {
+    const resolved = {
+      ...resolveRedactOptions({ mode: "tools" }),
+      redactFormBodies: false,
+    };
+    const response = ["line", "digest", "response", "1234567890abcdef"].join("-");
+
+    expect(
+      redactSensitiveLines(
+        [`Authorization: Digest username="example", response="${response}"; status=401`],
+        resolved,
+      ),
+    ).toEqual(["Authorization: Digest ***; status=401"]);
   });
 
   it("returns lines unmodified when resolved patterns is empty — does not fall back to defaults", () => {

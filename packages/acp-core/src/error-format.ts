@@ -1,4 +1,6 @@
 // ACP Core helper module supports error format behavior.
+import { redactStructuredAuthHeaders } from "./structured-auth-redaction.js";
+
 const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g,
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g,
@@ -7,8 +9,8 @@ const SECRET_PATTERNS: RegExp[] = [
   /(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
   /(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
   /--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|payment[-_]?credential|shared[-_]?payment[-_]?token)\s+(["']?)([^\s"']+)\1/gi,
-  /Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
-  /Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
+  /(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
+  /(?<![A-Za-z0-9_-])Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
   /(^|[\s,{])Proxy-Authorization\s*[:=]\s*[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)/gi,
   /(^|[\s,{])Proxy-Authorization\s*[:=]\s*([^\s"',;]+)(?=$|[\r\n,;])/gi,
   /(^|[\s,{])Authorization\s*[:=]\s*(?!(?:Bearer|Basic)\b)[A-Za-z][A-Za-z0-9._-]*\s+([^\s"',;]+)/gi,
@@ -40,6 +42,14 @@ const SECRET_PATTERNS: RegExp[] = [
 
 let configuredRedactor: ((value: string) => string) | undefined;
 
+function createStructuredAuthMarker(value: string): string {
+  let marker = ";__openclaw_structured_auth_redacted__;";
+  while (value.includes(marker)) {
+    marker = `;${marker}`;
+  }
+  return marker;
+}
+
 /** Installs a host-provided redactor used before ACP fallback secret-pattern redaction. */
 export function configureAcpErrorRedactor(redactor: ((value: string) => string) | undefined): void {
   configuredRedactor = redactor;
@@ -47,7 +57,9 @@ export function configureAcpErrorRedactor(redactor: ((value: string) => string) 
 
 /** Redacts common provider, GitHub, HTTP, payment, bot, and private-key secrets from error text. */
 export function redactSensitiveText(value: string): string {
-  let redacted = configuredRedactor ? configuredRedactor(value) : value;
+  const configured = configuredRedactor ? configuredRedactor(value) : value;
+  const structuredAuthMarker = createStructuredAuthMarker(configured);
+  let redacted = redactStructuredAuthHeaders(configured, structuredAuthMarker);
   for (const pattern of SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, (match, ...args: string[]) => {
       if (match.includes("PRIVATE KEY-----")) {
@@ -59,7 +71,7 @@ export function redactSensitiveText(value: string): string {
       return token ? match.replace(token, "[REDACTED]") : "[REDACTED]";
     });
   }
-  return redacted;
+  return redacted.replaceAll(structuredAuthMarker, "[REDACTED]");
 }
 
 export { stringifyNonErrorCause } from "@openclaw/normalization-core/error-coercion";
