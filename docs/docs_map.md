@@ -877,6 +877,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: HTTP Request URLs
   - H2: Install
   - H2: Quick setup
+  - H2: User identity (post as a real person)
   - H2: Socket Mode transport tuning
   - H2: Manifest and scope checklist
   - H3: Additional manifest settings
