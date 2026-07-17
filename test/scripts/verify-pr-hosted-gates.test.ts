@@ -75,6 +75,60 @@ function collectHostedGateEvidence(
 }
 
 describe("verify-pr-hosted-gates", () => {
+  it("accepts an in-progress CI run whose own attempt's ci-gate job succeeded", () => {
+    const inProgressRun = {
+      ...successfulRun("CI", 42, "2026-06-17T10:52:00Z"),
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 2,
+    };
+    const gateJob = {
+      name: "openclaw/ci-gate",
+      run_id: 42,
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+      completed_at: "2026-06-17T10:51:30Z",
+    };
+
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [inProgressRun],
+      ciGateJobs: [gateJob],
+    });
+    expect(evidence.workflows.map((workflow: { id: unknown }) => workflow.id)).toContain(42);
+
+    // A prior attempt's gate (same run id, older run_attempt) cannot vouch for
+    // a partial rerun in progress.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, run_attempt: 1 }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+
+    // A gate job from a different run, a failed gate, and a missing gate all
+    // fall back to requiring run completion.
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, run_id: 41 }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [inProgressRun],
+        ciGateJobs: [{ ...gateJob, conclusion: "failure" }],
+      }),
+    ).toThrow(/Missing successful recent CI workflow/);
+    expect(() =>
+      collectHostedGateEvidence({ sha, workflowRuns: [inProgressRun], ciGateJobs: [] }),
+    ).toThrow(/Missing successful recent CI workflow/);
+  });
+
   it("requires the latest scheduled workflow run to pass", () => {
     const evidence = collectHostedGateEvidence({
       sha,

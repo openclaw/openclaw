@@ -2521,6 +2521,19 @@ export const uk: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "Це попереднє переглядання ще не має URL.",
+        blockedExternal: "Зовнішні попередні перегляди вимкнено політикою вашого gateway.",
+        blockedScheme: "URL цього попереднього перегляду використовує непідтримувану схему.",
+        toolbar: "Елементи керування попереднім переглядом",
+        reload: "Перезавантажити попередній перегляд",
+        viewport: {
+          label: "Область перегляду попереднього перегляду",
+          desktop: "Комп’ютер",
+          tablet: "Планшет",
+          mobile: "Мобільний пристрій",
+        },
+      },
     },
   },
   workboard: {

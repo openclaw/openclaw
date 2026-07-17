@@ -1542,6 +1542,13 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_status TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_attempt_count INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_replay_count INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_next_attempt_at INTEGER");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
+  ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_protocol_features_json TEXT");
