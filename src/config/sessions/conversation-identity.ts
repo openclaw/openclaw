@@ -174,11 +174,11 @@ export function conversationIdentityFromSessionEntry(
     : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
   // Outbound routes can use an alias for delivery while `origin.from` carries
   // the canonical peer. Trust it only when both snapshots are fully paired.
-  const pairedOriginPeerId = routeOwnsTarget
+  const pairedOriginPeerId = routeTarget
     ? resolvePairedOriginPeerId({
         entry,
         deliveryContext,
-        deliveryTarget,
+        deliveryTarget: routeTarget,
         kind,
       })
     : undefined;
