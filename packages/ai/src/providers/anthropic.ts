@@ -36,6 +36,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { safeJsonStringify } from "../utils/safe-json-stringify.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -784,7 +785,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         output.content = [];
       }
       output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      output.errorMessage = error instanceof Error ? error.message : safeJsonStringify(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     }

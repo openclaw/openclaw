@@ -29,6 +29,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { safeJsonStringify } from "../utils/safe-json-stringify.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -313,15 +314,6 @@ function truncateErrorText(text: string, maxChars: number): string {
   }
   const truncated = truncateUtf16Safe(text, maxChars);
   return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return String(value);
-  }
 }
 
 function buildChatPayload(
