@@ -938,6 +938,41 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("gateway.port", () => {
+  it("accepts a port within the TCP range", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 18789,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects a port above the TCP range", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 65536,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.port");
+    }
+  });
+
+  it("rejects a non-positive port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        port: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.port");
+    }
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({
