@@ -325,6 +325,40 @@ describe("createFeishuClient HTTP timeout", () => {
     });
   });
 
+  it("normalizes Feishu SDK multipart uploads to explicit FormData", async () => {
+    createFeishuClient({
+      appId: "app_upload",
+      appSecret: "secret_upload", // pragma: allowlist secret
+      accountId: "multipart-upload",
+    });
+
+    const httpInstance = readLastClientHttpInstance();
+
+    await httpInstance.request({
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer token" },
+      data: {
+        file_type: "stream",
+        file_name: "tiny.txt",
+        file: Buffer.from("tiny"),
+      },
+    });
+
+    const delegated = readCallOptions(mockBaseHttpInstance.request);
+    expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
+    expect(delegated.headers).toEqual({
+      "Content-Type": "multipart/form-data",
+      Authorization: "Bearer token",
+    });
+    expect(delegated.data).toBeInstanceOf(FormData);
+    expect(delegated.data).not.toEqual({
+      file_type: "stream",
+      file_name: "tiny.txt",
+      file: Buffer.from("tiny"),
+    });
+  });
+
   it("uses config-configured default timeout when provided", async () => {
     createFeishuClient({
       appId: "app_4",
