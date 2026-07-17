@@ -31,8 +31,12 @@ type PersistedProgressRunBase = {
   runningEmoji?: string;
 };
 
-export type PersistedProgressRun = PersistedProgressRunBase &
-  ({ status: "active" } | { status: "cleanup"; outcome: SubagentProgressOutcome });
+export type PersistedActiveProgressRun = PersistedProgressRunBase & { status: "active" };
+export type PersistedCleanupProgressRun = PersistedProgressRunBase & {
+  status: "cleanup";
+  outcome: SubagentProgressOutcome;
+};
+export type PersistedProgressRun = PersistedActiveProgressRun | PersistedCleanupProgressRun;
 
 export function persistedTerminalOutcome(
   persisted?: PersistedProgressRun,
@@ -64,7 +68,7 @@ type ProgressStateForKeyResult =
   | {
       ok: true;
       activeRunIds: string[];
-      cleanupRuns: Array<{ runId: string; value: PersistedProgressRun }>;
+      cleanupRuns: Array<{ runId: string; value: PersistedCleanupProgressRun }>;
       ownedEmojis: string[];
     }
   | { ok: false };
@@ -223,14 +227,15 @@ export async function listProgressStateForKey(
   try {
     const entries = await store.entries();
     const matching = entries.filter((entry) => entry.value.key === key);
+    const cleanupRuns = matching.flatMap((entry) =>
+      entry.value.status === "cleanup" ? [{ runId: entry.key, value: entry.value }] : [],
+    );
     return {
       ok: true,
       activeRunIds: matching
         .filter((entry) => entry.value.status === "active")
         .map((entry) => entry.key),
-      cleanupRuns: matching
-        .filter((entry) => entry.value.status === "cleanup")
-        .map((entry) => ({ runId: entry.key, value: entry.value })),
+      cleanupRuns,
       ownedEmojis: Array.from(new Set(matching.flatMap((entry) => entry.value.runningEmoji ?? []))),
     };
   } catch (error) {
