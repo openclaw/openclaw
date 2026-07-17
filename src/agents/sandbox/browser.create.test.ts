@@ -774,64 +774,72 @@ describe("ensureSandboxBrowser create args", () => {
     );
   });
 
-  it("cancels the CDP probe response body after a non-ok startup probe", async () => {
-    let socketClosed = false;
-    let requestSocket: Socket | undefined;
-    let requestPath: string | undefined;
-    const server = createServer((req, res) => {
-      requestPath = req.url;
-      requestSocket = req.socket;
-      req.socket.once("close", () => {
-        socketClosed = true;
+  it.each([200, 503])(
+    "cancels the CDP probe response body after a %i startup probe",
+    async (status) => {
+      let socketClosed = false;
+      let requestSocket: Socket | undefined;
+      let requestPath: string | undefined;
+      const server = createServer((req, res) => {
+        requestPath = req.url;
+        requestSocket = req.socket;
+        req.socket.once("close", () => {
+          socketClosed = true;
+        });
+        res.writeHead(status, { "content-type": "text/plain" });
+        res.write("probe response\n");
+        const interval = setInterval(() => res.write("still streaming\n"), 25);
+        req.socket.once("close", () => clearInterval(interval));
       });
-      res.writeHead(503, { "content-type": "text/plain" });
-      res.write("not ready\n");
-      const interval = setInterval(() => res.write("still streaming\n"), 25);
-      req.socket.once("close", () => clearInterval(interval));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const cdpPort = (server.address() as AddressInfo).port;
-    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) => {
-      if (port === 9222) {
-        return cdpPort;
-      }
-      if (port === 6080) {
-        return 49101;
-      }
-      return null;
-    });
-    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
-      await params.onEnsureAttachTarget?.({});
-      throw new Error("expected CDP startup to fail before bridge creation");
-    });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const cdpPort = (server.address() as AddressInfo).port;
+      dockerMocks.readDockerPort.mockImplementation(
+        async (_containerName: string, port: number) => {
+          if (port === 9222) {
+            return cdpPort;
+          }
+          if (port === 6080) {
+            return 49101;
+          }
+          return null;
+        },
+      );
+      bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+        await params.onEnsureAttachTarget?.({});
+        throw new Error("probe completed before bridge creation");
+      });
 
-    const cfg = buildConfig(false);
-    cfg.browser.autoStartTimeoutMs = 50;
+      const cfg = buildConfig(false);
+      cfg.browser.autoStartTimeoutMs = 50;
 
-    try {
-      await expect(
-        ensureTestSandboxBrowser({
+      try {
+        const startup = ensureTestSandboxBrowser({
           scopeKey: "session:test",
           workspaceDir: "/tmp/workspace",
           agentWorkspaceDir: "/tmp/workspace",
           cfg,
-        }),
-      ).rejects.toThrow("hung container has been forcefully removed");
-      await new Promise((resolve) => {
-        setTimeout(resolve, 250);
-      });
-      expect(requestPath).toBe("/json/version");
-      expect(socketClosed).toBe(true);
-    } finally {
-      requestSocket?.destroy();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
+        });
+        await expect(startup).rejects.toThrow(
+          status === 200
+            ? "probe completed before bridge creation"
+            : "hung container has been forcefully removed",
+        );
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        expect(requestPath).toBe("/json/version");
+        expect(socketClosed).toBe(true);
+      } finally {
+        requestSocket?.destroy();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 
   it("keeps a stalled CDP request inside the browser startup deadline", async () => {
     const sockets = new Set<Socket>();

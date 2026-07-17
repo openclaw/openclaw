@@ -99,10 +99,10 @@ async function waitForSandboxCdp(params: {
           headers: { Authorization: buildSandboxCdpAuthHeader(params.authToken) },
           signal: ctrl.signal,
         });
+        await res.body?.cancel().catch(() => undefined);
         if (res.ok) {
           return true;
         }
-        await res.body?.cancel().catch(() => undefined);
       } finally {
         clearTimeout(t);
       }
