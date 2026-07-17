@@ -81,6 +81,10 @@ extension OpenClawChatViewModel {
             senderLabel: senderLabel.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    // Accepted sends consume the chip even if newer text was typed meanwhile:
+    // the quote was delivered with the submitted message, and web behaves the
+    // same (chat-send.ts clears chatReplyTarget on accept by messageId alone).
+    // Selection identity is already stricter: a re-selected target survives.
     func consumeReplyTarget(_ target: OpenClawChatReplyTarget?) {
         guard let target, self.replyTarget == target else { return }
         self.replyTarget = nil
