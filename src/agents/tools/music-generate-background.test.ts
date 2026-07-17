@@ -144,6 +144,7 @@ describe("music generate background helpers", () => {
     expectReplyInstructionContains("visible-reply contract");
     expectReplyInstructionContains("completion handoff");
     expectReplyInstructionContains("Do not re-send, re-attach, or echo MEDIA lines");
+    expectReplyInstructionContains("Do not call the message tool");
   });
 
   it("keeps failed completion notices in the durable agent-loop handoff", async () => {

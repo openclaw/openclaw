@@ -1147,7 +1147,9 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(replyInstruction).toMatch(/Do not re-send, re-attach, or echo MEDIA lines/i);
     expect(replyInstruction).not.toMatch(/final-reply MEDIA lines/i);
     expect(replyInstruction).not.toMatch(/every structured attachment from the internal event/i);
-    expect(replyInstruction).toMatch(/caption text only|short normal final reply caption/i);
+    expect(replyInstruction).not.toMatch(/message\(action=["']send["']\)/i);
+    expect(replyInstruction).toMatch(/short normal final reply caption/i);
+    expect(replyInstruction).toMatch(/Do not call the message tool/i);
   });
 
   it("does not direct-deliver generated media after requester abandonment", async () => {
