@@ -1469,7 +1469,9 @@ export async function runPreparedReply(
           senderIsOwner: command.senderIsOwner,
           ...(sourceTurnId ? { idempotencyKey: sourceTurnId } : {}),
           ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
-          ...(isHeartbeat ? { provenance: { kind: "heartbeat" as const } } : {}),
+          ...(isHeartbeat
+            ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
+            : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {
                 media: userTurnMediaForPersistence,

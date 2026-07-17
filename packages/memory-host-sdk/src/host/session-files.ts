@@ -802,10 +802,9 @@ export async function buildSessionEntry(
       false;
     const allowArchiveRecordCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
-    // When a heartbeat user message (authenticated by provenance) is filtered
-    // by sanitizeSessionText (below), this flag tracks that the next assistant
-    // response is a synthetic ack that must also be excluded from the dream corpus.
-    let pendingHeartbeatUserDrop = false;
+    // A heartbeat owns every generated response until the next user turn. The
+    // persisted runtime provenance makes this coupling safe from text spoofing.
+    let insideHeartbeatTurn = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -850,6 +849,14 @@ export async function buildSessionEntry(
       if (message.role !== "user" && message.role !== "assistant") {
         continue;
       }
+      const provenance = message.provenance as { kind?: unknown; sourceTool?: unknown } | undefined;
+      const isHeartbeatUser =
+        message.role === "user" &&
+        provenance?.kind === "internal_system" &&
+        provenance.sourceTool === "heartbeat";
+      if (message.role === "user") {
+        insideHeartbeatTurn = isHeartbeatUser;
+      }
       if (message.role === "user" && hasInterSessionUserProvenance(message)) {
         continue;
       }
@@ -857,35 +864,15 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      // Check before sanitization: if this user message carries heartbeat
-      // provenance, the following assistant response is a synthetic ack
-      // that must also be excluded (see pendingHeartbeatUserDrop below).
-      const isHeartbeatUser =
-        message.role === "user" &&
-        (message.provenance as { kind?: string } | undefined)?.kind === "heartbeat";
 
       // User text is not trusted archive-wide provenance. Per-message sanitization
       // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
-        if (isHeartbeatUser) {
-          pendingHeartbeatUserDrop = true;
-        }
-        // SAFE cross-message coupling for heartbeat only: the initiating turn
-        // is authenticated by runtime provenance (kind: "heartbeat"), not by
-        // user-spoofable text content. See PR #70737 for why text-based
-        // cross-message coupling is unsafe for [cron:...] patterns.
         continue;
       }
-
-      // When a heartbeat user message was filtered above, the assistant
-      // response that immediately follows is a synthetic heartbeat ack and
-      // must not enter the dream corpus.
-      if (pendingHeartbeatUserDrop) {
-        pendingHeartbeatUserDrop = false;
-        if (message.role === "assistant") {
-          continue;
-        }
+      if (insideHeartbeatTurn) {
+        continue;
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {
         continue;

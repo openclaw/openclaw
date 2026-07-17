@@ -212,8 +212,6 @@ type RepairDreamingArtifactsResult = {
   archivedSessionCorpus: boolean;
   archivedSessionIngestion: boolean;
   archivedPaths: string[];
-  removedHeartbeatDerivedLines?: number;
-  clearedSessionCheckpointKeys?: number;
   warnings: string[];
 };
 

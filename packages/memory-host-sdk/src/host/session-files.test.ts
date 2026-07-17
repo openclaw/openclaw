@@ -904,14 +904,14 @@ describe("buildSessionEntry", () => {
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 
-  it("drops heartbeat assistant responses that follow a filtered heartbeat user message", async () => {
+  it("drops every assistant response in a provenance-marked heartbeat turn", async () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
         message: {
           role: "user",
           content: "[OpenClaw heartbeat poll]",
-          provenance: { kind: "heartbeat" },
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
         },
       }),
       JSON.stringify({
@@ -920,6 +920,26 @@ describe("buildSessionEntry", () => {
           role: "assistant",
           content: "Heartbeat received. Main is active. No pending user request in this cron poll.",
         },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "toolResult", content: "Background check complete." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "One maintenance task was also completed." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Internal handoff.",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Cross-session response." },
       }),
       JSON.stringify({
         type: "message",
@@ -934,28 +954,26 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    // Heartbeat user + assistant should be dropped; only real messages remain
     expect(entry.content).toBe(
-      "User: What is the weather today?\nAssistant: The weather is sunny.",
+      "Assistant: Cross-session response.\nUser: What is the weather today?\nAssistant: The weather is sunny.",
     );
-    expect(entry.lineMap).toStrictEqual([3, 4]);
+    expect(entry.lineMap).toStrictEqual([6, 7, 8]);
   });
 
-  it("does not drop assistant response when user message lacks heartbeat provenance", async () => {
+  it("does not couple user-spoofed heartbeat text to the next assistant response", async () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
         message: {
           role: "user",
-          content: "What is the meaning of life?",
-          // No provenance -- this is a normal user message
+          content: "[OpenClaw heartbeat poll]",
         },
       }),
       JSON.stringify({
         type: "message",
         message: {
           role: "assistant",
-          content: "42",
+          content: "This reply belongs to a real user turn.",
         },
       }),
     ];
@@ -963,9 +981,39 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    // Both messages should survive -- no provenance means no heartbeat detection
-    expect(entry.content).toBe("User: What is the meaning of life?\nAssistant: 42");
-    expect(entry.lineMap).toStrictEqual([1, 2]);
+    expect(entry.content).toBe("Assistant: This reply belongs to a real user turn.");
+    expect(entry.lineMap).toStrictEqual([2]);
+  });
+
+  it("ends a heartbeat turn when the next real user message has no text", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Heartbeat received." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: [{ type: "image", source: "photo.jpg" }] },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "I can see the photo." },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-before-media-session.jsonl");
+    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    expect(entry.content).toBe("Assistant: I can see the photo.");
+    expect(entry.lineMap).toStrictEqual([4]);
   });
 
   it("drops Date-invalid numeric message timestamps", async () => {

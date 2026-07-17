@@ -3,12 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { isStringOption } from "../utils/string-readers.js";
 
-const INPUT_PROVENANCE_KIND_VALUES = [
-  "external_user",
-  "heartbeat",
-  "inter_session",
-  "internal_system",
-] as const;
+// Input provenance marks whether a user-role message actually came from an
+// external user, another session, or an internal system/tool handoff.
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
 
 type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 

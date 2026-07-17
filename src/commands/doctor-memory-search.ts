@@ -402,12 +402,6 @@ export async function maybeRepairMemoryRecallHealth(params: {
       dreamingRepair.archivedSessionCorpus ? "- archived session corpus" : null,
       dreamingRepair.archivedSessionIngestion ? "- archived session-ingestion state" : null,
       dreamingRepair.archivedDreamsDiary ? "- archived dream diary" : null,
-      typeof dreamingRepair.removedHeartbeatDerivedLines === "number"
-        ? `- removed heartbeat-derived corpus lines: ${dreamingRepair.removedHeartbeatDerivedLines}`
-        : null,
-      typeof dreamingRepair.clearedSessionCheckpointKeys === "number"
-        ? `- cleared session-ingestion checkpoint keys: ${dreamingRepair.clearedSessionCheckpointKeys}`
-        : null,
       dreamingRepair.archiveDir ? `- archive dir: ${dreamingRepair.archiveDir}` : null,
       ...dreamingRepair.warnings.map((warning) => `- warning: ${warning}`),
       `Verify: ${formatCliCommand("openclaw memory status --deep")}`,

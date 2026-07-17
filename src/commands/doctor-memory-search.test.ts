@@ -1557,8 +1557,6 @@ describe("memory recall doctor integration", () => {
     auditDreamingArtifacts.mockResolvedValueOnce({
       sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
       sessionCorpusFileCount: 2,
-      heartbeatContaminatedSessionCorpusFileCount: 1,
-      heartbeatContaminatedSessionCorpusLineCount: 2,
       suspiciousSessionCorpusFileCount: 1,
       suspiciousSessionCorpusLineCount: 3,
       sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
@@ -1566,9 +1564,9 @@ describe("memory recall doctor integration", () => {
       issues: [
         {
           severity: "warn",
-          code: "dreaming-session-corpus-heartbeat-derived",
+          code: "dreaming-session-corpus-self-ingested",
           message:
-            "Dreaming session corpus contains heartbeat-derived assistant entries (2 lines).",
+            "Dreaming session corpus appears to contain self-ingested narrative content (3 suspicious lines).",
           fixable: true,
         },
       ],
@@ -1580,8 +1578,6 @@ describe("memory recall doctor integration", () => {
       archivedSessionCorpus: true,
       archivedSessionIngestion: true,
       archivedPaths: [],
-      removedHeartbeatDerivedLines: 2,
-      clearedSessionCheckpointKeys: 3,
       warnings: [],
     });
     const prompter = createPrompter();
@@ -1597,8 +1593,6 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");
-    expect(message).toContain("removed heartbeat-derived corpus lines: 2");
-    expect(message).toContain("cleared session-ingestion checkpoint keys: 3");
   });
 });
 

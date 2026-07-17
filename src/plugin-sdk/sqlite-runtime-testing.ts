@@ -16,7 +16,6 @@ export async function appendSqliteSessionTranscriptEventForTest(
 }
 
 export { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-export { appendSqliteTranscriptMessage } from "../config/sessions/session-accessor.sqlite.js";
 export {
   appendSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEvents,
