@@ -8,8 +8,10 @@ import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
 import { spawnCommand } from "../../../process/exec.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -51,6 +53,10 @@ const grepSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
 });
 const DEFAULT_LIMIT = 100;
+// ripgrep can stall on a broken filesystem or network mount without exiting or
+// emitting output; bound the child so the tool call fails instead of hanging
+// until the (optional) outer abort fires.
+const RG_EXEC_TIMEOUT_MS = 60_000;
 
 /**
  * Pluggable operations for the grep tool.
@@ -71,6 +77,11 @@ const defaultGrepOperations: GrepOperations = {
 export interface GrepToolOptions {
   /** Custom operations for grep. Default: local filesystem plus ripgrep */
   operations?: GrepOperations;
+  /**
+   * Bound for the ripgrep child in ms; default 60_000. Test seam for exercising
+   * the timeout path without waiting a minute.
+   */
+  execTimeoutMs?: number;
 }
 
 function formatGrepCall(
@@ -124,6 +135,7 @@ export function createGrepToolDefinition(
   options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
   const customOps = options?.operations;
+  const execTimeoutMs = resolveTimerTimeoutMs(options?.execTimeoutMs, RG_EXEC_TIMEOUT_MS);
   return {
     name: "grep",
     label: "grep",
@@ -164,8 +176,10 @@ export function createGrepToolDefinition(
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
+        let execTimeout: NodeJS.Timeout | undefined;
         const cleanup = () => {
           rl?.close();
+          clearTimeout(execTimeout);
           signal?.removeEventListener("abort", onAbort);
         };
         const settle = (fn: () => void): boolean => {
@@ -264,12 +278,30 @@ export function createGrepToolDefinition(
             }
             const spawnedChild = spawnCommand([rgPath, ...args], {
               buffer: false,
+              // A wedged ripgrep can ignore the initial SIGTERM from the
+              // timeout or abort path; execa escalates to SIGKILL after this
+              // grace window.
+              forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
             releaseChildProcessOutputAfterExit(spawnedChild);
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
+            execTimeout = setTimeout(() => {
+              if (
+                settle(() =>
+                  reject(new Error(`ripgrep timed out after ${execTimeoutMs / 1000} seconds`)),
+                )
+              ) {
+                stopChild();
+                // If ripgrep ignores the SIGTERM above, forceKillAfterDelay
+                // reaps it after the grace window; release the pipes now so a
+                // defiant child cannot pin stream handles past settlement.
+                spawnedChild.stdout?.destroy();
+                spawnedChild.stderr?.destroy();
+              }
+            }, execTimeoutMs);
             let stderr = "";
             let matchCount = 0;
             let matchLimitReached = false;

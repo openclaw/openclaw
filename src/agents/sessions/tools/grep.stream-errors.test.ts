@@ -208,6 +208,44 @@ describe("grep tool stream errors", () => {
     },
   );
 
+  it("rejects and kills ripgrep when the search exceeds the execution timeout", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const tool = createGrepToolDefinition(process.cwd());
+    // The child never writes output and never closes, mimicking ripgrep stalled
+    // on a broken mount; the tool must reject instead of hanging for the outer abort.
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+
+    const rejection = expect(result).rejects.toThrow("ripgrep timed out after 60 seconds");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection;
+    expect(child.killed).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("clears the execution timeout when ripgrep exits normally", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("rg");
+
+    const tool = createGrepToolDefinition(process.cwd());
+    const result = tool.execute("call-1", { pattern: "foo" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    child.emit("close", 1);
+
+    await expect(result).resolves.toMatchObject({
+      content: [{ type: "text", text: "No matches found" }],
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(child.killed).toBe(false);
+    vi.useRealTimers();
+  });
+
   it("keeps stdout guarded after a stderr failure closes readline", async () => {
     const child = createChild();
     vi.mocked(spawnCommand).mockReturnValue(child as never);
