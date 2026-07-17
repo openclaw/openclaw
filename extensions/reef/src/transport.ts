@@ -300,7 +300,6 @@ export class ReefInboxConnection {
       } catch (error) {
         this.options.onError?.(asError(error));
         await abortableSleep(delay, signal);
-        // oxlint-disable-next-line no-useless-assignment -- Read by the next iteration's backoff sleep.
         delay = Math.min(delay * 2, 30_000);
       }
     }
