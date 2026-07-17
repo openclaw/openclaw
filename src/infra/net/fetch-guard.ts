@@ -663,6 +663,7 @@ async function fetchWithSsrFGuardInternal(
       });
 
       if (isRedirectStatus(response.status)) {
+        await response.body?.cancel().catch(() => undefined);
         const location = response.headers.get("location");
         if (!location) {
           await release(dispatcher);
@@ -698,7 +699,6 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        void response.body?.cancel();
         await closeDispatcher(dispatcher);
         currentUrl = nextUrl;
         continue;
