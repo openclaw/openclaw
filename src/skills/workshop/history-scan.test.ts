@@ -16,7 +16,6 @@ import {
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
 import { buildSkillHistoryScanPrompt } from "./history-scan-prompt.js";
-import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import {
   resolveSkillHistoryScanReviewOutcome,
   resolveSkillHistoryScanRunFailure,
