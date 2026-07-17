@@ -4,7 +4,7 @@ import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CronStatus, FastMode } from "../../api/types.ts";
+import type { CronStatus, FastMode, SkillStatusReport } from "../../api/types.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -155,13 +155,6 @@ function mcpServerCount(config: unknown): number {
     : 0;
 }
 
-function skillCount(config: unknown): number {
-  const entries = asConfigRecord(asConfigRecord(config)?.skills)?.entries;
-  return entries && typeof entries === "object" && !Array.isArray(entries)
-    ? Object.keys(entries).length
-    : 0;
-}
-
 function quickChannels(config: unknown): QuickSettingsChannel[] {
   const configured = asConfigRecord(asConfigRecord(config)?.channels) ?? {};
   const configuredIds = Object.keys(configured).filter((id) => id.trim().length > 0);
@@ -251,6 +244,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
   @state() private cronJobCount: number | null = null;
+  @state() private skillCount: number | null = null;
   @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
   @state() private microphoneLoading = false;
   @state() private microphoneError: string | null = null;
@@ -287,6 +281,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
   private cronStatusRequestId = 0;
+  private skillStatusRequestId = 0;
   private readonly systemInfoPolling = new PollController(
     this,
     SYSTEM_INFO_POLL_INTERVAL_MS,
@@ -338,6 +333,8 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.invalidateSystemInfoRequest();
     this.cronJobCount = null;
     this.cronStatusRequestId = 0;
+    this.skillCount = null;
+    this.skillStatusRequestId = 0;
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
     this.systemInfoGatewaySource = null;
@@ -358,10 +355,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (pageChanged || modeChanged) {
       this.invalidateSystemInfoRequest();
       this.cronJobCount = null;
+      this.skillCount = null;
     }
     this.syncSystemInfoPolling();
-    if (this.pageId === "config" && this.settingsMode === "quick" && this.cronJobCount === null) {
-      void this.loadCronStatus();
+    if (this.pageId === "config" && this.settingsMode === "quick") {
+      if (this.cronJobCount === null) {
+        void this.loadCronStatus();
+      }
+      if (this.skillCount === null) {
+        void this.loadSkillStatus();
+      }
     }
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants mic permission; the
@@ -587,6 +590,27 @@ export class ConfigPage extends OpenClawLightDomElement {
         return;
       }
       this.cronJobCount = null;
+    }
+  }
+
+  private async loadSkillStatus() {
+    const client = this.context.gateway?.snapshot?.client;
+    if (!client || !this.context.gateway?.snapshot?.connected) {
+      return;
+    }
+
+    const requestId = ++this.skillStatusRequestId;
+    try {
+      const res = await client.request<SkillStatusReport>("skills.status", {});
+      if (requestId !== this.skillStatusRequestId) {
+        return;
+      }
+      this.skillCount = res.skills.length;
+    } catch {
+      if (requestId !== this.skillStatusRequestId) {
+        return;
+      }
+      this.skillCount = null;
     }
   }
 
@@ -883,8 +907,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
       channels: quickChannels(configObject),
       automation: {
-        cronJobCount: this.cronJobCount ?? 0,
-        skillCount: skillCount(configObject),
+        cronJobCount: this.cronJobCount,
+        skillCount: this.skillCount ?? 0,
         mcpServerCount: mcpServerCount(configObject),
       },
       security: extractQuickSettingsSecurity(configObject),
