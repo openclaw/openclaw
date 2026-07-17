@@ -1237,11 +1237,22 @@ async function collectLegacyMemoryHostEventSources(
   env: NodeJS.ProcessEnv,
 ): Promise<LegacyMemoryHostEventSource[]> {
   const sources: LegacyMemoryHostEventSource[] = [];
+  const seenWorkspaces = new Set<string>();
   for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
-    const filePath = resolveMemoryHostEventLogPath(workspaceDir);
-    if (await legacyStateFileExists(filePath)) {
-      sources.push({ workspaceDir, filePath });
+    const requestedFilePath = resolveMemoryHostEventLogPath(workspaceDir);
+    if (!(await legacyStateFileExists(requestedFilePath))) {
+      continue;
     }
+    // Doctor owns alias normalization before runtime. Both the imported key and
+    // the claimed source must use one physical workspace identity. Keep the
+    // logical source path so archival renames a symlink, never its target.
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+    if (seenWorkspaces.has(canonicalWorkspaceDir)) {
+      continue;
+    }
+    seenWorkspaces.add(canonicalWorkspaceDir);
+    const filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
+    sources.push({ workspaceDir: canonicalWorkspaceDir, filePath });
   }
   return sources;
 }

@@ -8,6 +8,7 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import {
   createPluginStateKeyedStoreForTests,
   getPluginStateCapacityForTests,
@@ -540,6 +541,50 @@ describe("memory-core doctor dreaming migration", () => {
     );
     await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "canonicalizes and deduplicates aliased legacy host event sources",
+    async () => {
+      const workspaceAlias = path.join(rootDir, "workspace-alias");
+      const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
+      await fs.symlink(workspaceDir, workspaceAlias);
+      await fs.writeFile(
+        eventPath,
+        `${JSON.stringify({
+          type: "memory.recall.recorded",
+          timestamp: "2026-07-01T00:00:00.000Z",
+          query: "canonical alias",
+          resultCount: 0,
+          results: [],
+        })}\n`,
+        "utf8",
+      );
+      const params = migrationParams({
+        agents: {
+          list: [
+            { id: "main", workspace: workspaceDir },
+            { id: "alias", workspace: workspaceAlias },
+          ],
+        },
+      });
+      const migration = hostEventsMigration();
+
+      await expect(migration.detectLegacyState(params)).resolves.toEqual({
+        preview: [expect.stringContaining("Memory Core host events")],
+      });
+      const result = await migration.migrateLegacyState(params);
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        "Migrated Memory Core host events -> SQLite plugin state (1 new row(s))",
+        expect.stringContaining("Archived Memory Core host events legacy source"),
+      ]);
+      await expect(
+        readMemoryHostEventRecords({ workspaceDir: workspaceAlias, env }),
+      ).resolves.toMatchObject([{ query: "canonical alias" }]);
+      await expect(fs.access(`${eventPath}.migrated`)).resolves.toBeUndefined();
+    },
+  );
 
   it("leaves legacy host events in place when plugin-wide SQLite capacity is exhausted", async () => {
     const eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
