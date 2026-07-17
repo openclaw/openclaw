@@ -1252,10 +1252,27 @@ export async function restartLaunchAgent({
       stdout,
       warn,
     });
+    // The reload handoff must outwait the same effective drain budget the
+    // gateway applies before exiting; a config-raised deferral timeout would
+    // otherwise reopen the stranded-LaunchAgent race (#110137).
+    let drainTimeoutMs: number | undefined;
+    try {
+      const [{ getRuntimeConfig }, { resolveGatewayRestartDeferralTimeoutMs }] = await Promise.all([
+        import("../config/config.js"),
+        import("../infra/restart.js"),
+      ]);
+      drainTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+        getRuntimeConfig().gateway?.reload?.deferralTimeoutMs,
+      );
+    } catch {
+      // Config may be unavailable in minimal contexts; the handoff falls back
+      // to the default drain budget.
+    }
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: plistReloadNeeded ? "reload" : "kickstart",
       waitForPid: process.pid,
+      ...(drainTimeoutMs !== undefined ? { drainTimeoutMs } : {}),
     });
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);

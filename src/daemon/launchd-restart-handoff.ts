@@ -25,12 +25,23 @@ type LaunchdRestartTarget = {
 const START_AFTER_EXIT_PRINT_RETRY_COUNT = 15;
 const START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS = 0.2;
 // The booted-out label stays registered until the old gateway finishes its
-// drain-before-exit window, so the reload wait must outlast the full drain
-// budget — a short unload poll turns any active-run restart into a stranded,
-// never-relaunched LaunchAgent (#110137).
+// drain-before-exit window, so the reload wait must outlast the full effective
+// drain budget — a short unload poll turns any active-run restart into a
+// stranded, never-relaunched LaunchAgent (#110137).
 const RELOAD_BOOTOUT_WAIT_DELAY_SECONDS = 1;
-const RELOAD_BOOTOUT_WAIT_COUNT = Math.ceil(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS / 1000) + 15;
+const RELOAD_BOOTOUT_WAIT_MARGIN_SECONDS = 15;
 const RELOAD_BOOTSTRAP_RETRY_COUNT = 15;
+
+function resolveReloadBootoutWaitCount(drainTimeoutMs: number | undefined): number {
+  // An unbounded (<=0) or absent deferral config falls back to the default
+  // budget: the shell wait must stay finite, and the bootstrap retry loop
+  // still recovers drains that run slightly past it.
+  const effective =
+    typeof drainTimeoutMs === "number" && Number.isFinite(drainTimeoutMs) && drainTimeoutMs > 0
+      ? drainTimeoutMs
+      : DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
+  return Math.ceil(effective / 1000) + RELOAD_BOOTOUT_WAIT_MARGIN_SECONDS;
+}
 
 type LaunchdRestartLogEnv = {
   HOME?: string;
@@ -101,6 +112,7 @@ function resolveLaunchdRestartTarget(
 function buildLaunchdRestartScript(
   mode: LaunchdRestartHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
+  drainTimeoutMs?: number,
 ): string {
   // The detached shell waits for the caller before touching launchd so the
   // current gateway process can exit cleanly after scheduling the handoff.
@@ -150,7 +162,7 @@ exit "$status"
     // its drain-before-exit window, so this poll must outlast the full drain
     // budget — bootstrapping early fails with EIO (Bootstrap failed: 5) and a
     // 3s poll stranded the LaunchAgent whenever a run was active (#110137).
-    const bootoutWaitLoop = `bootout_wait_count="${RELOAD_BOOTOUT_WAIT_COUNT}"
+    const bootoutWaitLoop = `bootout_wait_count="${resolveReloadBootoutWaitCount(drainTimeoutMs)}"
 while [ "$bootout_wait_count" -gt 0 ]; do
   if ! launchctl print "$service_target" >/dev/null 2>&1; then
     break
@@ -238,6 +250,8 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
   env?: Record<string, string | undefined>;
   mode: LaunchdRestartHandoffMode;
   waitForPid?: number;
+  /** Effective gateway restart-deferral (drain) budget the reload wait must outlast (#110137). */
+  drainTimeoutMs?: number;
 }): LaunchdRestartHandoffResult {
   const target = resolveLaunchdRestartTarget(params.env);
   const waitForPid =
@@ -254,7 +268,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
       "/bin/sh",
       [
         "-c",
-        buildLaunchdRestartScript(params.mode, restartLogEnv),
+        buildLaunchdRestartScript(params.mode, restartLogEnv, params.drainTimeoutMs),
         "openclaw-launchd-restart-handoff",
         target.serviceTarget,
         target.domain,

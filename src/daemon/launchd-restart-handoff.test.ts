@@ -126,6 +126,31 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("bootstrap_retry_count=$((bootstrap_retry_count - 1))");
   });
 
+  it("scales the reload bootout wait to a non-default drain budget", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      mode: "reload",
+      waitForPid: 9876,
+      drainTimeoutMs: 600_000,
+    });
+    const [, raised] = requireSpawnCall();
+    expect(raised[1]).toContain('bootout_wait_count="615"');
+
+    spawnMock.mockClear();
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    scheduleDetachedLaunchdRestartHandoff({
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      mode: "reload",
+      waitForPid: 9876,
+      drainTimeoutMs: 0,
+    });
+    const [, unbounded] = requireSpawnCall();
+    // An unbounded (<=0) deferral config keeps the finite default wait.
+    expect(unbounded[1]).toContain('bootout_wait_count="315"');
+  });
+
   it("sanitizes restart helper environment overrides before spawning", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
