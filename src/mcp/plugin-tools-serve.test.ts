@@ -448,8 +448,9 @@ describe("plugin tools MCP server", () => {
         text: expect.stringContaining("Invalid arguments"),
       },
     ]);
-    expect(result.content[0].text).toContain("a: must be integer");
-    expect(result.content[0].text).toContain("b: must be number");
+    const typeText = result.content[0] as { type: "text"; text: string };
+    expect(typeText.text).toContain("a: must be integer");
+    expect(typeText.text).toContain("b: must be number");
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -602,9 +603,9 @@ describe("plugin tools MCP server", () => {
     });
 
     expect(result.isError).toBe(true);
-    const text = result.content[0].text;
-    expect(text).toContain("name: must be string");
-    expect(text).toContain("age: must be >= 0");
+    const multiText = result.content[0] as { type: "text"; text: string };
+    expect(multiText.text).toContain("name: must be string");
+    expect(multiText.text).toContain("age: must be >= 0");
     expect(execute).not.toHaveBeenCalled();
   });
 
