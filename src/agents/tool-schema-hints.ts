@@ -3,7 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const MAX_COMPACT_INPUT_HINT_CHARS = 300;
 const MAX_COMPACT_OUTPUT_HINT_CHARS = 600;
-const MAX_COMPACT_SCHEMA_PROPERTIES = 16;
+const MAX_COMPACT_INPUT_SCHEMA_PROPERTIES = 16;
+const MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES = 20;
 const MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS = 128;
 const MAX_COMPACT_INPUT_DEPTH = 4;
 const MAX_COMPACT_OUTPUT_DEPTH = 6;
@@ -37,15 +38,18 @@ type SchemaHint = {
 type CompactSchemaLimits = {
   maxChars: number;
   maxDepth: number;
+  maxProperties: number;
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_INPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_INPUT_DEPTH,
+  maxProperties: MAX_COMPACT_INPUT_SCHEMA_PROPERTIES,
 };
 const OUTPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_OUTPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_OUTPUT_DEPTH,
+  maxProperties: MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES,
 };
 
 const UNKNOWN_HINT: SchemaHint = { text: "unknown", complete: false };
@@ -204,7 +208,7 @@ function compactObjectHint(
   if (!isRecord(schema.properties)) {
     const requiredValues = Array.isArray(schema.required) ? schema.required : [];
     const required =
-      requiredValues.length > MAX_COMPACT_SCHEMA_PROPERTIES ||
+      requiredValues.length > limits.maxProperties ||
       requiredValues.some((value) => typeof value === "string");
     return !required && schema.additionalProperties === false
       ? completeHint("{}")
@@ -214,11 +218,11 @@ function compactObjectHint(
   const properties = schema.properties;
   const requiredValues = Array.isArray(schema.required) ? schema.required : [];
   const invalidRequired =
-    requiredValues.length <= MAX_COMPACT_SCHEMA_PROPERTIES &&
+    requiredValues.length <= limits.maxProperties &&
     requiredValues.some((value) => typeof value !== "string");
   const required = new Set(
     requiredValues
-      .slice(0, MAX_COMPACT_SCHEMA_PROPERTIES)
+      .slice(0, limits.maxProperties)
       .filter((value): value is string => typeof value === "string"),
   );
   const requiredKeys: string[] = [];
@@ -232,10 +236,10 @@ function compactObjectHint(
       missingRequired = true;
       continue;
     }
-    insertLexicallyBounded(requiredKeys, key, MAX_COMPACT_SCHEMA_PROPERTIES);
+    insertLexicallyBounded(requiredKeys, key, limits.maxProperties);
   }
 
-  const optionalLimit = MAX_COMPACT_SCHEMA_PROPERTIES - requiredKeys.length;
+  const optionalLimit = limits.maxProperties - requiredKeys.length;
   const optionalKeys: string[] = [];
   let optionalCount = 0;
   let oversizedOptionalKey = false;
@@ -255,7 +259,7 @@ function compactObjectHint(
 
   const keys = [...requiredKeys, ...optionalKeys];
   const structurallyIncomplete =
-    requiredValues.length > MAX_COMPACT_SCHEMA_PROPERTIES ||
+    requiredValues.length > limits.maxProperties ||
     invalidRequired ||
     missingRequired ||
     oversizedOptionalKey ||
