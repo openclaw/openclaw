@@ -1,4 +1,3 @@
-// Coverage for resolving bundled static manifest model catalog rows.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestMocks = vi.hoisted(() => ({
@@ -88,7 +87,6 @@ function createMistralManifestPlugin(overrides?: {
   discovery?: "static" | "refreshable" | "runtime";
   origin?: string;
 }) {
-  // Mistral fixture represents a bundled plugin with a static modelCatalog row.
   return {
     id: "mistral",
     origin: overrides?.origin ?? "bundled",
@@ -377,7 +375,11 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
         cfg: {
           models: {
             providers: {
-              "openai-fixed-endpoint": { api: "anthropic-messages", models: [] },
+              "openai-fixed-endpoint": {
+                api: "anthropic-messages",
+                baseUrl: "https://configured-alias.example.com/v1",
+                models: [],
+              },
             },
           },
         },
