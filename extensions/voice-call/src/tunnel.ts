@@ -1,5 +1,5 @@
 // Voice Call plugin module implements tunnel behavior.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -17,7 +17,7 @@ const NGROK_STOP_GRACE_MS = 2_000;
 const NGROK_FORCE_KILL_WAIT_MS = 1_000;
 
 async function terminateNgrokProcess(
-  proc: Pick<ChildProcessWithoutNullStreams, "kill" | "once" | "off">,
+  proc: Pick<ChildProcess, "kill" | "once" | "off">,
   isClosed: () => boolean,
 ): Promise<void> {
   if (isClosed()) {
