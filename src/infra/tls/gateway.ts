@@ -1,7 +1,8 @@
 // Gateway TLS runtime loads configured certificates or generates a local
 // self-signed pair, returning server-ready options plus client fingerprint.
 import { X509Certificate } from "node:crypto";
-import fs from "node:fs/promises";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
@@ -10,6 +11,8 @@ import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../
 import { pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
 import { normalizeFingerprint } from "./fingerprint.js";
+
+const GATEWAY_TLS_FILE_MAX_BYTES = 256 * 1024;
 
 // Gateway TLS runtime carries loaded cert material plus the normalized SHA-256
 // fingerprint advertised to clients.
@@ -63,8 +66,8 @@ async function generateSelfSignedCert(params: {
     ],
     { logOutput: false },
   );
-  await fs.chmod(params.keyPath, 0o600).catch(() => {});
-  await fs.chmod(params.certPath, 0o600).catch(() => {});
+  await fsp.chmod(params.keyPath, 0o600).catch(() => {});
+  await fsp.chmod(params.certPath, 0o600).catch(() => {});
   params.log?.info?.(
     `gateway tls: generated self-signed cert at ${shortenHomeInString(params.certPath)}`,
   );
@@ -125,9 +128,42 @@ export async function loadGatewayTlsRuntime(
   }
 
   try {
-    const cert = await fs.readFile(certPath, "utf8");
-    const key = await fs.readFile(keyPath, "utf8");
-    const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
+    const certStat = fs.statSync(certPath);
+    if (certStat.size > GATEWAY_TLS_FILE_MAX_BYTES) {
+      return {
+        enabled: false,
+        required: true,
+        certPath,
+        keyPath,
+        error: `gateway tls: cert file exceeds ${GATEWAY_TLS_FILE_MAX_BYTES} bytes`,
+      };
+    }
+    const keyStat = fs.statSync(keyPath);
+    if (keyStat.size > GATEWAY_TLS_FILE_MAX_BYTES) {
+      return {
+        enabled: false,
+        required: true,
+        certPath,
+        keyPath,
+        error: `gateway tls: key file exceeds ${GATEWAY_TLS_FILE_MAX_BYTES} bytes`,
+      };
+    }
+    if (caPath) {
+      const caStat = fs.statSync(caPath);
+      if (caStat.size > GATEWAY_TLS_FILE_MAX_BYTES) {
+        return {
+          enabled: false,
+          required: true,
+          certPath,
+          keyPath,
+          caPath,
+          error: `gateway tls: ca file exceeds ${GATEWAY_TLS_FILE_MAX_BYTES} bytes`,
+        };
+      }
+    }
+    const cert = await fsp.readFile(certPath, "utf8");
+    const key = await fsp.readFile(keyPath, "utf8");
+    const ca = caPath ? await fsp.readFile(caPath, "utf8") : undefined;
     const x509 = new X509Certificate(cert);
     const fingerprintSha256 = normalizeFingerprint(x509.fingerprint256 ?? "");
 

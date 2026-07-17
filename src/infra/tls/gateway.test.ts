@@ -110,6 +110,66 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("rejects oversized cert files before reading them", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "oversized-cert.pem");
+    const keyPath = path.join(dir, "oversized-key.pem");
+    await writeFile(certPath, "x".repeat(256 * 1024 + 1), "utf8");
+    await writeFile(keyPath, KEY_PEM, "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("cert file exceeds");
+  });
+
+  it("rejects oversized key files before reading them", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "oversized-cert.pem");
+    const keyPath = path.join(dir, "oversized-key.pem");
+    await writeFile(certPath, CERT_PEM, "utf8");
+    await writeFile(keyPath, "x".repeat(256 * 1024 + 1), "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("key file exceeds");
+  });
+
+  it("rejects oversized ca files before reading them", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "oversized-cert.pem");
+    const keyPath = path.join(dir, "oversized-key.pem");
+    const caPath = path.join(dir, "oversized-ca.pem");
+    await writeFile(certPath, CERT_PEM, "utf8");
+    await writeFile(keyPath, KEY_PEM, "utf8");
+    await writeFile(caPath, "x".repeat(256 * 1024 + 1), "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      caPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("ca file exceeds");
+  });
+
   it("fails closed when cert/key are missing and auto generation is disabled", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "missing-cert.pem");
