@@ -23,6 +23,7 @@ describe("e2e text file utilities", () => {
   it("keeps short diagnostic text intact and trims long text by byte count", () => {
     expect(tailText("short", 8)).toBe("short");
     expect(tailText("prefix-tail", 4)).toBe("tail");
+    expect(tailText("prefix \u{1f600}tail", 7)).toBe("tail");
   });
 
   it("reads only the requested file tail and treats missing or non-file paths as empty", () => {
@@ -33,6 +34,8 @@ describe("e2e text file utilities", () => {
     writeFileSync(file, "line-one\nline-two\nline-three", "utf8");
 
     expect(readTextFileTail(file, 10)).toBe("line-three");
+    writeFileSync(file, "prefix \u{1f600}tail", "utf8");
+    expect(readTextFileTail(file, 7)).toBe("tail");
     expect(readTextFileTail(path.join(root, "missing.log"), 10)).toBe("");
     expect(readTextFileTail(directory, 10)).toBe("");
   });
