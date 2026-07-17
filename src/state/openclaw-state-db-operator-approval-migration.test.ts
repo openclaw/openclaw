@@ -1,6 +1,7 @@
 // Operator-approval kind migration: exact-legacy fail-closed repair.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   assertCanonicalOperatorApprovalKinds,
   repairOperatorApprovalSchema,
@@ -56,6 +57,23 @@ describe("repairOperatorApprovalKinds", () => {
     expect(
       db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
     ).toEqual({ strict: 1 });
+    db.close();
+  });
+
+  it("migrates the legacy schema inside an outer immediate transaction without nesting a BEGIN", () => {
+    // The doctor repair runs this migration inside an outer immediate
+    // transaction; a raw nested BEGIN IMMEDIATE would abort with "cannot start a
+    // transaction within a transaction" and crash-loop gateway startup.
+    const db = new DatabaseSync(":memory:");
+    db.exec(legacyTwoKindCreateSql());
+    seedRow(db, "plugin");
+
+    const changes = runSqliteImmediateTransactionSync(db, () => repairOperatorApprovalSchema(db));
+
+    expect(changes).toEqual(["Migrated shared state operator approvals → OpenClaw system changes"]);
+    expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+    const rows = db.prepare("SELECT approval_id, kind FROM operator_approvals").all();
+    expect(rows).toEqual([{ approval_id: "a1", kind: "plugin" }]);
     db.close();
   });
 
