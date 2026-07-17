@@ -740,4 +740,30 @@ describe("google prompt cache", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-overflow");
   });
+
+  it("throws a descriptive error when Google prompt cache API returns malformed JSON", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("{invalid json", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const sessionManager = makeSessionManager([]);
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now: 1_000_000,
+      sessionManager,
+      streamFn: vi.fn(() => "stream" as never),
+    });
+
+    await expect(
+      Promise.resolve(
+        wrapped?.(
+          makeGoogleModel(),
+          { systemPrompt: "Follow policy.", messages: [] } as never,
+          {} as never,
+        ),
+      ),
+    ).rejects.toThrow("Malformed JSON in Google prompt cache response");
+  });
 });

@@ -157,7 +157,12 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder().decode(buffer));
+  const raw = new TextDecoder().decode(buffer);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error("Malformed JSON in live model catalog response", { cause: err });
+  }
 }
 
 function readLiveModelCatalogString(value: unknown): string | undefined {
