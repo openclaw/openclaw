@@ -365,7 +365,12 @@ export async function detectSetupInference(
       reason:
         "Can't be auto-tested safely here. Use 'Gemini CLI OAuth' or a Gemini API key instead.",
     }));
-  const antigravity = await (deps.probeLocalCommand ?? probeLocalCommand)("agy");
+  const probe = deps.probeLocalCommand ?? probeLocalCommand;
+  const [antigravity, pi, opencode] = await Promise.all([
+    probe("agy"),
+    probe("pi"),
+    probe("opencode"),
+  ]);
   if (antigravity.found) {
     unavailableCandidates.push({
       id: "antigravity-cli",
@@ -373,6 +378,24 @@ export async function detectSetupInference(
       detail: "installed",
       reason:
         "Can't be auto-tested safely here. Sign in with a provider or use an API key instead.",
+    });
+  }
+  if (pi.found) {
+    unavailableCandidates.push({
+      id: "pi-cli",
+      label: "Pi CLI",
+      detail: "installed",
+      reason:
+        "Pi is available for session use, but it is not a reusable guided-setup inference route yet.",
+    });
+  }
+  if (opencode.found) {
+    unavailableCandidates.push({
+      id: "opencode-cli",
+      label: "OpenCode CLI",
+      detail: "installed",
+      reason:
+        "OpenCode is available through ACP, but it is not a reusable guided-setup inference route yet.",
     });
   }
   const raw = detected.filter((candidate) => candidate.kind !== "gemini-cli");
