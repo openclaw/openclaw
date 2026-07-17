@@ -49,27 +49,44 @@ function normalizeElevenLabsLatencyTier(latencyTier: number | undefined): number
   return latencyTier;
 }
 
-// The buffered path rejects provider audio above MAX_AUDIO_BYTES. Enforce the same cap
-// without buffering and stop upstream before any byte beyond the cap reaches playback.
+// Mirror the buffered cap without buffering. Own the reader because Node can leak
+// transform writer rejections when playback cancellation races an overflow.
 function limitElevenLabsAudioStream(
   stream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
+  const reader = stream.getReader();
   let totalBytes = 0;
-  return stream.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        const remainingBytes = MAX_AUDIO_BYTES - totalBytes;
-        if (chunk.byteLength > remainingBytes) {
-          if (remainingBytes > 0) {
-            controller.enqueue(chunk.subarray(0, remainingBytes));
-          }
-          throw new Error(`ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`);
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
         }
-        totalBytes += chunk.byteLength;
-        controller.enqueue(chunk);
-      },
-    }),
-  );
+        const remainingBytes = MAX_AUDIO_BYTES - totalBytes;
+        if (chunk.value.byteLength > remainingBytes) {
+          if (remainingBytes > 0) {
+            controller.enqueue(chunk.value.subarray(0, remainingBytes));
+          }
+          const error = new Error(
+            `ElevenLabs API error: audio response exceeds ${MAX_AUDIO_BYTES} bytes`,
+          );
+          controller.error(error);
+          void reader.cancel(error).catch(() => undefined);
+          return;
+        }
+        totalBytes += chunk.value.byteLength;
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        void reader.cancel(error).catch(() => undefined);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+    },
+  });
 }
 
 type ElevenLabsTtsRequestParams = {
