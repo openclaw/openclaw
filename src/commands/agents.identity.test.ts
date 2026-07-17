@@ -248,7 +248,9 @@ describe("agents set-identity command", () => {
 
     await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(`No identity data found in ${identityPath}.`);
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Identity file ${identityPath} exceeds the maximum size of ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES} bytes`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });
