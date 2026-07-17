@@ -154,6 +154,13 @@ export function createDiagnosticsMetrics(meter: Meter) {
     unit: "ms",
     description: "Age of sessions selected for recovery",
   });
+  const sessionMaintenancePrunedCounter = meter.createCounter(
+    "openclaw.session.maintenance.pruned",
+    {
+      unit: "1",
+      description: "Cron run sessions pruned by the session reaper",
+    },
+  );
   const talkEventCounter = meter.createCounter("openclaw.talk.event", {
     unit: "1",
     description: "Talk events emitted by type",
@@ -322,6 +329,7 @@ export function createDiagnosticsMetrics(meter: Meter) {
     sessionRecoveryRequestedCounter,
     sessionRecoveryCompletedCounter,
     sessionRecoveryAgeHistogram,
+    sessionMaintenancePrunedCounter,
     talkEventCounter,
     talkEventDurationHistogram,
     talkAudioBytesHistogram,
