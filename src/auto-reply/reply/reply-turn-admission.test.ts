@@ -356,7 +356,7 @@ describe("reply turn admission", () => {
           mainRestartRecovery: {
             cycleId: "cycle-1",
             revision: 1,
-            chargedAttempts: 3,
+            chargedAttempts: 2,
           },
         },
       });

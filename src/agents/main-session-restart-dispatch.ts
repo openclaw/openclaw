@@ -36,6 +36,8 @@ import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
+const RESERVATION_ROLLBACK_RETRY_DELAY_MS = 1_000;
+const RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS = 30_000;
 const RESTART_RECOVERY_RESUME_MESSAGE =
   "[System] Your previous turn was interrupted by a gateway restart while " +
   "OpenClaw was waiting on tool/model work. Continue from the existing " +
@@ -260,6 +262,25 @@ async function rollbackRestartRecoveryReservation(params: {
     3,
     25,
   );
+}
+
+function scheduleRestartRecoveryReservationRollback(
+  params: Parameters<typeof rollbackRestartRecoveryReservation>[0],
+  delayMs = RESERVATION_ROLLBACK_RETRY_DELAY_MS,
+): void {
+  // Keep the exact reservation token alive after transient store outages.
+  // A Gateway restart safely retires the timer and its stale-generation slot.
+  setTimeout(() => {
+    void rollbackRestartRecoveryReservation(params).catch((error: unknown) => {
+      log.warn(
+        `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
+      );
+      scheduleRestartRecoveryReservationRollback(
+        params,
+        Math.min(delayMs * 2, RESERVATION_ROLLBACK_RETRY_MAX_DELAY_MS),
+      );
+    });
+  }, delayMs).unref?.();
 }
 
 export async function resumeMainSession(params: {
@@ -502,6 +523,13 @@ export async function resumeMainSession(params: {
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
+        scheduleRestartRecoveryReservationRollback({
+          kind:
+            dispatchStarted && !explicitlyRejected ? "abandon_reservation" : "cancel_reservation",
+          reservation: rollbackReservation,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        });
       });
     }
     log.warn(

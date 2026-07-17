@@ -1090,6 +1090,66 @@ describe("main-session-restart-recovery", () => {
     expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
   });
 
+  it("schedules exact reservation cleanup after immediate retries are exhausted", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    let dispatchFailed = false;
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      dispatchFailed = true;
+      throw new Error("gateway unavailable");
+    });
+    const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+    let cleanupFailures = 0;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        if (dispatchFailed && params.requireWriteSuccess && cleanupFailures < 3) {
+          cleanupFailures += 1;
+          throw new Error("extended session-store failure");
+        }
+        return await applySessionEntryReplacements(params);
+      });
+
+    try {
+      await expect(
+        recoverRestartAbortedMainSessions({ cfg: {}, stateDir: tmpDir }),
+      ).resolves.toEqual({ recovered: 0, failed: 1, skipped: 0 });
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
+          ?.reservation,
+      ).toBeDefined();
+      await vi.waitFor(
+        () => {
+          expect(
+            loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery
+              ?.reservation,
+          ).toBeUndefined();
+        },
+        { timeout: 3_000 },
+      );
+    } finally {
+      replacementSpy.mockRestore();
+    }
+
+    expect(cleanupFailures).toBe(3);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery,
+    ).toMatchObject({ chargedAttempts: 1 });
+  });
+
   it("retries reservation cleanup when durable dispatch preparation is rejected", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
