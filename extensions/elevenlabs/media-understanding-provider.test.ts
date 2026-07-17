@@ -22,6 +22,7 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     ssrfMock?.mockRestore();
     ssrfMock = undefined;
   });
@@ -92,5 +93,50 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
         fetchFn: fetchMock,
       }),
     ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");
+  });
+
+  it.each([
+    { ELEVENLABS_API_KEY: "  ", XI_API_KEY: "" },
+    { ELEVENLABS_API_KEY: "", XI_API_KEY: "\t" },
+    { ELEVENLABS_API_KEY: " ", XI_API_KEY: " " },
+  ])(
+    "treats whitespace-only env API keys as missing (%#)",
+    async ({ ELEVENLABS_API_KEY, XI_API_KEY }) => {
+      vi.stubEnv("ELEVENLABS_API_KEY", ELEVENLABS_API_KEY);
+      vi.stubEnv("XI_API_KEY", XI_API_KEY);
+      const fetchMock = vi.fn<typeof fetch>();
+
+      await expect(
+        transcribeElevenLabsAudio({
+          buffer: Buffer.from("audio"),
+          fileName: "voice.mp3",
+          mime: "audio/mpeg",
+          apiKey: "",
+          timeoutMs: 1000,
+          fetchFn: fetchMock,
+        }),
+      ).rejects.toThrow("ElevenLabs API key missing");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("trims the env API key fallback before sending", async () => {
+    vi.stubEnv("ELEVENLABS_API_KEY", "  env-key  ");
+    vi.stubEnv("XI_API_KEY", "");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ text: "hello" })));
+
+    await transcribeElevenLabsAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.mp3",
+      mime: "audio/mpeg",
+      apiKey: "",
+      timeoutMs: 1000,
+      fetchFn: fetchMock,
+    });
+
+    const [, init] = requireFirstFetchCall(fetchMock);
+    expect(new Headers(init.headers).get("xi-api-key")).toBe("env-key");
   });
 });

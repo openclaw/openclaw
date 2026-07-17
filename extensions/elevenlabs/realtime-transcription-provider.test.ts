@@ -2,10 +2,19 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+
+// The profile fallback reads real home-dir files; keep env-key tests hermetic.
+vi.mock("./config-compat.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-compat.js")>();
+  return {
+    ...actual,
+    resolveElevenLabsApiKeyWithProfileFallback: () => null,
+  };
+});
 
 let cleanup: (() => Promise<void>) | undefined;
 
@@ -46,6 +55,7 @@ async function createRealtimeServer(onRequest: (url: URL) => void) {
 
 describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await cleanup?.();
     cleanup = undefined;
   });
@@ -159,5 +169,17 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     expect(requests[0]?.searchParams.get("audio_format")).toBe("ulaw_8000");
     expect(requests[0]?.searchParams.get("commit_strategy")).toBe("vad");
     expect(requests[0]?.searchParams.get("language_code")).toBe("en");
+  });
+
+  it("reports whitespace-only XI_API_KEY as unconfigured and rejects session creation", () => {
+    vi.stubEnv("XI_API_KEY", " \t ");
+    const provider = buildElevenLabsRealtimeTranscriptionProvider();
+
+    expect(provider.isConfigured({ providerConfig: {} })).toBe(false);
+    expect(() =>
+      provider.createSession({
+        providerConfig: {},
+      }),
+    ).toThrow("ElevenLabs API key missing");
   });
 });
