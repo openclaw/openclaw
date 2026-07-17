@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile } from "typebox/compile";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
+import { Compile } from "typebox/compile";
 import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
