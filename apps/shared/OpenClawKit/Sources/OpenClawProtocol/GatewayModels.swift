@@ -6906,6 +6906,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
     public let action: AnyCodable
     public let needsapproval: Bool?
     public let proposalid: String?
+    public let question: [String: AnyCodable]?
 
     public init(
         sessionid: String,
@@ -6913,7 +6914,8 @@ public struct SystemAgentChatResult: Codable, Sendable {
         sensitive: Bool? = nil,
         action: AnyCodable,
         needsapproval: Bool? = nil,
-        proposalid: String? = nil)
+        proposalid: String? = nil,
+        question: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.reply = reply
@@ -6921,6 +6923,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         self.action = action
         self.needsapproval = needsapproval
         self.proposalid = proposalid
+        self.question = question
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6930,6 +6933,7 @@ public struct SystemAgentChatResult: Codable, Sendable {
         case action
         case needsapproval = "needsApproval"
         case proposalid = "proposalId"
+        case question
     }
 }
 
