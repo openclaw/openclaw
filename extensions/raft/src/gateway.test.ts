@@ -420,7 +420,9 @@ describe("Raft wake gateway", () => {
       ]);
       expect(closed).toBe(true);
       expect(run).not.toHaveBeenCalled();
-      expect(ctx.log?.warn).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+      expect(ctx.log?.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Request body timeout"),
+      );
     } finally {
       socket.destroy();
       controller.abort();

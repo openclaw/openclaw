@@ -9,7 +9,12 @@ import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/cha
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
 import { dispatchRaftWake } from "./inbound.js";
 
@@ -128,41 +133,35 @@ async function readWakePayload(
   request: IncomingMessage,
   timeoutMs: number,
 ): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-  let tooLarge = false;
-  let timedOut = false;
-  // A stalled bridge write must not pin this authenticated handler indefinitely.
-  // Destroying the partial request also closes the unusable connection.
-  const timer = setTimeout(() => {
-    timedOut = true;
-    request.destroy();
-  }, timeoutMs);
-  timer.unref();
+  // Reject declared oversized payloads before the shared reader destroys the
+  // underlying socket, so the caller can still write a proper HTTP response.
+  const contentLengthHeader = request.headers["content-length"];
+  if (typeof contentLengthHeader === "string") {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > MAX_WAKE_BODY_BYTES) {
+      throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.");
+    }
+  }
+
+  // Route body reads through the shared Plugin SDK request-body reader so
+  // timeout, size enforcement, destruction, and typed error classification
+  // stay on the centrally hardened path used by sibling channel webhooks.
+  let raw: string;
   try {
-    for await (const chunk of request) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      bytes += buffer.length;
-      if (bytes > MAX_WAKE_BODY_BYTES) {
-        tooLarge = true;
-        continue;
-      }
-      chunks.push(buffer);
-    }
+    raw = await readRequestBodyWithLimit(request, {
+      maxBytes: MAX_WAKE_BODY_BYTES,
+      timeoutMs,
+    });
   } catch (error) {
-    if (!timedOut) {
-      throw error;
+    if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+      throw new WakeRequestError(413, requestBodyErrorToText(error.code));
     }
-  } finally {
-    clearTimeout(timer);
+    if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+      throw new WakeRequestError(408, requestBodyErrorToText(error.code));
+    }
+    throw error;
   }
-  if (timedOut) {
-    throw new WakeRequestError(408, "Wake payload body timed out.");
-  }
-  if (tooLarge) {
-    throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.");
-  }
-  const text = Buffer.concat(chunks).toString("utf8").trim();
+  const text = raw.trim();
   if (!text) {
     return {};
   }
