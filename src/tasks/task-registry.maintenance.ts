@@ -59,7 +59,10 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
-import { runTaskFlowRegistryMaintenance } from "./task-flow-registry.maintenance.js";
+import {
+  assertTaskFlowRegistryMaintenanceReady,
+  runTaskFlowRegistryMaintenance,
+} from "./task-flow-registry.maintenance.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -1113,6 +1116,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
 }
 
 export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
+  assertTaskFlowRegistryMaintenanceReady();
   const summary = await runTaskRegistryMaintenance();
   await runTaskFlowRegistryMaintenance();
   return summary;
