@@ -17,6 +17,23 @@ import java.util.UUID
 internal data class WearProxyStatus(
   val connected: Boolean,
   val detail: String,
+  val activeAgentId: String?,
+  val activeSessionKey: String?,
+  val selectedModelRef: String?,
+  val eventSequence: Long?,
+  val phoneNodeId: String,
+  val eventStreamId: String? = null,
+)
+
+internal data class WearAgent(
+  val id: String,
+  val name: String,
+  val emoji: String?,
+  val selected: Boolean,
+)
+
+internal data class WearAgentList(
+  val agents: List<WearAgent>,
   val eventSequence: Long?,
   val phoneNodeId: String,
   val eventStreamId: String? = null,
@@ -107,6 +124,66 @@ internal class WearGatewayRepository(
     return WearProxyStatus(
       connected = result.boolean("connected") ?: false,
       detail = result.string("status") ?: "Phone gateway unavailable",
+      activeAgentId = result.string("activeAgentId"),
+      activeSessionKey = result.string("activeSessionKey"),
+      selectedModelRef = result.string("selectedModelRef"),
+      eventStreamId = response.eventStreamId,
+      eventSequence = response.eventSequence,
+      phoneNodeId = response.sourceNodeId,
+    )
+  }
+
+  suspend fun agents(expectedNodeId: String): WearAgentList {
+    val response =
+      requester.request(
+        WearRpcMethod.AgentsList,
+        buildJsonObject {},
+        expectedNodeId,
+        requirePreferredNode = true,
+      )
+    val result = response.payload.asObject("agents.list")
+    return WearAgentList(
+      agents =
+        (result["agents"] as? JsonArray)
+          .orEmpty()
+          .mapNotNull(::parseAgent),
+      eventStreamId = response.eventStreamId,
+      eventSequence = response.eventSequence,
+      phoneNodeId = response.sourceNodeId,
+    )
+  }
+
+  suspend fun selectAgent(
+    agentId: String,
+    phoneNodeId: String,
+  ) {
+    requester.request(
+      WearRpcMethod.AgentsSelect,
+      buildJsonObject { put("agentId", agentId) },
+      phoneNodeId,
+      requirePreferredNode = true,
+    )
+  }
+
+  suspend fun setGatewayEnabled(
+    enabled: Boolean,
+    phoneNodeId: String,
+  ): WearProxyStatus {
+    val method = if (enabled) WearRpcMethod.GatewayConnect else WearRpcMethod.GatewayDisconnect
+    val response =
+      requester.request(
+        method,
+        buildJsonObject {},
+        phoneNodeId,
+        requirePreferredNode = true,
+      )
+    val result = response.payload.asObject(if (enabled) "gateway.connect" else "gateway.disconnect")
+    return WearProxyStatus(
+      connected = result.boolean("connected") ?: false,
+      detail = result.string("status") ?: if (enabled) "Connecting" else "Offline",
+      activeAgentId = result.string("activeAgentId"),
+      activeSessionKey = result.string("activeSessionKey"),
+      selectedModelRef = result.string("selectedModelRef"),
       eventStreamId = response.eventStreamId,
       eventSequence = response.eventSequence,
       phoneNodeId = response.sourceNodeId,
@@ -258,6 +335,17 @@ private fun parseSession(
     updatedAt = source.long("updatedAt") ?: source.long("lastActivityAt"),
     hasActiveRun = source.boolean("hasActiveRun") ?: false,
     phoneNodeId = phoneNodeId,
+  )
+}
+
+private fun parseAgent(element: JsonElement): WearAgent? {
+  val source = element as? JsonObject ?: return null
+  val id = source.string("id") ?: return null
+  return WearAgent(
+    id = id,
+    name = source.string("name") ?: id,
+    emoji = source.string("emoji"),
+    selected = source.boolean("selected") ?: false,
   )
 }
 

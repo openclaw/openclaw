@@ -24,10 +24,23 @@ internal class WearProxyGatewayException(
   override val message: String,
 ) : IllegalStateException(message)
 
+internal data class WearProxyAgent(
+  val id: String,
+  val name: String?,
+  val emoji: String?,
+)
+
 internal class WearProxyController(
   private val requestGateway: suspend (method: String, params: JsonObject) -> JsonElement,
   private val isGatewayConnected: () -> Boolean,
   private val gatewayStatusText: () -> String,
+  private val activeAgentId: () -> String? = { null },
+  private val activeSessionKey: () -> String? = { null },
+  private val selectedModelRef: () -> String? = { null },
+  private val agents: () -> List<WearProxyAgent> = { emptyList() },
+  private val selectGatewayAgent: suspend (agentId: String) -> Boolean = { false },
+  private val connectGateway: suspend () -> Unit = {},
+  private val disconnectGateway: suspend () -> Unit = {},
   private val startRealtimeTalk:
     suspend (nodeId: String, sessionKey: String, attemptId: String, language: String?) -> WearRealtimeTalkSnapshot? = { _, _, _, _ -> null },
   private val stopRealtimeTalk: suspend (nodeId: String, attemptId: String) -> WearRealtimeTalkSnapshot? = { _, _ -> null },
@@ -41,6 +54,10 @@ internal class WearProxyController(
         when (request.method) {
           WearRpcMethod.ProxyStatus -> proxyStatus(request.params)
           WearRpcMethod.SessionsList -> listSessions(request.params)
+          WearRpcMethod.AgentsList -> listAgents(request.params)
+          WearRpcMethod.AgentsSelect -> selectAgent(request.params)
+          WearRpcMethod.GatewayConnect -> gatewayConnect(request.params)
+          WearRpcMethod.GatewayDisconnect -> gatewayDisconnect(request.params)
           WearRpcMethod.ChatHistory -> chatHistory(request.params)
           WearRpcMethod.ChatSend -> sendChat(request.params)
           WearRpcMethod.ChatAbort -> abortChat(request.params)
@@ -96,7 +113,54 @@ internal class WearProxyController(
     return buildJsonObject {
       put("connected", isGatewayConnected())
       put("status", gatewayStatusText().takeCodePoints(MAX_STATUS_CHARS))
+      activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
+      activeSessionKey()?.takeIf(String::isNotBlank)?.let { put("activeSessionKey", it.takeCodePoints(MAX_SESSION_KEY_CHARS)) }
+      selectedModelRef()?.takeIf(String::isNotBlank)?.let { put("selectedModelRef", it.takeCodePoints(MAX_MODEL_REF_CHARS)) }
     }
+  }
+
+  private fun listAgents(params: JsonObject): JsonObject {
+    params.requireOnly()
+    val selected = activeAgentId()
+    return buildJsonObject {
+      put(
+        "agents",
+        buildJsonArray {
+          agents().take(MAX_AGENT_COUNT).forEach { agent ->
+            val id = agent.id.trim().takeIf(String::isNotEmpty) ?: return@forEach
+            add(
+              buildJsonObject {
+                put("id", id.takeCodePoints(MAX_AGENT_ID_CHARS))
+                agent.name?.takeIf(String::isNotBlank)?.let { put("name", it.takeCodePoints(MAX_AGENT_NAME_CHARS)) }
+                agent.emoji?.takeIf(String::isNotBlank)?.let { put("emoji", it.takeCodePoints(MAX_AGENT_EMOJI_CHARS)) }
+                put("selected", id == selected)
+              },
+            )
+          }
+        },
+      )
+    }
+  }
+
+  private suspend fun selectAgent(params: JsonObject): JsonObject {
+    params.requireOnly("agentId")
+    val agentId = params.stringParam("agentId", MAX_AGENT_ID_CHARS)
+    if (!selectGatewayAgent(agentId)) {
+      throw WearProxyGatewayException("not_found", "Agent is no longer available")
+    }
+    return buildJsonObject { put("activeAgentId", agentId) }
+  }
+
+  private suspend fun gatewayConnect(params: JsonObject): JsonObject {
+    params.requireOnly()
+    connectGateway()
+    return proxyStatus(buildJsonObject {})
+  }
+
+  private suspend fun gatewayDisconnect(params: JsonObject): JsonObject {
+    params.requireOnly()
+    disconnectGateway()
+    return proxyStatus(buildJsonObject {})
   }
 
   private suspend fun listSessions(params: JsonObject): JsonObject {
@@ -195,6 +259,11 @@ internal class WearProxyController(
     const val MAX_IDEMPOTENCY_KEY_CHARS = 128
     const val MAX_RUN_ID_CHARS = 128
     const val MAX_STATUS_CHARS = 200
+    const val MAX_AGENT_COUNT = 32
+    const val MAX_AGENT_ID_CHARS = 200
+    const val MAX_AGENT_NAME_CHARS = 200
+    const val MAX_AGENT_EMOJI_CHARS = 32
+    const val MAX_MODEL_REF_CHARS = 200
     const val MAX_SESSION_LABEL_CHARS = 200
     const val MAX_EVENT_TEXT_CHARS = 2_000
     const val MAX_ERROR_CODE_CHARS = 64

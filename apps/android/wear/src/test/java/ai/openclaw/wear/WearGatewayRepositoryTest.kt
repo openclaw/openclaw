@@ -63,6 +63,44 @@ class WearGatewayRepositoryTest {
     }
 
   @Test
+  fun agentsAndGatewayControlsRequireThePreferredPhone() =
+    runTest {
+      val requester =
+        RecordingRequester { method, _ ->
+          when (method) {
+            WearRpcMethod.AgentsList ->
+              json.parseToJsonElement(
+                """{"agents":[{"id":"main","name":"Main","emoji":"*","selected":true}]}""",
+              )
+            WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
+            WearRpcMethod.GatewayDisconnect ->
+              json.parseToJsonElement(
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test"}""",
+              )
+            else -> error("unexpected $method")
+          }
+        }
+      val repository = WearGatewayRepository(requester)
+
+      val agents = repository.agents("phone-a")
+      repository.selectAgent("main", "phone-a")
+      val status = repository.setGatewayEnabled(enabled = false, phoneNodeId = "phone-a")
+
+      assertEquals("Main", agents.agents.single().name)
+      assertTrue(agents.agents.single().selected)
+      assertEquals("Offline", status.detail)
+      assertEquals("main", status.activeAgentId)
+      assertEquals("openai/gpt-test", status.selectedModelRef)
+      assertEquals(
+        listOf(WearRpcMethod.AgentsList, WearRpcMethod.AgentsSelect, WearRpcMethod.GatewayDisconnect),
+        requester.calls.map(Pair<WearRpcMethod, JsonObject>::first),
+      )
+      assertEquals(setOf("agentId"), requester.calls[1].second.keys)
+      assertTrue(requester.expectedNodeIds.all { it == "phone-a" })
+      assertTrue(requester.requirePreferredNodes.all { it })
+    }
+
+  @Test
   fun chatEventPreservesReplaceAndTextOnlyMessage() {
     val event =
       parseWearChatEvent(

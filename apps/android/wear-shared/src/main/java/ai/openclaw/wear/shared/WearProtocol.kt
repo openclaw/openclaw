@@ -41,6 +41,18 @@ enum class WearRpcMethod {
   @SerialName("sessions.list")
   SessionsList,
 
+  @SerialName("agents.list")
+  AgentsList,
+
+  @SerialName("agents.select")
+  AgentsSelect,
+
+  @SerialName("gateway.connect")
+  GatewayConnect,
+
+  @SerialName("gateway.disconnect")
+  GatewayDisconnect,
+
   @SerialName("chat.history")
   ChatHistory,
 

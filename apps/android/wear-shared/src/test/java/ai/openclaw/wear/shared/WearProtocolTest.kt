@@ -67,6 +67,10 @@ class WearProtocolTest {
       mapOf(
         WearRpcMethod.ProxyStatus to "proxy.status",
         WearRpcMethod.SessionsList to "sessions.list",
+        WearRpcMethod.AgentsList to "agents.list",
+        WearRpcMethod.AgentsSelect to "agents.select",
+        WearRpcMethod.GatewayConnect to "gateway.connect",
+        WearRpcMethod.GatewayDisconnect to "gateway.disconnect",
         WearRpcMethod.ChatHistory to "chat.history",
         WearRpcMethod.ChatSend to "chat.send",
         WearRpcMethod.ChatAbort to "chat.abort",

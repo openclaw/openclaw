@@ -55,6 +55,75 @@ class WearProxyControllerTest {
     }
 
   @Test
+  fun agentsAndGatewayControlsStayOnThePhoneRuntimeBoundary() =
+    runTest {
+      var gatewayRequests = 0
+      var connected = true
+      var selectedAgent = "main"
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ ->
+            gatewayRequests += 1
+            buildJsonObject {}
+          },
+          isGatewayConnected = { connected },
+          gatewayStatusText = { if (connected) "Connected" else "Offline" },
+          activeAgentId = { selectedAgent },
+          activeSessionKey = { "agent:$selectedAgent:main" },
+          selectedModelRef = { "openai/gpt-test" },
+          agents = {
+            listOf(
+              WearProxyAgent(id = "main", name = "Main", emoji = "*"),
+              WearProxyAgent(id = "ops", name = "Ops", emoji = null),
+            )
+          },
+          selectGatewayAgent = { agentId ->
+            selectedAgent = agentId
+            true
+          },
+          connectGateway = { connected = true },
+          disconnectGateway = { connected = false },
+        )
+
+      val status = controller.handle(request(WearRpcMethod.ProxyStatus))
+      val agents = controller.handle(request(WearRpcMethod.AgentsList))
+      val selected =
+        controller.handle(
+          request(
+            WearRpcMethod.AgentsSelect,
+            buildJsonObject { put("agentId", "ops") },
+          ),
+        )
+      val disconnected = controller.handle(request(WearRpcMethod.GatewayDisconnect))
+      val reconnected = controller.handle(request(WearRpcMethod.GatewayConnect))
+
+      val statusResult = checkNotNull(status.result).jsonObject
+      val agentsResult = checkNotNull(agents.result).jsonObject
+      val selectedResult = checkNotNull(selected.result).jsonObject
+      val disconnectedResult = checkNotNull(disconnected.result).jsonObject
+      val reconnectedResult = checkNotNull(reconnected.result).jsonObject
+
+      assertEquals("main", statusResult.getValue("activeAgentId").jsonPrimitive.content)
+      assertEquals("agent:main:main", statusResult.getValue("activeSessionKey").jsonPrimitive.content)
+      assertEquals("openai/gpt-test", statusResult.getValue("selectedModelRef").jsonPrimitive.content)
+      assertEquals(2, agentsResult.getValue("agents").jsonArray.size)
+      assertEquals("ops", selectedResult.getValue("activeAgentId").jsonPrimitive.content)
+      assertFalse(
+        disconnectedResult
+          .getValue("connected")
+          .jsonPrimitive.content
+          .toBoolean(),
+      )
+      assertTrue(
+        reconnectedResult
+          .getValue("connected")
+          .jsonPrimitive.content
+          .toBoolean(),
+      )
+      assertEquals(0, gatewayRequests)
+    }
+
+  @Test
   fun talkStartBindsTheWatchNodeAndSelectedSession() =
     runTest {
       var startArgs: List<String?>? = null
