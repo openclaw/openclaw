@@ -141,6 +141,45 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
+  it("uses merged channel overrides when dispatching an inbound turn", async () => {
+    const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
+    const recordInboundSession = vi.fn(async () => undefined);
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        session: { resolveStorePath, recordInboundSession },
+        reply: { dispatchReplyWithBufferedBlockDispatcher },
+      },
+    });
+
+    await runtime.channel.inbound.dispatch({
+      cfg: {},
+      channel: "test",
+      route: {
+        agentId: "main",
+        sessionKey: "agent:main:test:direct:u1",
+      },
+      ctxPayload: {
+        Body: "hello",
+        CommandAuthorized: false,
+        SessionKey: "agent:main:test:direct:u1",
+      },
+      delivery: { deliver: vi.fn(async () => undefined) },
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/override-sessions.json",
+        sessionKey: "agent:main:test:direct:u1",
+      }),
+    );
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+  });
+
   it("routes untrusted group prompt facts into untrusted structured context", () => {
     const runtime = createPluginRuntimeMock();
 

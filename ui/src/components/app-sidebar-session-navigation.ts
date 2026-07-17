@@ -180,10 +180,6 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       selectedAgentId: navigation.selectedAgentId,
       visibleSessions,
       toSidebarSession,
-      newSessionDisabled: !this.connected,
-      newSessionTitle: this.connected
-        ? t("chat.runControls.newSession")
-        : t("chat.runControls.newSessionDisconnected"),
     };
   }
 

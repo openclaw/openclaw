@@ -938,13 +938,34 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   return error;
 }
 
+/**
+ * Pins subagent-registry deps for gateway handler tests, always keeping
+ * `ensureRuntimePluginsLoaded` a no-op. Real ended-run hooks reload the
+ * standalone plugin runtime in the background, and `loadOpenClawPlugins`
+ * starts by wiping process-wide plugin registrations — including the detached
+ * task lifecycle runtime a later test just installed via
+ * `setDetachedTaskLifecycleRuntime`. Without this pin, a prior test's async
+ * subagent completion can silently uninstall a later test's runtime seam
+ * between install and finalize, so the finalize spy is never called.
+ */
+export function applyGatewaySubagentRegistryTestDeps(
+  overrides?: Parameters<typeof subagentRegistryTesting.setDepsForTest>[0],
+) {
+  subagentRegistryTesting.setDepsForTest({
+    ensureRuntimePluginsLoaded: () => {},
+    ...overrides,
+  });
+}
+
+applyGatewaySubagentRegistryTestDeps();
+
 export const describe0AfterEach0 = () => {
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
   resetTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
-  subagentRegistryTesting.setDepsForTest();
+  applyGatewaySubagentRegistryTestDeps();
   mocks.loadConfigReturn = {};
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();

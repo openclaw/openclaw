@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { createSpeechThresholdGate, readPcm16AudioStats } from "openclaw/plugin-sdk/realtime-voice";
-import type { MeetRealtimeAudioTransport } from "./realtime-audio-transport.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
+import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 type BridgeProcess = {
   pid?: number;
@@ -25,7 +25,7 @@ type BridgeProcess = {
   on(event: "error", listener: (error: Error) => void): unknown;
 };
 
-type MeetRealtimeAudioSpawn = (
+type MeetingRealtimeAudioSpawn = (
   command: string,
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
@@ -67,7 +67,7 @@ function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "S
   timer.unref?.();
 }
 
-export function createLocalMeetRealtimeAudioTransport(params: {
+export function createLocalMeetingRealtimeAudioTransport(params: {
   inputCommand: string[];
   outputCommand: string[];
   bargeInInputCommand?: string[];
@@ -75,11 +75,12 @@ export function createLocalMeetRealtimeAudioTransport(params: {
   bargeInPeakThreshold: number;
   bargeInCooldownMs: number;
   logger: RuntimeLogger;
-  spawn?: MeetRealtimeAudioSpawn;
-}): MeetRealtimeAudioTransport {
+  logScope: string;
+  spawn?: MeetingRealtimeAudioSpawn;
+}): MeetingRealtimeAudioTransport {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
-  const spawnFn: MeetRealtimeAudioSpawn =
+  const spawnFn: MeetingRealtimeAudioSpawn =
     params.spawn ??
     ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
   const spawnOutputProcess = () =>
@@ -101,7 +102,7 @@ export function createLocalMeetRealtimeAudioTransport(params: {
     }
   };
   const fail = (label: string) => (error: Error) => {
-    params.logger.warn(`[google-meet] ${label} failed: ${formatErrorMessage(error)}`);
+    params.logger.warn(`${params.logScope} ${label} failed: ${formatErrorMessage(error)}`);
     signalFatal();
   };
   const attachOutputProcessHandlers = (proc: BridgeProcess) => {
@@ -118,13 +119,13 @@ export function createLocalMeetRealtimeAudioTransport(params: {
     proc.on("exit", (code, signal) => {
       if (proc === outputProcess && !stopped) {
         params.logger.warn(
-          `[google-meet] audio output command exited (${code ?? signal ?? "done"})`,
+          `${params.logScope} audio output command exited (${code ?? signal ?? "done"})`,
         );
         signalFatal();
       }
     });
     proc.stderr?.on("data", (chunk) => {
-      params.logger.debug?.(`[google-meet] audio output: ${String(chunk).trim()}`);
+      params.logger.debug?.(`${params.logScope} audio output: ${String(chunk).trim()}`);
     });
     proc.stderr?.on("error", (error: Error) => {
       if (proc === outputProcess) {
@@ -136,17 +137,19 @@ export function createLocalMeetRealtimeAudioTransport(params: {
   inputProcess.on("error", fail("audio input command"));
   inputProcess.on("exit", (code, signal) => {
     if (!stopped) {
-      params.logger.warn(`[google-meet] audio input command exited (${code ?? signal ?? "done"})`);
+      params.logger.warn(
+        `${params.logScope} audio input command exited (${code ?? signal ?? "done"})`,
+      );
       signalFatal();
     }
   });
   inputProcess.stderr?.on("data", (chunk) => {
-    params.logger.debug?.(`[google-meet] audio input: ${String(chunk).trim()}`);
+    params.logger.debug?.(`${params.logScope} audio input: ${String(chunk).trim()}`);
   });
   inputProcess.stdout?.on("error", fail("audio input command stdout"));
   inputProcess.stderr?.on("error", fail("audio input command stderr"));
 
-  const transport: MeetRealtimeAudioTransport = {
+  const transport: MeetingRealtimeAudioTransport = {
     onFatal: (handler) => {
       fatalHandler = handler;
       if (fatalSignaled) {
@@ -193,7 +196,7 @@ export function createLocalMeetRealtimeAudioTransport(params: {
       outputProcess = spawnOutputProcess();
       attachOutputProcessHandlers(outputProcess);
       params.logger.debug?.(
-        "[google-meet] cleared realtime audio output buffer by restarting playback command",
+        `${params.logScope} cleared realtime audio output buffer by restarting playback command`,
       );
       terminateBridgeProcess(previousOutput, "SIGKILL");
     },
@@ -231,33 +234,33 @@ export function createLocalMeetRealtimeAudioTransport(params: {
           return;
         }
         params.logger.debug?.(
-          `[google-meet] human barge-in detected by local input (rms=${Math.round(
+          `${params.logScope} human barge-in detected by local input (rms=${Math.round(
             stats.rms,
           )}, peak=${stats.peak})`,
         );
       });
       bargeInInputProcess.stdout?.on("error", (error: Error) => {
         params.logger.warn(
-          `[google-meet] human barge-in input stdout failed: ${formatErrorMessage(error)}`,
+          `${params.logScope} human barge-in input stdout failed: ${formatErrorMessage(error)}`,
         );
       });
       bargeInInputProcess.stderr?.on("data", (chunk) => {
-        params.logger.debug?.(`[google-meet] barge-in input: ${String(chunk).trim()}`);
+        params.logger.debug?.(`${params.logScope} barge-in input: ${String(chunk).trim()}`);
       });
       bargeInInputProcess.stderr?.on("error", (error: Error) => {
         params.logger.warn(
-          `[google-meet] human barge-in input stderr failed: ${formatErrorMessage(error)}`,
+          `${params.logScope} human barge-in input stderr failed: ${formatErrorMessage(error)}`,
         );
       });
       bargeInInputProcess.on("error", (error) => {
         params.logger.warn(
-          `[google-meet] human barge-in input failed: ${formatErrorMessage(error)}`,
+          `${params.logScope} human barge-in input failed: ${formatErrorMessage(error)}`,
         );
       });
       bargeInInputProcess.on("exit", (code, signal) => {
         if (!stopped) {
           params.logger.debug?.(
-            `[google-meet] human barge-in input exited (${code ?? signal ?? "done"})`,
+            `${params.logScope} human barge-in input exited (${code ?? signal ?? "done"})`,
           );
         }
       });

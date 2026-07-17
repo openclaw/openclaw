@@ -820,16 +820,17 @@ describe("openai transport stream", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
+      const apiKey = "test-api-key";
       const summary = testing.summarizeResponsesPayload({
         model: "gpt-5.5",
         stream: true,
         input: [],
         tools: [{ type: "function", name: "exec" }],
-        apiKey: "sk-abcdefghijklmnopqrstuvwxyz",
+        apiKey,
       });
       expect(summary).toContain("payload=");
-      expect(summary).toContain("sk-abc");
-      expect(summary).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(summary).toContain('"apiKey":"***"');
+      expect(summary).not.toContain(apiKey);
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;

@@ -2922,6 +2922,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Available tools
   - H2: Listing and reading sessions
+  - H2: Sessions versus conversations
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
   - H2: Session state changes
@@ -5393,6 +5394,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/webchat
 - Headings:
+  - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired
   - H2: Security surface

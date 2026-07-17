@@ -2,9 +2,9 @@
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
+  createChannelInboundEnvelopeBuilder,
   logInboundDrop,
   resolveInboundMentionDecision,
-  resolveInboundSessionEnvelopeContext,
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -788,17 +788,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-      cfg,
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-    });
-    const body = core.channel.reply.formatAgentEnvelope({
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route });
+    const body = buildEnvelope({
       channel: "Teams",
       from: envelopeFrom,
       timestamp,
-      previousTimestamp,
-      envelope: envelopeOptions,
       body: agentBody,
     });
     let combinedBody = body;
@@ -811,12 +805,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         limit: historyLimit,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
-          core.channel.reply.formatAgentEnvelope({
+          buildEnvelope({
             channel: "Teams",
             from: conversationType,
             timestamp: entry.timestamp,
+            previousTimestamp: null,
             body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-            envelope: envelopeOptions,
           }),
       });
     }
@@ -858,7 +852,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "msteams",
-      finalize: core.channel.reply.finalizeInboundContext,
       contextVisibility: contextVisibilityMode,
       supplemental: {
         quote: quoteInfo
@@ -975,12 +968,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             raw: activity,
           }),
           resolveTurn: () => ({
+            cfg,
             channel: "msteams",
             accountId: route.accountId,
-            routeSessionKey: route.sessionKey,
-            storePath,
+            route: { agentId: route.agentId, sessionKey: route.sessionKey },
             ctxPayload,
-            recordInboundSession: core.channel.session.recordInboundSession,
             record: {
               onRecordError: (err) => {
                 logVerboseMessage(

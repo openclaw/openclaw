@@ -55,6 +55,8 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
+import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
@@ -543,6 +545,46 @@ export async function resolveManagedPluginIconUrl(params: {
     bundledOfficialEntries: listOfficialExternalPluginCatalogEntries(),
     pluginId: params.pluginId,
   });
+}
+
+function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized || normalized.length > 2048) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
+export function resolveManagedSetupCatalogIconUrl(params: {
+  config: OpenClawConfig;
+  iconUrl: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  const requested = normalizeManagedCatalogIconUrl(params.iconUrl);
+  if (!requested) {
+    return undefined;
+  }
+  const env = params.env ?? process.env;
+  const allowedUrls = [
+    ...resolveManifestProviderAuthChoices({
+      config: params.config,
+      env,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    }).map((choice) => choice.icon),
+    ...listRecommendedToolInstalls().map((install) => install.icon),
+  ];
+  return allowedUrls.some((iconUrl) => normalizeManagedCatalogIconUrl(iconUrl) === requested)
+    ? requested
+    : undefined;
 }
 
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */

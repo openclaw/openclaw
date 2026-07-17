@@ -119,6 +119,14 @@ type TestWebKitWindow = Window & {
   };
 };
 
+type MacosTitlebarControlsState = HTMLElement & {
+  navCollapsed: boolean;
+  historyOnly: boolean;
+  onOpenPalette?: () => void;
+  onOpenNewSession?: () => void;
+  updateComplete: Promise<boolean>;
+};
+
 afterEach(() => {
   Reflect.deleteProperty(window, "webkit");
   document.documentElement.classList.remove(
@@ -624,6 +632,27 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     // preventDefault is the handled signal for the native legacy fallback.
     expect(toggleEvent.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+  });
+
+  it("keeps search and new-session controls in the expanded native titlebar", async () => {
+    const onOpenPalette = vi.fn();
+    const onOpenNewSession = vi.fn();
+    const controls = document.createElement(
+      "openclaw-macos-titlebar-controls",
+    ) as unknown as MacosTitlebarControlsState;
+    controls.navCollapsed = false;
+    controls.historyOnly = false;
+    controls.onOpenPalette = onOpenPalette;
+    controls.onOpenNewSession = onOpenNewSession;
+    document.body.append(controls);
+    await controls.updateComplete;
+
+    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__search")?.click();
+    controls.querySelector<HTMLButtonElement>(".macos-titlebar-controls__new-session")?.click();
+
+    expect(onOpenPalette).toHaveBeenCalledOnce();
+    expect(onOpenNewSession).toHaveBeenCalledOnce();
+    controls.remove();
   });
 
   it("retains a native new-session request until a context exists", () => {

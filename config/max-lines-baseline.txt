@@ -134,9 +134,6 @@ extensions/google-meet/index.ts
 extensions/google-meet/src/cli.test.ts
 extensions/google-meet/src/cli.ts
 extensions/google-meet/src/meet.ts
-extensions/google-meet/src/realtime.ts
-extensions/google-meet/src/runtime.ts
-extensions/google-meet/src/transports/chrome.ts
 extensions/google/oauth.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts

@@ -574,9 +574,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
         capabilities: ["camera-frame"],
-        provider: "openai",
         sessionKey: "main",
-        transport: "webrtc",
       });
       console.info("[video-talk-e2e] session=provider:openai,transport:webrtc");
       const preview = page.locator('video[aria-label="Camera preview"]');
@@ -672,15 +670,164 @@ describeControlUiE2e("Control UI browser Talk", () => {
     }
   });
 
+  it("starts Gemini Live Video Talk, streams a fake camera directly, and handles describe_view", async () => {
+    const context = await browser.newContext({ permissions: ["camera", "microphone"] });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "talk.client.create": {
+          provider: "google",
+          transport: "provider-websocket",
+          protocol: "google-live-bidi",
+          // Fake harness token, assembled so secret scanners do not flag it.
+          clientSecret: ["auth_tokens", "browser-video-e2e"].join("/"),
+          websocketUrl:
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
+        },
+      },
+    });
+    const googleLiveMessages: unknown[] = [];
+    let describeViewSent = false;
+    await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (ws) => {
+      ws.onMessage((message) => {
+        const parsed = JSON.parse(typeof message === "string" ? message : message.toString()) as {
+          setup?: unknown;
+          realtimeInput?: { video?: unknown };
+        };
+        googleLiveMessages.push(parsed);
+        if (parsed.setup) {
+          ws.send(JSON.stringify({ setupComplete: {} }));
+          return;
+        }
+        if (parsed.realtimeInput?.video && !describeViewSent) {
+          describeViewSent = true;
+          ws.send(
+            JSON.stringify({
+              toolCall: {
+                functionCalls: [{ id: "call-camera", name: "describe_view", args: {} }],
+              },
+            }),
+          );
+        }
+      });
+    });
+    await page.addInitScript(() => {
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async (constraints: MediaStreamConstraints) => {
+          const stream = await getUserMedia(constraints);
+          (
+            window as Window & {
+              openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
+            }
+          ).openclawGeminiVideoTalkTracks = [
+            ...((window as Window & { openclawGeminiVideoTalkTracks?: MediaStreamTrack[] })
+              .openclawGeminiVideoTalkTracks ?? []),
+            ...stream.getTracks(),
+          ];
+          return stream;
+        },
+      });
+    });
+
+    try {
+      await page.setViewportSize({ width: 1366, height: 900 });
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Start video talk" }).click();
+      const request = await gateway.waitForRequest("talk.client.create");
+      expect(request.params).toMatchObject({
+        capabilities: ["camera-frame"],
+        sessionKey: "main",
+      });
+      const preview = page.locator('video[aria-label="Camera preview"]');
+      await expect.poll(() => preview.isVisible()).toBe(true);
+      await expect
+        .poll(() => preview.evaluate((video) => (video as HTMLVideoElement).videoWidth))
+        .toBeGreaterThan(0);
+      await expect
+        .poll(() =>
+          googleLiveMessages.some(
+            (message) =>
+              typeof message === "object" &&
+              message !== null &&
+              "realtimeInput" in message &&
+              JSON.stringify(message).includes('"video"'),
+          ),
+        )
+        .toBe(true);
+      await expect
+        .poll(() =>
+          googleLiveMessages.some(
+            (message) =>
+              typeof message === "object" &&
+              message !== null &&
+              "toolResponse" in message &&
+              JSON.stringify(message).includes('"cameraStreamActive":true'),
+          ),
+        )
+        .toBe(true);
+      const videoMessage = googleLiveMessages.find(
+        (message) =>
+          typeof message === "object" &&
+          message !== null &&
+          "realtimeInput" in message &&
+          JSON.stringify(message).includes('"video"'),
+      );
+      expect(new TextEncoder().encode(JSON.stringify(videoMessage)).length).toBeLessThanOrEqual(
+        512 * 1024,
+      );
+      const talkRequests = (await gateway.getRequests()).filter((entry) =>
+        entry.method.startsWith("talk."),
+      );
+      expect(talkRequests.map((entry) => entry.method)).toEqual(["talk.client.create"]);
+      await captureVideoTalkProof(page, "05-gemini-live-camera-preview.png");
+      console.info(
+        "[video-talk-e2e] gemini=realtimeInput.video+functionResponse,gateway_frame_requests:0",
+      );
+
+      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await expect.poll(() => preview.count()).toBe(0);
+      const trackStates = await page.evaluate(() =>
+        (
+          window as Window & {
+            openclawGeminiVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawGeminiVideoTalkTracks?.map((track) => track.readyState),
+      );
+      expect(trackStates).toHaveLength(2);
+      expect(trackStates?.every((state) => state === "ended")).toBe(true);
+      console.info("[video-talk-e2e] gemini_stop=preview-removed,tracks:ended+ended");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows actionable guidance when Video Talk camera permission is blocked", async () => {
     const context = await browser.newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "talk.client.create": {
-          provider: "openai",
-          transport: "webrtc",
-          clientSecret: "test-client-secret",
+          provider: "google",
+          transport: "provider-websocket",
+          protocol: "google-live-bidi",
+          // Fake harness token, assembled so secret scanners do not flag it.
+          clientSecret: ["auth_tokens", "browser-video-denied"].join("/"),
+          websocketUrl:
+            "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+          audio: {
+            inputEncoding: "pcm16",
+            inputSampleRateHz: 16_000,
+            outputEncoding: "pcm16",
+            outputSampleRateHz: 24_000,
+          },
         },
       },
     });

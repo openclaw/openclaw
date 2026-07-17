@@ -134,7 +134,14 @@ export async function openRealtimeTalkInput(
     return audio;
   }
 
-  const stopAudio = () => audio.getTracks().forEach((track) => track.stop());
+  let audioStopped = false;
+  const stopAudio = () => {
+    if (audioStopped) {
+      return;
+    }
+    audioStopped = true;
+    audio.getTracks().forEach((track) => track.stop());
+  };
   options.signal?.addEventListener("abort", stopAudio, { once: true });
   let camera: MediaStream | undefined;
   try {

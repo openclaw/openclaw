@@ -806,9 +806,9 @@ describe("gateway startup config secret preflight", () => {
 
   it("does not emit degraded or recovered events for warning-only secret reloads", async () => {
     const warning: SecretResolverWarning = {
-      code: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
-      path: "plugins.entries.google.config.webSearch.apiKey",
-      message: "web search provider fell back to environment credentials",
+      code: "WEB_SEARCH_AUTODETECT_SELECTED",
+      path: "tools.web.search.provider",
+      message: "web search provider was auto-detected",
     };
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => ({
       ...preparedSnapshot(config),
@@ -844,7 +844,7 @@ describe("gateway startup config secret preflight", () => {
     expect(result.config).toBe(config);
     expect(result.warnings).toEqual([warning]);
     expect(logSecrets.warn).toHaveBeenCalledWith(
-      "[WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED] web search provider fell back to environment credentials",
+      "[WEB_SEARCH_AUTODETECT_SELECTED] web search provider was auto-detected",
     );
     expect(emitStateEvent).not.toHaveBeenCalled();
     const preflightInput = callArg<{ config?: unknown }>(prepareRuntimeSecretsSnapshot);

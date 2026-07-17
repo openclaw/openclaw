@@ -397,7 +397,7 @@ async function summarizeViaLLM(params: {
     messages: params.messages,
     previousSummary: params.previousSummary,
   });
-  return compactionSafeguardDeps.summarizeInStages({
+  const result = await compactionSafeguardDeps.summarizeInStages({
     messages,
     model: params.model,
     apiKey: params.apiKey,
@@ -410,6 +410,14 @@ async function summarizeViaLLM(params: {
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
   });
+  if (result.kind === "summary") {
+    return result.text;
+  }
+
+  // A generic fallback means redistillation never happened. Preserve the
+  // known summary verbatim so a temporary model outage cannot erase it.
+  const previousSummary = params.previousSummary?.trim();
+  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**

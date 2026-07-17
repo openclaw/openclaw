@@ -311,6 +311,38 @@ describe("AppSidebar update card wiring", () => {
   });
 });
 
+describe("AppSidebar brand actions", () => {
+  it("starts a session for the active agent and leaves the sessions header sort-only", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const agentsList = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+      agents: [{ id: "main" }, { id: "research" }],
+    } as AgentsListResult;
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      agentsList,
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    await sidebar.updateComplete;
+
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-brand .sidebar-new-session");
+    expect(button?.getAttribute("aria-label")).toBe("New session");
+    expect(button?.disabled).toBe(false);
+    expect(
+      sidebar.querySelector(".sidebar-recent-sessions__head--root .sidebar-session-new"),
+    ).toBeNull();
+
+    button?.click();
+    expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
+  });
+});
+
 describe("AppSidebar agent chip", () => {
   const TWO_AGENTS = {
     defaultId: "main",
@@ -1321,9 +1353,9 @@ describe("AppSidebar session scroll fade", () => {
   it("shows fades only toward additional session content", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body");
     if (!scroller) {
-      throw new Error("Expected sidebar session scroller");
+      throw new Error("Expected sidebar body scroller");
     }
 
     let scrollHeight = 100;
@@ -1339,7 +1371,7 @@ describe("AppSidebar session scroll fade", () => {
       scroller.scrollTop = scrollTop;
       scroller.dispatchEvent(new Event("scroll"));
       await sidebar.updateComplete;
-      expect(scroller.classList.contains(`sidebar-recent-sessions--scroll-${expected}`)).toBe(true);
+      expect(scroller.classList.contains(`sidebar-shell__body--scroll-${expected}`)).toBe(true);
     };
 
     await expectScrollState(0, "none");

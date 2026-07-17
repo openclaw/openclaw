@@ -190,6 +190,7 @@
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/package-dist-imports.mjs",
+    "scripts/lib/recommended-tool-installs.json",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -1121,6 +1122,10 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
+    "./plugin-sdk/meeting-runtime": {
+      "types": "./dist/plugin-sdk/meeting-runtime.d.ts",
+      "default": "./dist/plugin-sdk/meeting-runtime.js"
+    },
     "./plugin-sdk/transcripts": {
       "types": "./dist/plugin-sdk/transcripts.d.ts",
       "default": "./dist/plugin-sdk/transcripts.js"
@@ -2024,7 +2029,7 @@
     "@anthropic-ai/sdk": "0.109.1",
     "@clack/core": "1.4.2",
     "@clack/prompts": "1.6.0",
-    "@earendil-works/pi-tui": "0.80.3",
+    "@earendil-works/pi-tui": "0.80.9",
     "@google/genai": "2.10.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",

@@ -7,6 +7,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import {
   commitStagedDeliveryQueueEntry,
+  commitStagedDeliveryQueueEntryOnce,
   deleteDeliveryQueueEntry,
   failPendingDeliveryQueueEntry,
   loadDeliveryQueueEntries,
@@ -17,6 +18,7 @@ import {
   type DeliveryQueueRowMetadata,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
@@ -79,6 +81,10 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
+  /** Channel-valid id reserved before enqueue; recovery must reuse it atomically. */
+  preparedMessageId?: string;
+  /** Serializable owner state finalized by both live delivery and recovery. */
+  deliveryCompletion?: DurableDeliveryCompletion;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -103,14 +109,8 @@ function queuedDeliveryMetadata(entry: QueuedDelivery): DeliveryQueueRowMetadata
   };
 }
 
-/** Persist a delivery entry before attempting send. Returns the entry ID. */
-export async function enqueueDelivery(
-  params: QueuedDeliveryPayload,
-  stateDir?: string,
-  mediaStageId?: string,
-): Promise<string> {
-  const id = generateSecureUuid();
-  const entry: QueuedDelivery = {
+function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): QueuedDelivery {
+  return {
     id,
     enqueuedAt: Date.now(),
     channel: params.channel,
@@ -133,8 +133,20 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
+    preparedMessageId: params.preparedMessageId,
+    deliveryCompletion: params.deliveryCompletion,
     retryCount: 0,
   };
+}
+
+/** Persist a delivery entry before attempting send. Returns the entry ID. */
+export async function enqueueDelivery(
+  params: QueuedDeliveryPayload,
+  stateDir?: string,
+  mediaStageId?: string,
+): Promise<string> {
+  const id = generateSecureUuid();
+  const entry = createQueuedDelivery(params, id);
   const metadata = queuedDeliveryMetadata(entry);
   if (mediaStageId) {
     const committed = commitStagedDeliveryQueueEntry({
@@ -157,6 +169,44 @@ export async function enqueueDelivery(
     });
   }
   return id;
+}
+
+/** Inserts one stable queue id without replacing prior pending or completed ownership. */
+export async function enqueueDeliveryOnce(
+  params: QueuedDeliveryPayload,
+  id: string,
+  stateDir?: string,
+  mediaStageId?: string,
+): Promise<{ id: string; created: boolean }> {
+  const normalizedId = id.trim();
+  if (!normalizedId) {
+    throw new Error("Stable delivery queue id is required");
+  }
+  const entry = createQueuedDelivery(params, normalizedId);
+  const metadata = queuedDeliveryMetadata(entry);
+  const created = mediaStageId
+    ? (() => {
+        const result = commitStagedDeliveryQueueEntryOnce({
+          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          entry,
+          metadata,
+          stagingId: mediaStageId,
+          stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+          stateDir,
+        });
+        if (result === "missing") {
+          throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
+        }
+        return result === "created";
+      })()
+    : upsertDeliveryQueueEntry({
+        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+        entry,
+        metadata,
+        stateDir,
+        insertOnly: true,
+      });
+  return { id: normalizedId, created };
 }
 
 /** Spool artifacts a pending row still references; empty once it is gone or unreadable. */

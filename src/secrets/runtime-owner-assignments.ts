@@ -68,7 +68,11 @@ function createDegradedOwner(assignments: SecretAssignment[], reason: string): D
   };
 }
 
-function warnDegradedOwner(context: ResolverContext, owner: DegradedSecretOwner): void {
+/** Emits the canonical warning for one isolated runtime secret owner. */
+export function warnDegradedSecretOwner(
+  context: ResolverContext,
+  owner: DegradedSecretOwner,
+): void {
   pushWarning(context, {
     code: "SECRETS_OWNER_UNAVAILABLE",
     path: owner.paths[0]!,
@@ -155,11 +159,14 @@ export async function resolveAndApplySecretAssignments(params: {
     for (const assignments of pendingOwners) {
       const failureReason = failedOwners.get(assignments);
       if (failureReason) {
-        // Leave explicit SecretRefs in runtime config. Applying another credential source here
-        // would silently route this owner through env/profile fallback after its declared ref failed.
+        // Canonicalize shorthand refs so runtime consumers can distinguish an unavailable ref
+        // from a successfully resolved literal that happens to look like `${ENV_VAR}`.
+        for (const assignment of assignments) {
+          assignment.apply({ ...assignment.ref });
+        }
         const degradedOwner = createDegradedOwner(assignments, failureReason);
         degradedOwners.push(degradedOwner);
-        warnDegradedOwner(params.context, degradedOwner);
+        warnDegradedSecretOwner(params.context, degradedOwner);
         continue;
       }
       if (

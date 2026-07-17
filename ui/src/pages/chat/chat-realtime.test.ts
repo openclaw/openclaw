@@ -67,7 +67,7 @@ describe("chat realtime actions", () => {
     expect(startSpy).toHaveBeenCalledOnce();
   });
 
-  it("launches video talk through WebRTC and owns the preview stream", async () => {
+  it("launches video talk through the configured provider and owns the preview stream", async () => {
     const state = createState();
 
     await state.toggleRealtimeTalk({ video: true });
@@ -75,8 +75,8 @@ describe("chat realtime actions", () => {
     const stream = {} as MediaStream;
     session.callbacks.onVideoStream?.(stream);
 
-    expect(session.options.provider).toBe("openai");
-    expect(session.options.transport).toBe("webrtc");
+    expect(session.options.provider).toBeUndefined();
+    expect(session.options.transport).toBeUndefined();
     expect(session.options.capabilities).toEqual(["camera-frame"]);
     expect(session.localOptions.videoEnabled).toBe(true);
     expect(state.realtimeTalkVideoStream).toBe(stream);
