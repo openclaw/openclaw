@@ -4,8 +4,8 @@
  * Routes legacy direct-message ingress through the standard channel reply pipeline.
  */
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "../plugin-sdk/inbound-envelope.js";
 import {
   normalizeOutboundReplyPayload,
   type OutboundReplyPayload,
@@ -163,8 +163,42 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, ctxPayload } = prepareDirectDmTurn(params);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: route.agentId });
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    peer: params.peer,
+    runtime: params.runtime.channel,
+    sessionStore: params.cfg.session?.store,
+  });
+  const { storePath, body } = buildEnvelope({
+    channel: params.channelLabel,
+    from: params.conversationLabel,
+    body: params.rawBody,
+    timestamp: params.timestamp,
+  });
+  const ctxPayload = params.runtime.channel.reply.finalizeInboundContext({
+    Body: body,
+    BodyForAgent: params.bodyForAgent ?? params.rawBody,
+    RawBody: params.rawBody,
+    CommandBody: params.commandBody ?? params.rawBody,
+    From: params.senderAddress,
+    To: params.recipientAddress,
+    SessionKey: route.sessionKey,
+    AccountId: route.accountId ?? params.accountId,
+    ChatType: "direct",
+    ConversationLabel: params.conversationLabel,
+    SenderId: params.senderId,
+    Provider: params.provider ?? params.channel,
+    Surface: params.surface ?? params.channel,
+    MessageSid: params.messageId,
+    MessageSidFull: params.messageId,
+    Timestamp: params.timestamp,
+    CommandAuthorized: params.commandAuthorized,
+    OriginatingChannel: params.originatingChannel ?? params.channel,
+    OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    ...params.extraContext,
+  });
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: route.agentId,
