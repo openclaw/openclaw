@@ -131,8 +131,10 @@ enum DeviceIdentitySQLiteStore {
     private static func ensureSchema(_ database: OpaquePointer, allowFreshCreation: Bool) throws {
         let userVersion = try self.queryInt64(database, sql: "PRAGMA user_version")
         guard userVersion <= self.maximumSupportedSchemaVersion else {
-            throw DeviceIdentityStoreError(
-                "Device identity database uses newer schema version \(userVersion); this build supports \(self.maximumSupportedSchemaVersion)")
+            let message =
+                "Device identity database uses newer schema version \(userVersion); " +
+                "this build supports \(self.maximumSupportedSchemaVersion)"
+            throw DeviceIdentityStoreError(message)
         }
 
         if try !self.schemaObjectExists(database, type: "table", name: self.tableName) {
