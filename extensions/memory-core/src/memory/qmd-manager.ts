@@ -2280,6 +2280,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     limit: number,
   ): string[] {
+    if (command === "vsearch") {
+      return [
+        "query",
+        `vec: ${normalizeQmdSemanticQuery(query)}`,
+        "--json",
+        "-n",
+        String(limit),
+        "--no-rerank",
+      ];
+    }
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
       const args = ["query", normalizedQuery, "--json", "-n", String(limit)];

@@ -33,19 +33,17 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     throw new Error(`qmd query returned invalid JSON: ${message}`);
   }
   try {
-    const parsed = parseQmdQueryResultArray(trimmedStdout);
+    const parsed = parseQmdQueryResultPayload(trimmedStdout);
     if (parsed !== null) {
       return parsed;
     }
-    const noisyPayload = extractFirstJsonArray(trimmedStdout);
-    if (!noisyPayload) {
-      throw new Error("qmd query JSON response was not an array");
+    for (const noisyPayload of extractJsonPayloadCandidates(trimmedStdout)) {
+      const fallback = parseQmdQueryResultPayload(noisyPayload);
+      if (fallback !== null) {
+        return fallback;
+      }
     }
-    const fallback = parseQmdQueryResultArray(noisyPayload);
-    if (fallback !== null) {
-      return fallback;
-    }
-    throw new Error("qmd query JSON response was not an array");
+    throw new Error("qmd query JSON response was not an array or results object");
   } catch (err) {
     const message = formatErrorMessage(err);
     warnQmdQueryParseError(message);
@@ -85,41 +83,55 @@ function summarizeQmdStderr(raw: string): string {
   return raw.length <= 120 ? raw : `${truncateUtf16Safe(raw, 117)}...`;
 }
 
-/** Parse and normalize a strict qmd JSON array payload. */
-function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
+/** Parse and normalize a strict qmd JSON result payload. */
+function parseQmdQueryResultPayload(raw: string): QmdQueryResult[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
+    const results = resolveQmdQueryResultItems(parsed);
+    if (results === null) {
       return null;
     }
-    return parsed.map((item) => {
-      if (typeof item !== "object" || item === null) {
-        return item as QmdQueryResult;
-      }
-      const record = item as Record<string, unknown>;
-      const docid = typeof record.docid === "string" ? record.docid : undefined;
-      const score =
-        typeof record.score === "number" && Number.isFinite(record.score)
-          ? record.score
-          : undefined;
-      const collection = typeof record.collection === "string" ? record.collection : undefined;
-      const file = typeof record.file === "string" ? record.file : undefined;
-      const snippet = typeof record.snippet === "string" ? record.snippet : undefined;
-      const body = typeof record.body === "string" ? record.body : undefined;
-      return {
-        docid,
-        score,
-        collection,
-        file,
-        snippet,
-        body,
-        startLine: parseQmdLineNumber(record.start_line ?? record.startLine),
-        endLine: parseQmdLineNumber(record.end_line ?? record.endLine),
-      } as QmdQueryResult;
-    });
+    return results.map(normalizeQmdQueryResult);
   } catch {
     return null;
   }
+}
+
+/** Accept legacy array output and qmd query object output. */
+function resolveQmdQueryResultItems(parsed: unknown): unknown[] | null {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+  const record = parsed as Record<string, unknown>;
+  return Array.isArray(record.results) ? record.results : null;
+}
+
+/** Normalize one qmd result row. */
+function normalizeQmdQueryResult(item: unknown): QmdQueryResult {
+  if (typeof item !== "object" || item === null) {
+    return item as QmdQueryResult;
+  }
+  const record = item as Record<string, unknown>;
+  const docid = typeof record.docid === "string" ? record.docid : undefined;
+  const score =
+    typeof record.score === "number" && Number.isFinite(record.score) ? record.score : undefined;
+  const collection = typeof record.collection === "string" ? record.collection : undefined;
+  const file = typeof record.file === "string" ? record.file : undefined;
+  const snippet = typeof record.snippet === "string" ? record.snippet : undefined;
+  const body = typeof record.body === "string" ? record.body : undefined;
+  return {
+    docid,
+    score,
+    collection,
+    file,
+    snippet,
+    body,
+    startLine: parseQmdLineNumber(record.start_line ?? record.startLine),
+    endLine: parseQmdLineNumber(record.end_line ?? record.endLine),
+  };
 }
 
 /** Normalize qmd line numbers, rejecting zero, negative, and non-integer values. */
@@ -127,12 +139,27 @@ function parseQmdLineNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** Extract the first complete JSON array from noisy stdout. */
-function extractFirstJsonArray(raw: string): string | null {
-  const start = raw.indexOf("[");
-  if (start < 0) {
-    return null;
+/** Extract complete JSON arrays/objects from noisy stdout. */
+function extractJsonPayloadCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const char = raw[i];
+    if (char !== "[" && char !== "{") {
+      continue;
+    }
+    const end = findJsonPayloadEnd(raw, i);
+    if (end === null) {
+      continue;
+    }
+    candidates.push(raw.slice(i, end + 1));
+    i = end;
   }
+  return candidates;
+}
+
+/** Find the end offset for a JSON array or object starting at `start`. */
+function findJsonPayloadEnd(raw: string, start: number): number | null {
+  const stack: string[] = [];
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -158,11 +185,26 @@ function extractFirstJsonArray(raw: string): string | null {
       continue;
     }
     if (char === "[") {
+      stack.push("]");
+      depth += 1;
+    } else if (char === "{") {
+      stack.push("}");
       depth += 1;
     } else if (char === "]") {
+      if (stack.pop() !== "]") {
+        return null;
+      }
       depth -= 1;
       if (depth === 0) {
-        return raw.slice(start, i + 1);
+        return i;
+      }
+    } else if (char === "}") {
+      if (stack.pop() !== "}") {
+        return null;
+      }
+      depth -= 1;
+      if (depth === 0) {
+        return i;
       }
     }
   }

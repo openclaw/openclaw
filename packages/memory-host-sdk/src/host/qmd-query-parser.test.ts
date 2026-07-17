@@ -25,6 +25,27 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("parses qmd query object output", () => {
+    const results = parseQmdQueryJson(
+      '{"results":[{"docid":"abc","score":0.5,"start_line":2,"end_line":3}]}',
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.5, startLine: 2, endLine: 3 }]);
+  });
+
+  it("extracts embedded result objects from noisy stdout", () => {
+    const results = parseQmdQueryJson(
+      `initializing
+{"event":"warm"}
+{"results":[{"docid":"abc","score":0.75}]}
+complete`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc", score: 0.75 }]);
+  });
+
   it("preserves explicit qmd line metadata when present", () => {
     const results = parseQmdQueryJson(
       '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',
