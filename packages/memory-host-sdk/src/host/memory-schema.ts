@@ -367,15 +367,19 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   preservedEmbeddingCacheTable?: string,
 ): void {
-  // A (path, source) already tracked canonically keeps both its row and its
-  // whole chunk set: importing legacy chunk ids under a canonical-owned source
-  // would mix stale text into a file sync considers current and never
-  // re-indexes. Legacy chunks migrate only with sources the canonical index
-  // does not track yet.
+  // A (path, source) the canonical index already has CHUNKS for keeps its whole
+  // canonical chunk set: importing legacy chunk ids there would mix stale text
+  // into a file sync considers current and never re-indexes. But a source with
+  // only a canonical row and no chunks yet (indexing interrupted before its
+  // chunks were written, or embedding pending/failed) still needs its legacy
+  // chunks — dropping them would leave the file silently unsearchable, since the
+  // matching source hash stops sync from re-indexing it. Snapshot the
+  // chunk-owning sources before the import so the exclusion (and the chunks
+  // assertion) sees canonical state from before these inserts add legacy chunks.
   db.exec(`
-    DROP TABLE IF EXISTS temp.legacy_import_canonical_sources;
-    CREATE TEMP TABLE legacy_import_canonical_sources AS
-    SELECT path, source FROM main.${MEMORY_INDEX_SOURCES_TABLE};
+    DROP TABLE IF EXISTS temp.legacy_import_chunk_owned_sources;
+    CREATE TEMP TABLE legacy_import_chunk_owned_sources AS
+    SELECT DISTINCT path, source FROM main.${MEMORY_INDEX_CHUNKS_TABLE};
   `);
   try {
     db.exec(`
@@ -392,7 +396,7 @@ function copyLegacyMemoryIndexRows(
       SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       FROM ${schema}.chunks AS legacy
       WHERE NOT EXISTS (
-        SELECT 1 FROM temp.legacy_import_canonical_sources AS owned
+        SELECT 1 FROM temp.legacy_import_chunk_owned_sources AS owned
         WHERE owned.path = legacy.path AND owned.source IS legacy.source
       );
     `);
@@ -426,13 +430,13 @@ function copyLegacyMemoryIndexRows(
          WHERE canonical.id = legacy.id
        )
        AND NOT EXISTS (
-         SELECT 1 FROM temp.legacy_import_canonical_sources AS owned
+         SELECT 1 FROM temp.legacy_import_chunk_owned_sources AS owned
          WHERE owned.path = legacy.path AND owned.source IS legacy.source
        )`,
       "chunks",
     );
   } finally {
-    db.exec("DROP TABLE IF EXISTS temp.legacy_import_canonical_sources");
+    db.exec("DROP TABLE IF EXISTS temp.legacy_import_chunk_owned_sources");
   }
   if (
     preservedEmbeddingCacheTable !== "embedding_cache" &&
