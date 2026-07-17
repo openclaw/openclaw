@@ -562,6 +562,7 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const aggregateToolResultPressureWarnings = new Set<string>();
+const MAX_TOOL_RESULT_PRESSURE_WARNINGS = 512;
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -4381,6 +4382,10 @@ export async function runEmbeddedAttempt(
               `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
               `sessionKey=${sessionLogKey}`;
             if (aggregatePressureEngaged) {
+              if (aggregateToolResultPressureWarnings.size >= MAX_TOOL_RESULT_PRESSURE_WARNINGS) {
+                const oldest = aggregateToolResultPressureWarnings.values().next().value;
+                if (oldest !== undefined) aggregateToolResultPressureWarnings.delete(oldest);
+              }
               if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
                 aggregateToolResultPressureWarnings.add(sessionLogKey);
                 log.warn(
