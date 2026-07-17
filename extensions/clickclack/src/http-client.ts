@@ -122,6 +122,7 @@ export function createClickClackClient(options: ClientOptions) {
     const response = await fetcher(`${baseUrl}${path}`, { ...init, headers: requestHeaders });
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
+      void response.body?.cancel()?.catch(() => {});
       throw new ClickClackHttpError(response.status, detail, new Headers(response.headers));
     }
     return await readProviderJsonResponse<T>(response, "ClickClack response", {

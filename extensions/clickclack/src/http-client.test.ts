@@ -96,11 +96,13 @@ function streamedErrorResponse(body: string, limit: number) {
     throw new Error("raw response.text() should not be used");
   });
 
+  const cancelBody = vi.fn(async () => undefined);
   const response = {
     ok: false,
     status: 502,
     text,
     body: {
+      cancel: cancelBody,
       getReader: () => ({
         read: async () => {
           if (readCount > 0) {
@@ -118,6 +120,7 @@ function streamedErrorResponse(body: string, limit: number) {
   return {
     response,
     cancel,
+    cancelBody,
     releaseLock,
     text,
     expectedDetail: body.slice(0, limit),
@@ -270,6 +273,7 @@ describe("ClickClack HTTP client", () => {
 
     expect(streamed.text).not.toHaveBeenCalled();
     expect(streamed.cancel).toHaveBeenCalledTimes(1);
+    expect(streamed.cancelBody).toHaveBeenCalledTimes(1);
     expect(streamed.releaseLock).toHaveBeenCalledTimes(1);
   });
 
