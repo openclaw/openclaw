@@ -348,8 +348,11 @@ function resolveDashscopeVideoDownloadTimeoutMs(
   defaultTimeoutMs: number | undefined,
 ): number {
   const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  if (typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0) {
-    return Math.floor(resolved);
+  if (typeof resolved === "number" && Number.isFinite(resolved)) {
+    // Preserve exhausted budgets (0 or negative) so a function-valued remaining
+    // deadline that the header fetch consumed fails closed instead of getting
+    // reset to the full default timeout.
+    return Math.max(0, Math.floor(resolved));
   }
   return defaultTimeoutMs ?? DEFAULT_VIDEO_GENERATION_TIMEOUT_MS;
 }
@@ -404,6 +407,13 @@ export async function downloadDashscopeGeneratedVideos(params: {
     let buffer: Buffer;
     let mimeType: string;
     try {
+      if (downloadTimeoutMs <= 0) {
+        // Exhausted remaining budget: fail closed instead of reading with no chunk timeout
+        // (readResponseWithLimit skips chunkTimeoutMs when it is 0/falsy).
+        throw new Error(
+          `${params.providerLabel} generated video download stalled: remaining budget exhausted`,
+        );
+      }
       buffer = await readResponseWithLimit(result.response, params.maxBytes, {
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>

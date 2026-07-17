@@ -1,5 +1,7 @@
 // DashScope-compatible download regressions: body idle after headers.
-import { describe, expect, it, vi } from "vitest";
+import { once } from "node:events";
+import http from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadDashscopeGeneratedVideos } from "./dashscope-compatible.js";
 
 function neverChunkingVideoResponse(): Response {
@@ -73,5 +75,79 @@ describe("downloadDashscopeGeneratedVideos", () => {
     }
     expect(buffer.toString("utf8")).toBe("mp4-bytes");
     expect(video?.mimeType).toBe("video/mp4");
+  });
+
+  it("fails closed when a function-valued remaining budget is exhausted", async () => {
+    const fetchFn = vi.fn(async () => neverChunkingVideoResponse());
+    const startedAt = Date.now();
+
+    await expect(
+      downloadDashscopeGeneratedVideos({
+        providerLabel: "Alibaba Wan",
+        urls: ["https://example.com/out.mp4"],
+        // Function-valued timeout returns 0: header fetch consumed the entire
+        // deadline. Must fail closed, not reset to the full default timeout.
+        timeoutMs: () => 0,
+        fetchFn: fetchFn as unknown as typeof fetch,
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow("remaining budget exhausted");
+
+    const elapsedMs = Date.now() - startedAt;
+    // Should reject quickly (0ms budget), not wait for the 60s default.
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("downloadDashscopeGeneratedVideos loopback HTTP", () => {
+  let server: http.Server | undefined;
+
+  afterEach(async () => {
+    if (!server) {
+      return;
+    }
+    server.closeAllConnections?.();
+    server.close();
+    await once(server, "close").catch(() => undefined);
+    server = undefined;
+  });
+
+  it("bounds a stalled loopback HTTP body with a real server", async () => {
+    server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "video/mp4" });
+      // Write one chunk so fetch resolves (Node fetch hangs until first body byte).
+      // Then never write more — simulates stalled CDN.
+      res.write("first-chunk");
+    });
+    server.on("clientError", (_err, socket) => socket.destroy());
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected loopback server address");
+    }
+    const port = address.port;
+
+    const timeoutMs = 200;
+    const startedAt = Date.now();
+
+    // Accept either error because the fetch-level AbortSignal timeout and
+    // the post-header chunk-idle timeout race; both are bounded within the
+    // configured budget.
+    await expect(
+      downloadDashscopeGeneratedVideos({
+        providerLabel: "Alibaba Wan",
+        urls: [`http://127.0.0.1:${port}/out.mp4`],
+        timeoutMs,
+        fetchFn: fetch,
+        allowPrivateNetwork: true,
+        maxBytes: 10 * 1024 * 1024,
+      }),
+    ).rejects.toThrow();
+
+    const elapsedMs = Date.now() - startedAt;
+    // Bounded proof: the download rejects within 5s, not an indefinite hang.
+    expect(elapsedMs).toBeLessThan(5_000);
   });
 });
