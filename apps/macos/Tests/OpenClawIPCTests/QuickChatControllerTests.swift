@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
@@ -10,13 +11,16 @@ struct QuickChatControllerTests {
 
         #expect(snapshots.count == 4)
         #expect(!snapshots[0].isVisible)
-        #expect(!snapshots[0].hotkeyRegistered)
+        #expect(snapshots[0].hotkeyRegistered)
+        #expect(snapshots[0].isEnabled)
         #expect(snapshots[1].isVisible)
         #expect(snapshots[1].hasGlobalMonitor)
         #expect(snapshots[1].hasLocalMonitor)
         #expect(!snapshots[2].isVisible)
         #expect(!snapshots[2].hasGlobalMonitor)
         #expect(!snapshots[2].hasLocalMonitor)
+        #expect(!snapshots[2].hotkeyRegistered)
+        #expect(!snapshots[2].isEnabled)
         #expect(!snapshots[3].hotkeyRegistered)
     }
 
@@ -24,8 +28,15 @@ struct QuickChatControllerTests {
         let latch = GrantLatch()
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
+            agentsProvider: {
+                AgentsListResult(
+                    defaultid: "main",
+                    mainkey: "main",
+                    scope: AnyCodable("per-agent"),
+                    agents: [AgentSummary(id: "main", name: "Main")])
+            },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .notifications) })
             },
@@ -55,6 +66,15 @@ struct QuickChatControllerTests {
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
         #expect(!controller.isVisible)
         controller.stop()
+    }
+
+    @Test func `quick chat setting defaults true and hydrates false`() async {
+        await TestIsolation.withUserDefaultsValues([quickChatEnabledKey: nil]) {
+            #expect(AppState(preview: true).quickChatEnabled)
+        }
+        await TestIsolation.withUserDefaultsValues([quickChatEnabledKey: false]) {
+            #expect(!AppState(preview: true).quickChatEnabled)
+        }
     }
 }
 

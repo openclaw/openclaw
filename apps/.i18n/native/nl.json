@@ -18769,6 +18769,16 @@
       "translated": "Schakel inactieve knipper- en wiebelanimaties in voor het statusicoon."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Snelle chat"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Toon een zwevend invoerveld voor snelle berichten, op te roepen met een algemene sneltoets."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Snelkoppeling voor Quick Chat"
@@ -21104,9 +21114,9 @@
       "translated": "Bericht aan \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "hoofdsessie"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Stuur een schermafbeelding van het venster"
     },
     {
       "id": "native.apple.136cef9f750d3803",

@@ -18769,6 +18769,16 @@
       "translated": "Aktifkan kedipan dan gerakan kecil saat idle pada ikon status."
     },
     {
+      "id": "native.apple.093df96ad9d52a40",
+      "source": "Quick Chat",
+      "translated": "Obrolan Cepat"
+    },
+    {
+      "id": "native.apple.a66e340b4e1bd972",
+      "source": "Show a floating composer for quick messages, summoned with a global shortcut.",
+      "translated": "Tampilkan kotak penulisan mengambang untuk pesan cepat, yang dapat dibuka dengan pintasan global."
+    },
+    {
       "id": "native.apple.d908ab245711bbd2",
       "source": "Quick Chat shortcut",
       "translated": "Pintasan Obrolan Cepat"
@@ -21104,9 +21114,9 @@
       "translated": "Kirim pesan ke \\(self.model.agentDisplay.name)"
     },
     {
-      "id": "native.apple.c1fec5e4735d8995",
-      "source": "main session",
-      "translated": "sesi utama"
+      "id": "native.apple.edf12ff583307f43",
+      "source": "Send a window screenshot",
+      "translated": "Kirim tangkapan layar jendela"
     },
     {
       "id": "native.apple.136cef9f750d3803",
