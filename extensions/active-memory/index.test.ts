@@ -810,6 +810,42 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("stops recall session cleanup retries when the recall aborts mid-backoff", async () => {
+    testing.setMinimumTimeoutMsForTests(1);
+    testing.setSetupGraceTimeoutMsForTests(0);
+    // Let the timeout path wait for the subagent so the cleanup retry schedule
+    // (or the aborted shortcut) fully settles before the assertions run.
+    testing.setTimeoutPartialDataGraceMsForTests(500);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 20,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
+      new Error("session store remains busy"),
+    );
+
+    const startedAt = Date.now();
+    await requireHook("before_prompt_build")(
+      { prompt: "what wings should i order? abort cleanup retry", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    // The 20ms watchdog aborts the recall while cleanup waits out the first
+    // 50ms retry backoff; cleanup must honor the abort instead of running the
+    // full [0, 50, 250]ms schedule to exhaustion.
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(1);
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(api.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
