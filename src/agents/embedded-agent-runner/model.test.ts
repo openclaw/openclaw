@@ -270,6 +270,7 @@ function resolveModelAsyncForTest(
   cfg?: OpenClawConfig,
   options?: {
     allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ReturnType<typeof createRuntimeHooks>;
     skipAgentDiscovery?: boolean;
@@ -2921,25 +2922,18 @@ describe("resolveModel", () => {
         },
       },
     };
-    const runtimeHooks = {
-      ...createRuntimeHooks(),
-      runProviderDynamicModel: vi.fn(({ provider, context }) =>
-        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
-          ? {
-              provider: "openai",
-              id: "gpt-5.5",
-              name: "gpt-5.5",
-              api: "openai-responses" as const,
-              baseUrl: "https://api.openai.com/v1",
-              reasoning: true,
-              input: ["text", "image"],
-              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-              contextWindow: 1_000_000,
-              maxTokens: 128_000,
-            }
-          : undefined,
-      ),
-    };
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
 
     const result = await resolveModelAsyncForTest(
       "azure-openai-responses",
@@ -2948,7 +2942,7 @@ describe("resolveModel", () => {
       cfg,
       {
         allowBundledStaticCatalogFallback: true,
-        runtimeHooks,
+        preferBundledStaticCatalogTransport: true,
         skipAgentDiscovery: true,
       },
     );
