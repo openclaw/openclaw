@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearAgentSummary
 import ai.openclaw.wear.shared.WearChatMessage
 import ai.openclaw.wear.shared.WearChatRole
 import ai.openclaw.wear.shared.WearConversationSnapshot
@@ -267,6 +268,8 @@ internal fun buildConversationSnapshot(
         selected = key == activeSessionKey,
       )
     }
+  val activeAgentId = activeSessionKey.agentIdFromSessionKey()
+  val agents = projectedSessions.mapNotNull { session -> session.id.agentIdFromSessionKey() }.distinct()
   val messages =
     ((history?.get("messages") as? JsonArray).orEmpty()).mapIndexedNotNull { index, element ->
       val row = element.objectOrNull() ?: return@mapIndexedNotNull null
@@ -300,6 +303,15 @@ internal fun buildConversationSnapshot(
       } else {
         WearGatewayState.DISCONNECTED
       },
+    activeAgentId = activeAgentId,
+    agents =
+      agents.map { agentId ->
+        WearAgentSummary(
+          id = agentId,
+          name = agentId,
+          selected = agentId == activeAgentId,
+        )
+      },
     activeSessionId = activeSessionKey,
     sessions = projectedSessions,
     messages = messages,
@@ -309,6 +321,16 @@ internal fun buildConversationSnapshot(
 }
 
 private fun incompatible(): WearConversationClientResult = WearConversationClientResult(failure = WearConversationFailure.INCOMPATIBLE)
+
+private fun String?.agentIdFromSessionKey(): String? {
+  val key = this?.trim().orEmpty()
+  if (!key.startsWith("agent:")) return null
+  return key
+    .removePrefix("agent:")
+    .substringBefore(':')
+    .trim()
+    .ifEmpty { null }
+}
 
 private fun JsonElement?.objectOrNull(): JsonObject? = this as? JsonObject
 
