@@ -102,7 +102,10 @@ describe("agent command restart recovery ownership", () => {
       },
     });
 
-    const completed = loadSessionEntry({ sessionKey, storePath: target.storePath });
+    const completed = loadSessionEntry({
+      sessionKey,
+      storePath: target.storePath,
+    }) as SessionEntry | undefined;
     expect(completed?.abortedLastRun).toBe(false);
     expect(completed?.mainRestartRecovery).toBeUndefined();
     expect(recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget).toHaveBeenLastCalledWith(
