@@ -594,7 +594,8 @@ export async function renderBundledRootHelpText(
   ].join("\n");
   return await spawnText(["--input-type=module", "--eval", inlineModule], {
     cwd: _distDirOverride,
-    env: renderContext.env,
+    // RootHelpRenderOptions marks env optional; spawnText requires one.
+    env: renderContext.env ?? process.env,
     failureMessage: `Failed to render bundled root help from ${bundleIdentity.bundleName}`,
     timeoutMs: ROOT_HELP_RENDER_TIMEOUT_MS,
   });
