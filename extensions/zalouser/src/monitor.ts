@@ -894,10 +894,13 @@ export async function monitorZalouserProvider(
     settleSuccess();
   };
   if (abortSignal.aborted) {
+    // The signal is already aborted — settle waitForExit and return before
+    // startZaloListener so we do not restore the Zalo API session or
+    // allocate listener resources that would be immediately torn down.
     onAbort();
-  } else {
-    abortSignal.addEventListener("abort", onAbort, { once: true });
+    return { stop };
   }
+  abortSignal.addEventListener("abort", onAbort, { once: true });
 
   let listener: Awaited<ReturnType<typeof startZaloListener>>;
   try {

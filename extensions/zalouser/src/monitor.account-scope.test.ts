@@ -152,4 +152,56 @@ describe("zalouser monitor pairing account scoping", () => {
     expect(pairingRequest.accountId).toBe("beta");
     expect(sendMessageZalouserMock).toHaveBeenCalled();
   });
+
+  it("returns before startZaloListener when the abort signal is already fired", async () => {
+    setZalouserRuntime({
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          upsertPairingRequest: vi.fn(async () => ({ code: "X", created: true })),
+          buildPairingReply: vi.fn(() => "pairing reply"),
+        },
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => false),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+          isControlCommandMessage: vi.fn(() => false),
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const account: ResolvedZalouserAccount = {
+      accountId: "beta",
+      enabled: true,
+      profile: "beta",
+      authenticated: true,
+      config: { dmPolicy: "pairing", allowFrom: [] },
+    };
+
+    const config: OpenClawConfig = {
+      channels: {
+        zalouser: {
+          accounts: {
+            beta: { dmPolicy: "pairing", allowFrom: [] },
+          },
+        },
+      },
+    };
+
+    const preAbortedController = new AbortController();
+    preAbortedController.abort();
+
+    const result = await monitorZalouserProvider({
+      account,
+      config,
+      runtime: createZalouserRuntimeEnv(),
+      abortSignal: preAbortedController.signal,
+    });
+
+    // The monitor must resolve immediately with a stop handle and must not
+    // have started the Zalo listener (session restore) for an already-aborted
+    // signal.
+    expect(result.stop).toBeInstanceOf(Function);
+    expect(startZaloListenerMock).not.toHaveBeenCalled();
+  });
 });
