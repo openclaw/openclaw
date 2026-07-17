@@ -112,19 +112,6 @@ describe("message hook mappers", () => {
             },
           },
         },
-        {
-          pluginId: "rejecting-claim-chat",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "rejecting-claim-chat",
-              label: "Rejecting claim chat",
-            }),
-            messaging: {
-              resolveInboundConversation: () => null,
-            },
-          },
-        },
       ]),
     );
   });
@@ -480,11 +467,14 @@ describe("message hook mappers", () => {
   it("does not fall back when a channel rejects inbound claim resolution", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
-        Provider: "rejecting-claim-chat",
-        Surface: "rejecting-claim-chat",
-        OriginatingChannel: "rejecting-claim-chat",
+        Provider: "claim-chat",
+        Surface: "claim-chat",
+        OriginatingChannel: "claim-chat",
+        From: undefined,
         To: "channel:room-123",
         OriginatingTo: "channel:room-123",
+        GroupChannel: undefined,
+        GroupSubject: undefined,
       }),
     );
 
