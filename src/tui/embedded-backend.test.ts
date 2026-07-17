@@ -1481,8 +1481,11 @@ describe("EmbeddedTuiBackend", () => {
     await vi.waitFor(() => {
       expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
     });
-    const collectedPrompt = (agentCommandFromIngressMock.mock.calls[1]?.[0] as { message: string })
-      .message;
+    const collectedCall = agentCommandFromIngressMock.mock.calls[1];
+    if (!collectedCall) {
+      throw new Error("expected collected local followup call");
+    }
+    const collectedPrompt = (collectedCall[0] as { message: string }).message;
     expect(collectedPrompt).toContain("[Queued messages while agent was busy]");
     expect(collectedPrompt).toContain("collect alpha");
     expect(collectedPrompt).toContain("collect beta");
